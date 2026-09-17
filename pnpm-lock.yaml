@@ -130,6 +130,9 @@ importers:
 
   packages/gmind-core:
     dependencies:
+      '@gmind/shared':
+        specifier: workspace:*
+        version: link:../shared
       ulid:
         specifier: ^2.3.0
         version: 2.4.0

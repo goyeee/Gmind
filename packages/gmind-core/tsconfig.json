@@ -1,8 +1,4 @@
 {
   "extends": "../../tsconfig.base.json",
-  "compilerOptions": {
-    "baseUrl": ".",
-    "paths": { "@gmind/shared": ["../../packages/shared/src/index.ts"] }
-  },
   "include": ["src"]
 }
