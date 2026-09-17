@@ -1,0 +1,21 @@
+{
+  "name": "gmind",
+  "private": true,
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "dev": "pnpm --filter @gmind/server --filter @gmind/web --parallel dev",
+    "build": "pnpm -r build",
+    "test": "pnpm -r test",
+    "typecheck": "pnpm -r --parallel typecheck",
+    "lint": "eslint .",
+    "compose:up": "docker compose -f docker/docker-compose.yml --env-file docker/.env up -d",
+    "compose:down": "docker compose -f docker/docker-compose.yml --env-file docker/.env down",
+    "db:migrate": "pnpm --filter @gmind/server migration:run"
+  },
+  "devDependencies": {
+    "eslint": "^9.0.0",
+    "typescript-eslint": "^8.0.0",
+    "prettier": "^3.3.0",
+    "typescript": "^5.5.0"
+  }
+}

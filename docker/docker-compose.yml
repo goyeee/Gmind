@@ -1,0 +1,47 @@
+services:
+  mysql:
+    image: ${MYSQL_IMAGE}
+    environment:
+      MYSQL_ROOT_PASSWORD: gminddev
+    ports:
+      - '${MYSQL_HOST_PORT:-33061}:3306'
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./mysql/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ['CMD', 'mysqladmin', 'ping', '-h', '127.0.0.1', '-uroot', '-pgminddev']
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  redis:
+    image: ${REDIS_IMAGE}
+    ports:
+      - '${REDIS_HOST_PORT:-63790}:6379'
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  minio:
+    image: ${MINIO_IMAGE:-minio/minio}
+    command: server /data --console-address ':9001'
+    environment:
+      MINIO_ROOT_USER: gminddev
+      MINIO_ROOT_PASSWORD: gminddev123
+    ports:
+      - '9000:9000'
+      - '9001:9001'
+    volumes:
+      - minio-data:/data
+
+  mailhog:
+    image: ${MAILHOG_IMAGE:-mailhog/mailhog}
+    ports:
+      - '8025:8025'
+      - '1025:1025'
+
+volumes:
+  mysql-data: {}
+  minio-data: {}

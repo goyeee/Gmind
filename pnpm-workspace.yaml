@@ -1,0 +1,9 @@
+packages:
+  - apps/*
+  - packages/*
+
+# pnpm 11 默认不执行依赖构建脚本；允许 esbuild 的 postinstall（vitest 的传递依赖）
+# 与 @nestjs/core 的 postinstall（仅打印 OpenCollective 提示，无实际构建）。
+allowBuilds:
+  '@nestjs/core': true
+  esbuild: true

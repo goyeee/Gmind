@@ -1,0 +1,15 @@
+{
+  "name": "@gmind/core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "test": "vitest run",
+    "lint": "eslint src",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": { "yjs": "^13.6.0", "ulid": "^2.3.0" },
+  "devDependencies": { "vitest": "^2.0.0" }
+}
