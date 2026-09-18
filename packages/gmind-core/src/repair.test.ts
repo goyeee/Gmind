@@ -3,7 +3,7 @@ import * as Y from 'yjs';
 import type { Transaction } from 'yjs';
 import { ROOT_NODE_ID, createTemplateDoc, docFromState, docToState } from './doc';
 import { ORIGIN_SYSTEM, ORIGIN_USER, addChild, deleteNodes, moveNode, setText, withTransaction } from './operations';
-import { childrenIds, getNode } from './read';
+import { childrenIds, getNode, subtreeIds } from './read';
 import type { NodeSnapshot } from './read';
 import { normalizeTree } from './repair';
 
@@ -450,5 +450,75 @@ describe('normalizeTreeFor 事务脏区增量（与全量等价，Task 9 修复�
     expect(childrenIds(doc, p2Id)).toEqual([]);
     expect(getNode(doc, xId)!.deleted).toBe(false);
     expect(normalizeTree(doc, ORIGIN_SYSTEM)).toBe(0); // 无任何残留
+  });
+});
+
+describe('parentId 环破坏（全量扫描专属规则：导入/64 写清扫执行）', () => {
+  /** 制造 2 节点环：X.parentId=Y、Y.parentId=X 且互相出现在对方 children，
+   * 并从 root.children 摘除二者——既有规则①-⑤对该文档零修复（纯环场景）。 */
+  function cycleDoc(): { doc: Y.Doc; xId: string; yId: string } {
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: 'X' }, { text: 'Y' }] });
+    const xId = findIdByText(doc, 'X');
+    const yId = findIdByText(doc, 'Y');
+    doc.transact(() => {
+      const nodes = doc.getMap('nodes');
+      const rootChildren = (nodes.get(ROOT_NODE_ID) as Y.Map<unknown>).get(
+        'children',
+      ) as Y.Array<string>;
+      rootChildren.delete(1, 1);
+      rootChildren.delete(0, 1);
+      const x = nodes.get(xId) as Y.Map<unknown>;
+      const y = nodes.get(yId) as Y.Map<unknown>;
+      x.set('parentId', yId);
+      y.set('parentId', xId);
+      (x.get('children') as Y.Array<string>).push([yId]);
+      (y.get('children') as Y.Array<string>).push([xId]);
+    });
+    return { doc, xId, yId };
+  }
+
+  it('normalizeTree 断环：环中最大 ULID 断回 root，另一节点保持为其子，修复幂等', () => {
+    const { doc, xId, yId } = cycleDoc();
+    const broken = xId > yId ? xId : yId; // 断点 = 环中最大 ULID（状态函数，跨副本一致）
+    const kept = xId > yId ? yId : xId;
+
+    expect(normalizeTree(doc, ORIGIN_SYSTEM)).toBeGreaterThan(0);
+    expect(getNode(doc, broken)!.parentId).toBe(ROOT_NODE_ID); // 最大 ULID 断回 root
+    expect(getNode(doc, kept)!.parentId).toBe(broken); // 另一节点保持环内原父
+    expect(childrenIds(doc, ROOT_NODE_ID)).toContain(broken); // 断点挂到 root children
+    expect(childrenIds(doc, broken)).toEqual([kept]); // kept 随断点挂回 root 子树
+    expect(childrenIds(doc, kept)).toEqual([]); // 环内互指条目已清理（kept 侧不再含 broken）
+    // 二者均在 root 子树可达（subtreeIds 含 visited 防御，安全）
+    expect(subtreeIds(doc, ROOT_NODE_ID)).toEqual(expect.arrayContaining([broken, kept]));
+
+    expect(normalizeTree(doc, ORIGIN_SYSTEM)).toBe(0); // 幂等：断环后无残留
+  });
+
+  it('导入即收敛：携带环的状态经 docFromState 后被断环治愈（全量扫描入口）', () => {
+    const { doc: cyclic, xId, yId } = cycleDoc();
+    const broken = xId > yId ? xId : yId;
+    const kept = xId > yId ? yId : xId;
+
+    const healed = docFromState(docToState(cyclic));
+    expect(getNode(healed, broken)!.parentId).toBe(ROOT_NODE_ID);
+    expect(getNode(healed, kept)!.parentId).toBe(broken);
+    expect(childrenIds(healed, ROOT_NODE_ID)).toEqual([broken]);
+    expect(childrenIds(healed, broken)).toEqual([kept]);
+    expect(normalizeTree(healed, ORIGIN_SYSTEM)).toBe(0); // 入口已收敛
+  });
+
+  it('断环跨副本一致：同态两副本各自 normalizeTree，全量快照一致（FR-COL-003）', () => {
+    const { doc: cyclic } = cycleDoc();
+    const state = docToState(cyclic);
+    // 裸 applyUpdate（不经 docFromState 的入口收敛），保留环再各自全量修复
+    const docA = new Y.Doc();
+    Y.applyUpdate(docA, state);
+    const docB = new Y.Doc();
+    Y.applyUpdate(docB, state);
+
+    expect(normalizeTree(docA, ORIGIN_SYSTEM)).toBe(normalizeTree(docB, ORIGIN_SYSTEM));
+    expect(fullSnapshot(docA)).toEqual(fullSnapshot(docB));
+    expect(normalizeTree(docA, ORIGIN_SYSTEM)).toBe(0);
+    expect(normalizeTree(docB, ORIGIN_SYSTEM)).toBe(0);
   });
 });

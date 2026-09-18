@@ -8,6 +8,9 @@ import { ORIGIN_SYSTEM } from './undo';
  *
  * `parentId` 是父级归属的唯一真值，`children` 数组只定同级顺序。本函数是**文档状态的
  * 纯函数**：给定相同文档状态，在任何副本上都执行相同修复并得到相同结果（FR-COL-003）：
+ *  ⓪ parentId 链成环（**仅全量扫描**）：环中最大 ULID 断回 root——增量路径脏区推导
+ *    看不到「自身不在脏区内」的环，normalizeTreeFor 不含此规则；历史环由两道全量
+ *    安全网（导入 docFromState 即收敛 / 第 64 写摊销清扫）在有限次写内治愈；
  *  ① children 数组去重（保留首个）；
  *  ② 移除指向不存在节点的项（含非字符串垃圾项的防御清除）；
  *  ③ 移除指向墓碑节点（deleted===true）的项；
@@ -79,6 +82,51 @@ interface ChildrenCleanup {
 interface ChildAppend {
   parentId: string;
   childId: string;
+}
+
+/**
+ * 规则⓪（环破坏，全量扫描专属）检测：沿存活节点的 parentId 链行走（visited 集合），
+ * 链止于缺失父/墓碑/root/无父；自环（parentId===id）维持既有防御跳过语义、不视为环。
+ * 每个环断开一处：断点 = 环中**最大 ULID**（可观测文档状态 ⇒ 断点选择是状态函数，
+ * 跨副本一致；遍历起点顺序不影响结果——环成员集合与链尾均以 archived 集合去重）。
+ * 返回待断节点（含旧父 id），按 id 升序排序（nodes 迭代序是本地插入序，应用序必须
+ * 由可观测状态决定，与规则⑤追加序同理）。
+ */
+function findParentCycleBreaks(
+  nodes: Y.Map<Y.Map<unknown>>,
+): Array<{ id: string; oldParentId: string }> {
+  const breaks: Array<{ id: string; oldParentId: string }> = [];
+  const archived = new Set<string>(); // 已判定节点（链尾与环成员）：不重复走链
+  for (const [startId, startNode] of nodes.entries()) {
+    if (startId === ROOT_NODE_ID || isTombstoned(startNode) || archived.has(startId)) continue;
+    const path: string[] = [];
+    const onPath = new Set<string>();
+    let cycleStart: string | undefined;
+    let cur: string = startId;
+    while (cur !== '' && cur !== ROOT_NODE_ID) {
+      if (onPath.has(cur)) {
+        cycleStart = cur; // 本链成环：cur 是首次重复的环成员
+        break;
+      }
+      if (archived.has(cur)) break; // 下游已归档：不会再遇到新环
+      onPath.add(cur);
+      path.push(cur);
+      const node = nodes.get(cur);
+      if (node === undefined || isTombstoned(node)) break; // 链止于缺失父/墓碑：无环
+      const pid = parentIdOf(node);
+      if (pid === '' || pid === cur) break; // 无父/自环：维持防御跳过语义
+      cur = pid;
+    }
+    for (const id of path) archived.add(id);
+    if (cycleStart === undefined) continue;
+    // 环成员 = path 中 cycleStart 起的尾段；断点取环中最大 ULID
+    const members = path.slice(path.indexOf(cycleStart));
+    let target = members[0]!;
+    for (const m of members) if (m > target) target = m;
+    breaks.push({ id: target, oldParentId: parentIdOf(nodes.get(target)!) });
+  }
+  breaks.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  return breaks;
 }
 
 export function normalizeTree(doc: Y.Doc, origin: string = ORIGIN_SYSTEM): number {
@@ -161,6 +209,13 @@ export function normalizeTree(doc: Y.Doc, origin: string = ORIGIN_SYSTEM): numbe
   // 追加序 = childId 升序：id 是可观测的文档状态，跨副本完全一致——这是
   // 「同状态必同结果」的关键（nodes 遍历序是每副本本地插入序，跨副本不可靠）。
   appends.sort((a, b) => (a.childId < b.childId ? -1 : a.childId > b.childId ? 1 : 0));
+
+  // ── 规则⓪（环破坏，全量扫描专属）：parentId 链成环而①-⑤全数通过时由此收敛
+  //    （见 findParentCycleBreaks）。每断一处计 1 修复——旧父 children 条目清除与
+  //    挂回 root 属断环机制的一部分，不重复计数。
+  const cycleBreaks = findParentCycleBreaks(nodes);
+  repairs += cycleBreaks.length;
+
   // ── 事务纪律：无修复不开事务、零写入；有修复则在单个 origin 事务内统一应用。
   if (repairs === 0) return 0;
   doc.transact(() => {
@@ -186,6 +241,28 @@ export function normalizeTree(doc: Y.Doc, origin: string = ORIGIN_SYSTEM): numbe
         parent.set('children', arr);
       }
       arr.push([a.childId]);
+    }
+    // 规则⓪应用：断点 parentId→root、挂到 root children 末尾、旧父 children 条目清除
+    // （cleanups/appends 已应用，数组现场重读定位，避免下标漂移）。
+    for (const b of cycleBreaks) {
+      const z = nodes.get(b.id);
+      if (!z) continue; // 防御（规划后理论不可达）
+      z.set('parentId', ROOT_NODE_ID);
+      const oldParent = nodes.get(b.oldParentId);
+      const oldChildren = oldParent !== undefined ? childrenOf(oldParent) : undefined;
+      if (oldChildren) {
+        const i = oldChildren.toArray().indexOf(b.id);
+        if (i !== -1) oldChildren.delete(i, 1);
+      }
+      const root = nodes.get(ROOT_NODE_ID); // root 重建在本事务先行，防御兜底缺失场景
+      if (root !== undefined) {
+        let rootChildren = childrenOf(root);
+        if (!rootChildren) {
+          rootChildren = new Y.Array<string>();
+          root.set('children', rootChildren);
+        }
+        rootChildren.push([b.id]);
+      }
     }
   }, origin);
   return repairs;

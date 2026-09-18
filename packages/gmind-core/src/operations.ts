@@ -39,7 +39,9 @@ const writeCounters = new WeakMap<Y.Doc, number>();
 
 /** 统一写入口：doc.transact(fn, origin) + 事务后按脏区增量 normalizeTree（默认开启）。
  * 脏区由事务对象推导（deriveNormalizeDirty，replica 一致）；无法确定性识别的形状
- * （未知根类型/未知嵌套数组/root 缺失/嵌套事务）退回全量 normalizeTree 安全阀。
+ * （未知根类型/未知嵌套数组/root 缺失）退回全量 normalizeTree 安全阀。
+ * 嵌套调用（外层 withTransaction 事务内）时内层跳过 normalize，由最外层统一执行
+ * （见下方嵌套规则注释）——组合原子操作请包一层外层 withTransaction。
  * 自愈安全网（Task 9 修复轮 2）：脏区推导只覆盖「本事务制造的违例」，历史残留
  * （未走本入口的裸写等）由每 64 次写一次的全量 normalizeTree 清扫兜底——全量扫描
  * 蕴含增量修复（同一收敛结果），故第 64 写以全量替代增量而非叠加。 */
@@ -67,12 +69,18 @@ export function withTransaction<T>(
     doc.off('afterTransaction', capture);
   }
   // fn 抛出时（部分写入已提交）与原行为一致：跳过 normalize 向上传播。
-  if (committed && opts.normalize !== false) {
+  // ── 嵌套规则 ── captured===null ⇒ afterTransaction 尚未触发 ⇒ 本调用嵌套在某个
+  // 外层 withTransaction 的事务内（Yjs 嵌套 transact 复用外层事务，afterTransaction
+  // 仅在最外层提交时触发一次）。此时内层整体跳过 normalize，交由最外层统一执行：
+  // ① 外层事务包含全部子写入，最外层提交时的 deriveNormalizeDirty（或第 64 写全量
+  //   清扫）覆盖一切，内层再跑只会在同一事务内重复修复；
+  // ② 嵌套内开的事务复用外层 origin——内层修复写会归到外层 origin（user 时混入
+  //   撤销栈，违反「normalize 以 system origin 写入」纪律）；
+  // ③ 内层修复在外层 fn 仍可能抛出时就已写入（修复提交先于外层成败可知）。
+  // 组合原子操作请包一层外层 withTransaction。
+  if (committed && opts.normalize !== false && captured !== null) {
     if (writes % SAFETY_SWEEP_INTERVAL === 0) {
       normalizeTree(doc, ORIGIN_SYSTEM); // 摊销全量清扫（蕴含增量）
-    } else if (captured === null) {
-      // 嵌套事务（外层未提交，afterTransaction 未触发）：维持原全量行为
-      normalizeTree(doc, ORIGIN_SYSTEM);
     } else {
       const dirty = deriveNormalizeDirty(doc, captured);
       if (dirty === null) normalizeTree(doc, ORIGIN_SYSTEM);

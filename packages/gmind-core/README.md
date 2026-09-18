@@ -9,6 +9,7 @@ import * as core from '@gmind/core';
 const doc = core.createTemplateDoc({ title: '我的脑图', children: [{ text: '主题 A' }] }); // 建档
 const um = core.createUndoManager(doc); // 先建管理器：只捕获其后提交的 user 写事务
 core.addChild(doc, core.ROOT_NODE_ID, { text: '主题 B' }); // 写操作（user origin，进撤销栈）
+core.capUndoStack(um); // 每 N 次写调用以维持 100 深度上限（FR-EDT-004）
 core.undo(um); // 撤销上一次写（返回 true，'主题 B' 消失）；core.redo(um) 可恢复
 const state = core.docToState(doc); // 序列化；docFromState(state) 还原（入口即收敛）
 ```
@@ -47,7 +48,7 @@ const state = core.docToState(doc); // 序列化；docFromState(state) 还原（
 - `const ORIGIN_USER = 'user'` / `const ORIGIN_SYSTEM = 'system'`、`type WriteOrigin = string`（转出自 undo）
 - `interface AddChildOptions { index?: number; text?: string }`
 - `interface WithTransactionOptions { normalize?: boolean }` — 默认 true，事务后按脏区 normalize
-- `withTransaction<T>(doc: Y.Doc, origin: WriteOrigin, fn: () => T, opts?: WithTransactionOptions): T`
+- `withTransaction<T>(doc: Y.Doc, origin: WriteOrigin, fn: () => T, opts?: WithTransactionOptions): T` — 嵌套调用时 normalize 由最外层统一执行（内层跳过）——组合原子操作请包一层外层 withTransaction。
 - `addChild(doc: Y.Doc, parentId: string, opts?: AddChildOptions, origin?: WriteOrigin): string`
 - `setText(doc: Y.Doc, id: string, text: string, origin?: WriteOrigin): void`
 - `deleteNodes(doc: Y.Doc, ids: string[], origin?: WriteOrigin): void` — 墓碑软删
@@ -64,6 +65,7 @@ const state = core.docToState(doc); // 序列化；docFromState(state) 还原（
 
 ### repair（自愈/规范化，均以 system origin 写入）
 
+- 环破坏仅在全量扫描执行（导入/64 写清扫），按最大 ULID 断环回 root。
 - `normalizeTree(doc: Y.Doc, origin?: string): number` — 全量收敛，返回修复写入数
 - `normalizeTreeFor(doc: Y.Doc, origin: string, dirtyNodeIds: Set<string>): number` — 增量收敛指定脏区
 - `deriveNormalizeDirty(doc: Y.Doc, tr: Y.Transaction): Set<string> | null` — 从事务派生脏节点集

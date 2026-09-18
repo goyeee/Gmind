@@ -1,13 +1,30 @@
 import { describe, expect, it } from 'vitest';
 import * as Y from 'yjs';
-import { createTemplateDoc } from './doc';
-import { addChild } from './operations';
+import { ROOT_NODE_ID, createTemplateDoc } from './doc';
+import { addChild, deleteNodes } from './operations';
 import { childrenIds, countAlive, getMeta, getNode, setDocMeta } from './read';
+import type { NodeSnapshot } from './read';
+import { normalizeTree } from './repair';
 import { ORIGIN_SYSTEM, ORIGIN_USER, capUndoStack, createUndoManager, redo, undo } from './undo';
 
 /** 空白文档（仅中心主题）。 */
 function blankDoc(): Y.Doc {
   return createTemplateDoc({ title: 'T', children: [] });
+}
+
+/** 按文本查节点 id（测试辅助；模板生成的 ULID 不可预知）。 */
+function findIdByText(doc: Y.Doc, text: string): string {
+  for (const [id, node] of doc.getMap('nodes').entries()) {
+    if ((node as Y.Map<unknown>).get('text') === text) return id;
+  }
+  throw new Error(`test helper: node with text "${text}" not found`);
+}
+
+/** 全文档节点快照（getNode 全量逐节点 deep-equal 口径）。 */
+function fullSnapshot(doc: Y.Doc): Record<string, NodeSnapshot | null> {
+  const out: Record<string, NodeSnapshot | null> = {};
+  for (const id of doc.getMap('nodes').keys()) out[id] = getNode(doc, id);
+  return out;
 }
 
 describe('ORIGIN 常量迁至 undo.ts', () => {
@@ -152,5 +169,45 @@ describe('captureTimeout 合并', () => {
     expect(um.redoStack.length).toBe(1);
     expect(redo(um)).toBe(true);
     expect(childrenIds(doc, 'root')).toEqual([aId, bId]);
+  });
+});
+
+describe('undo(deleteNodes) 往返钉死（T4 冻结 × T5 normalize × T6 undo 缝合）', () => {
+  it('删中间节点（级联墓碑、后代 children 冻结）→ undo 还原全文档快照且 normalize=0，redo 回删除态', () => {
+    // root → [A[A1[A1a], A2], B[B1]]；删中间节点 A（级联 A1/A1a/A2）
+    const doc = createTemplateDoc({
+      title: 'T',
+      children: [
+        { text: 'A', children: [{ text: 'A1', children: [{ text: 'A1a' }] }, { text: 'A2' }] },
+        { text: 'B', children: [{ text: 'B1' }] },
+      ],
+    });
+    const um = createUndoManager(doc); // 先于删除创建（user origin 进栈）
+    const aId = findIdByText(doc, 'A');
+    const a1Id = findIdByText(doc, 'A1');
+    const a1aId = findIdByText(doc, 'A1a');
+    const a2Id = findIdByText(doc, 'A2');
+    const bId = findIdByText(doc, 'B');
+
+    const before = fullSnapshot(doc);
+    deleteNodes(doc, [aId]);
+    // 删除态就位：级联墓碑 + A 从 root children 移除 + 后代 children 冻结不动
+    for (const id of [aId, a1Id, a1aId, a2Id]) expect(getNode(doc, id)!.deleted, id).toBe(true);
+    expect(childrenIds(doc, ROOT_NODE_ID)).toEqual([bId]);
+    expect(
+      ((doc.getMap('nodes').get(aId) as Y.Map<unknown>).get('children') as Y.Array<string>).toArray(),
+    ).toEqual([a1Id, a2Id]); // T4：冻结（快照还原依据）
+
+    // undo → 全文档逐节点快照与删除前完全一致
+    expect(undo(um)).toBe(true);
+    expect(fullSnapshot(doc)).toEqual(before);
+    // T5×T6 缝合：还原态满足全部 §4.2 不变量（normalize 零修复）
+    expect(normalizeTree(doc, ORIGIN_SYSTEM)).toBe(0);
+
+    // redo → 删除态还原
+    expect(redo(um)).toBe(true);
+    for (const id of [aId, a1Id, a1aId, a2Id]) expect(getNode(doc, id)!.deleted, id).toBe(true);
+    expect(childrenIds(doc, ROOT_NODE_ID)).toEqual([bId]);
+    expect(getNode(doc, bId)!.deleted).toBe(false);
   });
 });

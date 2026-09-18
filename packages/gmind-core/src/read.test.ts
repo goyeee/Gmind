@@ -139,3 +139,39 @@ describe('树遍历', () => {
     }
   });
 });
+
+describe('parentId 环防御（遍历必须终止）', () => {
+  /** 制造 2 节点环：X.parentId=Y、Y.parentId=X 且互相出现在对方 children
+   * （裸写绕过操作层校验，模拟并发换父交换合并/crafted doc_state 残留；
+   *  同时从 root.children 摘除二者，使既有规则①-⑤对该文档零修复）。 */
+  function cycleDoc(): { doc: Y.Doc; xId: string; yId: string } {
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: 'X' }, { text: 'Y' }] });
+    const nodes = doc.getMap('nodes');
+    const xId = [...nodes.entries()].find(([, n]) => (n as Y.Map<unknown>).get('text') === 'X')![0];
+    const yId = [...nodes.entries()].find(([, n]) => (n as Y.Map<unknown>).get('text') === 'Y')![0];
+    doc.transact(() => {
+      const rootChildren = (nodes.get(ROOT_NODE_ID) as Y.Map<unknown>).get(
+        'children',
+      ) as Y.Array<string>;
+      rootChildren.delete(1, 1);
+      rootChildren.delete(0, 1);
+      const x = nodes.get(xId) as Y.Map<unknown>;
+      const y = nodes.get(yId) as Y.Map<unknown>;
+      x.set('parentId', yId);
+      y.set('parentId', xId);
+      (x.get('children') as Y.Array<string>).push([yId]);
+      (y.get('children') as Y.Array<string>).push([xId]);
+    });
+    return { doc, xId, yId };
+  }
+
+  it('subtreeIds 在 2 节点环上终止，返回有限前缀（visited 防御）', () => {
+    const { doc, xId, yId } = cycleDoc();
+    expect(subtreeIds(doc, xId)).toEqual([xId, yId]); // X → Y → X(已访问，跳过)
+  });
+
+  it('pathToRoot 在 2 节点环上终止，返回有限前缀（visited 防御）', () => {
+    const { doc, xId, yId } = cycleDoc();
+    expect(pathToRoot(doc, xId)).toEqual([xId, yId]); // X → Y → X(已访问，断链)
+  });
+});

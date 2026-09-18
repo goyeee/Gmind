@@ -3,6 +3,8 @@ import type { StructureType } from '@gmind/shared';
 import { ROOT_NODE_ID } from './doc';
 import type { IconGroup } from './constants';
 import { GmindCoreError } from './errors';
+// undo 是叶子模块（仅依赖 yjs），此导入不构成新环（无 cycle 风险，评审轮已核）。
+import { ORIGIN_USER, type WriteOrigin } from './undo';
 
 export interface DocMeta {
   title: string;
@@ -49,7 +51,7 @@ export function getMeta(doc: Y.Doc): DocMeta {
 }
 
 /** 仅写入提供的键；默认 user origin（改名/结构切换可撤销，FR-EDT-012）。 */
-export function setDocMeta(doc: Y.Doc, patch: Partial<DocMeta>, origin = 'user'): void {
+export function setDocMeta(doc: Y.Doc, patch: Partial<DocMeta>, origin: WriteOrigin = ORIGIN_USER): void {
   doc.transact(() => {
     const meta = doc.getMap('meta');
     if (patch.title !== undefined) meta.set('title', patch.title);
@@ -89,10 +91,16 @@ export function isAlive(doc: Y.Doc, id: string): boolean {
   return node !== undefined && node.get('deleted') !== true;
 }
 
-/** 先序遍历（含自身）；includeDeleted=false 时跳过墓碑子树。 */
+/** 先序遍历（含自身）；includeDeleted=false 时跳过墓碑子树。
+ * visited 集合防御 children/parentId 环（并发换父交换合并或 crafted doc_state 可产生
+ * 2 节点环）：已访问 id 直接跳过，保证任意形状下终止——环的最终治理由全量扫描的
+ * 断环规则负责（repair.ts normalizeTree），遍历层只保证不挂起。 */
 export function subtreeIds(doc: Y.Doc, id: string, includeDeleted = false): string[] {
   const out: string[] = [];
+  const visited = new Set<string>();
   const walk = (nodeId: string): void => {
+    if (visited.has(nodeId)) return; // 环防御：跳过已访问
+    visited.add(nodeId);
     const node = nodesMap(doc).get(nodeId);
     if (!node) return;
     const deleted = node.get('deleted') === true;
@@ -105,10 +113,13 @@ export function subtreeIds(doc: Y.Doc, id: string, includeDeleted = false): stri
   return out;
 }
 
+/** 向根回溯；visited 集合防御 parentId 环（同 subtreeIds），成环时止于重复节点前。 */
 export function pathToRoot(doc: Y.Doc, id: string): string[] {
   const out: string[] = [];
+  const visited = new Set<string>();
   let cur: string | undefined = id;
-  while (cur !== undefined && cur !== '') {
+  while (cur !== undefined && cur !== '' && !visited.has(cur)) {
+    visited.add(cur);
     out.push(cur);
     const node = nodesMap(doc).get(cur);
     if (!node) break;

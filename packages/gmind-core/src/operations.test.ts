@@ -21,7 +21,7 @@ import {
   ORIGIN_SYSTEM,
   ORIGIN_USER,
 } from './operations';
-import { createUndoManager } from './undo';
+import { createUndoManager, redo, undo } from './undo';
 import { MAX_NOTE_LENGTH, type IconGroup } from './constants';
 
 /** 按文本查节点 id（测试辅助；模板生成的 ULID 不可预知）。 */
@@ -164,6 +164,78 @@ describe('withTransaction', () => {
   it('origin 常量：ORIGIN_USER=user、ORIGIN_SYSTEM=system', () => {
     expect(ORIGIN_USER).toBe('user');
     expect(ORIGIN_SYSTEM).toBe('system');
+  });
+});
+
+describe('withTransaction 嵌套：normalize 由最外层统一执行（内层跳过）', () => {
+  it('外层包两个 addChild：撤销栈恰一条，一次 undo 撤销两个子节点，redo 恢复', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [] });
+    const um = createUndoManager(doc); // 先于外层事务创建（user origin）
+    const ids: string[] = [];
+    withTransaction(doc, ORIGIN_USER, () => {
+      ids.push(addChild(doc, ROOT_NODE_ID, { text: 'A' }));
+      ids.push(addChild(doc, ROOT_NODE_ID, { text: 'B' }));
+    });
+
+    expect(um.undoStack.length).toBe(1); // 恰一条（不是三条：嵌套不产生独立撤销单元）
+    expect(childrenIds(doc, ROOT_NODE_ID)).toEqual(ids);
+
+    expect(undo(um)).toBe(true); // 一次 undo 撤销两个子节点
+    expect(childrenIds(doc, ROOT_NODE_ID)).toEqual([]);
+    for (const id of ids) expect(getNode(doc, id)).toBeNull();
+
+    expect(redo(um)).toBe(true);
+    expect(childrenIds(doc, ROOT_NODE_ID)).toEqual(ids);
+    for (const id of ids) expect(getNode(doc, id)).not.toBeNull();
+  });
+
+  it('内层不重复 normalize：预置违例的修复归最外层 system origin，undo 不复活残缺', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
+    const aId = findIdByText(doc, 'A');
+    const um = createUndoManager(doc);
+    // 裸写预置违例（ghost 条目；origin null 不进撤销栈）
+    doc.transact(() => {
+      const rootChildren = (doc.getMap('nodes').get(ROOT_NODE_ID) as Y.Map<unknown>).get(
+        'children',
+      ) as Y.Array<string>;
+      rootChildren.push(['ghost-id']);
+    });
+    expect(childrenIds(doc, ROOT_NODE_ID)).toEqual([aId, 'ghost-id']); // 残缺在库
+
+    withTransaction(doc, ORIGIN_USER, () => {
+      addChild(doc, ROOT_NODE_ID, { text: 'B' }); // 嵌套 withTransaction
+    });
+    expect(um.undoStack.length).toBe(1);
+    // 修复已发生（外层脏区覆盖 root children 数组）：ghost 条目被清理
+    expect(childrenIds(doc, ROOT_NODE_ID)).not.toContain('ghost-id');
+
+    expect(undo(um)).toBe(true); // 撤销 user 事务：B 消失
+    // 修复不随 undo 复活 → 修复写入归最外层 system origin（不在 user 栈项内）
+    expect(childrenIds(doc, ROOT_NODE_ID)).toEqual([aId]);
+    expect(getNode(doc, aId)!.deleted).toBe(false);
+  });
+
+  it('外层 fn 抛出：内层跳过 normalize，文档除 fn 自身部分写入外无修复提交', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
+    const aId = findIdByText(doc, 'A');
+    doc.transact(() => {
+      const rootChildren = (doc.getMap('nodes').get(ROOT_NODE_ID) as Y.Map<unknown>).get(
+        'children',
+      ) as Y.Array<string>;
+      rootChildren.push(['ghost-id']);
+    });
+    let newId = '';
+    expect(() =>
+      withTransaction(doc, ORIGIN_USER, () => {
+        newId = addChild(doc, ROOT_NODE_ID, { text: 'B' }); // 内层 withTransaction 已提交
+        throw new Error('boom');
+      }),
+    ).toThrow('boom');
+
+    // fn 自身部分写入已提交（Yjs 语义：抛出前已集成的写入保留）
+    expect(getNode(doc, newId)).not.toBeNull();
+    // 内层 normalize 未越权提交：预置 ghost 残留原样（normalize 写入随外层跳过）
+    expect(childrenIds(doc, ROOT_NODE_ID)).toEqual([aId, 'ghost-id', newId]);
   });
 });
 
