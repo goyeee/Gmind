@@ -7,8 +7,9 @@ Gmind 内核：Yjs 文档结构、读快照、写操作、自愈、撤销、剪�
 ```ts
 import * as core from '@gmind/core';
 const doc = core.createTemplateDoc({ title: '我的脑图', children: [{ text: '主题 A' }] }); // 建档
-const id = core.addChild(doc, core.ROOT_NODE_ID, { text: '主题 B' }); // 写操作（user origin，可撤销）
-core.undo(core.createUndoManager(doc)); // 撤销最近一次 user 写事务
+const um = core.createUndoManager(doc); // 先建管理器：只捕获其后提交的 user 写事务
+core.addChild(doc, core.ROOT_NODE_ID, { text: '主题 B' }); // 写操作（user origin，进撤销栈）
+core.undo(um); // 撤销上一次写（返回 true，'主题 B' 消失）；core.redo(um) 可恢复
 const state = core.docToState(doc); // 序列化；docFromState(state) 还原（入口即收敛）
 ```
 
@@ -28,7 +29,7 @@ const state = core.docToState(doc); // 序列化；docFromState(state) 还原（
 
 ### read（只读快照与存活查询）
 
-- `interface DocMeta { title: string; structureType: StructureType; themeId: string }`
+- `interface DocMeta { title: string; structureType: StructureType; themeId: string }` — `StructureType` 来自 `@gmind/shared`
 - `interface NodeImage { key: string; w: number; h: number }`
 - `interface NodeSnapshot { id; text; parentId; childIds; note; href; image: NodeImage | null; icons: Partial<Record<IconGroup, string>>; style: Record<string, string>; collapsed; deleted }`
 - `getMeta(doc: Y.Doc): DocMeta`
@@ -56,7 +57,7 @@ const state = core.docToState(doc); // 序列化；docFromState(state) 还原（
 - `setImage(doc: Y.Doc, id: string, image: NodeImage | null, origin?: WriteOrigin): void`
 - `setIcon(doc: Y.Doc, id: string, group: IconGroup, value: string | null, origin?: WriteOrigin): void`
 - `setCollapsed(doc: Y.Doc, id: string, collapsed: boolean, origin?: WriteOrigin): void` — 默认 ORIGIN_SYSTEM（不进撤销栈）
-- `toggleCollapse(doc: Y.Doc, id: string, origin?: WriteOrigin): void`
+- `toggleCollapse(doc: Y.Doc, id: string, origin?: WriteOrigin): void` — 默认 ORIGIN_SYSTEM（不进撤销栈）
 - `setStyle(doc: Y.Doc, id: string, patch: Record<string, string | number | null>, origin?: WriteOrigin): void`
 - `type StyleScope = 'subtree' | 'single'`
 - `applyStyle(doc: Y.Doc, rootIds: string[], patch: Record<string, string | number | null>, scope: StyleScope, origin?: WriteOrigin): void`
@@ -69,7 +70,8 @@ const state = core.docToState(doc); // 序列化；docFromState(state) 还原（
 
 ### undo（撤销/重做，仅跟踪 ORIGIN_USER 事务，FR-EDT-004）
 
-- `createUndoManager(doc: Y.Doc): Y.UndoManager` — captureTimeout 500ms 合并
+- `const UNDO_STACK_MAX = 100` — 撤销栈默认深度
+- `createUndoManager(doc: Y.Doc): Y.UndoManager` — captureTimeout 500ms 合并；只捕获构造之后提交的事务
 - `capUndoStack(um: Y.UndoManager, max?: number): void` — 默认 `UNDO_STACK_MAX = 100`
 - `undo(um: Y.UndoManager): boolean`
 - `redo(um: Y.UndoManager): boolean`
@@ -85,7 +87,7 @@ const state = core.docToState(doc); // 序列化；docFromState(state) 还原（
 
 - `const ROOT_NODE_ID = 'root'` — 中心主题固定 id，不可删/不可换父
 - `interface TemplateNodeSpec { text: string; children?: TemplateNodeSpec[] }`
-- `interface TemplateSpec { title: string; structure?: StructureType; theme?: string; children: TemplateNodeSpec[] }`
+- `interface TemplateSpec { title: string; structure?: StructureType; theme?: string; children: TemplateNodeSpec[] }` — `StructureType` 来自 `@gmind/shared`
 - `createTemplateDoc(spec: TemplateSpec): Y.Doc`
 - `docToState(doc: Y.Doc): Uint8Array`
 - `docFromState(state: Uint8Array): Y.Doc` — 导入即 normalize（自愈安全网）
