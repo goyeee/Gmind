@@ -2,6 +2,8 @@ import type * as Y from 'yjs';
 import { getNode, requireAliveNode } from './read';
 import { addChild, type AddChildOptions } from './operations';
 import { ORIGIN_USER, type WriteOrigin } from './undo';
+import { MAX_TEXT_LENGTH } from './constants';
+import { GmindCoreError } from './errors';
 
 /**
  * 剪贴板数据层（FR-EDT-009/010 内核）：子树 ⇄ 缩进大纲纯文本。
@@ -50,30 +52,35 @@ function indentLevel(line: string): number {
 
 /**
  * 解析缩进大纲为森林 spec（可能多个根）：Tab 或偶数空格缩进（空格数 ÷2 取整为层级）；
- * 跳过空行/纯空白行。反常缩进不抛错、确定性钳制：缩进跳深超过一层 → 挂到上一行节点的
- * 子级；回退跳过若干层级 → 弹栈挂到最近合法祖先，弹空则成为森林新根。
+ * 跳过空行/纯空白行；入口先归一化 CRLF/CR 为 \n（避免行尾残留 \r）。
+ * 栈内保存原始缩进层级：缩进跳深超过一层 → 挂到上一行节点的子级（钳制）；
+ * 回退则弹栈挂到最近更浅祖先——弹空（含首行即缩进、后续同层行）成为森林新根。
+ * 全程不抛错、确定。
  */
 export function outlineToSpec(text: string): SpecNode[] {
   const forest: SpecNode[] = [];
-  // 栈内为当前路径（自根至上一行），level 为该节点的实际（钳制后）层级
+  // 栈内为当前路径（自根至上一行），level 为该节点的原始缩进层级
   const stack: { node: SpecNode; level: number }[] = [];
-  for (const rawLine of text.split('\n')) {
+  for (const rawLine of text.replace(/\r\n?/g, '\n').split('\n')) {
     if (rawLine.trim() === '') continue;
     const node: SpecNode = { text: rawLine.replace(/^[ \t]+/, ''), children: [] };
     const level = indentLevel(rawLine);
     while (stack.length > 0 && stack[stack.length - 1].level >= level) stack.pop();
     if (stack.length === 0) forest.push(node);
     else stack[stack.length - 1].node.children.push(node);
-    stack.push({ node, level: stack.length === 0 ? 0 : stack[stack.length - 1].level + 1 });
+    stack.push({ node, level });
   }
   return forest;
 }
 
 /**
  * 将森林 spec 逐层插入 parent 下（FR-EDT-010 粘贴）：按 addChild 递归插入，
- * 返回全部新建节点 id（先序）。parent 校验同 addChild 且先于任何写入
- * （缺失 NODE_NOT_FOUND / 墓碑 NODE_DELETED，拒绝即零变更）；
- * index 为首个 spec 根在 parent children 中的位置，后续兄弟 spec 依次紧随其后。
+ * 返回全部新建节点 id（先序）。校验先于任何写入、拒绝即零变更——parent 校验同 addChild
+ * （缺失 NODE_NOT_FOUND / 墓碑 NODE_DELETED），并对整个 spec 递归预校验
+ * （任一节点 text 超 MAX_TEXT_LENGTH 抛 TEXT_TOO_LONG，同 setText 规则；children
+ * 非数组抛 TypeError）。全量预校验后逐点 addChild：循环内仅剩不可能失败的写入，
+ * 从而整次插入 all-or-nothing。index 为首个 spec 根在 parent children 中的位置，
+ * 后续兄弟 spec 依次紧随其后。
  */
 export function insertSpec(
   doc: Y.Doc,
@@ -83,12 +90,24 @@ export function insertSpec(
   origin: WriteOrigin = ORIGIN_USER,
 ): string[] {
   requireAliveNode(doc, parentId);
+  for (const rootSpec of spec) assertSpecValid(rootSpec);
   const ids: string[] = [];
   let cursor = index;
   for (const rootSpec of spec) {
     cursor = insertSpecNode(doc, parentId, cursor, rootSpec, ids, origin);
   }
   return ids;
+}
+
+/** 内部：递归预校验 spec 节点（text 长度、children 为数组）；违规即抛，未做任何写入。 */
+function assertSpecValid(spec: SpecNode): void {
+  if (spec.text.length > MAX_TEXT_LENGTH) {
+    throw new GmindCoreError('TEXT_TOO_LONG', '节点文本长度已达上限');
+  }
+  if (spec.children !== undefined && !Array.isArray(spec.children)) {
+    throw new TypeError('insertSpec: spec.children 必须为数组');
+  }
+  for (const child of spec.children ?? []) assertSpecValid(child);
 }
 
 /** 内部：在 parent 的 index 处插入 spec 节点及全部后代，返回下一个兄弟的插入位置。 */

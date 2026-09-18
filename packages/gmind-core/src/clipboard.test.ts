@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import * as Y from 'yjs';
-import { ROOT_NODE_ID, createTemplateDoc } from './doc';
+import { ROOT_NODE_ID, countNodes, createTemplateDoc } from './doc';
 import { GmindCoreError } from './errors';
 import { addChild, deleteNodes } from './operations';
 import { childrenIds, countAlive, getNode } from './read';
+import { MAX_TEXT_LENGTH } from './constants';
 import { insertSpec, outlineToSpec, subtreeToOutlineText, type SpecNode } from './clipboard';
 
 /** 断言 fn 抛出指定 code 的 GmindCoreError。 */
@@ -110,6 +111,26 @@ describe('outlineToSpec', () => {
     expect(spec[1]!.children[0]!.text).toBe('B-1');
   });
 
+  it('同层缩进的首行保留原始层级，后续同层行为森林兄弟（不并成单根链）', () => {
+    expect(outlineToSpec('\tA\n\tB')).toEqual([
+      { text: 'A', children: [] },
+      { text: 'B', children: [] },
+    ]);
+    expect(outlineToSpec('  A\n  B')).toEqual([
+      { text: 'A', children: [] },
+      { text: 'B', children: [] },
+    ]);
+  });
+
+  it('解析入口归一化 CRLF/CR，节点 text 不残留 \\r', () => {
+    expect(outlineToSpec('A\r\n\tB\r\n')).toEqual([
+      { text: 'A', children: [{ text: 'B', children: [] }] },
+    ]);
+    expect(outlineToSpec('A\r\tB')).toEqual([
+      { text: 'A', children: [{ text: 'B', children: [] }] },
+    ]);
+  });
+
   it('反常缩进钳制到最近合法祖先层级，结果确定（不抛错）', () => {
     // 1 个 Tab 之后出现 3 个 Tab：钳制为 1 Tab 节点（A-1）的子节点
     const text = 'A\n\tA-1\n\t\t\tDeep';
@@ -147,6 +168,34 @@ describe('insertSpec', () => {
     expect(childrenIds(doc, ROOT_NODE_ID).map((id) => getNode(doc, id)!.text)).toEqual([
       'P', 'R', 'Q', 'X',
     ]);
+  });
+
+  it('spec 含超长文本（含深层嵌套）全量预校验抛 TEXT_TOO_LONG，且文档零变更', () => {
+    const doc = createTemplateDoc({ title: '中心', children: [] });
+    const long = 'x'.repeat(MAX_TEXT_LENGTH + 1);
+    const aliveBefore = countAlive(doc);
+    const nodesBefore = countNodes(doc);
+
+    expectErrorCode(
+      () => insertSpec(doc, ROOT_NODE_ID, 0, [{ text: 'OK', children: [] }, { text: long, children: [] }]),
+      'TEXT_TOO_LONG',
+    );
+    // 违规节点藏在深层同样先被拒
+    expectErrorCode(
+      () => insertSpec(doc, ROOT_NODE_ID, 0, [{ text: 'OK', children: [{ text: long, children: [] }] }]),
+      'TEXT_TOO_LONG',
+    );
+    expect(countAlive(doc)).toBe(aliveBefore);
+    expect(countNodes(doc)).toBe(nodesBefore);
+  });
+
+  it('合法 spec 行为不变（预校验后逐点插入）', () => {
+    const doc = createTemplateDoc({ title: '中心', children: [] });
+    const ids = insertSpec(doc, ROOT_NODE_ID, 0, [
+      { text: 'P', children: [{ text: 'P-1', children: [] }] },
+    ]);
+    expect(ids).toHaveLength(2);
+    expect(ids.map((id) => getNode(doc, id)!.text)).toEqual(['P', 'P-1']);
   });
 
   it('parent 为墓碑抛 NODE_DELETED；不存在抛 NODE_NOT_FOUND；拒绝时文档零变更', () => {
