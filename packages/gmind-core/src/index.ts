@@ -6,3 +6,4 @@ export * from './read';
 export * from './undo';
 export * from './operations';
 export * from './repair';
+export * from './clipboard';
