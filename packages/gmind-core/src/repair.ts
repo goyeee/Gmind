@@ -99,7 +99,8 @@ export function normalizeTree(doc: Y.Doc, origin: string = ORIGIN_SYSTEM): numbe
   }
 
   // ── 阶段二（规划）：存活非 root 节点若不在其 parentId 的 children 中 → 追加到末尾。
-  //    追加顺序即 nodes 遍历序——Yjs 收敛后各副本 entries 序一致，仍是状态的纯函数。
+  //    注意：nodes 迭代序是「本副本插入序」（本地键先于远端键），不属于 CRDT 收敛状态，
+  //    不可用作写入顺序；追加序由收集后的 id 升序排序决定（见 appends.sort）。
   const appends: ChildAppend[] = [];
   for (const [id, node] of nodes.entries()) {
     if (id === ROOT_NODE_ID) continue;
@@ -120,6 +121,10 @@ export function normalizeTree(doc: Y.Doc, origin: string = ORIGIN_SYSTEM): numbe
     appends.push({ parentId, childId: id });
     repairs += 1;
   }
+
+  // 追加序 = childId 升序：id 是可观测的文档状态，跨副本完全一致——这是
+  // 「同状态必同结果」的关键（nodes 遍历序是每副本本地插入序，跨副本不可靠）。
+  appends.sort((a, b) => (a.childId < b.childId ? -1 : a.childId > b.childId ? 1 : 0));
 
   // ── 事务纪律：无修复不开事务、零写入；有修复则在单个 origin 事务内统一应用。
   if (repairs === 0) return 0;

@@ -259,4 +259,38 @@ describe('normalizeTree 交错一致性（FR-COL-003 单机预演）', () => {
     expect(snapA[x1Id]!.deleted).toBe(true);
     expect(snapA[p1Id]!.childIds).toEqual([]);
   });
+
+  it('并发建点 + 复制的 children 清空破坏：多孤儿追加顺序按 id 升序，跨副本一致', () => {
+    // 评审 C3 场景：nodes 迭代序是「本副本插入序」（本地键先于远端键），不属于
+    // CRDT 收敛状态——同状态不同迭代序时，多孤儿追加必须按可观测状态（id）定序。
+    const base = createTemplateDoc({ title: 'T', children: [{ text: 'P' }] });
+    const state = docToState(base);
+    const docA = docFromState(state);
+    const docB = docFromState(state);
+    const pId = findIdByText(docA, 'P');
+
+    // 并发建点：A 本地建 X，B 本地建 Y
+    const xId = addChild(docA, pId, { text: 'X' });
+    const yId = addChild(docB, pId, { text: 'Y' });
+    expect(xId).not.toBe(yId);
+
+    // 双向同步：CRDT 状态一致（entries 迭代序不一致：A=[root,P,X,Y]，B=[root,P,Y,X]）
+    exchange(docA, docB);
+
+    // 复制的破坏：A 清空 P.children（两个孤儿），并传播到 B → 两端状态再次一致
+    docA.transact(() => {
+      rawChildren(docA, pId).delete(0, 2);
+    });
+    Y.applyUpdate(docB, Y.encodeStateAsUpdate(docA));
+    expect(childrenIds(docA, pId)).toEqual([]);
+    expect(childrenIds(docB, pId)).toEqual([]);
+
+    normalizeTree(docA, ORIGIN_SYSTEM);
+    normalizeTree(docB, ORIGIN_SYSTEM);
+
+    // 收敛断言：P.children 两端完全一致，且等于孤儿按 id 升序（跨副本稳定序）
+    const expected = [xId, yId].sort();
+    expect(childrenIds(docA, pId)).toEqual(expected);
+    expect(childrenIds(docB, pId)).toEqual(expected);
+  });
 });
