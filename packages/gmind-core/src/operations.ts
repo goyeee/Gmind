@@ -9,7 +9,7 @@ import {
 import { GmindCoreError } from './errors';
 import { ROOT_NODE_ID } from './doc';
 import { requireAliveNode, subtreeIds, type NodeImage } from './read';
-import { normalizeTree } from './repair';
+import { normalizeTree, normalizeTreeFor, deriveNormalizeDirty } from './repair';
 import { ORIGIN_SYSTEM, ORIGIN_USER, type WriteOrigin } from './undo';
 
 /** 写操作来源常量定义于 undo.ts（撤销栈同源）；此处 re-export 保持既有导入路径可用。 */
@@ -28,15 +28,41 @@ export interface WithTransactionOptions {
   normalize?: boolean;
 }
 
-/** 统一写入口：doc.transact(fn, origin) + 事务后 normalizeTree（默认开启）。 */
+/** 统一写入口：doc.transact(fn, origin) + 事务后按脏区增量 normalizeTree（默认开启）。
+ * 脏区由事务对象推导（deriveNormalizeDirty，replica 一致）；无法确定性识别的形状
+ * （未知根类型/未知嵌套数组/root 缺失/嵌套事务）退回全量 normalizeTree 安全阀。 */
 export function withTransaction<T>(
   doc: Y.Doc,
   origin: WriteOrigin,
   fn: () => T,
   opts: WithTransactionOptions = {},
 ): T {
-  const result = doc.transact(fn, origin);
-  if (opts.normalize !== false) normalizeTree(doc, ORIGIN_SYSTEM);
+  // afterTransaction 监听在事务 GC（tryGcDeleteSet）之前触发，可安全读取脏区
+  // （含被覆盖键的旧值 item 链）；一次性注册，finally 注销。
+  let captured: Y.Transaction | null = null;
+  const capture = (tr: Y.Transaction): void => {
+    captured = tr;
+  };
+  doc.on('afterTransaction', capture);
+  let committed = false;
+  let result: T;
+  try {
+    result = doc.transact(fn, origin);
+    committed = true;
+  } finally {
+    doc.off('afterTransaction', capture);
+  }
+  // fn 抛出时（部分写入已提交）与原行为一致：跳过 normalize 向上传播。
+  if (committed && opts.normalize !== false) {
+    if (captured === null) {
+      // 嵌套事务（外层未提交，afterTransaction 未触发）：维持原全量行为
+      normalizeTree(doc, ORIGIN_SYSTEM);
+    } else {
+      const dirty = deriveNormalizeDirty(doc, captured);
+      if (dirty === null) normalizeTree(doc, ORIGIN_SYSTEM);
+      else normalizeTreeFor(doc, ORIGIN_SYSTEM, dirty);
+    }
+  }
   return result;
 }
 

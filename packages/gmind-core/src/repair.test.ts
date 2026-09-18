@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import * as Y from 'yjs';
 import type { Transaction } from 'yjs';
 import { ROOT_NODE_ID, createTemplateDoc, docFromState, docToState } from './doc';
-import { ORIGIN_SYSTEM, addChild, deleteNodes, moveNode } from './operations';
+import { ORIGIN_SYSTEM, ORIGIN_USER, addChild, deleteNodes, moveNode, setText, withTransaction } from './operations';
 import { childrenIds, getNode } from './read';
 import type { NodeSnapshot } from './read';
 import { normalizeTree } from './repair';
@@ -292,5 +292,112 @@ describe('normalizeTree 交错一致性（FR-COL-003 单机预演）', () => {
     const expected = [xId, yId].sort();
     expect(childrenIds(docA, pId)).toEqual(expected);
     expect(childrenIds(docB, pId)).toEqual(expected);
+  });
+});
+
+describe('normalizeTreeFor 事务脏区增量（与全量等价，Task 9 修复轮）', () => {
+  it('move+delete 残渣事务（裸写）：增量 normalize 与全量 normalize 快照一致，且增量后全量残留为 0', () => {
+    const base = createTemplateDoc({
+      title: 'T',
+      children: [
+        { text: 'P1', children: [{ text: 'A' }] },
+        { text: 'P2', children: [{ text: 'B' }] },
+        { text: 'X' },
+      ],
+    });
+    const state = docToState(base);
+    const docA = docFromState(state); // 增量路径（withTransaction 按脏区 normalize）
+    const docB = docFromState(state); // 全量路径（同一残渣 update + normalizeTree）
+    const xId = findIdByText(docA, 'X');
+    const p1Id = findIdByText(docA, 'P1');
+    const bId = findIdByText(docA, 'B');
+    const p2Id = findIdByText(docA, 'P2');
+
+    // 残渣事务：裸写、不带 removeFromParentChildren/墓碑联动（模拟复制残缺的远端事务）
+    // ① X 换父到 P1，但旧父（root）children 残留 X —— 走 parentId 旧值链推导
+    // ② B 裸墓碑，但 P2.children 残留 B —— 走 deleted 键推导
+    const sv = Y.encodeStateVector(docA);
+    withTransaction(docA, ORIGIN_USER, () => {
+      rawNode(docA, xId).set('parentId', p1Id);
+      rawNode(docA, bId).set('deleted', true);
+    });
+    Y.applyUpdate(docB, Y.encodeStateAsUpdate(docA, sv));
+    expect(fullSnapshot(docB)).toEqual(fullSnapshot(docA)); // 事务后（normalize 前）两端一致
+
+    normalizeTree(docB, ORIGIN_SYSTEM); // docB 全量修复
+    const snapA = fullSnapshot(docA);
+    const snapB = fullSnapshot(docB);
+    expect(snapA).toEqual(snapB); // 增量与全量最终状态一致
+    // 具体结局：X 只挂在 P1 下；B 条目从 P2 清除、本体保留墓碑
+    expect(snapA[xId]).toMatchObject({ parentId: p1Id, deleted: false });
+    // 具体结局：X 只挂在 P1 下（原子 A 在前，X 追加）；B 条目从 P2 清除、本体保留墓碑
+    expect(snapA[p1Id]!.childIds).toEqual([findIdByText(docA, 'A'), xId]);
+    expect(snapA[p2Id]!.childIds).toEqual([]);
+    expect(snapA[bId]!.deleted).toBe(true);
+    expect(snapA[findIdByText(docA, 'A')]!.deleted).toBe(false);
+    // 增量无残留：全量复扫为 0（对状态所有规则违例的等价性收口断言）
+    expect(normalizeTree(docA, ORIGIN_SYSTEM)).toBe(0);
+    expect(normalizeTree(docB, ORIGIN_SYSTEM)).toBe(0);
+  });
+
+  it('常规操作流差分：每个混合操作后，全量复扫（同状态克隆）均无残留且快照不变', () => {
+    // 每个操作（增量 normalize 后）克隆当前状态跑全量 normalizeTree：修复数必须为 0
+    // 且快照不变——若增量漏掉该事务制造的任何规则违例，克隆上的全量复扫必然 > 0。
+    // （新建节点 id 含 ulid 随机量，无法跨文档复现同序操作，故采用「逐操作克隆复扫」。）
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: 'P1' }, { text: 'P2' }] });
+    const p1 = findIdByText(doc, 'P1');
+    const p2 = findIdByText(doc, 'P2');
+    const pool: string[] = [p1, p2]; // 非 root 存活节点（root 不可 move/delete）
+    let seed = 0x5eed1234;
+    const rnd = (): number => {
+      seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+      return seed;
+    };
+    const pickId = (): string => pool[rnd() % pool.length];
+    const pickParent = (): string => (rnd() % 4 === 0 ? ROOT_NODE_ID : pickId());
+    const subtreeOf = (id: string): string[] => {
+      const out: string[] = [];
+      const walk = (nodeId: string): void => {
+        const node = doc.getMap('nodes').get(nodeId) as Y.Map<unknown> | undefined;
+        if (!node || node.get('deleted') === true) return;
+        out.push(nodeId);
+        for (const childId of getNode(doc, nodeId)!.childIds) walk(childId);
+      };
+      walk(id);
+      return out;
+    };
+    for (let i = 0; i < 200; i += 1) {
+      switch (i % 4) {
+        case 0:
+          pool.push(addChild(doc, pickParent(), { text: `n${i}` }));
+          break;
+        case 1:
+          setText(doc, pickId(), `t${i}`);
+          break;
+        case 2: {
+          const id = pickId();
+          let target = pickParent();
+          if (subtreeOf(id).includes(target)) target = ROOT_NODE_ID;
+          moveNode(doc, id, target);
+          break;
+        }
+        default: {
+          const id = pickId();
+          const removed = subtreeOf(id);
+          deleteNodes(doc, [id]);
+          const gone = new Set(removed);
+          for (let k = pool.length - 1; k >= 0; k -= 1) {
+            if (gone.has(pool[k])) pool.splice(k, 1);
+          }
+          pool.push(addChild(doc, ROOT_NODE_ID, { text: `补充${i}` }));
+          break;
+        }
+      }
+      const clone = docFromState(docToState(doc));
+      const before = fullSnapshot(doc);
+      expect(normalizeTree(clone, ORIGIN_SYSTEM), `op #${i}`).toBe(0);
+      expect(fullSnapshot(clone), `op #${i}`).toEqual(before);
+    }
+    expect(normalizeTree(doc, ORIGIN_SYSTEM)).toBe(0);
   });
 });
