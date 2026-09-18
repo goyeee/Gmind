@@ -103,7 +103,8 @@ function tombstoneSubtree(doc: Y.Doc, nodeId: string): void {
   }
 }
 
-/** 内部：从父节点的 children 数组中移除 childId（含容错：父缺失/无 children/重复项）。 */
+/** 内部：从父节点的 children 数组中移除 childId（含容错：父缺失/无 children/重复项）。
+ * 父节点已墓碑时不动其 children——那是保留结构（快照还原依据），如批量 [祖先, 后代] 连删。 */
 function removeFromParentChildren(doc: Y.Doc, childId: string): void {
   const nodes = nodesMap(doc);
   const node = nodes.get(childId);
@@ -111,7 +112,7 @@ function removeFromParentChildren(doc: Y.Doc, childId: string): void {
   const parentId = node.get('parentId');
   if (typeof parentId !== 'string' || parentId === '') return;
   const parent = nodes.get(parentId);
-  if (!parent) return;
+  if (!parent || parent.get('deleted') === true) return;
   const children = parent.get('children') as Y.Array<string> | undefined;
   if (!children) return;
   // Y.Array 无 indexOf，借 toArray() 定位（数组极小，开销可忽略）

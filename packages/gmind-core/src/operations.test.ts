@@ -235,6 +235,26 @@ describe('deleteNodes', () => {
     expect(getNode(doc, aId)!.deleted).toBe(false);
     expect(childrenIds(doc, ROOT_NODE_ID)).toEqual([aId]);
   });
+
+  it('批量 [祖先, 后代] 连删：不改动已墓碑祖先的保留 children 数组（T4 评审钉死）', () => {
+    const doc = buildTestTree();
+    const aId = findIdByText(doc, 'A');
+    const a1Id = findIdByText(doc, 'A1');
+    const a1aId = findIdByText(doc, 'A1a');
+    const a2Id = findIdByText(doc, 'A2');
+    const childIdsBefore = getNode(doc, aId)!.childIds;
+
+    deleteNodes(doc, [aId, a1Id]);
+
+    // 后代处理不得改动祖先保留的 children 数组（快照还原约束）
+    const aRaw = doc.getMap('nodes').get(aId) as Y.Map<unknown>;
+    expect((aRaw.get('children') as Y.Array<string>).toArray()).toEqual(childIdsBefore);
+    expect((aRaw.get('children') as Y.Array<string>).toArray()).toEqual([a1Id, a2Id]);
+    expect(getNode(doc, aId)!.childIds).toEqual(childIdsBefore);
+    // 后代仍正常墓碑
+    expect(getNode(doc, a1Id)!.deleted).toBe(true);
+    expect(getNode(doc, a1aId)!.deleted).toBe(true);
+  });
 });
 
 describe('moveNode', () => {
