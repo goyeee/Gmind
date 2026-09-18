@@ -1,6 +1,8 @@
 import * as Y from 'yjs';
 import { ulid } from 'ulid';
 import type { StructureType } from '@gmind/shared';
+import { normalizeTree } from './repair';
+import { ORIGIN_SYSTEM } from './undo';
 
 // doc.test.ts 与消费方统一从 './doc' 导入全部公开 API；数据本体在 templates.ts（import type 单向依赖，无运行时环）。
 export { SEED_TEMPLATES } from './templates';
@@ -69,6 +71,10 @@ export function docToState(doc: Y.Doc): Uint8Array {
 export function docFromState(state: Uint8Array): Y.Doc {
   const doc = new Y.Doc();
   Y.applyUpdate(doc, state);
+  // 导入即收敛（Task 9 修复轮 2）：导入/恢复是唯一「外部状态直入」的入口，状态可能
+  // 携带残缺写入的规则违例（换父败者侧、孤儿等）——入口处全量 normalize 一次，
+  // 保证 docFromState 返回的文档恒满足 §4.2 全部不变量。
+  normalizeTree(doc, ORIGIN_SYSTEM);
   return doc;
 }
 

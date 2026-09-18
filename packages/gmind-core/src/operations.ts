@@ -28,15 +28,29 @@ export interface WithTransactionOptions {
   normalize?: boolean;
 }
 
+/** 摊销安全网间隔：每 64 次本地写做一次全量 normalize 清扫（见 withTransaction）。 */
+const SAFETY_SWEEP_INTERVAL = 64;
+
+/**
+ * 每文档写计数（模块级 WeakMap）：仅本地调度用，不进文档状态、不参与副本收敛——
+ * normalize 是文档状态的纯函数，计数只决定「何时」做全量清扫，不改变收敛结果。
+ */
+const writeCounters = new WeakMap<Y.Doc, number>();
+
 /** 统一写入口：doc.transact(fn, origin) + 事务后按脏区增量 normalizeTree（默认开启）。
  * 脏区由事务对象推导（deriveNormalizeDirty，replica 一致）；无法确定性识别的形状
- * （未知根类型/未知嵌套数组/root 缺失/嵌套事务）退回全量 normalizeTree 安全阀。 */
+ * （未知根类型/未知嵌套数组/root 缺失/嵌套事务）退回全量 normalizeTree 安全阀。
+ * 自愈安全网（Task 9 修复轮 2）：脏区推导只覆盖「本事务制造的违例」，历史残留
+ * （未走本入口的裸写等）由每 64 次写一次的全量 normalizeTree 清扫兜底——全量扫描
+ * 蕴含增量修复（同一收敛结果），故第 64 写以全量替代增量而非叠加。 */
 export function withTransaction<T>(
   doc: Y.Doc,
   origin: WriteOrigin,
   fn: () => T,
   opts: WithTransactionOptions = {},
 ): T {
+  const writes = (writeCounters.get(doc) ?? 0) + 1;
+  writeCounters.set(doc, writes);
   // afterTransaction 监听在事务 GC（tryGcDeleteSet）之前触发，可安全读取脏区
   // （含被覆盖键的旧值 item 链）；一次性注册，finally 注销。
   let captured: Y.Transaction | null = null;
@@ -54,7 +68,9 @@ export function withTransaction<T>(
   }
   // fn 抛出时（部分写入已提交）与原行为一致：跳过 normalize 向上传播。
   if (committed && opts.normalize !== false) {
-    if (captured === null) {
+    if (writes % SAFETY_SWEEP_INTERVAL === 0) {
+      normalizeTree(doc, ORIGIN_SYSTEM); // 摊销全量清扫（蕴含增量）
+    } else if (captured === null) {
       // 嵌套事务（外层未提交，afterTransaction 未触发）：维持原全量行为
       normalizeTree(doc, ORIGIN_SYSTEM);
     } else {

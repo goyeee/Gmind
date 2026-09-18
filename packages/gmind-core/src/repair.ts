@@ -38,6 +38,16 @@ import { ORIGIN_SYSTEM } from './undo';
  * 墓碑 GC 说明（有意不做，M2 语义需要）：墓碑节点是撤销/快照还原依据，永不清除，
  * nodes Y.Map 随「删除+新建」流量单调增长；增量 normalize 后单次操作成本只与脏区
  * 相关（不再随 map 总量线性上涨），500 节点产品上限下增长缓慢，GC 留待 M2 裁决。
+ *
+ * ── 自愈安全网与 M2 准入清单（Task 9 修复轮 2 留档）──────────────────────
+ * 增量路径只修复「触发事务自己制造的违例」；历史残留由两道安全网兜底：
+ *  ① 导入即收敛：docFromState 在 applyUpdate 后全量 normalize 一次（唯一的外部
+ *     状态直入入口，doc.ts）；
+ *  ② 摊销清扫：withTransaction 每第 64 次本地写做一次全量 normalize（operations.ts，
+ *     本地写计数 WeakMap，不参与副本收敛）。
+ * M2 准入项：远端 applyUpdate 路径**必须**以同一脏区推导触发 normalize
+ * （deriveNormalizeDirty 已就绪；接线方式——applyUpdate 钩子或同步层显式调用——
+ * 在 M2 裁决）。在此之前，远端残留由上两道安全网在有限次本地写内收敛。
  */
 
 function nodesMap(doc: Y.Doc): Y.Map<Y.Map<unknown>> {

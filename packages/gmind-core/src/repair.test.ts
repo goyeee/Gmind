@@ -400,4 +400,55 @@ describe('normalizeTreeFor 事务脏区增量（与全量等价，Task 9 修复�
     }
     expect(normalizeTree(doc, ORIGIN_SYSTEM)).toBe(0);
   });
+
+  it('导入即收敛：携带规则④残缺的状态经 docFromState 后快照干净（修复轮 2 钉死）', () => {
+    // 构造脏状态：X 本在 P1 下，裸写混入 P2.children（同节点两个父级）→ 导出
+    const dirty = createTemplateDoc({
+      title: 'T',
+      children: [{ text: 'P1', children: [{ text: 'X' }] }, { text: 'P2' }],
+    });
+    const xDirty = findIdByText(dirty, 'X');
+    const p2Dirty = findIdByText(dirty, 'P2');
+    dirty.transact(() => {
+      rawChildren(dirty, p2Dirty).push([xDirty]);
+    });
+    expect(childrenIds(dirty, p2Dirty)).toEqual([xDirty]); // 残缺在库
+
+    const healed = docFromState(docToState(dirty));
+    const xId = findIdByText(healed, 'X');
+    const p1Id = findIdByText(healed, 'P1');
+    const p2Id = findIdByText(healed, 'P2');
+    expect(getNode(healed, xId)).toMatchObject({ parentId: p1Id, deleted: false });
+    expect(childrenIds(healed, p1Id)).toEqual([xId]);
+    expect(childrenIds(healed, p2Id)).toEqual([]); // 败者侧已清理
+    expect(normalizeTree(healed, ORIGIN_SYSTEM)).toBe(0); // 入口已收敛，无残留
+  });
+
+  it('摊销安全网：裸写残留最迟在第 64 次 withTransaction 写内被全量清扫治愈（修复轮 2 钉死）', () => {
+    const doc = createTemplateDoc({
+      title: 'T',
+      children: [{ text: 'P1', children: [{ text: 'X' }] }, { text: 'P2' }],
+    });
+    const xId = findIdByText(doc, 'X');
+    const p1Id = findIdByText(doc, 'P1');
+    const p2Id = findIdByText(doc, 'P2');
+    // 裸写残缺（绕过 withTransaction，不触发任何 normalize）
+    doc.transact(() => {
+      rawChildren(doc, p2Id).push([xId]);
+    });
+    const holders = (): number =>
+      [...doc.getMap('nodes').values()].filter((n) =>
+        ((n as Y.Map<unknown>).get('children') as Y.Array<string> | undefined)?.toArray().includes(xId),
+      ).length;
+    expect(holders()).toBe(2); // 残缺在库：X 同时挂在 P1 与 P2
+
+    for (let i = 0; i < 64; i += 1) {
+      setText(doc, p1Id, `t${i}`); // 与残缺无关的写（脏区推导为空）
+    }
+    expect(holders()).toBe(1); // 第 64 写的全量清扫已治愈
+    expect(childrenIds(doc, p1Id)).toEqual([xId]);
+    expect(childrenIds(doc, p2Id)).toEqual([]);
+    expect(getNode(doc, xId)!.deleted).toBe(false);
+    expect(normalizeTree(doc, ORIGIN_SYSTEM)).toBe(0); // 无任何残留
+  });
 });
