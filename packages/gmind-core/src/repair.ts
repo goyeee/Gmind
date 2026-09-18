@@ -1,6 +1,6 @@
 import * as Y from 'yjs';
 import { ROOT_NODE_ID } from './doc';
-import { ORIGIN_SYSTEM } from './operations';
+import { ORIGIN_SYSTEM } from './undo';
 
 /**
  * normalizeTree —— 树结构 repair 收敛（spec §4.2，全项目唯一自研共识点）。

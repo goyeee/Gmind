@@ -5,11 +5,11 @@ import { GmindCoreError } from './errors';
 import { ROOT_NODE_ID } from './doc';
 import { requireAliveNode, subtreeIds } from './read';
 import { normalizeTree } from './repair';
+import { ORIGIN_SYSTEM, ORIGIN_USER, type WriteOrigin } from './undo';
 
-/** 写操作来源：'user'（可撤销）/ 'system'（内部/修复，不进撤销栈）。 */
-export type WriteOrigin = string;
-export const ORIGIN_USER: WriteOrigin = 'user';
-export const ORIGIN_SYSTEM: WriteOrigin = 'system';
+/** 写操作来源常量定义于 undo.ts（撤销栈同源）；此处 re-export 保持既有导入路径可用。 */
+export { ORIGIN_USER, ORIGIN_SYSTEM };
+export type { WriteOrigin };
 
 export interface AddChildOptions {
   /** 插入位置；缺省追加末尾，越界（负数或超过长度）clamp 到末尾。 */

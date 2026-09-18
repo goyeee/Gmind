@@ -3,5 +3,6 @@ export * from './templates';
 export * from './constants';
 export * from './errors';
 export * from './read';
+export * from './undo';
 export * from './operations';
 export * from './repair';
