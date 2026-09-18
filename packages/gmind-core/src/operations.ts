@@ -1,9 +1,14 @@
 import * as Y from 'yjs';
 import { ulid } from 'ulid';
-import { MAX_TEXT_LENGTH } from './constants';
+import {
+  ICON_GROUPS,
+  MAX_NOTE_LENGTH,
+  MAX_TEXT_LENGTH,
+  type IconGroup,
+} from './constants';
 import { GmindCoreError } from './errors';
 import { ROOT_NODE_ID } from './doc';
-import { requireAliveNode, subtreeIds } from './read';
+import { requireAliveNode, subtreeIds, type NodeImage } from './read';
 import { normalizeTree } from './repair';
 import { ORIGIN_SYSTEM, ORIGIN_USER, type WriteOrigin } from './undo';
 
@@ -185,5 +190,185 @@ export function moveNode(
     const len = newChildren.length;
     const idx = index !== undefined && index >= 0 && index <= len ? index : len;
     newChildren.insert(idx, [id]);
+  });
+}
+
+/**
+ * 设置节点备注（FR-EDT-018）。
+ * 校验（先于 transact，拒绝即零变更）：存活；长度 ≤ MAX_NOTE_LENGTH，否则 NOTE_TOO_LONG。
+ */
+export function setNote(
+  doc: Y.Doc,
+  id: string,
+  note: string,
+  origin: WriteOrigin = ORIGIN_USER,
+): void {
+  if (note.length > MAX_NOTE_LENGTH) {
+    throw new GmindCoreError('NOTE_TOO_LONG', '备注长度已达上限');
+  }
+  const node = requireAliveNode(doc, id);
+  withTransaction(doc, origin, () => {
+    node.set('note', note);
+  });
+}
+
+/**
+ * 设置节点链接（FR-EDT-019）：仅允许 http/https；空串表示清除。
+ * 校验（先于 transact，拒绝即零变更）：存活；/^https?:\/\//i 或空串，否则 INVALID_HREF。
+ */
+export function setHref(
+  doc: Y.Doc,
+  id: string,
+  href: string,
+  origin: WriteOrigin = ORIGIN_USER,
+): void {
+  if (href !== '' && !/^https?:\/\//i.test(href)) {
+    throw new GmindCoreError('INVALID_HREF', '链接仅支持 http/https');
+  }
+  const node = requireAliveNode(doc, id);
+  withTransaction(doc, origin, () => {
+    node.set('href', href);
+  });
+}
+
+/**
+ * 设置节点图片（FR-EDT-020）：{key,w,h} 写入；null 清除（读回 null，spec §4.1 缺省语义）。
+ * 校验（先于 transact）：存活。
+ */
+export function setImage(
+  doc: Y.Doc,
+  id: string,
+  image: NodeImage | null,
+  origin: WriteOrigin = ORIGIN_USER,
+): void {
+  const node = requireAliveNode(doc, id);
+  withTransaction(doc, origin, () => {
+    if (image === null) node.delete('image');
+    else node.set('image', image);
+  });
+}
+
+/**
+ * 设置节点图标（FR-EDT-021）：组内替换即覆盖；value null 删除该组。
+ * icons 为节点上的 Y.Map（spec §4.1），缺失时同事务内创建（约定与 read.ts 读取侧一致）。
+ * 校验（先于 transact，拒绝即零变更）：存活；group ∈ ICON_GROUPS，否则 INVALID_ICON_GROUP。
+ */
+export function setIcon(
+  doc: Y.Doc,
+  id: string,
+  group: IconGroup,
+  value: string | null,
+  origin: WriteOrigin = ORIGIN_USER,
+): void {
+  if (!ICON_GROUPS.includes(group)) {
+    throw new GmindCoreError('INVALID_ICON_GROUP', '未知的图标分组');
+  }
+  const node = requireAliveNode(doc, id);
+  withTransaction(doc, origin, () => {
+    writeIcon(node, group, value);
+  });
+}
+
+/** 内部：取节点 icons Y.Map（缺失则创建并挂到节点上，需在事务内调用）。 */
+function iconsMapOf(node: Y.Map<unknown>): Y.Map<string> {
+  let icons = node.get('icons') as Y.Map<string> | undefined;
+  if (!icons) {
+    icons = new Y.Map<string>();
+    node.set('icons', icons);
+  }
+  return icons;
+}
+
+/** 内部：向节点 icons Y.Map 写入/删除一组图标。 */
+function writeIcon(node: Y.Map<unknown>, group: IconGroup, value: string | null): void {
+  const icons = iconsMapOf(node);
+  if (value === null) icons.delete(group);
+  else icons.set(group, value);
+}
+
+/**
+ * 折叠/展开节点（FR-EDT-030）。默认 ORIGIN_SYSTEM：同步生效但不可撤销
+ * （spec §4.2 第 5 条裁决——折叠状态不进撤销栈）。
+ */
+export function setCollapsed(
+  doc: Y.Doc,
+  id: string,
+  collapsed: boolean,
+  origin: WriteOrigin = ORIGIN_SYSTEM,
+): void {
+  const node = requireAliveNode(doc, id);
+  withTransaction(doc, origin, () => {
+    node.set('collapsed', collapsed);
+  });
+}
+
+/** 翻转折叠状态（默认 ORIGIN_SYSTEM，同 setCollapsed 不可撤销）。 */
+export function toggleCollapse(doc: Y.Doc, id: string, origin: WriteOrigin = ORIGIN_SYSTEM): void {
+  const node = requireAliveNode(doc, id);
+  withTransaction(doc, origin, () => {
+    node.set('collapsed', node.get('collapsed') !== true);
+  });
+}
+
+/** 内部：向节点 style Y.Map 应用 patch；value null 删除键；数值归一为字符串（与 NodeSnapshot.style 一致）。 */
+function writeStylePatch(node: Y.Map<unknown>, patch: Record<string, string | number | null>): void {
+  let style = node.get('style') as Y.Map<string> | undefined;
+  if (!style) {
+    style = new Y.Map<string>();
+    node.set('style', style);
+  }
+  for (const [attr, value] of Object.entries(patch)) {
+    if (value === null) style.delete(attr);
+    else style.set(attr, String(value));
+  }
+}
+
+/**
+ * 修改节点样式（FR-EDT-030）：多键 patch；value null 删除该键。
+ * 校验（先于 transact，拒绝即零变更）：存活。
+ */
+export function setStyle(
+  doc: Y.Doc,
+  id: string,
+  patch: Record<string, string | number | null>,
+  origin: WriteOrigin = ORIGIN_USER,
+): void {
+  const node = requireAliveNode(doc, id);
+  withTransaction(doc, origin, () => {
+    writeStylePatch(node, patch);
+  });
+}
+
+/** applyStyle 作用域：'subtree' 对每个 root 的全部存活后代（含自身）；'single' 仅节点自身。 */
+export type StyleScope = 'subtree' | 'single';
+
+/**
+ * 批量样式（FR-EDT-015 多选）：目标 id 在事务前收集完毕（rootIds 全部存活校验，
+ * subtree 作用域经 subtreeIds 展开含自身），随后单个 withTransaction 写入全部目标——
+ * 多选节点同时生效、撤销一次全部回滚。subtreeIds 跳过墓碑（对墓碑样式无意义）。
+ */
+export function applyStyle(
+  doc: Y.Doc,
+  rootIds: string[],
+  patch: Record<string, string | number | null>,
+  scope: StyleScope,
+  origin: WriteOrigin = ORIGIN_USER,
+): void {
+  const targets = new Set<string>();
+  for (const rootId of rootIds) {
+    requireAliveNode(doc, rootId);
+    if (scope === 'subtree') {
+      for (const targetId of subtreeIds(doc, rootId)) targets.add(targetId);
+    } else {
+      targets.add(rootId);
+    }
+  }
+  withTransaction(doc, origin, () => {
+    const nodes = nodesMap(doc);
+    for (const targetId of targets) {
+      const node = nodes.get(targetId);
+      if (!node) continue; // 防御：事务前已校验存活，正常不可达
+      writeStylePatch(node, patch);
+    }
   });
 }

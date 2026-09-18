@@ -6,13 +6,23 @@ import { GmindCoreError } from './errors';
 import { childrenIds, countAlive, getNode } from './read';
 import {
   addChild,
+  applyStyle,
   deleteNodes,
   moveNode,
+  setImage,
+  setIcon,
+  setNote,
+  setHref,
+  setCollapsed,
+  setStyle,
   setText,
+  toggleCollapse,
   withTransaction,
   ORIGIN_SYSTEM,
   ORIGIN_USER,
 } from './operations';
+import { createUndoManager } from './undo';
+import { MAX_NOTE_LENGTH, type IconGroup } from './constants';
 
 /** 按文本查节点 id（测试辅助；模板生成的 ULID 不可预知）。 */
 function findIdByText(doc: Y.Doc, text: string): string {
@@ -340,6 +350,247 @@ describe('moveNode', () => {
       expect.unreachable();
     } catch (e) {
       expect((e as GmindCoreError).code).toBe('NODE_NOT_FOUND');
+    }
+  });
+});
+
+describe('setNote', () => {
+  it(`恰好 ${MAX_NOTE_LENGTH} 字写入成功并经 getNode 读回`, () => {
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
+    const id = childrenIds(doc, ROOT_NODE_ID)[0]!;
+    const note = '注'.repeat(MAX_NOTE_LENGTH);
+    setNote(doc, id, note);
+    expect(getNode(doc, id)!.note).toBe(note);
+  });
+
+  it(`${MAX_NOTE_LENGTH + 1} 字抛 NOTE_TOO_LONG（消息固定）且文档零变更`, () => {
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
+    const id = childrenIds(doc, ROOT_NODE_ID)[0]!;
+    const before = fullSnapshot(doc);
+    try {
+      setNote(doc, id, '注'.repeat(MAX_NOTE_LENGTH + 1));
+      expect.unreachable();
+    } catch (e) {
+      expect(e).toBeInstanceOf(GmindCoreError);
+      expect((e as GmindCoreError).code).toBe('NOTE_TOO_LONG');
+      expect((e as GmindCoreError).message).toBe('备注长度已达上限');
+    }
+    expect(fullSnapshot(doc)).toBe(before);
+  });
+});
+
+describe('setHref', () => {
+  it('https 与 http 合法写入；空串合法（清除链接）', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
+    const id = childrenIds(doc, ROOT_NODE_ID)[0]!;
+    setHref(doc, id, 'https://a.dev');
+    expect(getNode(doc, id)!.href).toBe('https://a.dev');
+    setHref(doc, id, 'http://a.dev');
+    expect(getNode(doc, id)!.href).toBe('http://a.dev');
+    setHref(doc, id, '');
+    expect(getNode(doc, id)!.href).toBe('');
+  });
+
+  it('javascript: 与 ftp: 抛 INVALID_HREF（消息固定）且文档零变更', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
+    const id = childrenIds(doc, ROOT_NODE_ID)[0]!;
+    const before = fullSnapshot(doc);
+    for (const bad of ['javascript:alert(1)', 'ftp://x']) {
+      try {
+        setHref(doc, id, bad);
+        expect.unreachable();
+      } catch (e) {
+        expect(e).toBeInstanceOf(GmindCoreError);
+        expect((e as GmindCoreError).code).toBe('INVALID_HREF');
+        expect((e as GmindCoreError).message).toBe('链接仅支持 http/https');
+      }
+    }
+    expect(fullSnapshot(doc)).toBe(before);
+  });
+});
+
+describe('setImage', () => {
+  it('写入 {key,w,h} 并经 getNode 读回；null 清除（image 读回 null）', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
+    const id = childrenIds(doc, ROOT_NODE_ID)[0]!;
+    expect(getNode(doc, id)!.image).toBeNull();
+    const image = { key: 'img-1', w: 120, h: 80 };
+    setImage(doc, id, image);
+    expect(getNode(doc, id)!.image).toEqual(image);
+    setImage(doc, id, null);
+    expect(getNode(doc, id)!.image).toBeNull();
+  });
+});
+
+describe('setIcon', () => {
+  it('同组替换即覆盖：flag 红→蓝后仅剩蓝（FR-EDT-021）', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
+    const id = childrenIds(doc, ROOT_NODE_ID)[0]!;
+    setIcon(doc, id, 'flag', 'red');
+    expect(getNode(doc, id)!.icons).toEqual({ flag: 'red' });
+    setIcon(doc, id, 'flag', 'blue');
+    expect(getNode(doc, id)!.icons).toEqual({ flag: 'blue' });
+  });
+
+  it('跨组叠加：flag + priority + progress 三组并存', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
+    const id = childrenIds(doc, ROOT_NODE_ID)[0]!;
+    setIcon(doc, id, 'flag', 'red');
+    setIcon(doc, id, 'priority', 'p1');
+    setIcon(doc, id, 'progress', '50');
+    expect(getNode(doc, id)!.icons).toEqual({ flag: 'red', priority: 'p1', progress: '50' });
+  });
+
+  it('value null 删除该组图标', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
+    const id = childrenIds(doc, ROOT_NODE_ID)[0]!;
+    setIcon(doc, id, 'flag', 'red');
+    setIcon(doc, id, 'priority', 'p1');
+    setIcon(doc, id, 'flag', null);
+    expect(getNode(doc, id)!.icons).toEqual({ priority: 'p1' });
+  });
+
+  it('非法组名抛 INVALID_ICON_GROUP（消息固定）且文档零变更', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
+    const id = childrenIds(doc, ROOT_NODE_ID)[0]!;
+    const before = fullSnapshot(doc);
+    try {
+      setIcon(doc, id, 'nope' as unknown as IconGroup, 'x');
+      expect.unreachable();
+    } catch (e) {
+      expect(e).toBeInstanceOf(GmindCoreError);
+      expect((e as GmindCoreError).code).toBe('INVALID_ICON_GROUP');
+      expect((e as GmindCoreError).message).toBe('未知的图标分组');
+    }
+    expect(fullSnapshot(doc)).toBe(before);
+  });
+});
+
+describe('setCollapsed / toggleCollapse', () => {
+  it('setCollapsed 默认 system origin：undo 不回退折叠（spec §4.2 第 5 条裁决）', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
+    const id = childrenIds(doc, ROOT_NODE_ID)[0]!;
+    const um = createUndoManager(doc);
+    setText(doc, id, '改过的文本'); // user origin，进撤销栈
+    setCollapsed(doc, id, true); // system origin，不进栈
+    expect(getNode(doc, id)!.collapsed).toBe(true);
+
+    um.undo();
+
+    expect(getNode(doc, id)!.text).toBe('A'); // 文本回滚
+    expect(getNode(doc, id)!.collapsed).toBe(true); // 折叠不回滚
+  });
+
+  it('toggleCollapse 翻转 collapsed 值', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
+    const id = childrenIds(doc, ROOT_NODE_ID)[0]!;
+    expect(getNode(doc, id)!.collapsed).toBe(false);
+    toggleCollapse(doc, id);
+    expect(getNode(doc, id)!.collapsed).toBe(true);
+    toggleCollapse(doc, id);
+    expect(getNode(doc, id)!.collapsed).toBe(false);
+  });
+});
+
+describe('setStyle', () => {
+  it('多键 patch 写入并读回；value null 删除对应键', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
+    const id = childrenIds(doc, ROOT_NODE_ID)[0]!;
+    expect(getNode(doc, id)!.style).toEqual({});
+    setStyle(doc, id, { color: '#ff0000', fontWeight: 'bold' });
+    expect(getNode(doc, id)!.style).toEqual({ color: '#ff0000', fontWeight: 'bold' });
+    setStyle(doc, id, { color: null });
+    expect(getNode(doc, id)!.style).toEqual({ fontWeight: 'bold' });
+  });
+});
+
+describe('applyStyle', () => {
+  it("scope 'subtree'：3 层子树全部生效，且一次 undo 全部回滚（单事务，FR-EDT-015）", () => {
+    const doc = buildTestTree();
+    const aId = findIdByText(doc, 'A');
+    const a1Id = findIdByText(doc, 'A1');
+    const a1aId = findIdByText(doc, 'A1a');
+    const um = createUndoManager(doc);
+
+    applyStyle(doc, [aId], { color: 'red' }, 'subtree');
+
+    expect(um.undoStack.length).toBe(1); // 一个用户事务 = 一条撤销单元
+    // A 的 3 层子树全部生效：A、A1/A2、A1a
+    for (const id of [aId, a1Id, a1aId, findIdByText(doc, 'A2')]) {
+      expect(getNode(doc, id)!.style, id).toEqual({ color: 'red' });
+    }
+    // 子树之外不受影响
+    expect(getNode(doc, findIdByText(doc, 'B'))!.style).toEqual({});
+    expect(getNode(doc, findIdByText(doc, 'B1'))!.style).toEqual({});
+    expect(getNode(doc, ROOT_NODE_ID)!.style).toEqual({});
+
+    um.undo();
+    for (const id of [aId, a1Id, a1aId, findIdByText(doc, 'A2')]) {
+      expect(getNode(doc, id)!.style, id).toEqual({});
+    }
+  });
+
+  it("scope 'single'：仅写自身，后代不受影响；多 root 各自生效", () => {
+    const doc = buildTestTree();
+    const aId = findIdByText(doc, 'A');
+    const a1Id = findIdByText(doc, 'A1');
+    const bId = findIdByText(doc, 'B');
+
+    applyStyle(doc, [aId, bId], { color: 'blue' }, 'single');
+
+    expect(getNode(doc, aId)!.style).toEqual({ color: 'blue' });
+    expect(getNode(doc, bId)!.style).toEqual({ color: 'blue' });
+    expect(getNode(doc, a1Id)!.style).toEqual({});
+    expect(getNode(doc, ROOT_NODE_ID)!.style).toEqual({});
+  });
+
+  it('rootIds 含不存在 id 抛 NODE_NOT_FOUND 且收集先于事务、文档零变更', () => {
+    const doc = buildTestTree();
+    const aId = findIdByText(doc, 'A');
+    const before = fullSnapshot(doc);
+    try {
+      applyStyle(doc, [aId, 'nope'], { color: 'red' }, 'subtree');
+      expect.unreachable();
+    } catch (e) {
+      expect(e).toBeInstanceOf(GmindCoreError);
+      expect((e as GmindCoreError).code).toBe('NODE_NOT_FOUND');
+    }
+    expect(fullSnapshot(doc)).toBe(before);
+  });
+});
+
+describe('富内容/样式 setter 存活校验', () => {
+  it('不存在节点一律抛 NODE_NOT_FOUND；墓碑节点抛 NODE_DELETED', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
+    const aId = childrenIds(doc, ROOT_NODE_ID)[0]!;
+    const before = fullSnapshot(doc);
+    const calls: Array<() => void> = [
+      () => setNote(doc, 'nope', 'n'),
+      () => setHref(doc, 'nope', 'https://a.dev'),
+      () => setImage(doc, 'nope', null),
+      () => setIcon(doc, 'nope', 'flag', 'red'),
+      () => setCollapsed(doc, 'nope', true),
+      () => toggleCollapse(doc, 'nope'),
+      () => setStyle(doc, 'nope', { color: 'red' }),
+      () => applyStyle(doc, ['nope'], { color: 'red' }, 'single'),
+    ];
+    for (const call of calls) {
+      try {
+        call();
+        expect.unreachable();
+      } catch (e) {
+        expect(e).toBeInstanceOf(GmindCoreError);
+        expect((e as GmindCoreError).code).toBe('NODE_NOT_FOUND');
+      }
+    }
+    expect(fullSnapshot(doc)).toBe(before);
+
+    deleteNodes(doc, [aId]);
+    try {
+      setNote(doc, aId, 'n');
+      expect.unreachable();
+    } catch (e) {
+      expect((e as GmindCoreError).code).toBe('NODE_DELETED');
     }
   });
 });
