@@ -8,6 +8,7 @@
  * M1b Task 7：视口平移/以光标为中心缩放/适应画布（viewport）。
  * M1b Task 8：选择模型/框选/方向键几何导航（selection）。
  * M1b Task 9：拖拽换父/浮动主题手势（drag）与 IME 安全文本编辑覆盖层（texteditor）。
+ * M1b Task 10：浏览器剪贴板层——内部结构化 + 文本大纲双格式（clipboard）。
  */
 
 export * from './types';
@@ -19,3 +20,4 @@ export * from './viewport';
 export * from './selection';
 export * from './drag';
 export * from './texteditor';
+export * from './clipboard';

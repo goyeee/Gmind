@@ -175,6 +175,16 @@ export interface NodeSnapshotLike {
   deleted: boolean;
   /** 图标组（Task 4 布局按键数预留 iconSlotWidth 槽位；Task 6 渲染）。 */
   icons?: Record<string, unknown>;
+  // —— 富字段（Task 10 只增不改：仅剪贴板层消费；core NodeSnapshot 结构兼容，
+  //    布局/测量不读它们。icons 值放宽为 unknown，剪贴板层复制时收敛为 string）——
+  /** 节点备注。 */
+  note?: string;
+  /** 超链接。 */
+  href?: string;
+  /** 图片资源（对象存储 key + 原始宽高）。 */
+  image?: { key: string; w: number; h: number } | null;
+  /** 节点级样式覆盖（键值对）。 */
+  style?: Record<string, string>;
 }
 
 /**
