@@ -1,0 +1,15 @@
+{
+  "name": "@gmind/engine",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "test": "vitest run",
+    "lint": "eslint src",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": { "@gmind/core": "workspace:*" },
+  "devDependencies": { "vitest": "^2.0.0" }
+}

@@ -134,6 +134,16 @@ importers:
         specifier: ^5.4.0
         version: 5.4.0(@types/node@22.20.3)
 
+  packages/engine:
+    dependencies:
+      '@gmind/core':
+        specifier: workspace:*
+        version: link:../gmind-core
+    devDependencies:
+      vitest:
+        specifier: ^2.0.0
+        version: 2.0.0(@types/node@22.20.3)
+
   packages/gmind-core:
     dependencies:
       '@gmind/shared':
