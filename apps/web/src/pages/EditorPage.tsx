@@ -281,12 +281,16 @@ export function EditorPage() {
     );
   };
 
-  /** Shift+Tab 裁决（carry-in 8）：在当前节点与父之间插新父级，原子树跟随。 */
-  const createOutdent = (grandparentId: string, index: number, currentId: string): void => {
+  /**
+   * Shift+Tab（PRD FR-EDT-001，fix round 1 修正）：在与父节点之间插入新父 = P→N→C——
+   * 新节点插入**当前节点父**的 children 中当前节点原 index 处，随后当前节点换父到新节点
+   * （原子树跟随）。旧实现插到祖父层会让 P 平白失去子节点，N 与 P 并排为空节点，违反 PRD。
+   */
+  const createOutdent = (parentId: string, index: number, currentId: string): void => {
     if (!doc) return;
     try {
       withTransaction(doc, ORIGIN_USER, () => {
-        const newId = addChild(doc, grandparentId, { index });
+        const newId = addChild(doc, parentId, { index });
         moveNode(doc, currentId, newId); // 缺省 index：追加为新节点末子级
       });
       afterUserWrite();
@@ -316,14 +320,9 @@ export function EditorPage() {
     }
     const parent = getNode(doc, snap.parentId);
     if (!parent || parent.deleted) return;
-    if (parent.id === ROOT_NODE_ID) {
-      // 祖父即 root：当前节点本身在 root children 中，新节点插其前
-      createOutdent(ROOT_NODE_ID, parent.childIds.indexOf(current), current);
-      return;
-    }
-    const grandparent = getNode(doc, parent.parentId);
-    if (!grandparent || grandparent.deleted) return;
-    createOutdent(grandparent.id, grandparent.childIds.indexOf(parent.id), current);
+    // 父为 root（一级主题）与其余层级同一公式：新节点插在 parent children 中
+    // 当前节点原 index 处（root 受保护只体现在「root 不可换父」，此处合法）。
+    createOutdent(parent.id, parent.childIds.indexOf(current), current);
   };
 
   const handleDelete = (): void => {
@@ -505,12 +504,20 @@ export function EditorPage() {
       prev?.destroy();
       const scene = createScene(svgEl);
       sceneRef.current = scene;
-      const vp = new Viewport(svgEl, scene.nodesLayer);
+      // 视口包装层（fix round 1）：createScene 的边/节点两层是 svg 直接子元素，
+      // Viewport 只transform单个 g——必须包一层同时携带两层，否则平移/缩放时边脱节点。
+      const wrapper = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+      wrapper.setAttribute('class', 'gm-viewport');
+      wrapper.appendChild(scene.edgesLayer);
+      wrapper.appendChild(scene.nodesLayer);
+      svgEl.appendChild(wrapper);
+      const vp = new Viewport(svgEl, wrapper);
       if (prev) {
         vp.scale = prev.scale;
         vp.tx = prev.tx;
         vp.ty = prev.ty;
       }
+      vp.apply(); // fix round 1：构造只写恒等 transform，字段拷贝后必须显式回写
       vp.attach();
       viewportRef.current = vp;
       const drag = new DragController();
@@ -712,7 +719,16 @@ export function EditorPage() {
           data-testid="title-input"
           className="title-input"
           value={meta?.title ?? ''}
-          onChange={(e) => setTitle(e.target.value)}
+          onChange={(e) => {
+            const value = e.target.value;
+            if (value.trim() === '') {
+              // 空标题（fix round 1 minor b）：不落库不 PATCH，重渲染让受控值回灌恢复
+              setTick((t) => t + 1);
+              return;
+            }
+            setTitle(value);
+            afterUserWrite(); // fix round 1 minor a：标题写也走统一 capUndoStack 通道
+          }}
           placeholder="文档标题"
         />
         <span className="save-status" data-testid="save-status">

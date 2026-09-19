@@ -99,5 +99,15 @@ export function startSaveLoop(doc: Y.Doc, fileId: string, setStatus: SaveStatusS
     stopped = true;
     clearTimer();
     doc.off('afterTransaction', onAfterTransaction);
+    // 卸载冲刷（fix round 1）：2s 防抖内的待存变更在导航离开时立即发送，
+    // 否则静默丢失。SPA 内导航页面进程存活，fetch 会正常完成；在途请求自身
+    // 会落地，不重复发。（真实 unload 场景的 keepalive 属页面关闭范畴，M1b 不做。）
+    if (dirty && !inFlight) {
+      dirty = false;
+      void api(`/files/${fileId}/doc-state`, {
+        method: 'PUT',
+        body: { docState: toBase64(docToState(doc)) },
+      }).catch(() => undefined);
+    }
   };
 }

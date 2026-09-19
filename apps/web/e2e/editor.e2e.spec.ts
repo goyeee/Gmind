@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import * as Y from 'yjs';
 
 /**
  * 编辑器页面（/edit/:fileId）E2E — M1b Task 11。
@@ -111,4 +112,71 @@ test('编辑器：折叠 root 后出现 +N 徽标，展开后消失', async ({ p
   await page.keyboard.press('Control+/');
   await expect(page.locator('.editor-canvas svg .gm-collapse-badge')).toHaveCount(0);
   await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '周会对齐' })).toBeVisible();
+});
+
+// ─────────────── fix round 1 新增 ───────────────
+
+// 修复 1：主题切换重建场景后视口变换保留（不回到恒等变换）
+test('编辑器：主题切换后视口变换保留', async ({ page }) => {
+  await openSeedDoc(page, '本周计划');
+  await page.waitForTimeout(300); // 等待初始「适应画布」（rAF 内执行）
+  const vpG = page.locator('.editor-canvas svg .gm-viewport');
+  const before = await vpG.getAttribute('transform');
+  expect(before).toBeTruthy();
+  expect(before).not.toBe('translate(0, 0) scale(1)'); // 初始 fit 后必非恒等
+  await page.getByTestId('theme-select').selectOption('gmind-warm');
+  await expect(vpG).toHaveAttribute('transform', before as string);
+});
+
+// 修复 2：编辑后 2s 防抖内立即返回工作台 → 卸载冲刷保存 → 重开文件变更仍在
+test('编辑器：编辑后立即返回工作台，卸载冲刷保存持久化', async ({ page }) => {
+  await openSeedDoc(page, '本周计划');
+  await page.locator('.editor-canvas svg .gm-text', { hasText: '周一' }).dblclick();
+  const editor = page.locator('.gm-text-editor');
+  await expect(editor).toBeVisible();
+  await page.keyboard.type('周一改'); // 覆盖全选文本
+  await page.keyboard.press('Enter');
+  await page.getByTestId('back-btn').click(); // 2s 防抖窗口内离开 → 触发卸载冲刷
+  await expect(page).toHaveURL(/\/workspace/);
+  await page.waitForTimeout(800); // 冲刷 PUT 落库
+  await page.locator('.file-list li', { hasText: '本周计划' }).click();
+  await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '周一改' })).toBeVisible();
+});
+
+// 修复 3：Shift+Tab 在节点与父之间插入新父（P→N→C，PRD FR-EDT-001）——按保存后的
+// docState 结构断言：原父在原 index 处持有新空节点，新节点 children = [原节点]。
+test('编辑器：Shift+Tab 在节点与父之间插入新父', async ({ page }) => {
+  await openSeedDoc(page, '本周计划');
+  await expect(page.locator('.editor-canvas svg .gm-text')).toHaveCount(7);
+  await page.locator('.editor-canvas svg .gm-text', { hasText: '周三' }).click(); // 周三有子「方案评审」
+  await page.keyboard.press('Shift+Tab');
+  await expect(page.locator('.editor-canvas svg .gm-text')).toHaveCount(8); // +1 空新节点
+  await expect(page.getByTestId('save-status')).toHaveText(/已保存/);
+
+  // 从服务端读回 docState 反解结构（避免依赖渲染几何）
+  const token = await page.evaluate(() => localStorage.getItem('gmind.token'));
+  const fileId = page.url().split('/').pop() ?? '';
+  const res = await page.request.get(`/api/files/${fileId}`, {
+    headers: { Authorization: `Bearer ${token ?? ''}` },
+  });
+  expect(res.ok()).toBeTruthy();
+  const detail = (await res.json()) as { docState: string };
+  const doc = new Y.Doc();
+  const binary = atob(detail.docState); // web tsconfig 无 node types，不用 Buffer
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  Y.applyUpdate(doc, bytes);
+  const nodes = doc.getMap('nodes') as Y.Map<Y.Map<unknown>>;
+  const childIds = (id: string): string[] =>
+    ((nodes.get(id)?.get('children') as Y.Array<string> | undefined)?.toArray() ?? []);
+  const textOf = (id: string): string => String(nodes.get(id)?.get('text') ?? '');
+
+  const rootKids = childIds('root');
+  expect(rootKids.map(textOf)).toEqual(['周一', '', '周五']); // 新空节点占据周三原 index
+  const newId = rootKids[1] as string;
+  expect(childIds(newId).map(textOf)).toEqual(['周三']); // 原节点成为新节点之子
+  expect(String(nodes.get(newId)?.get('parentId'))).toBe('root');
+  const wedId = childIds(newId)[0] as string;
+  expect(String(nodes.get(wedId)?.get('parentId'))).toBe(newId);
+  expect(childIds(wedId).map(textOf)).toEqual(['方案评审']); // 原子树跟随
 });

@@ -83,6 +83,7 @@ export function useEditorDoc(fileId: string): {
 
   const setTitle = (title: string): void => {
     if (!state) return;
+    if (title.trim() === '') return; // 空标题（fix round 1）：不写文档更不 PATCH，受控值回灌恢复
     setDocMeta(state.doc, { title }, ORIGIN_USER);
     pendingTitle.current = title;
     if (patchTimer.current !== null) clearTimeout(patchTimer.current);
