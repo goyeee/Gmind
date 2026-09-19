@@ -12,9 +12,11 @@
  *   自 parentY + parentH/2 − 子带高/2 起顶对齐堆叠，父垂直居中于子带（经典脑图）。
  * - 水平（org）：子树宽 = max(自身宽, Σ子树宽 + H_GAP×(n-1))；兄弟水平排布，
  *   父水平居中于子带上方，层间 V_GAP。
- * - mindmap 分侧（绑定规则）：一级子树按文档序贪心分侧——依次分配 RIGHT 并累计
- *   子树高，累计 ≥ 总高之半后其余全归 LEFT（越线者仍在右侧；两侧各自自上而下、
- *   保文档序）；更深后代恒与其一级祖先同侧。
+ * - mindmap 分侧（绑定规则，fix r1 改预检查/断行语义）：一级子树按文档序依次装箱——
+ *   分配前判断累计 + 当前子树高是否超过总高之半，超过则自该子树起全部 LEFT，
+ *   否则 RIGHT（两等高分支得 1 右 1 左，符合惯例）；首个子树恒 RIGHT（断行语义
+ *   不留空行，单分支布局在右）；两侧各自自上而下、保文档序；更深后代恒与其一级
+ *   祖先同侧。
  * - 边锚点：mindmap/logic 取父/子相向侧中点，bezier 控制点水平外伸
  *   max(60, dx×0.5)；org 取父下中点/子上中点，elbow。折叠节点无子边。
  * - 根盒中心恒为 (0,0)；输出 bbox 宽高为全部节点盒的极差。
@@ -164,18 +166,22 @@ function childrenWidth(children: LayoutNode[], hGap: number): number {
 }
 
 /**
- * mindmap 分侧（绑定规则）：按文档序依次分配 RIGHT 并累计子树高；
- * 累计 ≥ 总高之半后，其余全部 LEFT（保序）。
+ * mindmap 分侧（预检查，断行语义）：分配前判断累计 + 当前子树高是否超过总高之半，
+ * 超过则自该子树起全部 LEFT，否则 RIGHT；首个子树恒 RIGHT（断行不留空行，
+ * 单分支/首支超半时仍居右）。保序：右侧取文档序前段，左侧取其余。
  */
 function assignMindmapSides(children: LayoutNode[], theme: ThemeTokens): Array<'left' | 'right'> {
   const total = childrenHeight(children, theme.V_GAP);
   const half = total / 2;
   let cum = 0;
   let flipped = false;
-  return children.map((child) => {
+  return children.map((child, i) => {
     if (flipped) return 'left';
+    if (i > 0 && cum + child.subtreeH > half) {
+      flipped = true;
+      return 'left';
+    }
     cum += child.subtreeH;
-    if (cum >= half) flipped = true;
     return 'right';
   });
 }

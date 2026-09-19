@@ -272,13 +272,16 @@ describe('layout 不变量（5 树 × 3 结构）', () => {
     }
   }
 
-  it('mindmap：均衡树（3 个等高一級子树）两侧均有节点，深层与一级祖先同侧', () => {
+  it('mindmap：预检查分侧——3 个等高一級子树得 1 右 2 左，深层与一级祖先同侧', () => {
     const result = layout(TREE_BUILDERS.wide(), { structure: 'mindmap', theme, measure: stubAdapter, styleOf });
     const root = boxOf(result, 'root');
     const level1 = result.nodes.filter((n) => n.depth === 1);
     expect(level1.length).toBe(3);
-    expect(level1.some((n) => n.side === 'right')).toBe(true);
-    expect(level1.some((n) => n.side === 'left')).toBe(true);
+    // 预检查/断行语义：a 装入右（0+54 ≤ 95），b 起累计 108 > 95 切左。
+    expect(level1.filter((n) => n.side === 'right')).toHaveLength(1);
+    expect(level1.filter((n) => n.side === 'left')).toHaveLength(2);
+    expect(boxOf(result, 'a').side).toBe('right');
+    expect(boxOf(result, 'b').side).toBe('left');
     for (const node of level1) {
       if (node.side === 'left') expect(node.x + node.w).toBeLessThan(root.x);
       else expect(node.x).toBeGreaterThan(root.x + root.w);
@@ -297,6 +300,26 @@ describe('layout 不变量（5 树 × 3 结构）', () => {
     const rightLeaf = boxOf(result, 'a1');
     expect(rightLeaf.side).toBe('right');
     expect(rightLeaf.x).toBeGreaterThan(root.x + root.w);
+  });
+
+  it('mindmap：两等高一級子树恰一左一右（分侧规则钉定）', () => {
+    const reader = makeReader({
+      root: { text: '根', children: ['p1', 'p2'] },
+      p1: { text: '支一', children: ['pa'] },
+      pa: { text: '叶甲' },
+      p2: { text: '支二', children: ['pb'] },
+      pb: { text: '叶乙' },
+    });
+    const result = layout(reader, { structure: 'mindmap', theme, measure: stubAdapter, styleOf });
+    const root = boxOf(result, 'root');
+    const level1 = result.nodes.filter((n) => n.depth === 1);
+    expect(level1).toHaveLength(2);
+    expect(level1.filter((n) => n.side === 'right')).toHaveLength(1);
+    expect(level1.filter((n) => n.side === 'left')).toHaveLength(1);
+    for (const node of level1) {
+      if (node.side === 'left') expect(node.x + node.w).toBeLessThan(root.x);
+      else expect(node.x).toBeGreaterThan(root.x + root.w);
+    }
   });
 
   it('collapsed：折叠节点按叶子渲染，隐藏后代无盒，collapsedCounts 记 "+3"', () => {
