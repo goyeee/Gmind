@@ -6,3 +6,4 @@ docker/.env
 playwright-report/
 test-results/
 .superpowers/
+.data/

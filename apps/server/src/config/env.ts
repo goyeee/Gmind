@@ -9,6 +9,8 @@ const envSchema = z.object({
   DB_PASSWORD: z.string().default('gminddev'),
   DB_DATABASE: z.string().default('gmind'),
   REDIS_URL: z.string().default('redis://127.0.0.1:63790/0'),
+  // 本地磁盘图片存储根目录（一期 Provider；根 .gitignore 已忽略 .data/）
+  STORAGE_DIR: z.string().default('./.data/storage'),
   DEV_SMS_CODE: z.string().default('123456'),
 });
 

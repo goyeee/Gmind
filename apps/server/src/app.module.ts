@@ -4,10 +4,11 @@ import { DatabaseModule } from './database/database.module';
 import { FilesModule } from './files/files.module';
 import { HealthController } from './health/health.controller';
 import { SessionModule } from './session/session.module';
+import { StorageModule } from './storage/storage.module';
 import { UsersModule } from './users/users.module';
 
 @Module({
-  imports: [DatabaseModule, SessionModule, UsersModule, FilesModule, AuthModule],
+  imports: [DatabaseModule, SessionModule, UsersModule, FilesModule, AuthModule, StorageModule],
   controllers: [HealthController],
 })
 export class AppModule {}
