@@ -8,6 +8,7 @@ import {
   writeToSystemClipboard,
   readFromSystemClipboard,
   readInternalFallback,
+  INTERNAL_MIME,
   type ClipboardPayload,
   type IDocHandle,
 } from './clipboard';
@@ -18,8 +19,6 @@ import {
  * IDocHandle（addChild/setText/setNote/setHref/setImage/setIcon/setStyle），
  * 快照形状镜像 core NodeSnapshot（富字段），写方法全部记录调用以便断言参数与顺序。
  */
-
-const INTERNAL_MIME = 'web application/vnd.gmind+json';
 
 interface StubNode {
   id: string;
@@ -500,5 +499,113 @@ describe('系统剪贴板（jsdom 降级 + 两 MIME）', () => {
     ]);
     Object.defineProperty(navigator, 'clipboard', { value: { read }, configurable: true });
     await expect(readFromSystemClipboard()).resolves.toEqual({ internal: null, text: 'S' });
+  });
+});
+
+describe('fix round 1：pasteNodes 全量预校验', () => {
+  function parentDoc(): StubDoc {
+    const doc = new StubDoc();
+    doc.addNode({ id: 'root' });
+    doc.addNode({ id: 'p', parentId: 'root', text: 'P' });
+    return doc;
+  }
+
+  it('深层节点 text 超 500 → TEXT_TOO_LONG 且零 addChild（递归预校验先于任何写入）', async () => {
+    const doc = parentDoc();
+    const payload = {
+      v: 1,
+      roots: [
+        {
+          ...emptyNode('r', 'R'),
+          children: [
+            {
+              ...emptyNode('c', 'C'),
+              children: [emptyNode('g', 'x'.repeat(MAX_TEXT_LENGTH + 1))], // 第 3 层超长
+            },
+          ],
+        },
+      ],
+    } as unknown as ClipboardPayload;
+
+    await expect(pasteNodes(doc, 'p', 0, payload)).rejects.toThrow('TEXT_TOO_LONG');
+    expect(doc.calls).toHaveLength(0); // 零写入
+  });
+
+  it('children 非数组 → TypeError 且零写入', async () => {
+    const doc = parentDoc();
+    const payload = {
+      v: 1,
+      roots: [{ ...emptyNode('r', 'R'), children: 'nope' }],
+    } as unknown as ClipboardPayload;
+
+    await expect(pasteNodes(doc, 'p', 0, payload)).rejects.toThrow(TypeError);
+    expect(doc.calls).toHaveLength(0);
+  });
+});
+
+describe('fix round 1：copyNodes 冗余子树裁剪（祖先+后代 id 集，框选可达）', () => {
+  function treeDoc(): StubDoc {
+    const doc = new StubDoc();
+    doc.addNode({ id: 'root' });
+    doc.addNode({ id: 'a', parentId: 'root', text: 'A' });
+    doc.addNode({ id: 'a1', parentId: 'a', text: 'A1' });
+    doc.addNode({ id: 'a1a', parentId: 'a1', text: 'A1A' });
+    doc.addNode({ id: 'b', parentId: 'root', text: 'B' });
+    return doc;
+  }
+
+  it('复制 [祖先, 后代, 无关根] → 后代裁剪，payload 中 child 仅出现一次', () => {
+    const { internal, text } = copyNodes(treeDoc(), ['a', 'a1', 'b']);
+
+    expect(internal.roots.map((r) => r.id)).toEqual(['a', 'b']);
+    const a = internal.roots[0];
+    expect(a.children.map((c) => c.id)).toEqual(['a1']); // a1 作为 a 的后代恰好一次
+    expect(a.children[0].children.map((c) => c.id)).toEqual(['a1a']);
+    expect(text).toBe('A\n\tA1\n\t\tA1A\nB');
+  });
+
+  it('裁剪与输入顺序无关：后代列在前仍被跳过', () => {
+    const { internal } = copyNodes(treeDoc(), ['a1a', 'a1', 'a']);
+    expect(internal.roots.map((r) => r.id)).toEqual(['a']);
+  });
+
+  it('cutNodes 不受裁剪影响：payload 裁剪但 deleteFn 仍收到原 ids', () => {
+    const doc = treeDoc();
+    const deleteFn = vi.fn((ids: string[]) => doc.deleteNodes(ids));
+
+    const result = cutNodes(doc, ['a', 'a1'], deleteFn);
+
+    expect(result.internal.roots.map((r) => r.id)).toEqual(['a']); // payload 裁剪
+    expect(deleteFn).toHaveBeenCalledTimes(1);
+    expect(deleteFn).toHaveBeenCalledWith(['a', 'a1']); // 删除侧原 ids
+    expect(doc.getNode('a1')?.deleted).toBe(true);
+  });
+});
+
+describe('fix round 1：remap 失败携带 pastedIds（页面恢复用）', () => {
+  it('remap 抛错 → 错误对象附 pastedIds（此刻已建的先序 id）后原样传播', async () => {
+    const doc = new StubDoc();
+    doc.addNode({ id: 'root' });
+    doc.addNode({ id: 'p', parentId: 'root', text: 'P' });
+    const payload: ClipboardPayload = {
+      v: 1,
+      roots: [
+        emptyNode('r1', 'R1'),
+        { ...emptyNode('r2', 'R2'), image: { key: 'old', w: 1, h: 2 } },
+      ],
+    };
+    const remap = vi.fn(async () => {
+      throw new Error('storage down');
+    });
+
+    const err = await pasteNodes(doc, 'p', 0, payload, 'user', remap).then(
+      () => null,
+      (e: Error & { pastedIds?: string[] }) => e,
+    );
+
+    expect(err).not.toBeNull();
+    expect(err!.message).toBe('storage down');
+    expect(err!.pastedIds).toHaveLength(2); // r1 与 r2 两个已建节点
+    expect(doc.adds()).toHaveLength(2);
   });
 });

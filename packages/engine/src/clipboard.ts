@@ -68,20 +68,44 @@ export interface CopyResult {
 
 /**
  * 复制 ids 对应的子树森林：alive 者建 payload 子树（getNode + childIds 递归），
- * 缺失/墓碑 id 跳过（copy 不抛错）。text 为各根的大纲文本以 \n 拼接
- * （语义镜像 core subtreeToOutlineText：根 0 个 Tab、逐层 +1、text 内换行折叠为
- * 单个空格——collapseNewlines 保持同步）。
+ * 缺失/墓碑 id 跳过（copy 不抛错）。fix round 1：框选可产生「祖先+后代同时入选」，
+ * 后代 id 在建 payload 前裁剪（hasCopiedAncestor）——子树只随其最近被复制的祖先
+ * 携带一次，不会重复出现；输入重复 id 同样去重。cutNodes 的删除侧不受影响
+ * （deleteFn 仍收到原 ids）。text 为各根的大纲文本以 \n 拼接（语义镜像 core
+ * subtreeToOutlineText：根 0 个 Tab、逐层 +1、text 内换行折叠为单个空格——
+ * collapseNewlines 保持同步）。
  */
 export function copyNodes(reader: DocReader, ids: string[]): CopyResult {
+  const copied = new Set(ids);
+  const emitted = new Set<string>();
   const roots: PayloadNode[] = [];
   const texts: string[] = [];
   for (const id of ids) {
+    if (emitted.has(id)) continue; // 输入重复 id 去重
     const snap = reader.getNode(id);
     if (!snap || snap.deleted) continue;
+    if (hasCopiedAncestor(snap, reader, copied)) continue; // 已复制子树的后代：裁剪
+    emitted.add(id);
     roots.push(payloadFromSnapshot(reader, snap));
     texts.push(renderOutline(reader, snap));
   }
   return { internal: { v: 1, roots }, text: texts.join('\n') };
+}
+
+/** 内部（fix round 1）：沿 parentId 上溯，任一祖先在本次复制集合中 → 该 id 是某个
+ * 已复制子树的后代。visited 集合防御 crafted parentId 环（同 core subtreeIds 纪律），
+ * 保证任意形状下终止。 */
+function hasCopiedAncestor(snap: NodeSnapshotLike, reader: DocReader, copied: Set<string>): boolean {
+  const visited = new Set<string>([snap.id]);
+  let parentId = snap.parentId;
+  while (parentId !== '' && !visited.has(parentId)) {
+    if (copied.has(parentId)) return true;
+    visited.add(parentId);
+    const parent = reader.getNode(parentId);
+    if (!parent) return false;
+    parentId = parent.parentId;
+  }
+  return false;
 }
 
 /** 内部：快照 → payload 子树递归（缺失/墓碑子节点防御性跳过）。 */
@@ -137,11 +161,13 @@ function collapseNewlines(text: string): string {
 // ─────────────────────────── paste（内部 payload 路径） ───────────────────────────
 
 /**
- * 粘贴内部 payload（富内容重建，id 全部新建）：首根插在 parent 的 index 处，
- * 其余根与其下后代一律追加（addChild 缺省 index）；每个新节点按 payload 依次
- * 写回 note/href/image/icons（逐组）/style（整 patch）。image 存在且提供
- * imageKeyRemap 时先 await remap(oldKey) 取新 key 再 setImage（对象存储复制由
- * 页面在 remap 内完成；remap 抛错原样向上传播，已建节点不回滚）。
+ * 粘贴内部 payload（富内容重建，id 全部新建）：先校验（parent 存活 + fix round 1
+ * 的全量 payload 预校验——任一节点违规在零写入期抛出，拒绝即零变更），随后首根插
+ * 在 parent 的 index 处，其余根与其下后代一律追加（addChild 缺省 index）；每个新
+ * 节点按 payload 依次写回 note/href/image/icons（逐组）/style（整 patch）。image
+ * 存在且提供 imageKeyRemap 时先 await remap(oldKey) 取新 key 再 setImage（对象存储
+ * 复制由页面在 remap 内完成；remap 抛错原样向上传播并携带 pastedIds——已建节点不
+ * 回滚，页面可据此恢复/清理）。
  * 返回全部新建 id（先序：根按 payload 顺序，父先于子）。
  * parent 缺失/墓碑 → Error('PARENT_INVALID')（先于任何写入校验）。
  */
@@ -154,11 +180,30 @@ export async function pasteNodes(
   imageKeyRemap?: (key: string) => Promise<string>,
 ): Promise<string[]> {
   requireValidParent(doc, parentId);
+  for (const root of payload.roots) assertPayloadNodeValid(root); // fix round 1：全量预校验先于任何写入
   const ids: string[] = [];
   for (const [i, root] of payload.roots.entries()) {
     await pastePayloadNode(doc, parentId, i === 0 ? index : undefined, root, ids, origin, imageKeyRemap);
   }
   return ids;
+}
+
+/** 内部（fix round 1）：递归预校验 payload 节点——镜像 pasteText 的 assertSpecValid
+ * 形状（保持同步）：text 非字符串 → TypeError；text 超 MAX_TEXT_LENGTH →
+ * Error('TEXT_TOO_LONG')（等价 core GmindCoreError('TEXT_TOO_LONG','节点文本长度
+ * 已达上限')，页面按 message 映射提示）；children 非数组 → TypeError。
+ * 在任何 addChild 之前对整棵 payload 森林执行完毕，违规即整次粘贴零变更。 */
+function assertPayloadNodeValid(node: PayloadNode): void {
+  if (typeof node.text !== 'string') {
+    throw new TypeError('pasteNodes: payload.text 必须为字符串');
+  }
+  if (node.text.length > MAX_TEXT_LENGTH) {
+    throw new Error('TEXT_TOO_LONG');
+  }
+  if (!Array.isArray(node.children)) {
+    throw new TypeError('pasteNodes: payload.children 必须为数组');
+  }
+  for (const child of node.children) assertPayloadNodeValid(child);
 }
 
 /** 内部：递归重建一个 payload 子树，ids 按先序收集。 */
@@ -176,7 +221,19 @@ async function pastePayloadNode(
   if (node.note !== '') doc.setNote(id, node.note, origin);
   if (node.href !== '') doc.setHref(id, node.href, origin);
   if (node.image) {
-    const key = remap ? await remap(node.image.key) : node.image.key;
+    let key: string;
+    if (remap) {
+      try {
+        key = await remap(node.image.key);
+      } catch (err) {
+        // fix round 1：remap 失败不回滚已建节点；把此刻已建的先序 id 挂到错误上，
+        // 页面可据此做部分粘贴的恢复/清理与提示。
+        (err as { pastedIds?: string[] }).pastedIds = [...ids];
+        throw err;
+      }
+    } else {
+      key = node.image.key;
+    }
     doc.setImage(id, { key, w: node.image.w, h: node.image.h }, origin);
   }
   for (const [group, value] of Object.entries(node.icons)) {
@@ -272,7 +329,7 @@ export function cutNodes(
 // ─────────────────────────── 系统剪贴板 ───────────────────────────
 
 /** Gmind 内部格式的自定义 MIME（Web custom format，需 'web ' 前缀）。 */
-const INTERNAL_MIME = 'web application/vnd.gmind+json';
+export const INTERNAL_MIME = 'web application/vnd.gmind+json';
 
 /** 内存兜底：系统剪贴板不可用（jsdom / 权限 / 无 API）时的应用内粘贴数据源。 */
 let lastInternal: ClipboardPayload | null = null;
