@@ -3,6 +3,7 @@ import { Navigate, Route, Routes } from 'react-router-dom';
 import { getToken } from './api/client';
 import { LoginPage } from './pages/LoginPage';
 import { WorkspacePage } from './pages/WorkspacePage';
+import { EditorPage } from './pages/EditorPage';
 
 function RequireAuth({ children }: { children: ReactElement }) {
   return getToken() ? children : <Navigate to="/login" replace />;
@@ -17,6 +18,14 @@ export function App() {
         element={
           <RequireAuth>
             <WorkspacePage />
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/edit/:fileId"
+        element={
+          <RequireAuth>
+            <EditorPage />
           </RequireAuth>
         }
       />

@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import type { FileListItem } from '@gmind/shared';
 import { api } from '../api/client';
 
 export function WorkspacePage() {
+  const navigate = useNavigate();
   const [files, setFiles] = useState<FileListItem[]>([]);
   const [error, setError] = useState('');
 
@@ -32,7 +34,7 @@ export function WorkspacePage() {
       {error && <p className="error">{error}</p>}
       <ul className="file-list">
         {files.map((f) => (
-          <li key={f.id}>
+          <li key={f.id} style={{ cursor: 'pointer' }} onClick={() => navigate(`/edit/${f.id}`)}>
             <span className="title">{f.title}</span>
             <span className="meta">{f.nodeCount} 节点 · 更新于 {new Date(f.updatedAt).toLocaleString()}</span>
           </li>

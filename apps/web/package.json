@@ -11,10 +11,13 @@
     "e2e": "playwright test"
   },
   "dependencies": {
+    "@gmind/core": "workspace:*",
+    "@gmind/engine": "workspace:*",
     "@gmind/shared": "workspace:*",
     "react": "^18.3.0",
     "react-dom": "^18.3.0",
-    "react-router-dom": "^6.26.0"
+    "react-router-dom": "^6.26.0",
+    "yjs": "^13.6.0"
   },
   "devDependencies": {
     "@playwright/test": "^1.47.0",
