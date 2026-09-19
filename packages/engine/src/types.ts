@@ -1,10 +1,11 @@
 /**
- * @gmind/engine 数据结构与适配器契约（M1b Task 3）。
+ * @gmind/engine 数据结构与适配器契约（M1b Task 3，Task 4 只增不改）。
  *
  * 绑定裁决：engine 不 import yjs，也不 import core 的 NodeSnapshot/DocMeta 类型；
  * 布局/渲染 API 通过 DocReader（结构化本地类型 DocMetaLike / NodeSnapshotLike）
  * 读取文档快照，由 apps/web 侧的适配函数从 @gmind/core 桥接。
  */
+export type { StructureType } from '@gmind/shared';
 
 /** 文本样式（与 DOM/Canvas 字体三元组一一对应）。 */
 export interface TextStyle {
@@ -35,6 +36,10 @@ export interface ThemeTokens {
   maxTextWidth: number;
   /** 节点盒最小宽度下限。 */
   minNodeWidth: number;
+  /** 垂直布局兄弟子树带间距（mindmap/logic 纵向、org 层级间纵向）。 */
+  V_GAP: number;
+  /** 水平布局兄弟子树带间距（mindmap/logic 层级间横向、org 横向）。 */
+  H_GAP: number;
 }
 
 /** 场景坐标点（中心主题 (0,0) 居中）。 */
@@ -60,6 +65,8 @@ export interface EdgeRoute {
   from: Point;
   to: Point;
   kind: 'bezier' | 'elbow';
+  /** bezier 控制点（恒 2 个，kind='bezier' 时提供；水平外伸 max(60, dx×0.5)）。elbow 无。 */
+  controls?: Point[];
 }
 
 /** 布局结果：collapsedCounts 记录各折叠节点被隐藏的后代数。 */
@@ -86,6 +93,8 @@ export interface NodeSnapshotLike {
   childIds: string[];
   collapsed: boolean;
   deleted: boolean;
+  /** 图标组（Task 4 布局按键数预留 iconSlotWidth 槽位；Task 6 渲染）。 */
+  icons?: Record<string, unknown>;
 }
 
 /**

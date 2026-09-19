@@ -10,6 +10,12 @@
     "lint": "eslint src",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
-  "dependencies": { "@gmind/core": "workspace:*" },
-  "devDependencies": { "vitest": "^2.0.0" }
+  "dependencies": {
+    "@gmind/core": "workspace:*",
+    "@gmind/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "vitest": "^2.0.0"
+  }
 }

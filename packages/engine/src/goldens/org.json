@@ -1,0 +1,150 @@
+{
+  "nodes": [
+    {
+      "id": "root",
+      "x": -32,
+      "y": -10,
+      "w": 64,
+      "h": 20,
+      "side": "down",
+      "depth": 0
+    },
+    {
+      "id": "g1",
+      "x": -141,
+      "y": 24,
+      "w": 54,
+      "h": 20,
+      "side": "down",
+      "depth": 1
+    },
+    {
+      "id": "ga",
+      "x": -198,
+      "y": 58,
+      "w": 74,
+      "h": 20,
+      "side": "down",
+      "depth": 2
+    },
+    {
+      "id": "gb",
+      "x": -84,
+      "y": 58,
+      "w": 54,
+      "h": 20,
+      "side": "down",
+      "depth": 2
+    },
+    {
+      "id": "g2",
+      "x": 30,
+      "y": 24,
+      "w": 54,
+      "h": 20,
+      "side": "down",
+      "depth": 1
+    },
+    {
+      "id": "gc",
+      "x": 10,
+      "y": 58,
+      "w": 94,
+      "h": 20,
+      "side": "down",
+      "depth": 2
+    },
+    {
+      "id": "g3",
+      "x": 144,
+      "y": 24,
+      "w": 54,
+      "h": 20,
+      "side": "down",
+      "depth": 1
+    }
+  ],
+  "edges": [
+    {
+      "id": "root->g1",
+      "from": {
+        "x": 0,
+        "y": 10
+      },
+      "to": {
+        "x": -114,
+        "y": 24
+      },
+      "kind": "elbow",
+      "controls": null
+    },
+    {
+      "id": "g1->ga",
+      "from": {
+        "x": -114,
+        "y": 44
+      },
+      "to": {
+        "x": -161,
+        "y": 58
+      },
+      "kind": "elbow",
+      "controls": null
+    },
+    {
+      "id": "g1->gb",
+      "from": {
+        "x": -114,
+        "y": 44
+      },
+      "to": {
+        "x": -57,
+        "y": 58
+      },
+      "kind": "elbow",
+      "controls": null
+    },
+    {
+      "id": "root->g2",
+      "from": {
+        "x": 0,
+        "y": 10
+      },
+      "to": {
+        "x": 57,
+        "y": 24
+      },
+      "kind": "elbow",
+      "controls": null
+    },
+    {
+      "id": "g2->gc",
+      "from": {
+        "x": 57,
+        "y": 44
+      },
+      "to": {
+        "x": 57,
+        "y": 58
+      },
+      "kind": "elbow",
+      "controls": null
+    },
+    {
+      "id": "root->g3",
+      "from": {
+        "x": 0,
+        "y": 10
+      },
+      "to": {
+        "x": 171,
+        "y": 24
+      },
+      "kind": "elbow",
+      "controls": null
+    }
+  ],
+  "collapsedCounts": {},
+  "width": 396,
+  "height": 88
+}

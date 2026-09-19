@@ -15,6 +15,8 @@ const theme: ThemeTokens = {
   lineHeightRatio: 1.5,
   maxTextWidth: 50,
   minNodeWidth: 20,
+  V_GAP: 14,
+  H_GAP: 40,
 };
 
 describe('measureNodeBox', () => {
