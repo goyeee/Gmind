@@ -156,29 +156,39 @@ describe('DragController 激活阈值与高亮', () => {
     expect(onDrop).not.toHaveBeenCalled();
   });
 
-  it('命中目标即加 drop-target，移开即去除；跨目标切换高亮随指针走', () => {
+  it('drop-target 高亮满 300ms 才点亮：250ms 未亮、300ms 翻转、移开即灭、切换重置', () => {
+    // fix round 1：高亮与 <300ms→null 裁决配对，杜绝「见亮即放仍浮动」的陷阱。
     nodeEl('a').dispatchEvent(
       pe('pointerdown', { button: 0, clientX: CENTER.a.x, clientY: CENTER.a.y, pointerId: 1 }),
     );
     svg.dispatchEvent(pe('pointermove', { clientX: CENTER.b.x, clientY: CENTER.b.y, pointerId: 1 }));
+    expect(nodeEl('b').classList.contains('drop-target')).toBe(false); // 刚进入不亮
+    vi.advanceTimersByTime(250);
+    expect(nodeEl('b').classList.contains('drop-target')).toBe(false);
+    vi.advanceTimersByTime(50); // 累计 300ms
     expect(nodeEl('b').classList.contains('drop-target')).toBe(true);
     svg.dispatchEvent(pe('pointermove', { clientX: CENTER.d.x, clientY: CENTER.d.y, pointerId: 1 }));
-    expect(nodeEl('b').classList.contains('drop-target')).toBe(false);
+    expect(nodeEl('b').classList.contains('drop-target')).toBe(false); // 移开/切换立即灭
+    expect(nodeEl('d').classList.contains('drop-target')).toBe(false); // 新目标重新计时
+    vi.advanceTimersByTime(300);
     expect(nodeEl('d').classList.contains('drop-target')).toBe(true);
     svg.dispatchEvent(pe('pointermove', { clientX: 650, clientY: 480, pointerId: 1 })); // 空白
     expect(nodeEl('d').classList.contains('drop-target')).toBe(false);
   });
 
-  it('自命中（拖拽源自身盒）不算目标', () => {
+  it('自命中（自身盒）：drop-forbidden 反馈、释放静默取消不回调', () => {
+    // fix round 1：自身释放若落入 null 分支会把整枝浮动成根主题（破坏性），
+    // 裁决改为与后代同待遇——静默取消。
     nodeEl('a').dispatchEvent(
       pe('pointerdown', { button: 0, clientX: CENTER.a.x, clientY: CENTER.a.y, pointerId: 1 }),
     );
     svg.dispatchEvent(pe('pointermove', { clientX: 80, clientY: 30, pointerId: 1 })); // 仍在 a 盒内
+    expect(nodeEl('a').classList.contains('drop-forbidden')).toBe(true);
     expect(nodeEl('a').classList.contains('drop-target')).toBe(false);
-    vi.advanceTimersByTime(400);
+    vi.advanceTimersByTime(400); // 即便悬停远超 300ms 也不允许
     svg.dispatchEvent(pe('pointerup', { clientX: 80, clientY: 30, pointerId: 1 }));
-    expect(onDrop).toHaveBeenCalledTimes(1);
-    expect(onDrop).toHaveBeenCalledWith('a', null);
+    expect(onDrop).not.toHaveBeenCalled();
+    expect(nodeEl('a').classList.contains('drop-forbidden')).toBe(false);
   });
 });
 
@@ -221,8 +231,8 @@ describe('DragController 边界与生命周期', () => {
       pe('pointerdown', { button: 0, clientX: CENTER.a.x, clientY: CENTER.a.y, pointerId: 1 }),
     );
     svg.dispatchEvent(pe('pointermove', { clientX: CENTER.b.x, clientY: CENTER.b.y, pointerId: 1 }));
+    vi.advanceTimersByTime(300); // 高亮满 300ms 才亮（fix round 1 时机）
     expect(nodeEl('b').classList.contains('drop-target')).toBe(true);
-    vi.advanceTimersByTime(400);
     svg.dispatchEvent(pe('pointercancel', { clientX: CENTER.b.x, clientY: CENTER.b.y, pointerId: 1 }));
     expect(nodeEl('b').classList.contains('drop-target')).toBe(false);
     svg.dispatchEvent(pe('pointerup', { clientX: CENTER.b.x, clientY: CENTER.b.y, pointerId: 1 }));
@@ -263,5 +273,53 @@ describe('DragController 边界与生命周期', () => {
 
   it('未 attach 直接 destroy 不抛错', () => {
     expect(() => new DragController().destroy()).not.toThrow();
+  });
+
+  it('svg 外释放（window pointerup）清候选不卡死：后续拖拽照常（fix round 1）', () => {
+    // 候选期未捕获指针，拖出窗口后 svg 收不到 pointerup → candidate 卡死。
+    nodeEl('a').dispatchEvent(
+      pe('pointerdown', { button: 0, clientX: CENTER.a.x, clientY: CENTER.a.y, pointerId: 1 }),
+    );
+    window.dispatchEvent(pe('pointerup', { clientX: 5000, clientY: -20, pointerId: 1 }));
+    expect(controller.dragging).toBeNull();
+    expect(onDrop).not.toHaveBeenCalled();
+    // 卡死修复后：下一次 pointerdown + 拖拽照常换父。
+    dragTo(CENTER.b.x, CENTER.b.y, 300);
+    expect(onDrop).toHaveBeenCalledTimes(1);
+    expect(onDrop).toHaveBeenCalledWith('a', 'b');
+  });
+
+  it('拖拽激活后 svg 外释放：走同一结束逻辑（空白 → null），且不卡死', () => {
+    nodeEl('a').dispatchEvent(
+      pe('pointerdown', { button: 0, clientX: CENTER.a.x, clientY: CENTER.a.y, pointerId: 1 }),
+    );
+    svg.dispatchEvent(pe('pointermove', { clientX: CENTER.b.x, clientY: CENTER.b.y, pointerId: 1 }));
+    window.dispatchEvent(pe('pointerup', { clientX: 5000, clientY: -20, pointerId: 1 }));
+    expect(onDrop).toHaveBeenCalledTimes(1);
+    expect(onDrop).toHaveBeenCalledWith('a', null); // 释放点在空白、悬停 <300ms → null
+    expect(controller.dragging).toBeNull();
+    dragTo(CENTER.b.x, CENTER.b.y, 300);
+    expect(onDrop).toHaveBeenCalledTimes(2);
+    expect(onDrop).toHaveBeenLastCalledWith('a', 'b');
+  });
+
+  it('destroy 释放已持有的指针捕获', () => {
+    const captured: number[] = [];
+    const released: number[] = [];
+    Object.defineProperty(svg, 'setPointerCapture', {
+      value: (id: number) => captured.push(id),
+      configurable: true,
+    });
+    Object.defineProperty(svg, 'releasePointerCapture', {
+      value: (id: number) => released.push(id),
+      configurable: true,
+    });
+    nodeEl('a').dispatchEvent(
+      pe('pointerdown', { button: 0, clientX: CENTER.a.x, clientY: CENTER.a.y, pointerId: 7 }),
+    );
+    svg.dispatchEvent(pe('pointermove', { clientX: CENTER.b.x, clientY: CENTER.b.y, pointerId: 7 }));
+    expect(captured).toEqual([7]); // 激活时捕获
+    controller.destroy();
+    expect(released).toEqual([7]); // destroy 释放（fix round 1 minor）
   });
 });

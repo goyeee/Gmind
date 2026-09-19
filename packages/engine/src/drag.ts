@@ -1,31 +1,41 @@
 /**
  * 节点拖拽换父 / 浮动主题手势 — M1b Task 9（FR-EDT-003）。
  *
- * 绑定裁决（M1b 计划 Task 9）：
+ * 绑定裁决（M1b 计划 Task 9 + fix round 1）：
  * - pointerdown 命中 <g data-node-id>（主键）才登记候选；折叠徽标 <g data-for-id>
  *   嵌在节点 g 内，须先按 data-for-id 排除——徽标点击归页面层（Task 11）。
  * - 位移阈值 4px（screen px）之前不激活：click 仍是 click（页面另接点击/编辑）。
  *   激活时记录拖拽 id 与 ghost 偏移（指针场景点 − 节点盒左上角，供页面画 ghost）。
- * - 拖动中每帧命中检测：viewport.toSceneFromEvent → 命中 NodeBox（排除自身；
- *   deps.isDescendant(id, cand) 为真的后代盒记为「禁止」）。合法目标需**同一目标**
- *   累计悬停 ≥300ms 才可释放换父：hoverStart 按目标记忆，切换目标即重置——
- *   未满 300ms 就释放视同无目标 → onDrop(id, null)。计时用 Date.now()，
- *   vitest fake timers 默认伪造 Date，测试可确定性推进。
- * - 高亮：目标 <g> 加 class `drop-target`；被禁止的后代 <g> 加 class
- *   `drop-forbidden`；移开/抬起/取消即清除。
+ * - 拖动中每帧命中检测：viewport.toSceneFromEvent → 命中 NodeBox。**自身盒与
+ *   后代盒同为「禁止目标」**（fix round 1：自身释放曾落入 null 分支 → 页面
+ *   moveNode(id,'root') 会把整枝浮动成根主题，属合法但破坏性的意外；裁决改为
+ *   静默取消，与后代同待遇）：悬停即亮 .drop-forbidden 反馈，释放不回调 onDrop。
+ * - 合法目标需**同一目标**累计悬停 ≥300ms 才可释放换父：hoverStart 按目标记忆，
+ *   切换目标即重置；未满 300ms 就释放视同无目标 → onDrop(id, null)。
+ *   高亮时机与释放裁决配对（fix round 1）：.drop-target 满 300ms 才由定时器翻转
+ *   点亮（悬停中即亮会诱导用户在 <300ms 时释放而触发 null/浮动），离开/切换/
+ *   结束立即摘除并撤销未触发的定时器。计时全走 Date.now()/setTimeout，
+ *   vitest fake timers 默认伪造二者，测试可确定性推进。
  * - 释放：合法目标（≥300ms）→ onDrop(id, targetId)；空白/未满阈值悬停 →
- *   onDrop(id, null)（浮动主题 = 页面层 moveNode(id, 'root')）；后代 → 取消不回调。
- *   自身盒被排除在命中外，其上释放即「无目标」→ null（浮装主题语义与空白一致）。
+ *   onDrop(id, null)（浮动主题 = 页面层 moveNode(id, 'root')）；自身/后代 → 取消。
+ * - 候选/拖拽期间额外挂 window 级 pointerup/pointercancel 兜底（fix round 1：
+ *   pointerdown 未捕获指针时，svg 外释放——如拖出窗口——不会在 svg 上派发
+ *   pointerup，candidate 卡死会使后续所有 pointerdown 被拒，拖拽永久失效）；
+ *   结束/destroy 即卸载。svg 内释放先冒泡过 svg 处理器（状态已清），window
+ *   处理器成 no-op，天然幂等。
  * - 生命周期仿 Viewport（Task 7）：构造不绑事件；attach() 绑定（幂等）、
- *   destroy() 全解绑并中止进行中的拖拽（不回调）；pointercancel 视为取消。
- *   setPointerCapture 特性探测 + try/catch（jsdom 无该 API 时降级）。
+ *   destroy() 全解绑、释放已持有的指针捕获并中止进行中的拖拽（不回调）；
+ *   pointercancel 视为取消；setPointerCapture 特性探测 + try/catch（T7 先例）。
+ * - 给 Task 11 的注记：拖拽激活后的释放**不会拦截**浏览器随后合成的 click
+ *   事件（上层规范未授权 preventDefault）——页面点击选择须自行防抖「刚拖拽完」
+ *   （如记录 last-drag 时间戳，click 距其 < X ms 内忽略）。
  */
 import type { NodeBox } from './types';
 import type { Viewport } from './viewport';
 
 /** 拖拽激活位移阈值（screen px）。 */
 export const DRAG_THRESHOLD_PX = 4;
-/** 悬停目标确认时长（同一目标累计 ≥ 此值才允许换父）。 */
+/** 悬停目标确认时长（同一目标累计 ≥ 此值才允许换父并点亮高亮）。 */
 export const DROP_HOVER_MS = 300;
 
 /** 依赖注入：坐标换算与换父裁决由页面侧提供。 */
@@ -49,7 +59,7 @@ export interface DragSnapshot {
   offsetY: number;
 }
 
-/** 命中结果：命中的盒 + 是否为禁止目标（拖拽源的后代）。 */
+/** 命中结果：命中的盒 + 是否为禁止目标（拖拽源自身或其后代）。 */
 interface Hit {
   box: NodeBox;
   forbidden: boolean;
@@ -65,8 +75,14 @@ export class DragController {
   /** 当前悬停的合法目标与起悬时刻（Date.now()）；无目标为 null/0。 */
   private hoverTarget: string | null = null;
   private hoverStart = 0;
-  /** 当前被标 drop-forbidden 的后代 id。 */
+  /** .drop-target 的 300ms 翻转定时器（离开/切换/结束即撤销）。 */
+  private hoverTimer: ReturnType<typeof setTimeout> | null = null;
+  /** 当前被标 drop-forbidden 的节点 id（自身或后代）。 */
   private hoverForbidden: string | null = null;
+  /** 候选/拖拽期间挂着的 window 级兜底监听标记。 */
+  private windowBound = false;
+  /** 已成功捕获的 pointerId（null = 未捕获）；finish/destroy 释放。 */
+  private capturedPointerId: number | null = null;
 
   /** 拖拽进行中的快照；未拖拽为 null。 */
   get dragging(): DragSnapshot | null {
@@ -87,7 +103,7 @@ export class DragController {
     deps.svg.addEventListener('pointercancel', this.onPointerCancel);
   }
 
-  /** 解绑全部监听并中止进行中的拖拽（不触发 onDrop；幂等）。 */
+  /** 解绑全部监听、释放指针捕获并中止进行中的拖拽（不触发 onDrop；幂等）。 */
   destroy(): void {
     if (this.deps) {
       this.deps.svg.removeEventListener('pointerdown', this.onPointerDown);
@@ -96,6 +112,8 @@ export class DragController {
       this.deps.svg.removeEventListener('pointercancel', this.onPointerCancel);
     }
     this.clearHighlights();
+    this.releaseCapture();
+    this.unbindWindowFallback();
     this.deps = null;
     this.attached = false;
     this.candidate = null;
@@ -116,6 +134,8 @@ export class DragController {
     const id = g.getAttribute('data-node-id');
     if (!id) return;
     this.candidate = { id, x: e.clientX, y: e.clientY, pointerId: e.pointerId };
+    // 候选期尚未捕获指针：svg 外释放只在 window 上可见，兜底防候选卡死。
+    this.bindWindowFallback();
   };
 
   private onPointerMove = (e: PointerEvent): void => {
@@ -138,6 +158,7 @@ export class DragController {
     if (!deps) return;
     if (this.candidate && e.pointerId === this.candidate.pointerId) {
       this.candidate = null; // 未激活即抬起：click，不做任何事
+      this.unbindWindowFallback();
       return;
     }
     if (!this.drag || e.pointerId !== this.drag.pointerId) return;
@@ -147,18 +168,18 @@ export class DragController {
     const hoveredOk =
       hit !== null && !hit.forbidden && this.hoverTarget === hit.box.id &&
       Date.now() - this.hoverStart >= DROP_HOVER_MS;
-    this.finish(e.pointerId);
+    this.finish();
     if (hit === null) {
       deps.onDrop(id, null); // 空白 → 浮动主题
       return;
     }
-    if (hit.forbidden) return; // 拖入自身后代：取消
+    if (hit.forbidden) return; // 自身/自身后代：静默取消
     deps.onDrop(id, hoveredOk ? hit.box.id : null); // 悬停未满 300ms 视同无目标
   };
 
-  private onPointerCancel = (e: PointerEvent): void => {
+  private onPointerCancel = (): void => {
     if (!this.candidate && !this.drag) return;
-    this.finish(e.pointerId);
+    this.finish();
   };
 
   /** 过阈值：登记拖拽与 ghost 偏移（可选门控 canReparent 不放行则保持候选不激活）。 */
@@ -168,6 +189,7 @@ export class DragController {
     if (!deps || !cand) return;
     if (deps.canReparent && !deps.canReparent(cand.id)) {
       this.candidate = null;
+      this.unbindWindowFallback();
       return;
     }
     const scene = deps.viewport.toSceneFromEvent(e);
@@ -182,55 +204,84 @@ export class DragController {
     if (typeof deps.svg.setPointerCapture === 'function') {
       try {
         deps.svg.setPointerCapture(e.pointerId);
+        this.capturedPointerId = e.pointerId;
       } catch {
-        /* 捕获失败可忽略：监听就在 svg 上（Task 7 先例） */
+        /* 捕获失败可忽略：监听就在 svg 上 + window 兜底（Task 7 先例） */
       }
     }
     this.updateHover(this.hitAt(scene.x, scene.y, cand.id));
   }
 
-  /** 结束拖拽：清高亮与状态并释放指针捕获（不触发 onDrop——由调用方决定）。 */
-  private finish(pointerId?: number): void {
-    const deps = this.deps;
+  /** 结束拖拽：清高亮、释放捕获、卸 window 兜底（不触发 onDrop——由调用方决定）。 */
+  private finish(): void {
     this.clearHighlights();
     this.candidate = null;
     this.drag = null;
-    if (deps && pointerId !== undefined && typeof deps.svg.releasePointerCapture === 'function') {
+    this.releaseCapture();
+    this.unbindWindowFallback();
+  }
+
+  private releaseCapture(): void {
+    const svg = this.deps?.svg;
+    if (
+      this.capturedPointerId !== null &&
+      svg &&
+      typeof svg.releasePointerCapture === 'function'
+    ) {
       try {
-        deps.svg.releasePointerCapture(pointerId);
+        svg.releasePointerCapture(this.capturedPointerId);
       } catch {
         /* 指针可能已释放 */
       }
     }
+    this.capturedPointerId = null;
   }
 
-  /** 场景点命中：排除自身；后代盒标 forbidden。命中最先匹配的盒。 */
+  private bindWindowFallback(): void {
+    if (this.windowBound) return;
+    this.windowBound = true;
+    // svg 内释放会先冒泡过 svg 处理器（状态已清），此兜底处理器成 no-op。
+    window.addEventListener('pointerup', this.onPointerUp);
+    window.addEventListener('pointercancel', this.onPointerCancel);
+  }
+
+  private unbindWindowFallback(): void {
+    if (!this.windowBound) return;
+    this.windowBound = false;
+    window.removeEventListener('pointerup', this.onPointerUp);
+    window.removeEventListener('pointercancel', this.onPointerCancel);
+  }
+
+  /** 场景点命中：命中最先匹配的盒；自身与后代均为禁止目标（fix round 1）。 */
   private hitAt(sceneX: number, sceneY: number, draggedId: string): Hit | null {
     const deps = this.deps;
     if (!deps) return null;
     for (const b of deps.getBoxes()) {
-      if (b.id === draggedId) continue;
       if (sceneX < b.x || sceneX > b.x + b.w || sceneY < b.y || sceneY > b.y + b.h) continue;
-      return { box: b, forbidden: deps.isDescendant(draggedId, b.id) };
+      return {
+        box: b,
+        forbidden: b.id === draggedId || deps.isDescendant(draggedId, b.id),
+      };
     }
     return null;
   }
 
-  /** 悬停状态机：目标切换重置计时；同步 drop-target / drop-forbidden 高亮。 */
+  /** 悬停状态机：目标切换重置计时；.drop-target 满 300ms 定时器翻转，禁止反馈即时。 */
   private updateHover(hit: Hit | null): void {
     const targetId = hit !== null && !hit.forbidden ? hit.box.id : null;
     const forbiddenId = hit !== null && hit.forbidden ? hit.box.id : null;
     if (targetId !== this.hoverTarget) {
-      this.setClass(this.hoverTarget, 'drop-target', false);
+      this.clearTargetHighlight(); // 离开/切换：立即摘除 + 撤销未触发的翻转定时器
       if (targetId !== null) {
         this.hoverTarget = targetId;
         this.hoverStart = Date.now(); // 换目标即重置 300ms 计时
-        this.setClass(targetId, 'drop-target', true);
-      } else {
-        this.hoverTarget = null;
-        this.hoverStart = 0;
+        this.hoverTimer = setTimeout(() => {
+          this.hoverTimer = null;
+          if (this.hoverTarget === targetId) this.setClass(targetId, 'drop-target', true);
+        }, DROP_HOVER_MS);
       }
     }
+    // 自身/后代的禁止反馈即时显隐，不参与 300ms 延迟。
     if (forbiddenId !== this.hoverForbidden) {
       this.setClass(this.hoverForbidden, 'drop-forbidden', false);
       this.hoverForbidden = forbiddenId;
@@ -238,11 +289,20 @@ export class DragController {
     }
   }
 
-  private clearHighlights(): void {
+  /** 摘除目标高亮：清定时器、去类、复位悬停状态。 */
+  private clearTargetHighlight(): void {
+    if (this.hoverTimer !== null) {
+      clearTimeout(this.hoverTimer);
+      this.hoverTimer = null;
+    }
     this.setClass(this.hoverTarget, 'drop-target', false);
-    this.setClass(this.hoverForbidden, 'drop-forbidden', false);
     this.hoverTarget = null;
     this.hoverStart = 0;
+  }
+
+  private clearHighlights(): void {
+    this.clearTargetHighlight();
+    this.setClass(this.hoverForbidden, 'drop-forbidden', false);
     this.hoverForbidden = null;
   }
 
