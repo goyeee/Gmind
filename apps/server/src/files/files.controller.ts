@@ -1,7 +1,11 @@
-import { Body, Controller, Get, Inject, Post, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Inject, Param, Patch, Post, Put, Req, UseGuards } from '@nestjs/common';
+import { z } from 'zod';
 import { createFileSchema } from '@gmind/shared';
 import { UserGuard } from '../auth/user.guard';
 import { FilesService } from './files.service';
+
+// PUT doc-state 的传输契约：Yjs 状态二进制以 base64 编码（body { docState }）
+const docStateSchema = z.object({ docState: z.string().min(1) });
 
 @Controller('api/files')
 @UseGuards(UserGuard)
@@ -20,5 +24,30 @@ export class FilesController {
     // 按 FileListItem 契约序列化，避免裸实体（含 docState Buffer）被 Nest 原样序列化
     const created = await this.files.createForUser(req.user.id, { title });
     return this.files.toListItem(created);
+  }
+
+  @Get(':id')
+  getContent(@Req() req: { user: { id: string } }, @Param('id') id: string) {
+    return this.files.getOwnedFileWithState(req.user.id, id);
+  }
+
+  @Put(':id/doc-state')
+  async saveDocState(@Req() req: { user: { id: string } }, @Param('id') id: string, @Body() body: unknown) {
+    const { docState } = docStateSchema.parse(body ?? {});
+    const state = new Uint8Array(Buffer.from(docState, 'base64'));
+    return this.files.saveDocState(req.user.id, id, state);
+  }
+
+  @Patch(':id')
+  async rename(@Req() req: { user: { id: string } }, @Param('id') id: string, @Body() body: unknown) {
+    // 复用 createFileSchema 的 title 规则（min 1 / max 255 / 默认「未命名脑图」）；shape.title.parse 返回字符串本体
+    const title = createFileSchema.shape.title.parse((body as { title?: string } | null)?.title);
+    return this.files.rename(req.user.id, id, title);
+  }
+
+  @Post(':id/open')
+  @HttpCode(200) // 打开是幂等动作而非资源创建，返回 200
+  markOpened(@Req() req: { user: { id: string } }, @Param('id') id: string) {
+    return this.files.markOpened(req.user.id, id);
   }
 }
