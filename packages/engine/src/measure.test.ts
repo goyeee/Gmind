@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { measureNodeBox } from './measure';
+import { THEMES } from './themes';
 import type { MeasureAdapter, TextStyle, ThemeTokens } from './types';
 
 // 桩测量适配器：每个字符固定 10px 宽（行高由引擎按 theme 自算，不经过适配器）。
@@ -9,7 +10,9 @@ const stubAdapter: MeasureAdapter = {
 
 const style: TextStyle = { fontSize: 14, fontWeight: 400, fontFamily: 'sans-serif' };
 
+// 桩主题：几何度量为本套测试自有值；其余 token（颜色/字体）以默认主题补齐。
 const theme: ThemeTokens = {
+  ...THEMES['gmind-blue'],
   nodePaddingX: 8,
   iconSlotWidth: 18,
   lineHeightRatio: 1.5,

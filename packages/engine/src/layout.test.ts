@@ -3,6 +3,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { layout } from './layout';
+import { THEMES } from './themes';
 import type {
   DocReader,
   LayoutResult,
@@ -49,7 +50,9 @@ function makeReader(defs: Record<string, PlainNode>): DocReader {
 
 const stubAdapter: MeasureAdapter = { measureTextLine: (text) => text.length * 10 };
 
+/** 金样绑定桩主题：几何度量沿用 T4 金样值；其余 token（颜色/字体）以默认主题补齐。 */
 const theme: ThemeTokens = {
+  ...THEMES['gmind-blue'],
   nodePaddingX: 12,
   iconSlotWidth: 20,
   lineHeightRatio: 1,

@@ -7,7 +7,7 @@
  * - 从 'root' 收集存活树：getNode/childrenIds 语义；deleted 节点连同其子树整体跳过；
  *   折叠节点按叶子渲染（不下钻），collapsedCounts[id] = 被隐藏的存活后代数。
  * - 盒子经 measureNodeBox：图标按键数预留 iconSlotWidth 槽位；样式由 styleOf 提供
- *   （缺省按深度主题派生：根 / 一级 / 二级及更深，Task 5 按主题系统精化）。
+ *   （缺省按深度取主题分级派生：根 / 一级 / 二级及更深，字号/字重/字族全由主题 token 驱动）。
  * - 垂直（mindmap/logic）：子树高 = max(自身高, Σ子树高 + V_GAP×(n-1))；一节点之子
  *   自 parentY + parentH/2 − 子带高/2 起顶对齐堆叠，父垂直居中于子带（经典脑图）。
  * - 水平（org）：子树宽 = max(自身宽, Σ子树宽 + H_GAP×(n-1))；兄弟水平排布，
@@ -22,6 +22,7 @@
  * - 根盒中心恒为 (0,0)；输出 bbox 宽高为全部节点盒的极差。
  */
 import { measureNodeBox } from './measure';
+import { themeTextStyleOf } from './themes';
 import type {
   DocReader,
   EdgeRoute,
@@ -59,19 +60,8 @@ export interface LayoutOptions {
   structure: StructureType;
   theme: ThemeTokens;
   measure: MeasureAdapter;
-  /** 缺省时按深度取主题派生样式（根/一级/二级+）。Task 5 接管精化。 */
+  /** 缺省时按深度取主题派生样式（根/一级/二级+，字号/字重/字族全由 theme token 驱动）。 */
   styleOf?: (id: string, depth: number) => TextStyle;
-}
-
-// 缺省文本样式（Task 4 内联桩；Task 5 主题系统精化后由 theme 驱动）。
-const DEFAULT_ROOT_STYLE: TextStyle = { fontSize: 20, fontWeight: 600, fontFamily: 'sans-serif' };
-const DEFAULT_LEVEL1_STYLE: TextStyle = { fontSize: 16, fontWeight: 500, fontFamily: 'sans-serif' };
-const DEFAULT_LEVEL2_STYLE: TextStyle = { fontSize: 14, fontWeight: 400, fontFamily: 'sans-serif' };
-
-function defaultStyleOf(_id: string, depth: number): TextStyle {
-  if (depth <= 0) return DEFAULT_ROOT_STYLE;
-  if (depth === 1) return DEFAULT_LEVEL1_STYLE;
-  return DEFAULT_LEVEL2_STYLE;
 }
 
 /** 统计折叠节点之下被隐藏的存活后代数（跳过墓碑；visited 防环）。 */
@@ -274,7 +264,8 @@ function flatten(node: LayoutNode, depth: number, boxes: NodeBox[], collapsed: M
  */
 export function layout(reader: DocReader, opts: LayoutOptions): LayoutResult {
   const { structure, theme, measure } = opts;
-  const styleOf = opts.styleOf ?? defaultStyleOf;
+  // 缺省样式：主题分级派生（Task 5 主题系统；页面层闭合文档传 styleOf 以叠加 nodeStyle）。
+  const styleOf = opts.styleOf ?? ((_id: string, depth: number) => themeTextStyleOf(theme, depth));
 
   const root = collectTree(reader, theme, measure, styleOf);
   if (!root) return { nodes: [], edges: [], collapsedCounts: new Map(), width: 0, height: 0 };

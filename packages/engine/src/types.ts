@@ -23,9 +23,11 @@ export interface MeasureAdapter {
 }
 
 /**
- * 主题度量令牌（Task 3 最小集，Task 5 按主题系统扩展；只增不改）。
+ * 主题令牌（渲染 + 布局完整集；Task 3 最小集，Task 5 只增不改补全）。
+ * 所有键必须有值——Task 6 渲染器将逐个消费。
  */
 export interface ThemeTokens {
+  // —— 布局度量（Task 3/4 既有键，沿用）——
   /** 节点盒水平内边距（左右各一份）。 */
   nodePaddingX: number;
   /** 单个图标槽的宽度（图标区位于节点盒左侧）。 */
@@ -40,6 +42,82 @@ export interface ThemeTokens {
   V_GAP: number;
   /** 水平布局兄弟子树带间距（mindmap/logic 层级间横向、org 横向）。 */
   H_GAP: number;
+  // —— 分级节点样式：root / level1 / level2+（depth ≥2 统一用 level2）——
+  /** 根节点填充色。 */
+  rootFill: string;
+  /** 根节点边框色。 */
+  rootBorderColor: string;
+  /** 根节点文字色。 */
+  rootTextColor: string;
+  /** 根节点字号（绑定缺省 20）。 */
+  rootFontSize: number;
+  /** 根节点字重。 */
+  rootFontWeight: number;
+  /** 根节点字族（系统字体栈字符串）。 */
+  rootFontFamily: string;
+  /** 一级节点填充色。 */
+  level1Fill: string;
+  /** 一级节点边框色。 */
+  level1BorderColor: string;
+  /** 一级节点文字色。 */
+  level1TextColor: string;
+  /** 一级节点字号（绑定缺省 16）。 */
+  level1FontSize: number;
+  /** 一级节点字重。 */
+  level1FontWeight: number;
+  /** 一级节点字族（系统字体栈字符串）。 */
+  level1FontFamily: string;
+  /** 二级及更深节点填充色。 */
+  level2Fill: string;
+  /** 二级及更深节点边框色。 */
+  level2BorderColor: string;
+  /** 二级及更深节点文字色。 */
+  level2TextColor: string;
+  /** 二级及更深节点字号（绑定缺省 14）。 */
+  level2FontSize: number;
+  /** 二级及更深节点字重。 */
+  level2FontWeight: number;
+  /** 二级及更深节点字族（系统字体栈字符串）。 */
+  level2FontFamily: string;
+  // —— 画布与连接线 ——
+  /** 画布背景色。 */
+  canvasBackground: string;
+  /** 连接线颜色。 */
+  edgeColor: string;
+  /** 连接线宽度（px）。 */
+  edgeWidth: number;
+  // —— 节点盒外观 ——
+  /** 节点盒圆角半径（px）。 */
+  nodeBorderRadius: number;
+  /** 节点盒边框宽度（px）。 */
+  nodeBorderWidth: number;
+  // —— 折叠徽标 ——
+  /** 折叠徽标背景色。 */
+  collapseBadgeBg: string;
+  /** 折叠徽标前景（文字）色。 */
+  collapseBadgeFg: string;
+}
+
+/** 主题标识：core meta `themeId` 的合法值域（'gmind-light' 为解析期别名，见 resolveThemeId）。 */
+export type ThemeId = 'gmind-blue' | 'gmind-warm' | 'gmind-accessible';
+
+/**
+ * 节点最终解析样式：主题分级派生 + 节点级 nodeStyle 覆盖后的渲染输入
+ * （Task 6 渲染器只读本结构，不再自行兜底颜色）。
+ */
+export interface ResolvedNodeStyle {
+  /** 节点填充色。 */
+  fill: string;
+  /** 节点边框色。 */
+  border: string;
+  /** 文字色。 */
+  textColor: string;
+  /** 文本三元组（fontSize/fontWeight/fontFamily），与测量、DOM/Canvas 字体一一对应。 */
+  textStyle: TextStyle;
+  /** 解析后字号（textStyle.fontSize 的冗余直读形式）。 */
+  fontSize: number;
+  /** 解析后字族（textStyle.fontFamily 的冗余直读形式）。 */
+  fontFamily: string;
 }
 
 /** 场景坐标点（中心主题 (0,0) 居中）。 */
