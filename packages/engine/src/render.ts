@@ -269,7 +269,11 @@ function applyNode(
   );
   if (entry.icons) {
     entry.icons.textContent = glyphs;
+    // 属性回填（创建后每次更新）：跨深度复用节点时字号/文字色随 styleOf 变化。
     entry.icons.setAttribute('y', fmt(b.h / 2 + fontSize * 0.35));
+    entry.icons.setAttribute('x', fmt(theme.nodePaddingX));
+    entry.icons.setAttribute('font-size', fmt(fontSize));
+    entry.icons.setAttribute('fill', style.textColor);
   }
 
   // note / link 角标：note 非空渲染 'N'，href 非空渲染 🔗；同时存在时水平错位。
@@ -285,7 +289,12 @@ function applyNode(
       fill: style.textColor,
     }),
   );
-  if (entry.linkBadge) entry.linkBadge.textContent = '🔗';
+  if (entry.linkBadge) {
+    entry.linkBadge.textContent = '🔗';
+    // 属性回填：文本编辑加宽盒子后角标随右缘移动。
+    entry.linkBadge.setAttribute('x', fmt(b.w - CORNER_BADGE_PAD));
+    entry.linkBadge.setAttribute('fill', style.textColor);
+  }
   entry.noteBadge = syncOptional(entry.noteBadge, hasNote, g, () =>
     el('text', {
       class: 'gm-note-badge',
@@ -302,9 +311,11 @@ function applyNode(
       'x',
       fmt(b.w - CORNER_BADGE_PAD - (hasLink ? CORNER_BADGE_STEP : 0)),
     );
+    entry.noteBadge.setAttribute('fill', style.textColor);
   }
 
   // image：href 走 /api/images/{key}；宽高直用 image.w/h（页面负责 ≤200px 钳制）。
+  // 属性回填：同一节点换图/换尺寸时原地更新（元素引用保持）。
   const img = visual.image ?? null;
   entry.image = syncOptional(entry.image, img !== null, g, () =>
     el('image', {
@@ -316,6 +327,11 @@ function applyNode(
       href: `/api/images/${img?.key ?? ''}`,
     }),
   );
+  if (entry.image && img) {
+    entry.image.setAttribute('href', `/api/images/${img.key}`);
+    entry.image.setAttribute('width', fmt(img.w));
+    entry.image.setAttribute('height', fmt(img.h));
+  }
 
   // 折叠徽标：+N，仅 count>0；元素随有无增删（旧徽标元素移除，不保留引用）。
   if (collapsedCount > 0) {

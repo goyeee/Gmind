@@ -256,6 +256,52 @@ describe('renderScene：协调更新（保元素引用）', () => {
     expect(gB.querySelector('.gm-collapse-badge')?.textContent).toBe('+7');
     expect(badge.isConnected).toBe(false); // 旧徽标元素被移除，新元素重建
   });
+
+  it('保留节点 image 更新：key/宽高变化 → 属性回填，元素引用不变', () => {
+    const scene = createScene(svg);
+    const data1 = baseData();
+    data1.set('b', { text: 'x', image: { key: 'old', w: 100, h: 60 } });
+    renderScene(scene, makeInput(baseLayout(), data1));
+    const img = nodeG('b')?.querySelector('image.gm-image') as SVGImageElement;
+    const data2 = baseData();
+    data2.set('b', { text: 'x', image: { key: 'new', w: 150, h: 90 } });
+    renderScene(scene, makeInput(baseLayout(), data2));
+    expect(nodeG('b')?.querySelector('image.gm-image')).toBe(img);
+    expect(img.getAttribute('href')).toBe('/api/images/new');
+    expect(img.getAttribute('width')).toBe('150');
+    expect(img.getAttribute('height')).toBe('90');
+  });
+
+  it('保留节点文本加宽盒子：link 角标 x 随右缘移动，元素引用不变', () => {
+    const scene = createScene(svg);
+    const data1 = baseData();
+    data1.set('b', { text: '短', href: 'https://example.com' });
+    renderScene(scene, makeInput(baseLayout(), data1));
+    const link = nodeG('b')?.querySelector('.gm-link-badge') as SVGTextElement;
+    expect(link.getAttribute('x')).toBe('94'); // w=100 − 6
+    const data2 = baseData();
+    data2.set('b', { text: '一段长了很多的文本', href: 'https://example.com' });
+    const layout2 = baseLayout();
+    layout2.nodes = [layout2.nodes[0] as NodeBox, box('b', 60, -20, 200, 40), layout2.nodes[2] as NodeBox];
+    renderScene(scene, makeInput(layout2, data2));
+    expect(nodeG('b')?.querySelector('.gm-link-badge')).toBe(link);
+    expect(link.getAttribute('x')).toBe('194'); // w=200 − 6
+  });
+
+  it('保留节点跨深度复用：icons font-size/fill 随 styleOf 更新，元素引用不变', () => {
+    const scene = createScene(svg);
+    const data1 = baseData();
+    data1.set('b', { text: 'x', icons: { star: '1' } });
+    renderScene(scene, makeInput(baseLayout(), data1));
+    const icons = nodeG('b')?.querySelector('.gm-icons') as SVGTextElement;
+    expect(icons.getAttribute('font-size')).toBe('14'); // depth 2 → level2
+    // 升为一级（depth 1）：字号/文字色按主题分级变化。
+    const styleL1 = (id: string): ResolvedNodeStyle => resolveNodeStyle(theme, id === 'a' ? 0 : 1, {});
+    renderScene(scene, { layout: baseLayout(), theme, styleOf: styleL1, nodeData: data1 });
+    expect(nodeG('b')?.querySelector('.gm-icons')).toBe(icons);
+    expect(icons.getAttribute('font-size')).toBe('16');
+    expect(icons.getAttribute('fill')).toBe('#1f2a44');
+  });
 });
 
 describe('renderScene：清理与幂等', () => {
