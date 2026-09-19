@@ -135,6 +135,8 @@ export interface NodeBox {
   h: number;
   side: 'left' | 'right' | 'down';
   depth: number;
+  /** 父节点 id（根节点无此字段）；Task 8 siblingEnd 同级首末判定用（只增不改）。 */
+  parentId?: string;
 }
 
 /** 边路由：两端锚点 + 线型。 */

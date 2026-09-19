@@ -7,7 +7,8 @@
       "w": 64,
       "h": 20,
       "side": "right",
-      "depth": 0
+      "depth": 0,
+      "parentId": null
     },
     {
       "id": "g1",
@@ -16,7 +17,8 @@
       "w": 54,
       "h": 20,
       "side": "right",
-      "depth": 1
+      "depth": 1,
+      "parentId": "root"
     },
     {
       "id": "ga",
@@ -25,7 +27,8 @@
       "w": 74,
       "h": 20,
       "side": "right",
-      "depth": 2
+      "depth": 2,
+      "parentId": "g1"
     },
     {
       "id": "gb",
@@ -34,7 +37,8 @@
       "w": 54,
       "h": 20,
       "side": "right",
-      "depth": 2
+      "depth": 2,
+      "parentId": "g1"
     },
     {
       "id": "g2",
@@ -43,7 +47,8 @@
       "w": 54,
       "h": 20,
       "side": "right",
-      "depth": 1
+      "depth": 1,
+      "parentId": "root"
     },
     {
       "id": "gc",
@@ -52,7 +57,8 @@
       "w": 94,
       "h": 20,
       "side": "right",
-      "depth": 2
+      "depth": 2,
+      "parentId": "g2"
     },
     {
       "id": "g3",
@@ -61,7 +67,8 @@
       "w": 54,
       "h": 20,
       "side": "right",
-      "depth": 1
+      "depth": 1,
+      "parentId": "root"
     }
   ],
   "edges": [

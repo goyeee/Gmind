@@ -251,11 +251,17 @@ function buildEdges(node: LayoutNode, structure: StructureType, out: EdgeRoute[]
   }
 }
 
-/** 先序展平（根先、文档序），并回填折叠计数。 */
-function flatten(node: LayoutNode, depth: number, boxes: NodeBox[], collapsed: Map<string, number>): void {
-  boxes.push({ id: node.id, x: node.x, y: node.y, w: node.w, h: node.h, side: node.side, depth });
+/** 先序展平（根先、文档序），回填折叠计数与 parentId（根无 parentId；Task 8 只增不改）。 */
+function flatten(
+  node: LayoutNode,
+  depth: number,
+  parentId: string | undefined,
+  boxes: NodeBox[],
+  collapsed: Map<string, number>,
+): void {
+  boxes.push({ id: node.id, x: node.x, y: node.y, w: node.w, h: node.h, side: node.side, depth, parentId });
   if (node.collapsedCount !== undefined) collapsed.set(node.id, node.collapsedCount);
-  for (const child of node.children) flatten(child, depth + 1, boxes, collapsed);
+  for (const child of node.children) flatten(child, depth + 1, node.id, boxes, collapsed);
 }
 
 /**
@@ -287,7 +293,7 @@ export function layout(reader: DocReader, opts: LayoutOptions): LayoutResult {
 
   const nodes: NodeBox[] = [];
   const collapsedCounts = new Map<string, number>();
-  flatten(root, 0, nodes, collapsedCounts);
+  flatten(root, 0, undefined, nodes, collapsedCounts);
   const edges: EdgeRoute[] = [];
   buildEdges(root, structure, edges);
 

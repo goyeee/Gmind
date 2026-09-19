@@ -375,7 +375,16 @@ function serialize(result: LayoutResult): string {
   const counts = [...result.collapsedCounts.entries()].sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
   return `${JSON.stringify(
     {
-      nodes: result.nodes.map((n) => ({ id: n.id, x: n.x, y: n.y, w: n.w, h: n.h, side: n.side, depth: n.depth })),
+      nodes: result.nodes.map((n) => ({
+        id: n.id,
+        x: n.x,
+        y: n.y,
+        w: n.w,
+        h: n.h,
+        side: n.side,
+        depth: n.depth,
+        parentId: n.parentId ?? null, // Task 8 起金样含 parentId（根为 null）
+      })),
       edges: result.edges.map((e) => ({ id: e.id, from: e.from, to: e.to, kind: e.kind, controls: e.controls ?? null })),
       collapsedCounts: Object.fromEntries(counts),
       width: result.width,
