@@ -3,6 +3,7 @@ import { Test } from '@nestjs/testing';
 import { AppModule } from '../../src/app.module';
 import { QuotaExceptionFilter } from '../../src/common/quota-exception.filter';
 import { ZodExceptionFilter } from '../../src/common/zod-exception.filter';
+import { MulterExceptionFilter } from '../../src/storage/storage.multer.filter';
 import { createDataSource } from '../../src/database/data-source';
 
 /** e2e 统一装置：连 gmind_test 库 + Redis db1（环境变量由 vitest.e2e.config.ts 的 setupFiles 固定），
@@ -18,7 +19,7 @@ export async function createTestApp(): Promise<INestApplication> {
 
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
   const app = moduleRef.createNestApplication();
-  app.useGlobalFilters(new ZodExceptionFilter(), new QuotaExceptionFilter());
+  app.useGlobalFilters(new ZodExceptionFilter(), new QuotaExceptionFilter(), new MulterExceptionFilter());
   await app.init();
   return app;
 }

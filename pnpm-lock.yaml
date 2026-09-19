@@ -47,6 +47,9 @@ importers:
       ioredis:
         specifier: ^5.4.0
         version: 5.11.1
+      multer:
+        specifier: 2.0.2
+        version: 2.0.2
       mysql2:
         specifier: ^3.11.0
         version: 3.24.4(@types/node@22.20.3)

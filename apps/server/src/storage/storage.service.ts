@@ -9,8 +9,10 @@ import {
 import { ulid } from 'ulid';
 import { IMAGE_EXT_CONTENT_TYPES, LocalDiskProvider, type StorageProvider } from './local-disk.provider';
 
-/** 单图大小上限 10MB（spec：超限 413）。 */
+/** 单图大小上限 10MB（spec：超限 413）。同时作为 multer 内存缓冲的硬顶（FileInterceptor limits），防超限请求整包进内存。 */
 export const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+/** 413 统一文案：StorageService 校验与 multer 限制（经 MulterExceptionFilter 映射）共用。 */
+export const IMAGE_TOO_LARGE_MESSAGE = '图片大小超出 10MB 限制';
 
 /** 按魔数识别图片扩展名（显式字节校验，白名单外返回 null）：png \x89PNG / jpg \xFF\xD8\xFF / gif GIF8 / webp RIFF....WEBP。 */
 function detectImageExt(buf: Buffer): string | null {
@@ -37,7 +39,7 @@ export class StorageService {
   /** 校验大小与魔数 → 生成键 files/{fileId}/{ulid}.{ext} → 落盘。尺寸 w/h 由前端读取，服务端不解析像素。 */
   async saveImage(fileId: string, data: Buffer): Promise<{ key: string }> {
     if (data.length > MAX_IMAGE_BYTES) {
-      throw new PayloadTooLargeException('图片大小超出 10MB 限制');
+      throw new PayloadTooLargeException(IMAGE_TOO_LARGE_MESSAGE);
     }
     const ext = detectImageExt(data);
     if (!ext) {

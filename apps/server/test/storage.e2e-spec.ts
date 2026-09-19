@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import request from 'supertest';
 import type { INestApplication } from '@nestjs/common';
-import { rmSync } from 'node:fs';
+import { readdirSync, rmSync } from 'node:fs';
 import { createTestApp } from './support/app-test';
 
 // 1×1 透明 PNG（已知良好的 base64 常量，魔数 89 50 4E 47）
@@ -55,8 +55,8 @@ describe('storage 域（本地磁盘图片存储 Provider）', () => {
     expect(res.status).toBe(200);
     const bytes = Buffer.isBuffer(res.body) ? res.body : Buffer.from(res.body);
     expect(bytes.equals(PNG_1X1)).toBe(true);
-    expect(res.headers['content-type']).toContain('image/png');
-    expect(res.headers['cache-control']).toContain('immutable');
+    expect(res.headers['content-type']).toBe('image/png');
+    expect(res.headers['cache-control']).toBe('public, max-age=31536000, immutable');
   });
 
   it('jpg/gif/webp 魔数均被接受并返回对应 Content-Type', async () => {
@@ -73,7 +73,7 @@ describe('storage 域（本地磁盘图片存储 Provider）', () => {
       expect(upload.status).toBe(201);
       const res = await request(app.getHttpServer()).get(`/api/images/${upload.body.key}`);
       expect(res.status).toBe(200);
-      expect(res.headers['content-type']).toContain(c.type);
+      expect(res.headers['content-type']).toBe(c.type);
     }
   });
 
@@ -86,13 +86,17 @@ describe('storage 域（本地磁盘图片存储 Provider）', () => {
     expect(res.body.message).toBe('不支持的图片格式');
   });
 
-  it('>10MB Buffer（合法 PNG 魔数 + 填充）→ 413「图片大小超出 10MB 限制」', async () => {
+  it('>10MB Buffer（合法 PNG 魔数 + 填充）→ 413「图片大小超出 10MB 限制」，且不在磁盘留下任何文件', async () => {
+    // multer fileSize 硬顶路径：拒收发生在内存缓冲/落盘之前，磁盘不得新增文件
+    const countStoredFiles = (): number => readdirSync(TEST_STORAGE_DIR, { recursive: true }).length;
+    const before = countStoredFiles();
     const res = await request(app.getHttpServer())
       .post('/api/files/file-abc/images')
       .set('Authorization', `Bearer ${token}`)
       .attach('file', OVER_10MB_PNG, 'big.png');
     expect(res.status).toBe(413);
     expect(res.body.message).toBe('图片大小超出 10MB 限制');
+    expect(countStoredFiles()).toBe(before);
   });
 
   it('GET 不存在的 key → 404', async () => {
