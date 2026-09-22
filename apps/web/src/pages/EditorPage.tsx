@@ -55,6 +55,7 @@ import {
   Viewport,
 } from '@gmind/engine';
 import { attachKeyboardMap } from '../editor/keyboardMap';
+import { RichPanel } from '../editor/RichPanel';
 import { startSaveLoop } from '../editor/saveLoop';
 import { useEditorDoc } from '../editor/useEditorDoc';
 import './editor.css';
@@ -119,6 +120,9 @@ export function EditorPage() {
   const [status, setStatus] = useState('尚未编辑');
   const [toast, setToast] = useState('');
   const [zoomPct, setZoomPct] = useState(100);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; nodeId: string } | null>(
+    null,
+  );
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const showToast = (message: string): void => {
@@ -465,10 +469,77 @@ export function EditorPage() {
     if (id) openNodeEditor(id);
   };
 
+  // —— 右键菜单（Task 12）：动作复用与键盘相同的 core/engine 处理器 ——
+
+  const onSvgContextMenu = (e: React.MouseEvent<SVGSVGElement>): void => {
+    e.preventDefault();
+    if (justDraggedRef.current) return;
+    const g = (e.target as Element).closest('[data-node-id]');
+    const id = g?.getAttribute('data-node-id');
+    if (!id || !doc) {
+      setContextMenu(null);
+      return;
+    }
+    const snap = getNode(doc, id);
+    if (!snap || snap.deleted) return;
+    selectionRef.current?.selectOnly(id);
+    setContextMenu({ x: e.clientX, y: e.clientY, nodeId: id });
+  };
+
+  const runMenuAction = (action: string): void => {
+    const menu = contextMenu;
+    setContextMenu(null);
+    if (!menu || !doc) return;
+    const nodeBox = boxesRef.current.find((b) => b.id === menu.nodeId) ?? null;
+    switch (action) {
+      case 'insert-child':
+        openNewNodeEditor(menu.nodeId, undefined, nodeBox, 'child');
+        break;
+      case 'insert-sibling': {
+        if (menu.nodeId === ROOT_NODE_ID) {
+          openNewNodeEditor(ROOT_NODE_ID, undefined, nodeBox, 'child');
+          break;
+        }
+        const snap = getNode(doc, menu.nodeId);
+        const parent = snap ? getNode(doc, snap.parentId) : null;
+        if (!snap || !parent || parent.deleted) break;
+        openNewNodeEditor(
+          parent.id,
+          parent.childIds.indexOf(menu.nodeId) + 1,
+          nodeBox,
+          'sibling',
+        );
+        break;
+      }
+      case 'delete':
+        handleDelete();
+        break;
+      case 'copy':
+        void handleCopy();
+        break;
+      case 'cut':
+        void handleCut();
+        break;
+      case 'paste':
+        void handlePaste();
+        break;
+      case 'toggle-collapse':
+        handleToggleCollapse();
+        break;
+      default:
+        break;
+    }
+  };
+
   // —— React 渲染所需的文档派生值（tick 由 rerender 推进） ——
   const meta = doc ? getMeta(doc) : null;
   const themeId = meta ? resolveThemeId(meta.themeId) : 'gmind-blue';
   const nodeCount = doc ? countAlive(doc) : 0;
+  const selectionNow = selectionRef.current;
+  const selectedNodeId =
+    selectionNow && selectionNow.selected.size === 1
+      ? ([...selectionNow.selected][0] ?? null)
+      : null;
 
   // —— 引擎装配主 effect ——
   useEffect(() => {
@@ -736,15 +807,56 @@ export function EditorPage() {
         </span>
       </header>
 
-      <div className="editor-canvas">
-        <svg
-          ref={svgRef}
-          onClick={onSvgClick}
-          onDoubleClick={onSvgDoubleClick}
-          role="application"
-          aria-label="脑图画布"
-        />
+      <div className="editor-main">
+        <div className="editor-canvas">
+          <svg
+            ref={svgRef}
+            onClick={(e) => {
+              setContextMenu(null);
+              onSvgClick(e);
+            }}
+            onDoubleClick={onSvgDoubleClick}
+            onContextMenu={onSvgContextMenu}
+            role="application"
+            aria-label="脑图画布"
+          />
+        </div>
+
+        {doc && um && selectedNodeId && (
+          <RichPanel
+            doc={doc}
+            fileId={fileId}
+            nodeId={selectedNodeId}
+            afterUserWrite={afterUserWrite}
+            showToast={showToast}
+          />
+        )}
       </div>
+
+      {contextMenu && (
+        <div
+          className="context-menu"
+          data-testid="context-menu"
+          style={{ left: contextMenu.x, top: contextMenu.y }}
+          role="menu"
+        >
+          {(
+            [
+              ['insert-child', '插入子级'],
+              ['insert-sibling', '插入同级'],
+              ['toggle-collapse', '折叠/展开'],
+              ['copy', '复制'],
+              ['cut', '剪切'],
+              ['paste', '粘贴'],
+              ['delete', '删除'],
+            ] as const
+          ).map(([action, label]) => (
+            <button key={action} onClick={() => runMenuAction(action)}>
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
 
       <footer className="editor-bottombar">
         <button data-testid="fit-btn" onClick={fitCanvas}>

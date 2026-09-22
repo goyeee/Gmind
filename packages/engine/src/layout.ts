@@ -7,7 +7,8 @@
  * - 从 'root' 收集存活树：getNode/childrenIds 语义；deleted 节点连同其子树整体跳过；
  *   折叠节点按叶子渲染（不下钻），collapsedCounts[id] = 被隐藏的存活后代数。
  * - 盒子经 measureNodeBox：图标按键数预留 iconSlotWidth 槽位；样式由 styleOf 提供
- *   （缺省按深度取主题分级派生：根 / 一级 / 二级及更深，字号/字重/字族全由主题 token 驱动）。
+ *   （缺省按深度取主题分级派生：根 / 一级 / 二级及更深，字号/字重/字族全由主题 token 驱动）；
+ *   节点含图片时盒高计入图片高度（T6 carry-in 裁决，Task 12 落地：h = max(文本高, 图高)）。
  * - 垂直（mindmap/logic）：子树高 = max(自身高, Σ子树高 + V_GAP×(n-1))；一节点之子
  *   自 parentY + parentH/2 − 子带高/2 起顶对齐堆叠，父垂直居中于子带（经典脑图）。
  * - 水平（org）：子树宽 = max(自身宽, Σ子树宽 + H_GAP×(n-1))；兄弟水平排布，
@@ -96,7 +97,15 @@ function collectTree(
     const snap = reader.getNode(id);
     if (!snap || snap.deleted) return null;
     const iconCount = snap.icons ? Object.keys(snap.icons).length : 0;
-    const box = measureNodeBox(snap.text, styleOf(id, depth), theme, { adapter: measure, iconCount });
+    // T6 carry-in 裁决（Task 12 落地）：盒高计入图片高度。图片尺寸就在树遍历已取的
+    // snap 上（reader.getNode），无需新增布局入参——直接作为测量选项下传。
+    const image = snap.image ?? null;
+    const box = measureNodeBox(snap.text, styleOf(id, depth), theme, {
+      adapter: measure,
+      iconCount,
+      imageH: image ? image.h : undefined,
+      imageW: image ? image.w : undefined,
+    });
     const node: LayoutNode = {
       id,
       depth,

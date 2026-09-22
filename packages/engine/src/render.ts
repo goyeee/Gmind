@@ -312,6 +312,8 @@ function applyNode(
       fmt(b.w - CORNER_BADGE_PAD - (hasLink ? CORNER_BADGE_STEP : 0)),
     );
     entry.noteBadge.setAttribute('fill', style.textColor);
+    // 悬停预览前 200 字（FR-EDT-018；SVG 元素上浏览器原生支持 title 属性提示）。
+    entry.noteBadge.setAttribute('title', (visual.note ?? '').slice(0, 200));
   }
 
   // image：href 走 /api/images/{key}；宽高直用 image.w/h（页面负责 ≤200px 钳制）。

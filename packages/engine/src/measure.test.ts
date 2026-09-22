@@ -56,4 +56,24 @@ describe('measureNodeBox', () => {
     expect(box.w).toBe(theme.minNodeWidth);
     expect(box.h).toBe(14 * 1.5);
   });
+
+  // T6 carry-in 裁决（Task 12 落地）：布局盒高必须计入图片高度。
+  it('图片高度计入：h = max(文本高, imageH)；无图不变', () => {
+    // 文本高 21 < 图高 64 → 图高主导
+    expect(measureNodeBox('你好', style, theme, { adapter: stubAdapter, imageH: 64 }).h).toBe(64);
+    // 文本高 63 > 图高 10 → 文本主导
+    const multi = measureNodeBox('a\nb\nc', style, theme, { adapter: stubAdapter, imageH: 10 });
+    expect(multi.h).toBe(3 * 14 * 1.5);
+    // 缺省（无图）行为不变
+    expect(measureNodeBox('你好', style, theme, { adapter: stubAdapter }).h).toBe(21);
+  });
+
+  it('图片宽度计入：w ≥ imageW + 2×nodePaddingX；文本更宽时文本主导', () => {
+    // 图宽 100 + 2×8 = 116 > 文本宽 20 + 16
+    expect(measureNodeBox('ab', style, theme, { adapter: stubAdapter, imageW: 100 }).w).toBe(116);
+    // 文本宽 50 + 16 > 图宽 10 + 16 → 文本主导
+    expect(measureNodeBox('aaaaaaaaaa', style, theme, { adapter: stubAdapter, imageW: 10 }).w).toBe(
+      5 * 10 + 2 * 8,
+    );
+  });
 });

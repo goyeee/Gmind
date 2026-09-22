@@ -111,3 +111,35 @@
   color: #fff;
   border-radius: 6px;
 }
+
+/* 主区：画布 + 富内容面板并排（Task 12） */
+.editor-main {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
+.context-menu {
+  position: fixed;
+  z-index: 1200;
+  background: #fff;
+  border: 1px solid #e5e6eb;
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  display: flex;
+  flex-direction: column;
+  min-width: 128px;
+  padding: 4px;
+}
+.context-menu button {
+  border: none;
+  background: none;
+  text-align: left;
+  padding: 8px 12px;
+  font-size: 13px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.context-menu button:hover {
+  background: #f2f3f5;
+}

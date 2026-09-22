@@ -5,6 +5,16 @@ export interface MeasureNodeBoxOptions {
   adapter?: MeasureAdapter;
   /** 左侧图标数，宽度累加 iconCount × theme.iconSlotWidth。 */
   iconCount?: number;
+  /**
+   * 节点图片高度（px）。T6 carry-in 裁决（Task 12 落地）：布局盒高必须计入图片——
+   * h = max(文本高, imageH)，否则图片与文本/兄弟节点重叠。缺省（无图）不变。
+   */
+  imageH?: number;
+  /**
+   * 节点图片宽度（px）。图片自左内边距起绘制，宽度下限 = imageW + 2×nodePaddingX。
+   * 缺省（无图）不参与。
+   */
+  imageW?: number;
 }
 
 export interface NodeBoxMeasure {
@@ -17,8 +27,10 @@ export interface NodeBoxMeasure {
  * 计算节点盒尺寸与最终文本行：
  * - 按 '\n' 分行；单行超 theme.maxTextWidth 时逐字符贪心断行（中英文通用），
  *   在即将溢出的字符前断开，绝不产生空尾行（空文本除外）。
- * - 行高 = fontSize × theme.lineHeightRatio，h = 行数 × 行高。
- * - w = max(最宽行宽 + 2×nodePaddingX + iconCount×iconSlotWidth, minNodeWidth)。
+ * - 行高 = fontSize × theme.lineHeightRatio，文本高 = 行数 × 行高。
+ * - h = max(文本高, imageH ?? 0)（T6 carry-in 裁决：盒高计入图片高度）。
+ * - w = max(最宽行宽 + 2×nodePaddingX + iconCount×iconSlotWidth,
+ *   imageW !== undefined ? imageW + 2×nodePaddingX : 0, minNodeWidth)。
  * 纯函数、确定性：同一输入恒得同一输出。
  */
 export function measureNodeBox(
@@ -32,15 +44,18 @@ export function measureNodeBox(
   const physicalLines = text.split('\n');
   const lines = physicalLines.flatMap((line) => wrapLine(line, adapter, style, theme.maxTextWidth));
   const lineHeight = style.fontSize * theme.lineHeightRatio;
-  const h = lines.length * lineHeight;
+  const textH = lines.length * lineHeight;
+  const h = Math.max(textH, options.imageH ?? 0);
 
   let maxLineW = 0;
   for (const line of lines) {
     const w = adapter.measureTextLine(line, style);
     if (w > maxLineW) maxLineW = w;
   }
+  const imageW = options.imageW !== undefined ? options.imageW + theme.nodePaddingX * 2 : 0;
   const w = Math.max(
     maxLineW + theme.nodePaddingX * 2 + iconCount * theme.iconSlotWidth,
+    imageW,
     theme.minNodeWidth,
   );
   return { w, h, lines };

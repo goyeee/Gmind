@@ -25,6 +25,7 @@ interface PlainNode {
   collapsed?: boolean;
   deleted?: boolean;
   icons?: Record<string, unknown>;
+  image?: { key: string; w: number; h: number } | null;
 }
 
 function makeReader(defs: Record<string, PlainNode>): DocReader {
@@ -39,6 +40,7 @@ function makeReader(defs: Record<string, PlainNode>): DocReader {
       collapsed: def.collapsed ?? false,
       deleted: def.deleted ?? false,
       icons: def.icons,
+      image: def.image,
     };
   };
   return {
@@ -443,4 +445,20 @@ describe('layout 确定性与金样', () => {
       expect(json, `金样不一致：${file}（UPDATE_GOLDENS=1 重新生成）`).toBe(readFileSync(file, 'utf8'));
     });
   }
+
+  // Task 12（T6 carry-in 裁决）：布局盒高必须计入图片高度。金样树不含图片（金样不变），
+  // 此不变量用例钉死含图节点：盒高 ≥ 图高、盒宽 ≥ 图宽 + 2×内边距。
+  it('图片节点：盒高计入图片高度（h = max(文本高, 图高)）', () => {
+    const reader = makeReader({
+      root: { text: '根', children: ['img'] },
+      img: { text: '图', image: { key: 'files/f/x.png', w: 16, h: 64 } },
+    });
+    const result = layout(reader, { structure: 'mindmap', theme, measure: stubAdapter, styleOf });
+    const box = boxOf(result, 'img');
+    expect(box.h).toBe(64); // 文本高 20（fontSize 20 × ratio 1）< 图高 64 → 图高主导
+    expect(box.w).toBeGreaterThanOrEqual(16 + theme.nodePaddingX * 2); // 图自左内边距起绘制
+    // 无图文本节点不受影响（文本高主导）
+    const plain = boxOf(result, 'root');
+    expect(plain.h).toBe(20);
+  });
 });
