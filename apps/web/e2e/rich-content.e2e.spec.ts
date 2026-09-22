@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -40,7 +41,7 @@ function nodeGroup(page: Page, text: string) {
   return page.locator('.editor-canvas svg g[data-node-id]').filter({ hasText: text });
 }
 
-// 用例 1：面板写备注保存 → 画布备注角标出现（含 title 预览）→ 刷新仍在（持久化）
+// 用例 1：面板写备注保存 → 画布备注角标出现（含 <title> 悬停预览）→ 刷新仍在（持久化）
 test('富内容：面板写备注保存后角标出现且刷新仍在', async ({ page }) => {
   await openSeedDoc(page, '本周计划');
   await selectNodeByText(page, '周一');
@@ -50,12 +51,14 @@ test('富内容：面板写备注保存后角标出现且刷新仍在', async ({
   await panel.getByRole('button', { name: '保存备注' }).click();
   const g = nodeGroup(page, '周一');
   await expect(g.locator('.gm-note-badge')).toBeVisible();
-  await expect(g.locator('.gm-note-badge')).toHaveAttribute('title', /评审要点/);
+  // 悬停预览为 SVG <title> 子元素（SVG 标准原生 tooltip；HTML title 属性在
+  // SVG 元素上多数浏览器不渲染提示）
+  await expect(g.locator('.gm-note-badge > title')).toHaveText(/评审要点/);
   await expect(page.getByTestId('save-status')).toHaveText(/已保存/);
   await page.reload();
   await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '本周计划' })).toBeVisible();
   await expect(nodeGroup(page, '周一').locator('.gm-note-badge')).toBeVisible();
-  await expect(nodeGroup(page, '周一').locator('.gm-note-badge')).toHaveAttribute('title', /评审要点/);
+  await expect(nodeGroup(page, '周一').locator('.gm-note-badge > title')).toHaveText(/评审要点/);
 });
 
 // 用例 2：设 https 链接角标出现；javascript: 被拒——toast 文案出现且角标不新增
@@ -73,6 +76,26 @@ test('富内容：https 链接显示角标，javascript: 提示错误且不写�
   // 拒绝即零变更：仍是原链接的 1 个角标（未清除也未新增）
   await expect(g.locator('.gm-link-badge')).toHaveCount(1);
   await expect(g.locator('.gm-link-badge')).toBeVisible();
+});
+
+// 用例 2b（FR-EDT-019）：点击链接角标 → 新标签页打开，且不触发选中切换
+// （链接指向本机 web 端点：headless 无外网依赖；另一节点保持选中钉住「只打开不选中」）
+test('富内容：点击链接角标新标签页打开且不改变选中', async ({ page }) => {
+  await openSeedDoc(page, '本周计划');
+  await selectNodeByText(page, '周三');
+  const panel = page.getByTestId('rich-panel');
+  const origin = new URL(page.url()).origin;
+  await panel.getByLabel('节点链接').fill(`${origin}/login`);
+  await panel.getByRole('button', { name: '保存链接' }).click();
+  const badge = nodeGroup(page, '周三').locator('.gm-link-badge');
+  await expect(badge).toBeVisible();
+  await page.locator('.editor-canvas svg .gm-text', { hasText: '周五' }).click(); // 选中他人
+  await expect(nodeGroup(page, '周五')).toHaveClass(/gm-selected/);
+  const [popup] = await Promise.all([page.waitForEvent('popup'), badge.click()]);
+  expect(popup.url()).toBe(`${origin}/login`);
+  // 角标点击只负责打开：周五的选中态不被抢占
+  await expect(nodeGroup(page, '周五')).toHaveClass(/gm-selected/);
+  await popup.close();
 });
 
 // 用例 3：上传 16×64 png → 节点 .gm-image 渲染且盒高计入图高；移除后消失
@@ -136,4 +159,24 @@ test('富内容：右键菜单插入子级可用', async ({ page }) => {
   await page.keyboard.type('右键子节点');
   await page.keyboard.press('Enter');
   await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '右键子节点' })).toBeVisible();
+});
+
+// 用例 6（FR-EDT-020）：编辑态画布粘贴截图（剪贴板图片文件）→ 上传并直插选中节点。
+// 真实 Chromium 支持 new DataTransfer() + items.add(File) 组装 ClipboardEvent。
+test('富内容：画布粘贴截图直插选中节点', async ({ page }) => {
+  await openSeedDoc(page, '本周计划');
+  await selectNodeByText(page, '周五');
+  const pngB64 = readFileSync(FIXTURE_PNG).toString('base64');
+  await page.evaluate((b64) => {
+    const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+    const d = new DataTransfer();
+    d.items.add(new File([bytes], 'paste.png', { type: 'image/png' }));
+    document.dispatchEvent(
+      new ClipboardEvent('paste', { clipboardData: d, bubbles: true, cancelable: true }),
+    );
+  }, pngB64);
+  const image = nodeGroup(page, '周五').locator('image.gm-image');
+  await expect(image).toBeVisible(); // 上传 + setImage + 重渲染（断言自动重试）
+  expect(await image.getAttribute('href')).toContain('/api/images/files/');
+  await expect(page.getByTestId('save-status')).toHaveText(/已保存/);
 });

@@ -16,6 +16,8 @@ export interface KeyboardMapDeps {
   redo(): void;
   /** Enter（未编辑态）：新建同级节点（root 上新建子级）并进入编辑。 */
   onEnter(): void;
+  /** Space（未编辑态，FR-EDT-005）：主选中节点进入编辑态。 */
+  onEditSelected(): void;
   /** Tab 新建子级 / Shift+Tab 在当前与父之间插新父级。 */
   onTab(shift: boolean): void;
   /** Delete/Backspace 删除选中（root 降级清空子级）。 */
@@ -33,7 +35,10 @@ export interface KeyboardMapDeps {
   onPaste(): void;
 }
 
-function isEditableTarget(target: EventTarget | null): boolean {
+/** 焦点在输入控件/内容可编辑元素上（输入、下拉、覆盖层编辑器等）：
+ * 本键盘映射全部让路（原生输入行为优先）。画布 paste 监听（EditorPage 图片粘贴）
+ * 复用同一判定。 */
+export function isEditableTarget(target: EventTarget | null): boolean {
   return (
     target instanceof Element &&
     target.closest('input, textarea, select, [contenteditable="true"]') !== null
@@ -90,6 +95,12 @@ export function attachKeyboardMap(deps: KeyboardMapDeps): () => void {
       case 'Enter':
         e.preventDefault();
         deps.onEnter();
+        return;
+      case ' ':
+        // FR-EDT-005：空格进入编辑态（页面 overflow hidden 已兜底滚动，仍
+        // preventDefault 抑制默认滚动/按钮激活）
+        e.preventDefault();
+        deps.onEditSelected();
         return;
       case 'Tab':
         e.preventDefault();

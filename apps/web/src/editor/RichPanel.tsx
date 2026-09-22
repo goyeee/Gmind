@@ -12,7 +12,7 @@ import {
   type IconGroup,
   type StyleScope,
 } from '@gmind/core';
-import { getToken } from '../api/client';
+import { clampImageSize, MAX_IMAGE_BYTES, readImageSize, uploadImage } from './imageUpload';
 import './rich-panel.css';
 
 /**
@@ -53,36 +53,6 @@ export interface RichPanelProps {
   nodeId: string;
   afterUserWrite: () => void;
   showToast: (message: string) => void;
-}
-
-/** 读取图片自然尺寸（页面负责 ≤200px 等比钳制，服务端不解析像素）。 */
-function readImageSize(file: File): Promise<{ w: number; h: number; url: string }> {
-  return new Promise((resolve, reject) => {
-    const url = URL.createObjectURL(file);
-    const img = new Image();
-    img.onload = () => resolve({ w: img.naturalWidth, h: img.naturalHeight, url });
-    img.onerror = () => {
-      URL.revokeObjectURL(url);
-      reject(new Error('图片解析失败'));
-    };
-    img.src = url;
-  });
-}
-
-/** multipart 上传（api client 只发 JSON，这里单独用原生 fetch + Bearer）。 */
-async function uploadImage(fileId: string, file: File): Promise<{ key: string }> {
-  const form = new FormData();
-  form.append('file', file);
-  const res = await fetch(`/api/files/${fileId}/images`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${getToken() ?? ''}` },
-    body: form,
-  });
-  if (!res.ok) {
-    const data = (await res.json().catch(() => ({}))) as { message?: string };
-    throw new Error(data.message ?? `上传失败（${res.status}）`);
-  }
-  return (await res.json()) as { key: string };
 }
 
 export function RichPanel(props: RichPanelProps): ReactElement {
@@ -134,7 +104,7 @@ export function RichPanel(props: RichPanelProps): ReactElement {
   };
 
   const onPickImage = async (file: File): Promise<void> => {
-    if (file.size > 10 * 1024 * 1024) {
+    if (file.size > MAX_IMAGE_BYTES) {
       showToast('图片大小超出 10MB 限制');
       return;
     }
@@ -144,8 +114,8 @@ export function RichPanel(props: RichPanelProps): ReactElement {
       try {
         const { key } = await uploadImage(fileId, file);
         // ≤200px 等比钳制（FR-EDT-020）
-        const ratio = Math.min(1, 200 / Math.max(naturalW, naturalH));
-        write(() => setImage(doc, nodeId, { key, w: Math.max(1, Math.round(naturalW * ratio)), h: Math.max(1, Math.round(naturalH * ratio)) }));
+        const { w, h } = clampImageSize(naturalW, naturalH);
+        write(() => setImage(doc, nodeId, { key, w, h }));
       } finally {
         URL.revokeObjectURL(url);
       }

@@ -180,3 +180,55 @@ test('编辑器：Shift+Tab 在节点与父之间插入新父', async ({ page })
   expect(String(nodes.get(wedId)?.get('parentId'))).toBe(newId);
   expect(childIds(wedId).map(textOf)).toEqual(['方案评审']); // 原子树跟随
 });
+
+// ─────────────── M1 验收修复轮新增 ───────────────
+
+// FR-EDT-005：选中节点按空格进入编辑态（双击/Enter 之外的第三入口）
+test('编辑器：选中节点按空格进入编辑态并提交生效', async ({ page }) => {
+  await openSeedDoc(page, '本周计划');
+  await page.locator('.editor-canvas svg .gm-text', { hasText: '周一' }).click();
+  await page.keyboard.press(' ');
+  const editor = page.locator('.gm-text-editor');
+  await expect(editor).toBeVisible();
+  await expect(editor).toBeFocused();
+  await page.keyboard.type('周一改'); // 打开即全选：键入直接覆盖
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '周一改' })).toBeVisible();
+});
+
+// FR-EDT-009（PRD 原文「粘贴目标为当前选中节点的子级」）：复制周三子树 → 选中周一
+// 粘贴 → 副本成为周一的子级（推翻旧「同级」实现）。按服务端 docState 反解结构断言。
+test('编辑器：复制节点后选中另一节点 Ctrl+V 粘贴为其子级', async ({ page }) => {
+  await openSeedDoc(page, '本周计划');
+  await page.locator('.editor-canvas svg .gm-text', { hasText: '周三' }).click();
+  await page.keyboard.press('Control+C');
+  await page.locator('.editor-canvas svg .gm-text', { hasText: '周一' }).click();
+  await page.keyboard.press('Control+V');
+  await expect(page.getByTestId('save-status')).toHaveText(/已保存/);
+
+  const token = await page.evaluate(() => localStorage.getItem('gmind.token'));
+  const fileId = page.url().split('/').pop() ?? '';
+  const res = await page.request.get(`/api/files/${fileId}`, {
+    headers: { Authorization: `Bearer ${token ?? ''}` },
+  });
+  expect(res.ok()).toBeTruthy();
+  const detail = (await res.json()) as { docState: string };
+  const doc = new Y.Doc();
+  const binary = atob(detail.docState); // web tsconfig 无 node types，不用 Buffer
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  Y.applyUpdate(doc, bytes);
+  const nodes = doc.getMap('nodes') as Y.Map<Y.Map<unknown>>;
+  const childIds = (id: string): string[] =>
+    ((nodes.get(id)?.get('children') as Y.Array<string> | undefined)?.toArray() ?? []);
+  const textOf = (id: string): string => String(nodes.get(id)?.get('text') ?? '');
+
+  const mondayId = childIds('root').find((id) => textOf(id) === '周一');
+  expect(mondayId).toBeTruthy();
+  const copyId = childIds(mondayId as string).find((id) => textOf(id) === '周三');
+  expect(copyId).toBeTruthy(); // 副本出现在周一 children（粘贴为子级）
+  expect(String(nodes.get(copyId as string)?.get('parentId'))).toBe(mondayId);
+  expect(childIds(copyId as string).map(textOf)).toEqual(['方案评审']); // 子树完整跟随
+  // 原「周三」仍在 root 下：复制不动原节点
+  expect(childIds('root').map(textOf)).toContain('周三');
+});

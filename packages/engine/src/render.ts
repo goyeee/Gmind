@@ -312,8 +312,13 @@ function applyNode(
       fmt(b.w - CORNER_BADGE_PAD - (hasLink ? CORNER_BADGE_STEP : 0)),
     );
     entry.noteBadge.setAttribute('fill', style.textColor);
-    // 悬停预览前 200 字（FR-EDT-018；SVG 元素上浏览器原生支持 title 属性提示）。
-    entry.noteBadge.setAttribute('title', (visual.note ?? '').slice(0, 200));
+    // 悬停预览前 200 字（FR-EDT-018）：SVG <title> 子元素是标准的原生 tooltip
+    // 机制——SVG 元素上的 HTML title 属性多数浏览器不渲染提示（M1 验收修复轮
+    // 改造）。textContent 赋值会清空子元素，故每次渲染后回填 <title> 子元素。
+    const preview = (visual.note ?? '').slice(0, 200);
+    const titleEl = el('title');
+    titleEl.textContent = preview;
+    entry.noteBadge.appendChild(titleEl);
   }
 
   // image：href 走 /api/images/{key}；宽高直用 image.w/h（页面负责 ≤200px 钳制）。

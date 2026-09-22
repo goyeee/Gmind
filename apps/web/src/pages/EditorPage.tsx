@@ -5,7 +5,7 @@ import {
   addChild,
   capUndoStack,
   childrenIds,
-  countAlive,
+  countAliveReachable,
   deleteNodes,
   getMeta,
   getNode,
@@ -54,7 +54,13 @@ import {
   writeToSystemClipboard,
   Viewport,
 } from '@gmind/engine';
-import { attachKeyboardMap } from '../editor/keyboardMap';
+import { attachKeyboardMap, isEditableTarget } from '../editor/keyboardMap';
+import {
+  clampImageSize,
+  MAX_IMAGE_BYTES,
+  readImageSize,
+  uploadImage,
+} from '../editor/imageUpload';
 import { RichPanel } from '../editor/RichPanel';
 import { startSaveLoop } from '../editor/saveLoop';
 import { useEditorDoc } from '../editor/useEditorDoc';
@@ -72,6 +78,10 @@ import './editor.css';
  * - 拖拽 onDrop 后浏览器合成的 click 用 justDragged 标记忽略（carry-in 裁决）；
  * - 键盘映射 document 冒泡 + 覆盖层/输入控件让路（carry-in 裁决）；
  * - 所有用户写后统一 capUndoStack（afterUserWrite 集中封装）。
+ *
+ * M1 验收修复轮（2026-09-22）新增：空格进编辑态（FR-EDT-005）、粘贴为选中节点
+ * 子级（FR-EDT-009，推翻旧「同级」实现）、链接角标新标签页打开（FR-EDT-019）、
+ * 画布粘贴截图直插（FR-EDT-020，imageUpload 共享助手）、剪贴板错误码映射。
  */
 
 // 单例测量适配器：Canvas measureText（引擎 MeasureAdapter 实现）。
@@ -438,7 +448,11 @@ export function EditorPage() {
     if (!selection) return;
     const ids = [...selection.selected].filter((id) => id !== ROOT_NODE_ID);
     if (ids.length === 0) return;
-    await writeToSystemClipboard(copyNodes(readerOf(doc), ids));
+    try {
+      await writeToSystemClipboard(copyNodes(readerOf(doc), ids));
+    } catch (e) {
+      showToast(clipboardErrorMessage(e));
+    }
   };
 
   const handleCut = async (): Promise<void> => {
@@ -447,36 +461,34 @@ export function EditorPage() {
     if (!selection) return;
     const ids = [...selection.selected].filter((id) => id !== ROOT_NODE_ID);
     if (ids.length === 0) return;
-    writeToSystemClipboard(
-      cutNodes(handleOf(doc), ids, (deleteIds) => {
-        deleteNodes(doc, deleteIds, ORIGIN_USER);
-        afterUserWrite();
-      }),
-    );
-    selection.selectOnly(ROOT_NODE_ID);
+    try {
+      writeToSystemClipboard(
+        cutNodes(handleOf(doc), ids, (deleteIds) => {
+          deleteNodes(doc, deleteIds, ORIGIN_USER);
+          afterUserWrite();
+        }),
+      );
+      selection.selectOnly(ROOT_NODE_ID);
+    } catch (e) {
+      showToast(clipboardErrorMessage(e));
+    }
   };
 
   const handlePaste = async (): Promise<void> => {
     if (!doc) return;
     const selection = selectionRef.current;
     if (!selection) return;
-    // 语义：有单选 → 粘贴为其同级（选中位置之后）；否则追加到 root 末尾
+    // FR-EDT-009（PRD 原文「粘贴目标为当前选中节点的子级」）：单选 → 粘贴为该节点
+    // 子级（追加其 children 末尾）；无选中/多选 → root 末尾。
     let parentId = ROOT_NODE_ID;
-    let index: number | undefined;
     const sel = [...selection.selected];
-    if (sel.length === 1 && sel[0] !== ROOT_NODE_ID) {
+    if (sel.length === 1) {
       const snap = getNode(doc, sel[0]);
-      if (snap && !snap.deleted) {
-        const parent = getNode(doc, snap.parentId);
-        if (parent && !parent.deleted) {
-          parentId = parent.id;
-          index = parent.childIds.indexOf(sel[0]) + 1;
-        }
-      }
+      if (snap && !snap.deleted) parentId = snap.id;
     }
     try {
       const clip = await readFromSystemClipboard();
-      const idx = index ?? getNode(doc, parentId)?.childIds.length ?? 0;
+      const idx = getNode(doc, parentId)?.childIds.length ?? 0;
       if (clip.internal) {
         await pasteNodes(handleOf(doc), parentId, idx, clip.internal, undefined, remapImageKey);
         fitPendingRef.current = true;
@@ -488,7 +500,31 @@ export function EditorPage() {
       }
       afterUserWrite();
     } catch (e) {
-      showToast(e instanceof Error ? e.message : '粘贴失败');
+      showToast(clipboardErrorMessage(e));
+    }
+  };
+
+  // —— 编辑态画布粘贴截图（FR-EDT-020）：图片文件直接上传并插入选中节点 ——
+
+  const insertPastedImage = async (file: File): Promise<void> => {
+    if (!doc) return;
+    if (file.size > MAX_IMAGE_BYTES) {
+      showToast('图片大小超出 10MB 限制');
+      return;
+    }
+    try {
+      const { w: naturalW, h: naturalH, url } = await readImageSize(file);
+      try {
+        const { key } = await uploadImage(fileId, file);
+        const { w, h } = clampImageSize(naturalW, naturalH);
+        // 插入目标：主选中节点（无选中/多选时 primaryId 降级为 root）
+        setImage(doc, primaryId(), { key, w, h }, ORIGIN_USER);
+        afterUserWrite();
+      } finally {
+        URL.revokeObjectURL(url);
+      }
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : '图片插入失败');
     }
   };
 
@@ -499,6 +535,17 @@ export function EditorPage() {
     const selection = selectionRef.current;
     if (!doc || !selection) return;
     const target = e.target as Element;
+    // FR-EDT-019：点击链接角标 → 新标签页打开（先于折叠徽标/节点选择处理，
+    // 打开后直接 return，不触发选中切换）。href 服务端已白名单校验，此处
+    // 仍防御性复查 http/https；noopener 隔离 opener。
+    if (target.closest('.gm-link-badge')) {
+      const nodeId = target.closest('[data-node-id]')?.getAttribute('data-node-id');
+      const href = nodeId ? getNode(doc, nodeId)?.href : '';
+      if (href && /^https?:\/\//i.test(href)) {
+        window.open(href, '_blank', 'noopener');
+      }
+      return;
+    }
     const badge = target.closest('[data-for-id]');
     if (badge) {
       const id = badge.getAttribute('data-for-id');
@@ -660,7 +707,9 @@ export function EditorPage() {
   // —— React 渲染所需的文档派生值（tick 由 rerender 推进） ——
   const meta = doc ? getMeta(doc) : null;
   const themeId = meta ? resolveThemeId(meta.themeId) : 'gmind-blue';
-  const nodeCount = doc ? countAlive(doc) : 0;
+  // 脚标口径与服务端配额统一（FR-ACC-003）：自 root 可达的存活节点数（不含 root；
+  // 墓碑/孤儿不计——与 countAlive 的差异见 @gmind/core countAliveReachable）
+  const nodeCount = doc ? countAliveReachable(doc) : 0;
   const selectionNow = selectionRef.current;
   const selectedNodeId =
     selectionNow && selectionNow.selected.size === 1
@@ -816,6 +865,7 @@ export function EditorPage() {
       undo: () => coreUndo(manager),
       redo: () => coreRedo(manager),
       onEnter: handleEnter,
+      onEditSelected: () => openNodeEditor(primaryId()),
       onTab: handleTab,
       onDelete: handleDelete,
       onSelectAll: handleSelectAll,
@@ -829,6 +879,20 @@ export function EditorPage() {
 
     const onDocUpdate = (): void => scheduleRerender();
     d.on('update', onDocUpdate);
+    // 编辑态画布粘贴截图（FR-EDT-020）：document 冒泡监听；焦点在输入控件/
+    // 覆盖层时让路（与键盘映射同一 isEditableTarget 判定）；剪贴板含图片文件时
+    // preventDefault 截停默认行为并走上传链路，否则不干预（文本粘贴走键盘映射
+    // Ctrl+V 通道与原生 paste 共存，二者对图片文件互斥）。
+    const onDocPaste = (ev: ClipboardEvent): void => {
+      if (overlay.isOpen || isEditableTarget(ev.target)) return;
+      const file = Array.from(ev.clipboardData?.files ?? []).find((f) =>
+        f.type.startsWith('image/'),
+      );
+      if (!file) return;
+      ev.preventDefault();
+      void insertPastedImage(file);
+    };
+    document.addEventListener('paste', onDocPaste);
     const onWheelSync = (): void => {
       requestAnimationFrame(syncZoom);
     };
@@ -842,6 +906,7 @@ export function EditorPage() {
       cancelAnimationFrame(rafId);
       scheduled = false;
       svgEl.removeEventListener('wheel', onWheelSync);
+      document.removeEventListener('paste', onDocPaste);
       d.off('update', onDocUpdate);
       stopSave();
       detachKeys();
@@ -1038,6 +1103,17 @@ export function EditorPage() {
 // ---------------------------------------------------------------------------
 // core → engine 适配器（模块级纯函数，绑定 doc）
 // ---------------------------------------------------------------------------
+
+/** 剪贴板错误 → 用户文案（M1a 准入欠账，M1 验收修复轮补齐）：
+ * engine clipboard 抛 Error('TEXT_TOO_LONG')/'PARENT_INVALID' 与 children 形状
+ * TypeError，直出 e.message 对用户不可读，按错误码映射；其余维持原文案。 */
+function clipboardErrorMessage(e: unknown): string {
+  if (e instanceof TypeError) return '剪贴板内容格式无效';
+  const msg = e instanceof Error ? e.message : '';
+  if (msg === 'TEXT_TOO_LONG') return '节点文本长度已达上限';
+  if (msg === 'PARENT_INVALID') return '粘贴目标无效';
+  return e instanceof Error ? e.message : '操作失败';
+}
 
 /** @gmind/core 读 API → engine DocReader。 */
 function readerOf(d: Y.Doc): DocReader {

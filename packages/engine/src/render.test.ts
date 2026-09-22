@@ -132,14 +132,30 @@ describe('renderScene：初次渲染', () => {
     expect(nodeG('c')?.querySelector('.gm-icons')).toBeNull();
   });
 
-  it('note 角标（非空才渲染 N）、link 角标（非空才渲染）', () => {
+  it('note 角标（非空才渲染 N，含 <title> 悬停预览子元素）、link 角标（非空才渲染）', () => {
     const data = baseData();
     data.set('b', { text: 'x', note: '有笔记', href: 'https://example.com' });
     renderScene(createScene(svg), makeInput(baseLayout(), data));
-    expect(svg.querySelector('.gm-note-badge')?.textContent).toBe('N');
+    // 角标直接文本 = 'N'（<title> 是 SVG 标准 tooltip 子元素，FR-EDT-018 悬停预览）
+    const noteBadge = svg.querySelector('.gm-note-badge');
+    expect(noteBadge?.childNodes[0]?.textContent).toBe('N');
+    expect(noteBadge?.querySelector('title')?.textContent).toBe('有笔记');
     expect(svg.querySelector('.gm-link-badge')?.textContent).not.toBe('');
     expect(nodeG('a')?.querySelector('.gm-note-badge')).toBeNull();
     expect(nodeG('a')?.querySelector('.gm-link-badge')).toBeNull();
+  });
+
+  it('note 角标 <title> 预览截断前 200 字，且随 note 更新回填', () => {
+    const long = '字'.repeat(260);
+    const data = baseData();
+    data.set('b', { text: 'x', note: long });
+    renderScene(createScene(svg), makeInput(baseLayout(), data));
+    const titleOf = (): string | null | undefined =>
+      svg.querySelector('.gm-note-badge')?.querySelector('title')?.textContent;
+    expect(titleOf()).toHaveLength(200);
+    data.set('b', { text: 'x', note: '更新后' });
+    renderScene(createScene(svg), makeInput(baseLayout(), data));
+    expect(titleOf()).toBe('更新后'); // textContent 重建后 title 子元素随之回填
   });
 
   it('image 节点渲染 <image>，href 拼接 /api/images/{key}，宽高直用 image.w/h', () => {
