@@ -13,7 +13,7 @@
  *   priority→progress→flag→star，未知组忽略；M1b 值后缀不区分字形，视觉打磨后置）、
  *   <text class="gm-note-badge">（note 非空渲染 'N'）、<text class="gm-link-badge">
  *   （href 非空渲染）、<image class="gm-image">（href=/api/images/{key}，宽高用
- *   image.w/h——页面侧负责 ≤200px 等比钳制；M1b 盒高不含图，重叠视觉后置）、
+ *   image.w/h——页面侧负责 ≤200px 等比钳制；盒高计入图片高度（图与文本的节点内堆叠视觉仍后置））、
  *   折叠徽标 <g class="gm-collapse-badge" data-for-id>（「+N」，N=collapsedCounts；
  *   位置按 box.side 确定：right→盒右、left→盒左、down→盒下）。
  * - 边 <path data-edge-id>：bezier 为 `M from C c1 c2 to`（controls 恒 2 个，缺省退化）；

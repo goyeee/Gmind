@@ -43,7 +43,10 @@ function readImageSize(file: File): Promise<{ w: number; h: number; url: string 
     const url = URL.createObjectURL(file);
     const img = new Image();
     img.onload = () => resolve({ w: img.naturalWidth, h: img.naturalHeight, url });
-    img.onerror = () => reject(new Error('图片解析失败'));
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error('图片解析失败'));
+    };
     img.src = url;
   });
 }

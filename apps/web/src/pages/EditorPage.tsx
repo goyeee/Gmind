@@ -102,6 +102,19 @@ export function EditorPage() {
   const doc = state?.doc ?? null;
   const um = state?.um ?? null;
 
+  // dev-only 性能压测钩子（e2e/perf-editor.spec.ts 专用）：页面上下文经
+  // window.__gmind.getDoc() 取活动 doc 实例（脚本另用 /@id/@gmind/core 动态导入
+  // 复用页面同一模块实例）。import.meta.env.DEV 在生产构建为 false，本副作用被剔除。
+  useEffect(() => {
+    if (!import.meta.env.DEV || !doc) return;
+    (window as unknown as { __gmind?: { getDoc: () => Y.Doc } }).__gmind = {
+      getDoc: () => doc,
+    };
+    return () => {
+      delete (window as unknown as { __gmind?: unknown }).__gmind;
+    };
+  }, [doc]);
+
   const svgRef = useRef<SVGSVGElement | null>(null);
   const sceneRef = useRef<SceneRoot | null>(null);
   const viewportRef = useRef<Viewport | null>(null);
