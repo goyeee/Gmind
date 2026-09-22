@@ -137,6 +137,35 @@ export function countAlive(doc: Y.Doc): number {
   return n;
 }
 
+/** 配额口径（FR-ACC-003「文档节点数 ≤500」＝活跃文档规模）：自 root 沿 children
+ * 可达的存活节点数（不含 root）。与 countAlive/countNodes 的差异：
+ * - 墓碑（deleted=true，永不清除、随编辑累积）不计入——否则长期编辑的正常文档会
+ *   被 countNodes 的墓碑余额推过上限，永久无法保存（M1 验收修复轮裁决）；
+ * - 自 root 不可达的孤儿（parentId 指向缺失/墓碑/为空，normalize 确定性跳过）不计入；
+ * docFromState 已在入口全量 normalize，可达集合即「有意义的活跃规模」。
+ * visited 集合防御 children 侧环（同 subtreeIds，并发换父交换合并或 crafted state
+ * 可产生），保证任意形状下终止。 */
+export function countAliveReachable(doc: Y.Doc): number {
+  const root = nodesMap(doc).get(ROOT_NODE_ID);
+  if (!root || root.get('deleted') === true) return 0;
+  const children = root.get('children') as Y.Array<string> | undefined;
+  if (!children) return 0;
+  let n = 0;
+  const visited = new Set<string>([ROOT_NODE_ID]);
+  const stack: string[] = [...children.toArray()];
+  while (stack.length > 0) {
+    const id = stack.pop() as string;
+    if (visited.has(id)) continue; // 环防御：跳过已访问
+    visited.add(id);
+    const node = nodesMap(doc).get(id);
+    if (!node || node.get('deleted') === true) continue; // 墓碑子树整枝剪除
+    n += 1;
+    const next = node.get('children') as Y.Array<string> | undefined;
+    if (next) stack.push(...next.toArray());
+  }
+  return n;
+}
+
 /** 内部取节点：缺失抛 NODE_NOT_FOUND，墓碑抛 NODE_DELETED。 */
 export function requireAliveNode(doc: Y.Doc, id: string): Y.Map<unknown> {
   const node = nodesMap(doc).get(id);

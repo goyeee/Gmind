@@ -1,7 +1,14 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { IsNull, Repository } from 'typeorm';
-import { countNodes, createTemplateDoc, docFromState, docToState, SEED_TEMPLATES } from '@gmind/core';
+import {
+  countAliveReachable,
+  countNodes,
+  createTemplateDoc,
+  docFromState,
+  docToState,
+  SEED_TEMPLATES,
+} from '@gmind/core';
 import type { FileListItem } from '@gmind/shared';
 import { FileCollaboratorEntity } from './file-collaborator.entity';
 import { FileEntity } from './file.entity';
@@ -109,7 +116,10 @@ export class FilesService {
     };
   }
 
-  /** 回写文档状态：先解析校验（失败 400），再校验节点配额 ≤500（超限 403），最后落库。 */
+  /** 回写文档状态：先解析校验（失败 400），再校验节点配额 ≤500（超限 403），最后落库。
+   *  配额口径（FR-ACC-003＝活跃文档规模）：countAliveReachable——docFromState 入口已
+   *  全量 normalize，取自 root 可达的存活节点数；墓碑随编辑永久累积、孤儿不可达，
+   *  均不计入（countNodes 口径会使远低于上限的正常文档被墓碑余额永久卡死保存）。 */
   async saveDocState(userId: string, id: string, state: Uint8Array): Promise<{ nodeCount: number }> {
     const file = await this.findAliveOr404(userId, id);
     let doc;
@@ -118,7 +128,7 @@ export class FilesService {
     } catch {
       throw new BadRequestException('文档解析失败');
     }
-    const nodeCount = countNodes(doc);
+    const nodeCount = countAliveReachable(doc);
     if (nodeCount > MAX_DOC_NODES) {
       throw new QuotaError(`文档节点数已达上限（${MAX_DOC_NODES}）`);
     }

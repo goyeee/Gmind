@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import * as Y from 'yjs';
-import { ROOT_NODE_ID, createTemplateDoc } from './doc';
+import { ROOT_NODE_ID, countNodes, createTemplateDoc, docFromState, docToState } from './doc';
 import { GmindCoreError } from './errors';
-import { childrenIds, countAlive, getMeta, getNode, isAlive, pathToRoot, requireAliveNode, setDocMeta, subtreeIds } from './read';
+import { childrenIds, countAlive, countAliveReachable, getMeta, getNode, isAlive, pathToRoot, requireAliveNode, setDocMeta, subtreeIds } from './read';
 
 describe('getMeta / setDocMeta', () => {
   it('读取模板文档 meta 完整', () => {
@@ -137,6 +137,69 @@ describe('树遍历', () => {
     } catch (e) {
       expect((e as GmindCoreError).code).toBe('NODE_NOT_FOUND');
     }
+  });
+});
+
+describe('countAliveReachable（FR-ACC-003 配额口径：自 root 可达的活跃规模）', () => {
+  const build = (): Y.Doc =>
+    createTemplateDoc({
+      title: 'T',
+      children: [{ text: 'A', children: [{ text: 'A1' }, { text: 'A2' }] }, { text: 'B' }],
+    });
+
+  it('可达性：统计全部后代（不含 root）', () => {
+    expect(countAliveReachable(build())).toBe(4); // A + A1 + A2 + B
+  });
+
+  it('墓碑与孤儿不计入（countAlive/countNodes 会计入，配额口径剔除）', () => {
+    const doc = build();
+    const nodes = doc.getMap<Y.Map<unknown>>('nodes');
+    const root = getNode(doc, ROOT_NODE_ID)!;
+    const bId = root.childIds[1]!;
+    doc.transact(() => {
+      (nodes.get(bId) as Y.Map<unknown>).set('deleted', true); // 墓碑（撤销语义：条目保留）
+      const orphan = new Y.Map<unknown>();
+      orphan.set('text', 'orphan');
+      orphan.set('parentId', 'ghost'); // 指向缺失节点：normalize 确定性跳过、不挂回
+      orphan.set('children', new Y.Array<string>());
+      nodes.set('orphan-x', orphan);
+    });
+    const restored = docFromState(docToState(doc)); // 入口全量 normalize 后孤儿仍是孤儿
+    expect(countNodes(restored)).toBe(6); // root + A + A1 + A2 + B墓碑 + 孤儿
+    expect(countAlive(restored)).toBe(4); // A/A1/A2/孤儿（含不可达孤儿、不含墓碑）
+    expect(countAliveReachable(restored)).toBe(3); // 仅 A/A1/A2 自 root 可达
+  });
+
+  it('children 侧 2 节点环上终止（visited 防御，复用 M1a 环防御结论）', () => {
+    const doc = build();
+    const nodes = doc.getMap<Y.Map<unknown>>('nodes');
+    const root = getNode(doc, ROOT_NODE_ID)!;
+    const aId = root.childIds[0]!;
+    const bId = root.childIds[1]!;
+    doc.transact(() => {
+      const rootChildren = (nodes.get(ROOT_NODE_ID) as Y.Map<unknown>).get(
+        'children',
+      ) as Y.Array<string>;
+      rootChildren.delete(1, 1); // root.children = [A]
+      const aChildren = (nodes.get(aId) as Y.Map<unknown>).get('children') as Y.Array<string>;
+      aChildren.delete(1, 1); // A.children = [A1]
+      aChildren.push([bId]); // A.children = [A1, B]
+      const bChildren = new Y.Array<string>();
+      bChildren.push([aId]);
+      bChildren.push([bId]); // B.children = [A, B]：环 + 自环
+      (nodes.get(bId) as Y.Map<unknown>).set('children', bChildren);
+    });
+    // A + A1 + B：回指 A/B 均已访问，visited 集合保证终止
+    expect(countAliveReachable(doc)).toBe(3);
+  });
+
+  it('root 缺失或墓碑时返回 0', () => {
+    const doc = build();
+    doc.getMap<Y.Map<unknown>>('nodes').delete(ROOT_NODE_ID);
+    expect(countAliveReachable(doc)).toBe(0);
+    const doc2 = build();
+    (doc2.getMap<Y.Map<unknown>>('nodes').get(ROOT_NODE_ID) as Y.Map<unknown>).set('deleted', true);
+    expect(countAliveReachable(doc2)).toBe(0);
   });
 });
 

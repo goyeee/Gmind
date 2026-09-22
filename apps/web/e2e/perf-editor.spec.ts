@@ -10,21 +10,22 @@ import { expect, test, type Page } from '@playwright/test';
  *  1. 注册登录（复用 editor spec 模式）→ 页面内 fetch POST /api/files 建空白文件 → 打开编辑器；
  *  2. EditorPage 在 dev 构建暴露 `window.__gmind.getDoc()`（import.meta.env.DEV 剔除）；
  *     页面上下文动态 import('/@id/@gmind/core')（vite dev 的 bare-id 路由）复用页面同一模块实例；
- *  3. outlineToSpec + insertSpec 写入 499 个节点（+root = 500，服务端 MAX_DOC_NODES 口径
- *     countNodes 含 root；编辑器脚标口径 countAlive 不含 root）→ 等待「已保存」；
+ *  3. outlineToSpec + insertSpec 写入 499 个节点（+root = 500；配额与脚标口径 2026-09-22
+ *     起统一为「自 root 可达的活跃节点」：countAliveReachable 不含 root，恰 499 ≤ 500）
+ *     → 等待「已保存」；
  *  4. 连续 30s 混合编辑脚本（i%4：addChild / deleteNodes / setText / moveNode，均 ORIGIN_USER），
  *     每操作 performance.now 包裹「操作 → 下一帧」（含 doc update → rAF 内 layout+renderScene
  *     完整管线）；rAF 时间戳按 1s 窗口统计 FPS；
  *  5. 断言：中位 FPS ≥ 40（NFR-PERF-001）、操作延迟 P95 < 100ms（NFR-PERF-003）、操作零失败。
  *
- * 已知口径边界：连续编辑期间事务间隔 < 2s 防抖，保存循环不发起 PUT；混合增删产生墓碑使
- * nodes.size 超 500 上限，停止后的一次落库会被服务端 403 拒绝（QuotaError）——属预期，
- * 压测目标是渲染/编辑管线性能而非持久化（见 docs/perf-m1.md）。
+ * 已知口径边界：连续编辑期间事务间隔 < 2s 防抖，保存循环不发起 PUT；停止后的一次
+ * 落库为全量状态。配额口径（countAliveReachable，M1 验收修复轮起）不计墓碑/不可达孤儿，
+ * 混合增删产生的墓碑不再推高配额读数——500 上限内落库不应被 403 拒绝（见 docs/perf-m1.md）。
  */
 
 test.skip(!process.env.PERF, '需 PERF=1：本地性能验证工具，非 CI 门');
 
-/** 写入节点数：+root 后 nodes.size 恰为服务端 500 上限（FR-ACC-003）。 */
+/** 写入节点数：可达活跃 499（FR-ACC-003 上限 500，留 1 格编辑余量）。 */
 const NODE_COUNT = 499;
 /** 连续编辑时长（裁决：~30s）。 */
 const RUN_MS = 30_000;

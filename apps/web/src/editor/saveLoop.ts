@@ -1,6 +1,6 @@
 import * as Y from 'yjs';
 import { docToState } from '@gmind/core';
-import { api } from '../api/client';
+import { api, ApiError } from '../api/client';
 
 /**
  * 自动保存循环 — M1b Task 11。
@@ -10,10 +10,15 @@ import { api } from '../api/client';
  * 请求在途又有新变更 → 状态保持「保存中…」，落地后立即补存；
  * 失败指数退避 1s/2s/4s 重试 3 次，仍未成功 → setStatus('保存失败，正在重试')
  * 并保留待存状态，下一次事务把重试计数清零重新进入防抖。
+ * 例外（M1 验收修复轮）：403 配额拒绝（FR-ACC-003，可达活跃节点 >500）是确定性
+ * 拒绝——重试同样超限，走独立非重试分支给出可行动文案并停止自动重试；用户删除
+ * 节点后的下一次事务照常触发补存（硬封锁会导致删除本身也无法落库）。
  */
 
 const DEBOUNCE_MS = 2000;
 const RETRY_DELAYS_MS = [1000, 2000, 4000] as const;
+/** 403 配额终态文案（区别于网络类失败的重试文案，可直接行动）。 */
+const QUOTA_STATUS = '文档节点数超过上限（500），请删除部分节点后保存';
 
 function toBase64(state: Uint8Array): string {
   let binary = '';
@@ -58,7 +63,14 @@ export function startSaveLoop(doc: Y.Doc, fileId: string, setStatus: SaveStatusS
       });
       retries = 0;
       setStatus(`已保存 ${clockNow()}`);
-    } catch {
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 403) {
+        // 配额超限：确定性拒绝，重试无意义——不消耗 1s/2s/4s 退避路径，放弃本次
+        // 待存（下一次事务重新进入防抖；删除节点后的下一次补存即可成功落库）
+        dirty = false;
+        setStatus(QUOTA_STATUS);
+        return;
+      }
       dirty = true; // 保留待存状态
       if (retries < RETRY_DELAYS_MS.length) {
         const delay = RETRY_DELAYS_MS[retries];

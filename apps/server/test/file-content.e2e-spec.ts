@@ -2,7 +2,16 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import request from 'supertest';
 import type { INestApplication } from '@nestjs/common';
 import { DataSource } from 'typeorm';
-import { countNodes, createTemplateDoc, docFromState, docToState } from '@gmind/core';
+import type * as Y from 'yjs';
+import {
+  ROOT_NODE_ID,
+  countAliveReachable,
+  countNodes,
+  createTemplateDoc,
+  deleteNodes,
+  docFromState,
+  docToState,
+} from '@gmind/core';
 import { createTestApp } from './support/app-test';
 import { FileCollaboratorEntity } from '../src/files/file-collaborator.entity';
 import { FileEntity } from '../src/files/file.entity';
@@ -88,21 +97,23 @@ describe('文件内容端点（读取/回写/改名/打开）', () => {
       .set('Authorization', `Bearer ${otherToken}`)
       .send({ docState: toBase64State({ title: '协作改', children: [{ text: 'x' }] }) });
     expect(putRes.status).toBe(200);
-    expect(putRes.body.nodeCount).toBe(2);
+    expect(putRes.body.nodeCount).toBe(1); // 可达活跃口径（不含 root）
   });
 
-  it('PUT 合法状态（3 节点）→ nodeCount=3 且再次 GET 读回一致', async () => {
+  it('PUT 合法状态（2 存活节点 + root）→ nodeCount=2（可达活跃口径）且再次 GET 读回一致', async () => {
     const state = toBase64State({ title: 'T', children: [{ text: 'a' }, { text: 'b' }] });
     const put = await authed(ownerToken, 'put', `/api/files/${fileId}/doc-state`).send({ docState: state });
     expect(put.status).toBe(200);
-    expect(put.body).toEqual({ nodeCount: 3 });
+    // node_count 写回口径 = countAliveReachable（不含 root，FR-ACC-003 活跃文档规模）
+    expect(put.body).toEqual({ nodeCount: 2 });
 
     const got = await authed(ownerToken, 'get', `/api/files/${fileId}`);
     expect(got.status).toBe(200);
     expect(got.body.docState).toBe(state);
-    expect(got.body.nodeCount).toBe(3);
+    expect(got.body.nodeCount).toBe(2);
     const doc = docFromState(new Uint8Array(Buffer.from(got.body.docState, 'base64')));
-    expect(countNodes(doc)).toBe(3);
+    expect(countNodes(doc)).toBe(3); // 旧 countNodes 口径含 root：3
+    expect(countAliveReachable(doc)).toBe(2);
     expect(doc.getMap('meta').get('title')).toBe('T');
   });
 
@@ -114,14 +125,33 @@ describe('文件内容端点（读取/回写/改名/打开）', () => {
     expect(res.body.message).toBe('文档解析失败');
   });
 
-  it('PUT 501 节点状态 → 403「文档节点数已达上限（500）」', async () => {
+  it('PUT 可达活跃节点 501（+root）→ 403「文档节点数已达上限（500）」', async () => {
     const state = toBase64State({
       title: '超大文档',
-      children: Array.from({ length: 500 }, (_, i) => ({ text: `n${i}` })),
+      children: Array.from({ length: 501 }, (_, i) => ({ text: `n${i}` })),
     });
     const res = await authed(ownerToken, 'put', `/api/files/${fileId}/doc-state`).send({ docState: state });
     expect(res.status).toBe(403);
     expect(res.body.message).toBe('文档节点数已达上限（500）');
+  });
+
+  it('PUT 600 节点其中 200 墓碑（可达 400）→ 200 且 nodeCount=400（配额只看可达活跃）', async () => {
+    // 经 core 操作层构建：600 子节点后删除 200 个（墓碑语义，nodes 条目永不清除）
+    const doc = createTemplateDoc({
+      title: '墓碑文档',
+      children: Array.from({ length: 600 }, (_, i) => ({ text: `n${i}` })),
+    });
+    const rootChildren = (doc.getMap('nodes').get(ROOT_NODE_ID) as Y.Map<unknown>).get(
+      'children',
+    ) as Y.Array<string>;
+    deleteNodes(doc, rootChildren.toArray().slice(0, 200));
+    expect(countAliveReachable(doc)).toBe(400);
+    expect(countNodes(doc)).toBe(601); // 旧 countNodes 口径会把墓碑余额计入而误判超限
+
+    const state = Buffer.from(docToState(doc)).toString('base64');
+    const res = await authed(ownerToken, 'put', `/api/files/${fileId}/doc-state`).send({ docState: state });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ nodeCount: 400 });
   });
 
   it('PATCH 改名 → GET title 变化且列表同步', async () => {
