@@ -69,4 +69,29 @@ export class StorageService {
     }
     return image;
   }
+
+  /**
+   * 对象复制（Task 15 FR-EDT-010：跨文件粘贴图片随迁重传）。key 校验与 getImage
+   * 同口径（宽松：格式合法〔扩展名白名单〕+ 无 '..'）；新键 = files/{fileId}/{ulid}.{ext}
+   * （fileId 校验同 saveImage，拒绝路径成分）。源不存在映射 404。
+   */
+  async copyImage(fileId: string, sourceKey: string): Promise<{ key: string }> {
+    if (!fileId || fileId.includes('/') || fileId.includes('\\') || fileId.includes('..')) {
+      throw new BadRequestException('非法的文件标识');
+    }
+    if (!sourceKey || sourceKey.includes('..')) {
+      throw new BadRequestException('非法的存储键');
+    }
+    const ext = sourceKey.slice(sourceKey.lastIndexOf('.') + 1);
+    if (!IMAGE_EXT_CONTENT_TYPES[ext]) {
+      throw new BadRequestException('非法的存储键');
+    }
+    const source = await this.provider.get(sourceKey);
+    if (!source) {
+      throw new NotFoundException('图片不存在');
+    }
+    const newKey = `files/${fileId}/${ulid()}.${ext}`;
+    await this.provider.copy(sourceKey, newKey);
+    return { key: newKey };
+  }
 }

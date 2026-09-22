@@ -59,6 +59,52 @@ describe('storage 域（本地磁盘图片存储 Provider）', () => {
     expect(res.headers['cache-control']).toBe('public, max-age=31536000, immutable');
   });
 
+  it('POST images/copy：上传的 key 复制到另一 file 前缀 → 新 key 字节一致，原 key 仍在（Task 15 FR-EDT-010）', async () => {
+    const upload = await request(app.getHttpServer())
+      .post('/api/files/file-abc/images')
+      .set('Authorization', `Bearer ${token}`)
+      .attach('file', PNG_1X1, 'x.png');
+    expect(upload.status).toBe(201);
+    const sourceKey = upload.body.key as string;
+
+    const copy = await request(app.getHttpServer())
+      .post('/api/files/file-xyz/images/copy')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ sourceKey });
+    expect(copy.status).toBe(201);
+    expect(typeof copy.body.key).toBe('string');
+    expect(copy.body.key).not.toBe(sourceKey);
+    expect((copy.body.key as string).startsWith('files/file-xyz/')).toBe(true);
+
+    const copied = await request(app.getHttpServer()).get(`/api/images/${copy.body.key}`);
+    expect(copied.status).toBe(200);
+    const bytes = Buffer.isBuffer(copied.body) ? copied.body : Buffer.from(copied.body);
+    expect(bytes.equals(PNG_1X1)).toBe(true);
+    // 源对象不受影响
+    const origin = await request(app.getHttpServer()).get(`/api/images/${sourceKey}`);
+    expect(origin.status).toBe(200);
+  });
+
+  it('POST images/copy：源 key 不存在 → 404；含 .. → 400；扩展名白名单外 → 400', async () => {
+    const missing = await request(app.getHttpServer())
+      .post('/api/files/file-xyz/images/copy')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ sourceKey: 'files/file-abc/nope.png' });
+    expect(missing.status).toBe(404);
+
+    const traversal = await request(app.getHttpServer())
+      .post('/api/files/file-xyz/images/copy')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ sourceKey: '../etc/passwd.png' });
+    expect(traversal.status).toBe(400);
+
+    const badExt = await request(app.getHttpServer())
+      .post('/api/files/file-xyz/images/copy')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ sourceKey: 'files/file-abc/key.txt' });
+    expect(badExt.status).toBe(400);
+  });
+
   it('jpg/gif/webp 魔数均被接受并返回对应 Content-Type', async () => {
     const cases = [
       { buf: JPG_FAKE, name: 'x', type: 'image/jpeg' },

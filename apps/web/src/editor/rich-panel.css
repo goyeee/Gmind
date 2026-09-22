@@ -106,3 +106,33 @@
   color: #86909c;
   font-size: 12px;
 }
+
+/* 样式区（Task 15 FR-EDT-015）：色板 / 字号 / 作用域 */
+.style-label {
+  font-style: normal;
+  color: #86909c;
+  font-size: 12px;
+}
+.swatch-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+}
+.swatch {
+  width: 20px;
+  height: 20px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: 4px;
+  cursor: pointer;
+  padding: 0;
+}
+.swatch:hover {
+  outline: 2px solid #3370ff;
+}
+.rich-panel select {
+  padding: 5px 6px;
+  border: 1px solid #e5e6eb;
+  border-radius: 6px;
+  font: inherit;
+}

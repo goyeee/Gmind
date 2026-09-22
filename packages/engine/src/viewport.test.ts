@@ -334,6 +334,16 @@ describe('Viewport 空白拖拽平移（attach 后）', () => {
     expect(t.tx).toBe(0);
     expect(t.ty).toBe(0);
   });
+
+  it('Shift+主键空白按下不平移（留给页面层框选，Task 15 FR-EDT-008）', () => {
+    vp.attach();
+    svg.dispatchEvent(pointerEvent('pointerdown', { button: 0, shiftKey: true, clientX: 10, clientY: 10, pointerId: 1 }));
+    svg.dispatchEvent(pointerEvent('pointermove', { shiftKey: true, clientX: 80, clientY: 80, pointerId: 1 }));
+    svg.dispatchEvent(pointerEvent('pointerup', { shiftKey: true, clientX: 80, clientY: 80, pointerId: 1 }));
+    const t = parseTransform();
+    expect(t.tx).toBe(0);
+    expect(t.ty).toBe(0);
+  });
 });
 
 describe('Viewport destroy 生命周期', () => {

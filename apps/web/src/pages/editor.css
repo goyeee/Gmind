@@ -59,6 +59,13 @@
   stroke-width: 2.5;
 }
 
+/* 框选橡皮筋（Task 15 FR-EDT-008）：svg 直挂，按 screen 坐标自绘 */
+.editor-canvas svg .gm-marquee {
+  fill: rgba(51, 112, 255, 0.12);
+  stroke: #3370ff;
+  stroke-width: 1;
+}
+
 .editor-bottombar {
   flex: none;
   display: flex;

@@ -58,6 +58,7 @@ import { attachKeyboardMap } from '../editor/keyboardMap';
 import { RichPanel } from '../editor/RichPanel';
 import { startSaveLoop } from '../editor/saveLoop';
 import { useEditorDoc } from '../editor/useEditorDoc';
+import { api } from '../api/client';
 import './editor.css';
 
 /**
@@ -95,6 +96,9 @@ const THEME_OPTIONS: { value: string; label: string }[] = [
   { value: 'gmind-accessible', label: '无障碍' },
 ];
 
+/** 缩放快捷档位（Task 15 FR-EDT-027，PRD 50%~200%）。 */
+const ZOOM_PRESETS = [50, 75, 100, 150, 200];
+
 export function EditorPage() {
   const { fileId = '' } = useParams();
   const navigate = useNavigate();
@@ -128,6 +132,11 @@ export function EditorPage() {
   const justDraggedRef = useRef(false);
   const themeRef = useRef<string>('');
   const fitPendingRef = useRef(false);
+  // 框选橡皮筋（Task 15 FR-EDT-008）：svg 直挂的 <rect class="gm-marquee">（不进
+  // wrapper——橡皮筋按 svg 相对 screen 坐标自绘，不受视口 transform），锚点同步记
+  // screen 坐标供 move 阶段重绘。
+  const marqueeRectRef = useRef<SVGRectElement | null>(null);
+  const marqueeAnchorScreenRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
 
   const [tick, setTick] = useState(0);
   const [status, setStatus] = useState('尚未编辑');
@@ -172,6 +181,23 @@ export function EditorPage() {
     if (!vp || !svgEl) return;
     vp.zoomAt(factor, svgEl.clientWidth / 2, svgEl.clientHeight / 2);
     syncZoom();
+  };
+
+  /** 快捷档位缩放（FR-EDT-027）：直接设 scale（zoomTo 内钳制到 10%~400%）。 */
+  const zoomToPreset = (pct: number): void => {
+    const vp = viewportRef.current;
+    if (!vp) return;
+    vp.zoomTo(pct / 100);
+    syncZoom();
+  };
+
+  /** 页面级全屏切换（FR-EDT-028）：Esc 退出由浏览器原生处理。headless 下可能被拒，吞错。 */
+  const toggleFullscreen = (): void => {
+    if (document.fullscreenElement) {
+      void document.exitFullscreen().catch(() => undefined);
+    } else {
+      void document.documentElement.requestFullscreen().catch(() => undefined);
+    }
   };
 
   /** 主选中节点：恰好单选返回该节点，否则以 root 为操作锚点。 */
@@ -390,7 +416,22 @@ export function EditorPage() {
     if (next) selection.selectOnly(next);
   };
 
-  // —— 剪贴板（T10 交付面装配；M1b 单文件粘贴，remap 缺省） ——
+  // —— 剪贴板（T10 交付面装配；Task 15 起图片随粘贴 remap，FR-EDT-010 收尾） ——
+
+  /**
+   * 图片 key 重映射（FR-EDT-010「图片随迁重传」）：跨文件粘贴时把旧 key 复制为
+   * 当前文件存储下的新对象（POST /api/files/:fileId/images/copy）。同文件粘贴
+   * （key 已属当前文件前缀）直接沿用原 key——裁决：前缀短路，避免同文件粘贴
+   * 令存储翻倍；跨文件才产生新副本，符合 PRD「重新上传至目标文档存储」语义。
+   */
+  const remapImageKey = (oldKey: string): Promise<string> => {
+    if (oldKey.startsWith(`files/${fileId}/`)) return Promise.resolve(oldKey);
+    return api<{ key: string }>(`/files/${fileId}/images/copy`, {
+      method: 'POST',
+      body: { sourceKey: oldKey },
+    }).then((r) => r.key);
+  };
+
   const handleCopy = async (): Promise<void> => {
     if (!doc) return;
     const selection = selectionRef.current;
@@ -437,7 +478,7 @@ export function EditorPage() {
       const clip = await readFromSystemClipboard();
       const idx = index ?? getNode(doc, parentId)?.childIds.length ?? 0;
       if (clip.internal) {
-        await pasteNodes(handleOf(doc), parentId, idx, clip.internal);
+        await pasteNodes(handleOf(doc), parentId, idx, clip.internal, undefined, remapImageKey);
         fitPendingRef.current = true;
       } else if (clip.text !== null && clip.text.trim() !== '') {
         pasteText(handleOf(doc), parentId, idx, clip.text);
@@ -451,7 +492,7 @@ export function EditorPage() {
     }
   };
 
-  // —— 画布指针交互（点击选择 / 徽标折叠 / 双击编辑） ——
+  // —— 画布指针交互（点击选择 / 框选 / 徽标折叠 / 双击编辑） ——
 
   const onSvgClick = (e: React.MouseEvent<SVGSVGElement>): void => {
     if (justDraggedRef.current) return; // 拖拽释放后浏览器合成的 click：忽略（carry-in 裁决）
@@ -472,7 +513,79 @@ export function EditorPage() {
     }
     const g = target.closest('[data-node-id]');
     const id = g?.getAttribute('data-node-id');
-    if (id) selection.selectOnly(id);
+    if (!id) return;
+    // FR-EDT-008：Ctrl/Cmd+点击 = 加/减选；Shift+点击让位给框选起点（无操作，
+    // 裁决：右键已被 contextmenu 占用，框选 = Shift+左键拖拽）
+    if (e.shiftKey) return;
+    if (e.ctrlKey || e.metaKey) {
+      selection.toggle(id);
+      return;
+    }
+    selection.selectOnly(id);
+  };
+
+  /** Shift+左键在空白处按下 → 引擎 beginMarquee（scene 坐标）+ 起画橡皮筋。 */
+  const onSvgPointerDown = (e: React.PointerEvent<SVGSVGElement>): void => {
+    if (e.button !== 0 || !e.shiftKey || e.ctrlKey || e.metaKey) return;
+    const selection = selectionRef.current;
+    const vp = viewportRef.current;
+    const svgEl = svgRef.current;
+    if (!selection || !vp || !svgEl) return;
+    const target = e.target as Element;
+    if (target.closest('[data-node-id]') || target.closest('[data-for-id]')) return;
+    e.preventDefault(); // 抑制拖拽选中文本等浏览器默认行为
+    const scene = vp.toSceneFromEvent(e.nativeEvent);
+    selection.beginMarquee(scene.x, scene.y);
+    const svgBox = svgEl.getBoundingClientRect();
+    marqueeAnchorScreenRef.current = { x: e.clientX - svgBox.left, y: e.clientY - svgBox.top };
+    const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+    rect.setAttribute('class', 'gm-marquee');
+    svgEl.appendChild(rect);
+    marqueeRectRef.current = rect;
+    if (typeof svgEl.setPointerCapture === 'function') {
+      try {
+        svgEl.setPointerCapture(e.pointerId);
+      } catch {
+        /* 捕获失败可忽略：监听就在 svg 上 */
+      }
+    }
+  };
+
+  const onSvgPointerMove = (e: React.PointerEvent<SVGSVGElement>): void => {
+    const selection = selectionRef.current;
+    const vp = viewportRef.current;
+    if (!selection || !selection.isMarquee || !vp) return;
+    const scene = vp.toSceneFromEvent(e.nativeEvent);
+    selection.updateMarquee(scene.x, scene.y);
+    const rect = marqueeRectRef.current;
+    const svgEl = svgRef.current;
+    if (rect && svgEl) {
+      const svgBox = svgEl.getBoundingClientRect();
+      const cx = e.clientX - svgBox.left;
+      const cy = e.clientY - svgBox.top;
+      const a = marqueeAnchorScreenRef.current;
+      rect.setAttribute('x', String(Math.min(a.x, cx)));
+      rect.setAttribute('y', String(Math.min(a.y, cy)));
+      rect.setAttribute('width', String(Math.abs(cx - a.x)));
+      rect.setAttribute('height', String(Math.abs(cy - a.y)));
+    }
+  };
+
+  /** 结束框选：相交入选、空结果清空（PRD 框选语义），橡皮筋随手移除。 */
+  const onSvgPointerUp = (e: React.PointerEvent<SVGSVGElement>): void => {
+    const selection = selectionRef.current;
+    if (!selection || !selection.isMarquee) return;
+    selection.endMarquee(boxesRef.current);
+    marqueeRectRef.current?.remove();
+    marqueeRectRef.current = null;
+    const svgEl = svgRef.current;
+    if (svgEl && typeof svgEl.releasePointerCapture === 'function') {
+      try {
+        svgEl.releasePointerCapture(e.pointerId);
+      } catch {
+        /* 已释放可忽略 */
+      }
+    }
   };
 
   const onSvgDoubleClick = (e: React.MouseEvent<SVGSVGElement>): void => {
@@ -799,6 +912,9 @@ export function EditorPage() {
         <button data-testid="redo-btn" title="重做 (Ctrl+Y)" onClick={() => um && coreRedo(um)}>
           重做
         </button>
+        <button data-testid="fullscreen-btn" title="全屏（Esc 退出）" onClick={toggleFullscreen}>
+          全屏
+        </button>
         <input
           data-testid="title-input"
           className="title-input"
@@ -828,6 +944,10 @@ export function EditorPage() {
               setContextMenu(null);
               onSvgClick(e);
             }}
+            onPointerDown={onSvgPointerDown}
+            onPointerMove={onSvgPointerMove}
+            onPointerUp={onSvgPointerUp}
+            onPointerCancel={onSvgPointerUp}
             onDoubleClick={onSvgDoubleClick}
             onContextMenu={onSvgContextMenu}
             role="application"
@@ -875,6 +995,22 @@ export function EditorPage() {
         <button data-testid="fit-btn" onClick={fitCanvas}>
           适应画布
         </button>
+        <select
+          data-testid="zoom-select"
+          aria-label="缩放档位"
+          value={ZOOM_PRESETS.includes(zoomPct) ? String(zoomPct) : ''}
+          onChange={(e) => {
+            const pct = Number(e.target.value);
+            if (pct > 0) zoomToPreset(pct);
+          }}
+        >
+          <option value="">档位</option>
+          {ZOOM_PRESETS.map((p) => (
+            <option key={p} value={String(p)}>
+              {p}%
+            </option>
+          ))}
+        </select>
         <button data-testid="zoom-out" onClick={() => zoomBy(1 / 1.2)}>
           -
         </button>

@@ -13,6 +13,8 @@
  *   目标不在 [data-node-id]（节点盒及其子元素）也不在 [data-for-id]（折叠徽标）内
  *   即开始，pointermove 按位移增量 panBy，pointerup/pointercancel 结束；
  *   setPointerCapture 特性探测（jsdom 无该 API 时降级为 svg 自身监听）。
+ *   例外（Task 15，FR-EDT-008）：Shift+主键在空白处留给页面层框选起点
+ *   （SelectionModel.beginMarquee），Viewport 对 shift 按下不启动平移。
  * - 生命周期：构造不绑任何事件；attach() 显式绑定、destroy() 全部解绑
  *   （幂等：未 attach 时 destroy 是 no-op，attach 可再次复用）。
  */
@@ -226,6 +228,7 @@ export class Viewport {
 
   private onPointerDown = (e: PointerEvent): void => {
     if (e.button !== 0) return;
+    if (e.shiftKey) return; // Shift+左键空白 = 框选起点（页面层），不平移
     const target = e.target as Element | null;
     if (target?.closest('[data-node-id]') || target?.closest('[data-for-id]')) return;
     this.panning = true;

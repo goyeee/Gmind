@@ -7,6 +7,8 @@ import { env } from '../config/env';
 export interface StorageProvider {
   put(key: string, data: Buffer, contentType: string): Promise<void>;
   get(key: string): Promise<{ data: Buffer; contentType: string } | null>;
+  /** 服务端对象复制（Task 15 FR-EDT-010：跨文件粘贴图片随迁）。源不存在时实现层抛错。 */
+  copy(key: string, newKey: string): Promise<void>;
 }
 
 /** 扩展名 → Content-Type 白名单（键由 StorageService 生成，扩展名必属白名单；读回据此回填）。 */
@@ -49,5 +51,13 @@ export class LocalDiskProvider implements StorageProvider {
     } catch {
       return null; // ENOENT 等一律按不存在处理，由服务层映射 404
     }
+  }
+
+  /** read+put 语义即本地盘 copyFile；目标父目录先建（与 put 对齐，copyFile 不会自建目录），
+   *  源 ENOENT 向上传播，由服务层映射 404。 */
+  async copy(key: string, newKey: string): Promise<void> {
+    const dst = this.resolve(newKey);
+    await fsp.mkdir(path.dirname(dst), { recursive: true });
+    await fsp.copyFile(this.resolve(key), dst);
   }
 }

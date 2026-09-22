@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  Body,
   Controller,
   Get,
   Inject,
@@ -13,8 +14,12 @@ import {
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import type { Express, Response } from 'express';
+import { z } from 'zod';
 import { UserGuard } from '../auth/user.guard';
 import { MAX_IMAGE_BYTES, StorageService } from './storage.service';
+
+// POST images/copy 的传输契约（Task 15 FR-EDT-010：{ sourceKey } → { key }）
+const copyImageSchema = z.object({ sourceKey: z.string().min(1) });
 
 @Controller()
 export class StorageController {
@@ -29,6 +34,14 @@ export class StorageController {
   uploadImage(@Param('id') id: string, @UploadedFile() file?: Express.Multer.File) {
     if (!file) throw new BadRequestException('缺少文件');
     return this.storage.saveImage(id, file.buffer);
+  }
+
+  /** 服务端对象复制（Task 15 FR-EDT-010）：跨文件粘贴时图片随迁到目标文件存储。 */
+  @Post('api/files/:id/images/copy')
+  @UseGuards(UserGuard)
+  copyImage(@Param('id') id: string, @Body() body: unknown) {
+    const { sourceKey } = copyImageSchema.parse(body ?? {});
+    return this.storage.copyImage(id, sourceKey);
   }
 
   /** 通配读取：Nest 10（Express 4）`*` 捕获段落在 req.params[0]，覆盖多级键 files/{id}/{ulid}.png。 */

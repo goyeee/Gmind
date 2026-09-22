@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactElement } from 'react';
 import type * as Y from 'yjs';
 import {
+  applyStyle,
   getNode,
   ICON_GROUPS,
   MAX_NOTE_LENGTH,
@@ -9,13 +10,15 @@ import {
   setIcon,
   setNote,
   type IconGroup,
+  type StyleScope,
 } from '@gmind/core';
 import { getToken } from '../api/client';
 import './rich-panel.css';
 
 /**
- * 富内容面板（M1b Task 12，FR-EDT-018~021）：选中节点的备注/链接/图片/图标编辑。
- * 写入一律经 @gmind/core 操作 API（调用方统一 origin 与 capUndoStack），画布刷新
+ * 富内容面板（M1b Task 12，FR-EDT-018~021）+ 样式区（Task 15，FR-EDT-015）：
+ * 选中节点的样式/备注/链接/图片/图标编辑。写入一律经 @gmind/core 操作 API
+ * （applyStyle 作用域 subtree/single；调用方统一 origin 与 capUndoStack），画布刷新
  * 走既有 doc update → renderScene 管线。
  */
 
@@ -28,6 +31,21 @@ const GROUP_LABELS: Record<(typeof ICON_GROUPS)[number], string> = {
   flag: '旗帜',
   star: '星标',
 };
+
+/** 样式色板（Task 15，8 色）：填充与文字色共用。 */
+const STYLE_PALETTE: { name: string; value: string }[] = [
+  { name: '红', value: '#f53f3f' },
+  { name: '橙', value: '#ff8800' },
+  { name: '黄', value: '#f7ba1e' },
+  { name: '绿', value: '#00b42a' },
+  { name: '青', value: '#14c9c9' },
+  { name: '蓝', value: '#3370ff' },
+  { name: '紫', value: '#722ed1' },
+  { name: '黑', value: '#1f2329' },
+];
+
+/** 字号档位（PRD FR-EDT-015 10–36px 内取常用档）。 */
+const FONT_SIZES = [12, 14, 16, 18, 20, 24, 36];
 
 export interface RichPanelProps {
   doc: Y.Doc;
@@ -72,6 +90,8 @@ export function RichPanel(props: RichPanelProps): ReactElement {
   const [note, setNoteValue] = useState('');
   const [href, setHrefValue] = useState('');
   const [uploading, setUploading] = useState(false);
+  // 样式作用域（FR-EDT-015）：默认含子树，可切仅当前节点
+  const [styleScope, setStyleScope] = useState<StyleScope>('subtree');
 
   // 渲染期直读快照（tick 变更驱动重渲染；getNode 为纯读，无副作用）。
   const snap = getNode(doc, nodeId);
@@ -105,6 +125,12 @@ export function RichPanel(props: RichPanelProps): ReactElement {
 
   const saveHref = (): void => {
     write(() => setHref(doc, nodeId, href.trim()));
+  };
+
+  /** 样式 patch（FR-EDT-015）：applyStyle subtree/single 作用域 + 统一 capUndoStack。
+   *  清除项写 null 删键（writeStylePatch 语义）。 */
+  const applyStylePatch = (patch: Record<string, string | number | null>): void => {
+    write(() => applyStyle(doc, [nodeId], patch, styleScope));
   };
 
   const onPickImage = async (file: File): Promise<void> => {
@@ -156,6 +182,71 @@ export function RichPanel(props: RichPanelProps): ReactElement {
 
   return (
     <aside className="rich-panel" data-testid="rich-panel">
+      <h3>样式</h3>
+      <div className="field" data-testid="style-section">
+        <em className="style-label">填充</em>
+        <div className="swatch-row">
+          {STYLE_PALETTE.map((c) => (
+            <button
+              key={c.value}
+              type="button"
+              title={`填充-${c.name}`}
+              aria-label={`填充-${c.name}`}
+              className="swatch"
+              style={{ background: c.value }}
+              onClick={() => applyStylePatch({ fill: c.value })}
+            />
+          ))}
+          <button type="button" title="默认填充" onClick={() => applyStylePatch({ fill: null })}>
+            默认
+          </button>
+        </div>
+        <em className="style-label">文字色</em>
+        <div className="swatch-row">
+          {STYLE_PALETTE.map((c) => (
+            <button
+              key={c.value}
+              type="button"
+              title={`文字-${c.name}`}
+              aria-label={`文字-${c.name}`}
+              className="swatch"
+              style={{ background: c.value }}
+              onClick={() => applyStylePatch({ color: c.value })}
+            />
+          ))}
+          <button type="button" title="默认文字色" onClick={() => applyStylePatch({ color: null })}>
+            默认
+          </button>
+        </div>
+        <em className="style-label">字号</em>
+        <select
+          data-testid="font-size-select"
+          aria-label="字号"
+          value={snap.style?.fontSize ?? ''}
+          onChange={(e) => {
+            const v = e.target.value;
+            applyStylePatch({ fontSize: v === '' ? null : Number(v) });
+          }}
+        >
+          <option value="">默认</option>
+          {FONT_SIZES.map((s) => (
+            <option key={s} value={String(s)}>
+              {s}
+            </option>
+          ))}
+        </select>
+        <em className="style-label">作用域</em>
+        <select
+          data-testid="style-scope-select"
+          aria-label="样式作用域"
+          value={styleScope}
+          onChange={(e) => setStyleScope(e.target.value === 'single' ? 'single' : 'subtree')}
+        >
+          <option value="subtree">含子树</option>
+          <option value="single">仅当前节点</option>
+        </select>
+      </div>
+
       <h3>节点</h3>
 
       <label className="field">
