@@ -111,6 +111,9 @@ export class CollabService implements OnApplicationShutdown {
           head,
           (ws) => wss.emit('connection', ws, request),
         );
+      } else {
+        // 非 /collab 的 upgrade 无人接管：立即销毁，防止 socket 悬挂
+        (socket as { destroy: () => void }).destroy();
       }
     };
     httpServer.on('upgrade', upgradeHandler);
@@ -133,7 +136,23 @@ export class CollabService implements OnApplicationShutdown {
     this.wss = undefined;
     this.httpServer = undefined;
     this.upgradeHandler = undefined;
-    if (wss) await new Promise<void>((resolve) => wss.close(() => resolve()));
+    if (wss) {
+      // 有界等待：3s 内既有连接仍未关闭则强制 terminate，防僵尸 socket 拖住进程关停
+      await new Promise<void>((resolve) => {
+        let done = false;
+        const finish = (): void => {
+          if (done) return;
+          done = true;
+          clearTimeout(timer);
+          resolve();
+        };
+        const timer = setTimeout(() => {
+          for (const client of wss.clients) client.terminate();
+          finish();
+        }, 3_000);
+        wss.close(finish);
+      });
+    }
   }
 
   /** 鉴权 + 准入（唯一强制点）：token 优先取 auth 帧（@hocuspocus v4 的 token 通道），
@@ -184,18 +203,25 @@ export class CollabService implements OnApplicationShutdown {
     }
   }
 
-  /** 持久化（防抖后）：回写 doc_state + node_count（可达活跃口径），广播 persisted ack。
-   *  失败只记日志——持久化异常不应击穿 Hocuspocus 的文档循环。 */
+  /** 持久化（防抖后）：回写 doc_state + node_count（可达活跃口径，仅存活文件），
+   *  成功后广播 persisted ack。
+   *  失败必须上抛（v4 契约：hook 抛错 → 文档保留在内存、下次防抖重试；静默吞掉会让
+   *  unloadImmediately 在落库失败后照常卸载，最后一次断开前的编辑永久丢失）。 */
   private async storeDocument(data: onStoreDocumentPayload): Promise<void> {
     try {
       const nodeCount = countAliveReachable(data.document);
       const docState = Buffer.from(docToState(data.document));
-      await this.files.update({ id: data.documentName }, { docState, nodeCount });
-      data.document.broadcastStateless(
-        JSON.stringify({ type: 'persisted', at: new Date().toISOString() }),
+      await this.files.update(
+        { id: data.documentName, deletedAt: IsNull() },
+        { docState, nodeCount },
       );
     } catch (err) {
       console.error(`[collab] onStoreDocument 失败（${data.documentName}）`, err);
+      throw err;
     }
+    // ack 只在成功写入后广播（放在 try 之外，失败路径不可达此处）
+    data.document.broadcastStateless(
+      JSON.stringify({ type: 'persisted', at: new Date().toISOString() }),
+    );
   }
 }
