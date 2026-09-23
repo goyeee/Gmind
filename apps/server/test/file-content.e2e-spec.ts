@@ -184,6 +184,36 @@ describe('文件内容端点（读取/回写/改名/打开）', () => {
     expect(row.lastOpenedAt?.toISOString()).toBe(res.body.lastOpenedAt);
   });
 
+  it('连续两次 POST open → last_opened_at 真实推进且 updated_at 不变（定点更新，不污染列表排序）', async () => {
+    const repo = dataSource.getRepository(FileEntity);
+    // 脚手架：直查 DB 把 last_opened_at 拨旧（绕 1 分钟写摊销）。updated_at 一并拨到
+    // 已知旧值——若实现误走 save()（或 update() 未显式钉住 updated_at），UpdateQueryBuilder
+    // 会自动回填 CURRENT_TIMESTAMP（秒级截断），与旧值必不同，断言即可捕获。
+    const rewind = (): Promise<unknown> => {
+      const past = new Date(Date.now() - 120_000);
+      return repo.update(fileId, { lastOpenedAt: past, updatedAt: past });
+    };
+
+    await rewind();
+    const before1 = await repo.findOneByOrFail({ id: fileId });
+    const open1 = await authed(ownerToken, 'post', `/api/files/${fileId}/open`);
+    expect(open1.status).toBe(200);
+    const after1 = await repo.findOneByOrFail({ id: fileId });
+
+    await rewind();
+    const before2 = await repo.findOneByOrFail({ id: fileId });
+    const open2 = await authed(ownerToken, 'post', `/api/files/${fileId}/open`);
+    expect(open2.status).toBe(200);
+    const after2 = await repo.findOneByOrFail({ id: fileId });
+
+    // last_opened_at：两次 open 均真实推进（直查 DB 对比两次读值）
+    expect(after1.lastOpenedAt!.getTime()).toBeGreaterThan(before1.lastOpenedAt!.getTime());
+    expect(after2.lastOpenedAt!.getTime()).toBeGreaterThan(before2.lastOpenedAt!.getTime());
+    // updated_at：open 不推进（走 repo.update 定点更新而非 save() 全量回写）
+    expect(after1.updatedAt.getTime()).toBe(before1.updatedAt.getTime());
+    expect(after2.updatedAt.getTime()).toBe(before2.updatedAt.getTime());
+  });
+
   it('已删文件的读取/回写/改名/打开全部 404', async () => {
     await dataSource.getRepository(FileEntity).update(fileId, { deletedAt: new Date() });
 

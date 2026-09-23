@@ -10,7 +10,7 @@ import { CollabService } from './collab/collab.service';
 
 async function bootstrap(): Promise<void> {
   const app = await NestFactory.create(AppModule);
-  // doc-state PUT 携带全量 Yjs 状态（base64）：满额 500 节点 docState(b64)≈110KB，
+  // doc-state PUT 携带全量 Yjs 状态（base64）：满额节点（MAX_DOC_NODES，@gmind/shared）docState(b64)≈110KB，
   // 超 Nest/Express 默认 100KB JSON 限制会 413（满额文档不可保存，perf T13 发现）。
   // 上限 2MB 远高于最大合法 docState，图片上传走 multipart（multer 10MB）不受此限。
   app.use(json({ limit: '2mb' }));

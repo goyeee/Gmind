@@ -18,7 +18,7 @@ import {
   docToState,
 } from '@gmind/core';
 import { env } from '../config/env';
-import { MAX_DOC_NODES } from '../files/files.service';
+import { MAX_DOC_NODES } from '@gmind/shared';
 import { FileCollaboratorEntity } from '../files/file-collaborator.entity';
 import { FileEntity } from '../files/file.entity';
 import { SessionService } from '../session/session.service';
@@ -43,7 +43,7 @@ const FILE_ID_RE = /^[0-9A-Z]{26}$/;
  *   且不建立文档连接；缺失/已删/无权限同口径 reason，不泄露存在性。
  * - onLoadDocument：doc_state 恢复；无状态 → createTemplateDoc({title, children:[]})
  *   仅含 root 的空文档（裁定）。
- * - onChange：countAliveReachable > 500 → 边缘触发广播 quota-exceeded（持久化时序
+ * - onChange：countAliveReachable > MAX_DOC_NODES → 边缘触发广播 quota-exceeded（持久化时序
  *   advisory，不拒绝连接/编辑；PUT 路径 403 语义不变）。
  * - onStoreDocument：Hocuspocus 内置防抖（debounce/maxDebounce 可配）→ 回写
  *   doc_state + node_count（可达活跃口径，与 PUT 一致）→ 广播 persisted ack。

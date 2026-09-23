@@ -1,5 +1,6 @@
 import * as Y from 'yjs';
 import { docToState } from '@gmind/core';
+import { MAX_DOC_NODES } from '@gmind/shared';
 import { api, ApiError } from '../api/client';
 
 /**
@@ -10,15 +11,15 @@ import { api, ApiError } from '../api/client';
  * 请求在途又有新变更 → 状态保持「保存中…」，落地后立即补存；
  * 失败指数退避 1s/2s/4s 重试 3 次，仍未成功 → setStatus('保存失败，正在重试')
  * 并保留待存状态，下一次事务把重试计数清零重新进入防抖。
- * 例外（M1 验收修复轮）：403 配额拒绝（FR-ACC-003，可达活跃节点 >500）是确定性
+ * 例外（M1 验收修复轮）：403 配额拒绝（FR-ACC-003，可达活跃节点 > MAX_DOC_NODES）是确定性
  * 拒绝——重试同样超限，走独立非重试分支给出可行动文案并停止自动重试；用户删除
  * 节点后的下一次事务照常触发补存（硬封锁会导致删除本身也无法落库）。
  */
 
 const DEBOUNCE_MS = 2000;
 const RETRY_DELAYS_MS = [1000, 2000, 4000] as const;
-/** 403 配额终态文案（区别于网络类失败的重试文案，可直接行动）。 */
-const QUOTA_STATUS = '文档节点数超过上限（500），请删除部分节点后保存';
+/** 403 配额终态文案（区别于网络类失败的重试文案，可直接行动）；上限数值与 server 共用 @gmind/shared。 */
+const QUOTA_STATUS = `文档节点数超过上限（${MAX_DOC_NODES}），请删除部分节点后保存`;
 
 function toBase64(state: Uint8Array): string {
   let binary = '';

@@ -9,13 +9,12 @@ import {
   docToState,
   SEED_TEMPLATES,
 } from '@gmind/core';
+import { MAX_DOC_NODES } from '@gmind/shared';
 import type { FileListItem } from '@gmind/shared';
 import { FileCollaboratorEntity } from './file-collaborator.entity';
 import { FileEntity } from './file.entity';
 
 export const MAX_FILES_PER_USER = 100;
-/** 单文档节点数上限（spec §7.2）：PUT doc-state 超限拒绝（FR-ACC-003）。 */
-export const MAX_DOC_NODES = 500;
 /** 打开时间戳写摊销节流：1 分钟内重复打开不回写 last_opened_at。 */
 const OPEN_THROTTLE_MS = 60_000;
 
@@ -116,7 +115,7 @@ export class FilesService {
     };
   }
 
-  /** 回写文档状态：先解析校验（失败 400），再校验节点配额 ≤500（超限 403），最后落库。
+  /** 回写文档状态：先解析校验（失败 400），再校验节点配额 ≤ MAX_DOC_NODES（超限 403），最后落库。
    *  配额口径（FR-ACC-003＝活跃文档规模）：countAliveReachable——docFromState 入口已
    *  全量 normalize，取自 root 可达的存活节点数；墓碑随编辑永久累积、孤儿不可达，
    *  均不计入（countNodes 口径会使远低于上限的正常文档被墓碑余额永久卡死保存）。 */
@@ -146,15 +145,20 @@ export class FilesService {
     return this.toListItem(file);
   }
 
-  /** 回写最近打开时间；1 分钟内重复打开直接返回旧值（写摊销）。 */
+  /** 回写最近打开时间；1 分钟内重复打开直接返回旧值（写摊销）。
+   *  落库走 repo.update 定点更新：UpdateQueryBuilder 对 @UpdateDateColumn 会自动回填
+   *  CURRENT_TIMESTAMP，必须显式把 updated_at 钉回自身（updatedAt: () => 'updated_at'）
+   *  才能不推进——save() 全量回写会污染列表 updatedAt 排序（M1 遗留）。 */
   async markOpened(userId: string, id: string): Promise<{ lastOpenedAt: string }> {
     const file = await this.findAliveOr404(userId, id);
     if (file.lastOpenedAt && Date.now() - file.lastOpenedAt.getTime() < OPEN_THROTTLE_MS) {
       return { lastOpenedAt: file.lastOpenedAt.toISOString() };
     }
     const openedAt = new Date();
-    file.lastOpenedAt = openedAt;
-    await this.repo.save(file);
+    await this.repo.update(id, {
+      lastOpenedAt: openedAt,
+      updatedAt: () => 'updated_at', // 定点写：updated_at 设回自身，绕开自动 CURRENT_TIMESTAMP
+    });
     return { lastOpenedAt: openedAt.toISOString() };
   }
 }
