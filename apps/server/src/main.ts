@@ -6,6 +6,7 @@ import { env } from './config/env';
 import { ZodExceptionFilter } from './common/zod-exception.filter';
 import { QuotaExceptionFilter } from './common/quota-exception.filter';
 import { MulterExceptionFilter } from './storage/storage.multer.filter';
+import { CollabService } from './collab/collab.service';
 
 async function bootstrap(): Promise<void> {
   const app = await NestFactory.create(AppModule);
@@ -16,7 +17,9 @@ async function bootstrap(): Promise<void> {
   app.enableCors({ origin: ['http://localhost:5173'], credentials: true });
   app.useGlobalFilters(new ZodExceptionFilter(), new QuotaExceptionFilter(), new MulterExceptionFilter());
   await app.listen(env.PORT);
-  console.log(`[gmind-server] listening on :${env.PORT}`);
+  // 协同网关复用同一个 HTTP server：/collab 的 WebSocket upgrade 由 Hocuspocus 处理
+  app.get(CollabService).attach(app.getHttpServer());
+  console.log(`[gmind-server] listening on :${env.PORT} (collab at ${env.PORT}/collab)`);
 }
 
 void bootstrap();
