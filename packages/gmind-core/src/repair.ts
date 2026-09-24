@@ -48,9 +48,10 @@ import { ORIGIN_SYSTEM } from './undo';
  *     状态直入入口，doc.ts）；
  *  ② 摊销清扫：withTransaction 每第 64 次本地写做一次全量 normalize（operations.ts，
  *     本地写计数 WeakMap，不参与副本收敛）。
- * M2 准入项：远端 applyUpdate 路径**必须**以同一脏区推导触发 normalize
- * （deriveNormalizeDirty 已就绪；接线方式——applyUpdate 钩子或同步层显式调用——
- * 在 M2 裁决）。在此之前，远端残留由上两道安全网在有限次本地写内收敛。
+ * M2 准入项（Task 7 落地）：远端 applyUpdate 路径已以同一脏区推导接入收敛——
+ * `attachRemoteNormalization`（本文件）在 afterTransaction 内对每个事务执行
+ * deriveNormalizeDirty → normalizeTreeFor/全量安全阀，web 端由 collab.ts 挂载；
+ * 在此之前，远端残留由上两道安全网在有限次本地写内收敛（仍保留为兜底）。
  */
 
 function nodesMap(doc: Y.Doc): Y.Map<Y.Map<unknown>> {
@@ -487,4 +488,38 @@ export function normalizeTreeFor(doc: Y.Doc, origin: string, dirtyNodeIds: Set<s
     }
   }, origin);
   return repairs;
+}
+
+// ══ 远端事务收敛接线（M2 准入清单 §1）══════════════════════════════════════
+
+/**
+ * 远端收敛接线：在 doc 上挂一个 afterTransaction 监听，对**每一个**提交的事务
+ * （本地 withTransaction 写与远端裸 applyUpdate 一视同仁）按脏区推导执行同一收敛：
+ * `deriveNormalizeDirty(tr)` → 可识别走 `normalizeTreeFor`，不可识别退回全量
+ * `normalizeTree` 安全阀（与 operations.ts 的写后 normalize 完全同一套口径）。
+ *
+ * 为什么无条件挂载（M2 Task 7 裁定）：本地写已在 withTransaction 内 normalize 过，
+ * 本监听再跑一遍是**双过闸**——但 normalize 对干净文档零修复、零写入（不开事务），
+ * 第二趟永远空转，代价只是一次只读脏区推导；换来的是「远端残留」有且只有一个
+ * 治愈入口（web 端 collab.ts 挂一次即可，无需区分事务来源）。若按 origin 甄别
+ * 「本地已处理」，远端事务可能伪装成本地 origin（origin 是任意透传值），漏治。
+ *
+ * 终止性：heal 写自身以 ORIGIN_SYSTEM 开事务，同样触发本监听——但 normalize 的
+ * 写入不再制造任何规则违例（①-⑤ 全部就地满足），推导出的第二次修复数为 0、
+ * 不开事务，递归在第二趟终止。Yjs 13.6 的 afterTransaction 在事务 GC 之前触发
+ * （deriveNormalizeDirty 的旧值 item 链读取安全，同 withTransaction 的依据），
+ * 且清理期内新开的事务被追加进同一 cleanup 队列顺延处理，嵌套安全。
+ *
+ * 返回注销函数（UI 销毁时调用；测试用例的 detach 契约钉死于 remote-sync.test.ts）。
+ */
+export function attachRemoteNormalization(doc: Y.Doc): () => void {
+  const heal = (tr: Y.Transaction): void => {
+    const dirty = deriveNormalizeDirty(doc, tr);
+    if (dirty === null) normalizeTree(doc, ORIGIN_SYSTEM);
+    else normalizeTreeFor(doc, ORIGIN_SYSTEM, dirty);
+  };
+  doc.on('afterTransaction', heal);
+  return () => {
+    doc.off('afterTransaction', heal);
+  };
 }

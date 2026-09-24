@@ -1,5 +1,5 @@
 import { HocuspocusProvider } from '@hocuspocus/provider';
-import { docFromState, docToState, ROOT_NODE_ID } from '@gmind/core';
+import { attachRemoteNormalization, docFromState, docToState, ROOT_NODE_ID } from '@gmind/core';
 import { colorForUser, type RemoteCursor } from '@gmind/engine';
 import * as Y from 'yjs';
 import { IndexeddbPersistence } from 'y-indexeddb';
@@ -158,6 +158,19 @@ export function startCollab(fileId: string, doc: Y.Doc, opts: CollabOptions): Co
   // 同一命名空间（dbName = fileId）
   const idb = new IndexeddbPersistence(fileId, doc);
 
+  // —— 远端事务收敛（M2 准入清单 §1，Task 7）——
+  // HocuspocusProvider 把服务端同步的 update 以裸 applyUpdate 写进同一 Y.Doc 实例
+  //（不走 withTransaction），并发残留（move vs delete 等）会未治愈落库。挂载
+  // attachRemoteNormalization（每 doc 一次，随 destroy 注销）后，每个提交的事务——
+  // 含远端事务——统一按脏区收敛。裁定记录：
+  // ① 本地写因此「双过闸」（withTransaction 已 normalize，监听再跑一遍）——normalize
+  //    幂等，第二趟零修复零写入，代价仅为一次只读推导；换来单一远端治愈入口
+  //   （origin 甄别不可靠：远端事务可伪装本地 origin）。
+  // ② 服务端 Hocuspocus 的内存文档**有意不挂**本接线（本文档随连接生灭、瞬态）：
+  //    onLoadDocument 经 docFromState 入口全量 normalize，两次装载间的残留无害；
+  //    接线属 web 客户端职责，收敛语义在 core 级被 remote-sync.test.ts 钉死。
+  const detachRemoteNormalization = attachRemoteNormalization(doc);
+
   const wsScheme = location.protocol === 'https:' ? 'wss' : 'ws';
   const provider = new HocuspocusProvider({
     url: `${wsScheme}://${location.host}/collab`,
@@ -262,6 +275,7 @@ export function startCollab(fileId: string, doc: Y.Doc, opts: CollabOptions): Co
     destroy(): void {
       destroyed = true;
       if (editingTimer !== null) clearTimeout(editingTimer);
+      detachRemoteNormalization(); // 远端收敛接线注销（Task 7）
       awareness?.off('change', onAwarenessChange);
       provider.off('status', onStatusEvent);
       provider.off('synced', onSynced);

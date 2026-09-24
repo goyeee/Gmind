@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import * as Y from 'yjs';
-import { ROOT_NODE_ID, createTemplateDoc } from './doc';
-import { addChild, deleteNodes } from './operations';
+import { ROOT_NODE_ID, createTemplateDoc, docFromState, docToState } from './doc';
+import { addChild, deleteNodes, moveNode } from './operations';
 import { childrenIds, countAlive, getMeta, getNode, setDocMeta } from './read';
 import type { NodeSnapshot } from './read';
-import { normalizeTree } from './repair';
+import { attachRemoteNormalization, normalizeTree } from './repair';
 import { ORIGIN_SYSTEM, ORIGIN_USER, capUndoStack, createUndoManager, redo, undo } from './undo';
 
 /** 空白文档（仅中心主题）。 */
@@ -169,6 +169,48 @@ describe('captureTimeout 合并', () => {
     expect(um.redoStack.length).toBe(1);
     expect(redo(um)).toBe(true);
     expect(childrenIds(doc, 'root')).toEqual([aId, bId]);
+  });
+});
+
+describe('远端事务不进本地撤销栈（M2 准入清单 §1 多端撤销断言）', () => {
+  /**
+   * 场景（接线挂载，与生产 useEditorDoc→startCollab 顺序一致）：本端 deleteNodes([X])
+   * 进撤销栈；远端并发 moveNode(X → P1) 以裸 applyUpdate 直入——远端事务与其触发的
+   * 接线 heal 写（system origin）都不得改变本地撤销栈；undo 仍只回退本端操作，
+   * 远端写入的效果在 undo 后保留（由此产生的换父残留由接线当轮治愈）。
+   */
+  it('applyUpdate（远端 move + 接线 heal）后 undoStack 不变，undo 只回退本人删除', () => {
+    const base = createTemplateDoc({ title: 'T', children: [{ text: 'P1' }, { text: 'X' }] });
+    const state = docToState(base);
+    const doc = docFromState(state);
+    const remote = docFromState(state);
+    const xId = findIdByText(doc, 'X');
+    const p1Id = findIdByText(doc, 'P1');
+    const aliveBefore = fullSnapshot(doc);
+
+    const um = createUndoManager(doc);
+    attachRemoteNormalization(doc); // 生产接线（um 之后挂载，顺序同 collab.ts）
+
+    deleteNodes(doc, [xId]); // 本端 user 操作：唯一进栈项
+    expect(um.undoStack.length).toBe(1);
+
+    const sv = Y.encodeStateVector(remote);
+    moveNode(remote, xId, p1Id);
+    Y.applyUpdate(doc, Y.encodeStateAsUpdate(remote, sv)); // 远端裸事务 + 接线 heal 写
+
+    expect(um.undoStack.length).toBe(1); // 远端 apply 与 heal 均未进栈
+    expect(childrenIds(doc, p1Id)).toEqual([]); // heal 已清理墓碑 X 的换父残留
+    expect(getNode(doc, xId)!.deleted).toBe(true); // 本端删除的墓碑不受远端事务影响
+
+    expect(undo(um)).toBe(true); // undo 只回退本人删除
+    expect(getNode(doc, xId)!.deleted).toBe(false); // X 复活（本人删除被撤销）
+    expect(getNode(doc, xId)!.parentId).toBe(p1Id); // 远端移动结果保留（undo 不吃远端写）
+    // 远端移动 + undo 还原的组合残留（X 同时挂在 root 与 P1）已由接线当轮治愈
+    expect(childrenIds(doc, p1Id)).toEqual([xId]);
+    expect(childrenIds(doc, ROOT_NODE_ID)).toEqual([p1Id]);
+    expect(normalizeTree(doc, ORIGIN_SYSTEM)).toBe(0); // 无任何残留
+    expect(um.undoStack.length).toBe(0);
+    expect(fullSnapshot(doc)).not.toEqual(aliveBefore); // X 停在远端移动后的新父（远端写存活）
   });
 });
 
