@@ -67,7 +67,13 @@ import {
 import { MemberPanel } from '../editor/MemberPanel';
 import { RichPanel } from '../editor/RichPanel';
 import { startCollab, type CollabHandle, type CollabStatus, type PresenceMember } from '../editor/collab';
-import { QUOTA_STATUS, shouldPut, startSaveLoop } from '../editor/saveLoop';
+import {
+  QUOTA_ADD_BLOCKED,
+  QUOTA_STATUS,
+  nextQuotaBlock,
+  shouldPut,
+  startSaveLoop,
+} from '../editor/saveLoop';
 import { useEditorDoc } from '../editor/useEditorDoc';
 import { api } from '../api/client';
 import './editor.css';
@@ -87,6 +93,11 @@ import './editor.css';
  * M1 验收修复轮（2026-09-22）新增：空格进编辑态（FR-EDT-005）、粘贴为选中节点
  * 子级（FR-EDT-009，推翻旧「同级」实现）、链接角标新标签页打开（FR-EDT-019）、
  * 画布粘贴截图直插（FR-EDT-020，imageUpload 共享助手）、剪贴板错误码映射。
+ *
+ * M2 终审修复轮（2026-09-22）：WS 路径配额强制（FR-ACC-003 P0，M1b 终审裁定）——
+ * quota-exceeded 广播置 quotaBlockedRef（nextQuotaBlock 事件机），新增入口
+ * （Tab/Enter/Shift+Tab/右键插入/粘贴）toast 拦截；拦截期间 persisted ack 复查
+ * countAliveReachable 并保持配额指示不被「已保存」覆盖；删除节点解除。
  */
 
 // 单例测量适配器：Canvas measureText（引擎 MeasureAdapter 实现）。
@@ -200,6 +211,10 @@ export function EditorPage() {
   // 协同通道真值表状态（M2 Task 3）：startCollab 回调推进，saveLoop 经桥接消费。
   // ref 而非 state：决策函数读的是最新值，不需要触发渲染。
   const collabRef = useRef({ wsConnected: false, wsEverConnected: false });
+  // WS 路径配额拦截标志（M2 终审修复轮，FR-ACC-003 P0）：'quota' 广播置位，
+  // nextQuotaBlock 按裁定事件收敛（删除解除 / persisted ack 复查）。shouldPut 在
+  // WS 在线时停用 PUT，服务端广播本为 advisory——此标志把 ≤500 节点控制落到客户端。
+  const quotaBlockedRef = useRef(false);
   const [toast, setToast] = useState('');
   const [zoomPct, setZoomPct] = useState(100);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; nodeId: string } | null>(
@@ -211,6 +226,16 @@ export function EditorPage() {
     setToast(message);
     if (toastTimer.current !== null) clearTimeout(toastTimer.current);
     toastTimer.current = setTimeout(() => setToast(''), 2500);
+  };
+
+  /**
+   * 配额拦截闸（M2 终审修复轮）：置位期间阻止**新增**节点（PRD FR-ACC-003 语义），
+   * 删除/既有节点文本编辑/样式修改/拖拽移动不受限。命中给出可行动 toast 并返回 true。
+   */
+  const addBlockedByQuota = (): boolean => {
+    if (!quotaBlockedRef.current) return false;
+    showToast(QUOTA_ADD_BLOCKED);
+    return true;
   };
 
   /** 所有用户写后统一调用（carry-in 裁决：capUndoStack 集中封装）。 */
@@ -317,6 +342,7 @@ export function EditorPage() {
     anchorBox: NodeBox | null,
     relation: 'child' | 'sibling',
   ): void => {
+    if (addBlockedByQuota()) return; // 配额拦截（Tab 插子级/Enter 插同级/右键菜单共用本入口）
     const vp = viewportRef.current;
     const svgEl = svgRef.current;
     if (!vp || !svgEl) return;
@@ -393,6 +419,7 @@ export function EditorPage() {
    */
   const createOutdent = (parentId: string, index: number, currentId: string): void => {
     if (!doc) return;
+    if (addBlockedByQuota()) return; // Shift+Tab 会新增节点，同受配额拦截
     try {
       withTransaction(doc, ORIGIN_USER, () => {
         const newId = addChild(doc, parentId, { index });
@@ -439,6 +466,10 @@ export function EditorPage() {
     try {
       deleteNodes(doc, ids, ORIGIN_USER); // root 含其中时降级为清空子级
       afterUserWrite();
+      // 配额拦截的解除通道（M1b 终审裁定）：删除节点即解除新增拦截。若删除后仍
+      // 超限，服务端边缘触发器在回落限内前不会重复广播（advisory 残余窗口，登记
+      // docs/m2-entry-checklist.md §7.6）。
+      quotaBlockedRef.current = nextQuotaBlock(quotaBlockedRef.current, { type: 'deleted' });
       selection.selectOnly(ROOT_NODE_ID);
       fitPendingRef.current = true;
     } catch (e) {
@@ -528,6 +559,7 @@ export function EditorPage() {
 
   const handlePaste = async (): Promise<void> => {
     if (!doc) return;
+    if (addBlockedByQuota()) return; // 粘贴会新增节点，同受配额拦截
     const selection = selectionRef.current;
     if (!selection) return;
     // FR-EDT-009（PRD 原文「粘贴目标为当前选中节点的子级」）：单选 → 粘贴为该节点
@@ -950,6 +982,27 @@ export function EditorPage() {
         if (collabStatus === 'offline' || collabStatus === 'connecting') {
           collabRef.current.wsConnected = false;
         }
+        if (collabStatus === 'quota') {
+          // M2 终审修复轮（Global Constraint / M1b 终审裁定原文）：超限广播 → 置
+          // 只读新增拦截标志 + toast。此前仅改状态文字，~2s 后即被 persisted ack
+          // 的「已保存」覆盖，WS 主路径的 ≤500 节点控制（FR-ACC-003 P0）形同虚设。
+          quotaBlockedRef.current = nextQuotaBlock(quotaBlockedRef.current, { type: 'quota' });
+          showToast(QUOTA_ADD_BLOCKED);
+        }
+        if (collabStatus === 'saved' && quotaBlockedRef.current) {
+          // 拦截中的每次 persisted ack 复查本地可达活跃数（客户端无法逐键计数，
+          // 借服务端回执收敛）：≤ 上限才解除，仍超限则保持拦截。
+          quotaBlockedRef.current = nextQuotaBlock(true, {
+            type: 'saved',
+            aliveCount: d ? countAliveReachable(d) : 0,
+          });
+          if (quotaBlockedRef.current) {
+            // 仍超限：ack 不得把配额指示覆盖回「已保存」（裁定：拦截期间指示常驻）
+            setStatus(QUOTA_STATUS);
+            return;
+          }
+          // 解除：不 return，落入常规「已保存 HH:MM」
+        }
         const next = statusText(collabStatus, detail);
         if (next !== null) setStatus(next);
       },
@@ -1013,6 +1066,7 @@ export function EditorPage() {
       d.off('update', onDocUpdate);
       stopSave();
       collabHandleRef.current = null;
+      quotaBlockedRef.current = false; // 文件切换不继承上一文件的配额拦截
       collab.destroy(); // provider + IndexedDB 本地副本一并收尾（顺序：先冲刷 saveLoop 决策再断链）
       cursorLayerRef.current = null;
       remoteCursorsRef.current = [];

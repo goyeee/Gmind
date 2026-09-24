@@ -21,13 +21,21 @@ import { api, ApiError } from '../api/client';
  * 例外（M1 验收修复轮）：403 配额拒绝（FR-ACC-003，可达活跃节点 > MAX_DOC_NODES）
  * 是确定性拒绝——重试同样超限，走独立非重试分支给出可行动文案并停止自动重试；
  * 用户删除节点后的下一次事务照常触发补存（硬封锁会导致删除本身也无法落库）。
- * WS 模式下配额拒绝经 quota-exceeded 广播同文案呈现（EditorPage 桥接）。
+ * WS 模式下配额拒绝经 quota-exceeded 广播同文案呈现（EditorPage 桥接）；M2 终审
+ * 修复轮起广播另置客户端新增拦截标志（nextQuotaBlock），WS 主路径的 ≤500 节点
+ * 控制（FR-ACC-003 P0）由客户端强制，不再只是指示文案。
  */
 
 const DEBOUNCE_MS = 2000;
 const RETRY_DELAYS_MS = [1000, 2000, 4000] as const;
 /** 403 配额终态文案（区别于网络类失败的重试文案，可直接行动）；上限数值与 server 共用 @gmind/shared。 */
 export const QUOTA_STATUS = `文档节点数超过上限（${MAX_DOC_NODES}），请删除部分节点后保存`;
+/**
+ * WS 路径配额拦截（M2 终审修复轮，FR-ACC-003）的「新增被拒」文案。
+ * M1b 终审裁定原文：超限广播 → 客户端置只读新增拦截标志 + toast——PRD 阻止的是
+ * **新增**节点，删除/既有节点文本编辑/样式修改不受限。
+ */
+export const QUOTA_ADD_BLOCKED = '文档节点数已达上限，请删除部分节点后再添加';
 
 /**
  * 持久化通道真值表（binding，M2 Task 3）：
@@ -43,6 +51,35 @@ export function shouldPut(input: {
   if (input.forceFallback) return true;
   if (input.wsConnected && input.wsEverConnected) return false;
   return true;
+}
+
+/**
+ * WS 路径配额拦截标志机（M2 终审修复轮，M1b 终审裁定的可单测形态）。
+ *
+ * 事件（EditorPage 桥接 collab 状态与用户动作推进）：
+ * - `{ type: 'quota' }`：服务端 quota-exceeded 广播 → 置拦截（阻止新增节点）；
+ * - `{ type: 'deleted' }`：用户删除节点成功 → 解除（删除是用户唯一被裁定的
+ *   主动解除通道；若删除后仍超限，服务端边缘触发器在回落限内前不会重复广播，
+ *   该残余窗口为 advisory 语义，登记 docs/m2-entry-checklist.md §7.6）；
+ * - `{ type: 'saved'; aliveCount }`：拦截期间每次 persisted ack 复查——客户端
+ *   无法逐键负担可达计数，借服务端持久化回执按 countAliveReachable ≤ 上限
+ *   收敛；仍超限则保持拦截（同时指示文案不得被 ack 覆盖回「已保存」）。
+ * 未拦截时 saved/deleted 均维持 false（saved 只复查、不设标志）。
+ */
+export type QuotaBlockEvent =
+  | { type: 'quota' }
+  | { type: 'deleted' }
+  | { type: 'saved'; aliveCount: number };
+
+export function nextQuotaBlock(prev: boolean, event: QuotaBlockEvent): boolean {
+  switch (event.type) {
+    case 'quota':
+      return true;
+    case 'deleted':
+      return false;
+    case 'saved':
+      return prev && event.aliveCount > MAX_DOC_NODES;
+  }
 }
 
 /** EditorPage 桥接 collab 状态给 saveLoop 的只读视图。 */
