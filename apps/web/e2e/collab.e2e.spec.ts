@@ -86,9 +86,6 @@ test('协同三态：编辑后状态「保存中」→「已保存 HH:MM」', as
 // 用例 2 断网编辑恢复：断网编辑（「离线编辑中」）→ 恢复联网 → 自动同步回「已保存」
 // 且编辑内容仍在画布
 test('断网编辑显示离线编辑中，恢复联网后自动同步', async ({ page, context }) => {
-    page.on('console', (m) => {
-      if (m.text().includes('collab-debug')) console.log('PAGE:', m.text()); // TODO(debug)
-    });
   await openSeedDoc(page, '本周计划');
   await goOffline(page, context);
   await addChildNode(page, '离线节点');

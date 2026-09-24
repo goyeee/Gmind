@@ -50,17 +50,14 @@ export function startCollab(fileId: string, doc: Y.Doc, opts: CollabOptions): Co
   });
 
   const onStatusEvent = ({ status }: { status: string }): void => {
-    console.log('[collab-debug] status', status); // TODO(debug): 用后即删
     // 'connected' ≠ 可展示态：等服务端 sync 完成再报 synced；连接失败/断开报 offline
     if (status === 'disconnected') onStatus('offline');
     else onStatus('connecting');
   };
   const onSynced = (): void => {
-    console.log('[collab-debug] synced'); // TODO(debug): 用后即删
     onStatus('synced');
   };
   const onStateless = ({ payload }: { payload: string }): void => {
-    console.log('[collab-debug] stateless', payload.slice(0, 40)); // TODO(debug): 用后即删
     try {
       const msg = JSON.parse(payload) as { type?: string; at?: string };
       if (msg.type === 'persisted') onStatus('saved', msg.at);
@@ -81,7 +78,6 @@ export function startCollab(fileId: string, doc: Y.Doc, opts: CollabOptions): Co
   if (import.meta.env.DEV) {
     const hooks = {
       setReachable(reachable: boolean): void {
-        console.log('[collab-debug] setReachable', reachable); // TODO(debug): 用后即删
         if (reachable) {
           void provider.connect();
         } else {
