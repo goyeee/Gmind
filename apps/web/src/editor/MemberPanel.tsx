@@ -67,7 +67,8 @@ function MemberGroup({
       ) : (
         <ul className="member-rows">
           {members.map((m) => (
-            <MemberRow key={m.userId} member={m} isOwner={m.userId === ownerUserId} />
+            // 键用 awareness clientID：同账号多标签页 userId 相同，键须按连接唯一
+            <MemberRow key={m.clientID} member={m} isOwner={m.userId === ownerUserId} />
           ))}
         </ul>
       )}

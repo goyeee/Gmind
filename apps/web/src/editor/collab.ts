@@ -52,6 +52,8 @@ export interface PresenceUser {
 
 /** 在线成员（awareness states → 成员面板数据面；含自己）。 */
 export interface PresenceMember extends PresenceUser {
+  /** awareness clientID：同账号多标签页各自独立（面板行键的稳定性依据）。 */
+  clientID: number;
   joinedAt: string;
   editing: boolean;
   isSelf: boolean;
@@ -82,10 +84,13 @@ interface MeResponse {
 
 let mePromise: Promise<MeResponse> | null = null;
 
-/** 当前用户身份（模块级缓存：页面生命周期至多请求一次，多文件切换复用）。
- *  获取失败（离线首开等）回落空身份——空 userId 不计入在线成员（无身份不广播）。 */
+/** 当前用户身份（模块级缓存：成功后页面生命周期内复用，多文件切换不重发；
+ *  失败不缓存——清空占位让下次 startCollab 重试，避免一次网络抖动永久匿名）。 */
 function fetchMe(): Promise<MeResponse> {
-  mePromise ??= api<MeResponse>('/users/me').catch(() => ({ id: '', nickname: '用户' }));
+  mePromise ??= api<MeResponse>('/users/me').catch(() => {
+    mePromise = null;
+    return { id: '', nickname: '用户' };
+  });
   return mePromise;
 }
 
@@ -114,6 +119,7 @@ export function buildPresence(
     if (!user) continue;
     members.push({
       ...user,
+      clientID,
       joinedAt: typeof state.joinedAt === 'string' ? state.joinedAt : '',
       editing: state.editing === true,
       isSelf: clientID === selfClientID,
@@ -164,9 +170,10 @@ export function startCollab(fileId: string, doc: Y.Doc, opts: CollabOptions): Co
   const awareness = provider.awareness;
   const selfClientID = doc.clientID; // Awareness 构造沿用 doc.clientID：本地身份键
   let destroyed = false;
-  // 本地选区镜像：身份装配（users/me）与选区onChange是两条异步线，谁先到都不许
-  // 互相覆盖——身份落定时回放当前选区，而不是重置为空。
+  // 本地镜像：身份装配（users/me）与写活动/选区是异步到达的两条线，谁先到都不许
+  // 互相覆盖——身份落定时回放当前镜像，而不是重置（selection 同理，见 setSelection）。
   let localSelection: string[] = [];
+  let localEditing = false;
 
   // 身份异步装配（users/me 模块级缓存）；装配后一次性写入本地字段，
   // 此前（含远端）的 awareness 状态不含本端身份，面板/光标自然不显示。
@@ -178,7 +185,7 @@ export function startCollab(fileId: string, doc: Y.Doc, opts: CollabOptions): Co
       color: colorForUser(me.id),
     });
     awareness.setLocalStateField('joinedAt', new Date().toISOString());
-    awareness.setLocalStateField('editing', false);
+    awareness.setLocalStateField('editing', localEditing);
     awareness.setLocalStateField('selection', localSelection);
   });
 
@@ -191,10 +198,12 @@ export function startCollab(fileId: string, doc: Y.Doc, opts: CollabOptions): Co
 
   let editingTimer: ReturnType<typeof setTimeout> | null = null;
   const markEditing = (): void => {
+    localEditing = true;
     awareness?.setLocalStateField('editing', true);
     if (editingTimer !== null) clearTimeout(editingTimer);
     editingTimer = setTimeout(() => {
       editingTimer = null;
+      localEditing = false;
       awareness?.setLocalStateField('editing', false);
     }, EDITING_IDLE_MS);
   };
