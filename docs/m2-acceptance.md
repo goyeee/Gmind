@@ -56,7 +56,7 @@
 - `pnpm typecheck`：server / web / engine / gmind-core / shared 五包全部 Done，exit 0。
 - `pnpm test`（全仓单测）：**369 passed** —— @gmind/shared 5（1 文件）、@gmind/gmind-core 146（9 文件，含混沌套件 20 种子 + 12 偏置、remote-sync 5 例（4 接线 + 1 无接线对照）、undo 多端断言）、@gmind/engine 199（10 文件，含 cursors 12 例）、@gmind/server 11（4 文件，含 collab.service 单测）、@gmind/web 8（2 文件）；Test Files 26 passed。
 - `pnpm --filter @gmind/server test:e2e`：Test Files 7 passed (7)，Tests **42 passed (42)**（auth 8 / files 4 / db-init 2 / users-me 2 / file-content 12 / storage 8 / **collab 6**——无 token 伪造拒绝、非协作者 404 不泄露、owner/collaborator 双向同步、MySQL 回写 + persisted ack + 重连、配额告警边缘触发）。
-- `pnpm --filter @gmind/web e2e`（`WEB_PORT=5174 API_ORIGIN=http://localhost:3001`）：**34 passed, 1 skipped (16.8s)**，0 failed（editor 11 / rich-content 7 / **collab 6** / m0-acceptance 3 / m1-gaps 6 / perf-editor 1 skipped 须 PERF=1）。
+- `pnpm --filter @gmind/web e2e`（`WEB_PORT=5174 API_ORIGIN=http://localhost:3001`）：**34 passed, 1 skipped (16.8s)**，0 failed（editor 11 / rich-content 8 / **collab 6** / m0-acceptance 3 / m1-gaps 6 / perf-editor 1 skipped 须 PERF=1）。
 - `PERF=1 … playwright test perf-editor.spec.ts`：**1 passed (33.2s)**，输出见上表 NFR 行。
 - latency bots 15s 短跑：**PASS**（50 bots / 1506 ops / P50=1.6ms P95=6.0ms P99=8.2ms MAX=19.8ms / 写失败 0 / 鉴权失败 0，退出码 0；文档「延迟压测-M2T10验收」）。60s 两轮完整数据（P95=3.7/2.3ms）见 docs/perf-m2.md（2026-09-22 Task 9 当日实跑）。
 
