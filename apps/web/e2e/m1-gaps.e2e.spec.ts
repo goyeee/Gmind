@@ -151,12 +151,15 @@ test('样式：填充红作用域含子树 → 本节点与子节点 rect 同变
   await expect(nodeGroup(page, '周三').locator('rect')).toHaveAttribute('fill', RED);
   await expect(nodeGroup(page, '方案评审').locator('rect')).toHaveAttribute('fill', RED);
   await expect(page.getByTestId('save-status')).toHaveText(/已保存/);
-  // 撤销：一次 Ctrl+Z 恢复整棵子树
+  // 撤销：一次 Ctrl+Z 恢复整棵子树（undo → rAF 重渲染异步落地，用 expect.poll 重试
+  // 断言替代即时 getAttribute——测试债清偿，与下方字号用例同口径）
   await page.keyboard.press('Control+Z');
-  const wedFill = await nodeGroup(page, '周三').locator('rect').getAttribute('fill');
-  expect(wedFill).not.toBe(RED);
-  const childFill = await nodeGroup(page, '方案评审').locator('rect').getAttribute('fill');
-  expect(childFill).not.toBe(RED);
+  await expect
+    .poll(() => nodeGroup(page, '周三').locator('rect').getAttribute('fill'), { timeout: 5000 })
+    .not.toBe(RED);
+  await expect
+    .poll(() => nodeGroup(page, '方案评审').locator('rect').getAttribute('fill'), { timeout: 5000 })
+    .not.toBe(RED);
 });
 
 test('样式：作用域切「仅当前节点」设字号 24 → 子节点字号不变', async ({ page }) => {

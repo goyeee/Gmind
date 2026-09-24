@@ -180,3 +180,27 @@ test('富内容：画布粘贴截图直插选中节点', async ({ page }) => {
   expect(await image.getAttribute('href')).toContain('/api/images/files/');
   await expect(page.getByTestId('save-status')).toHaveText(/已保存/);
 });
+
+// 用例 7（测试债清偿 M2 Task 9）：链接 + 图片 + 图标三者齐设 → 刷新后全部仍在
+// （三者走三条写路径 setHref/setImage/setIcon，组合持久化此前只有备注单品类覆盖）
+test('富内容：链接/图片/图标齐设后刷新全部仍在', async ({ page }) => {
+  await openSeedDoc(page, '本周计划');
+  await selectNodeByText(page, '周五');
+  const panel = page.getByTestId('rich-panel');
+  const g = nodeGroup(page, '周五');
+  await panel.getByLabel('节点链接').fill('https://example.com/gmind');
+  await panel.getByRole('button', { name: '保存链接' }).click();
+  await expect(g.locator('.gm-link-badge')).toBeVisible();
+  await panel.getByTestId('image-input').setInputFiles(FIXTURE_PNG);
+  await expect(g.locator('image.gm-image')).toBeVisible();
+  await panel.getByTitle('旗帜-红').click();
+  await expect(g.locator('.gm-icons')).toHaveText('⚑');
+  await expect(page.getByTestId('save-status')).toHaveText(/已保存/);
+  // 刷新（重连协同 + 从 doc_state 恢复）：三个角标全部仍在
+  await page.reload();
+  await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '本周计划' })).toBeVisible();
+  const gAfter = nodeGroup(page, '周五');
+  await expect(gAfter.locator('.gm-link-badge')).toBeVisible();
+  await expect(gAfter.locator('image.gm-image')).toBeVisible();
+  await expect(gAfter.locator('.gm-icons')).toHaveText('⚑');
+});

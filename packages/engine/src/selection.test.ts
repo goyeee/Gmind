@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
+import { layout } from './layout';
+import { THEMES } from './themes';
 import { SelectionModel, navigate, siblingEnd } from './selection';
-import type { NodeBox } from './types';
+import type { DocReader, MeasureAdapter, NodeBox, NodeSnapshotLike, TextStyle, ThemeTokens } from './types';
 
 // ---------------------------------------------------------------------------
 // 手工精构 NodeBox[]（场景坐标，几何对应 T4 金样的 mindmap 形态：H_GAP 40 逐层外扩）。
@@ -304,5 +306,144 @@ describe('siblingEnd', () => {
   it('根（无 parentId）与未知 id → null', () => {
     expect(siblingEnd('root', MINDMAP, 'first')).toBeNull();
     expect(siblingEnd('ghost', MINDMAP, 'last')).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T8 测试债清偿（M2 Task 9）：navigate / siblingEnd 消费 layout() 真实输出。
+// 上面手工精构盒集只验证选择几何本身；此处把「金样树 × 3 结构」经 layout() 产出
+// 的真盒集（与 layout.test.ts 金样同一确定性输出，几何已由金样绑定）喂给导航，
+// 钉定「真实几何上的命中」。桩与 layout.test.ts 同款（每字符 10px、行高 20px）。
+// ---------------------------------------------------------------------------
+
+function makeReader(defs: Record<string, { text: string; children?: string[]; icons?: Record<string, unknown> }>): DocReader {
+  const snap = (id: string): NodeSnapshotLike | null => {
+    const def = defs[id];
+    if (!def) return null;
+    return {
+      id,
+      text: def.text,
+      parentId: '',
+      childIds: def.children ?? [],
+      collapsed: false,
+      deleted: false,
+      icons: def.icons,
+      image: null,
+    };
+  };
+  return {
+    getMeta: () => ({ title: '测试文档', structureType: 'mindmap', themeId: 'stub' }),
+    getNode: snap,
+    childrenIds: (id) => snap(id)?.childIds ?? [],
+  };
+}
+
+const stubAdapter: MeasureAdapter = { measureTextLine: (text) => text.length * 10 };
+const theme: ThemeTokens = {
+  ...THEMES['gmind-blue'],
+  nodePaddingX: 12,
+  iconSlotWidth: 20,
+  lineHeightRatio: 1,
+  maxTextWidth: 240,
+  minNodeWidth: 40,
+  V_GAP: 14,
+  H_GAP: 40,
+};
+const styleOf = (): TextStyle => ({ fontSize: 20, fontWeight: 400, fontFamily: 'stub' });
+
+/** 金样树（layout.test.ts goldenReader 同款：3 一级 × 深浅混合，含图标加宽盒）。 */
+const goldenBoxes = (structure: 'mindmap' | 'logic' | 'org'): NodeBox[] =>
+  layout(
+    makeReader({
+      root: { text: '中心主题', children: ['g1', 'g2', 'g3'] },
+      g1: { text: '分支一', children: ['ga', 'gb'] },
+      ga: { text: '叶子甲', icons: { tag: 't' } },
+      gb: { text: '叶子乙' },
+      g2: { text: '分支二', children: ['gc'] },
+      gc: { text: '长文本节点内容' },
+      g3: { text: '分支三' },
+    }),
+    { structure, theme, measure: stubAdapter, styleOf },
+  ).nodes;
+
+describe('navigate/siblingEnd × layout() 真实输出（T8 债：金样树 3 结构）', () => {
+  const idsOf = (boxes: NodeBox[]): string[] => boxes.map((b) => b.id);
+  const kidsOf = (boxes: NodeBox[], id: string): NodeBox[] =>
+    boxes.filter((b) => b.parentId === id); // boxes 文档序，同级随之有序
+
+  it('mindmap：分侧与父子方向命中（ga 图标加宽使 gb 几何更近）', () => {
+    const boxes = goldenBoxes('mindmap');
+    expect(idsOf(boxes)).toEqual(['root', 'g1', 'ga', 'gb', 'g2', 'gc', 'g3']);
+    // root 左右各命中最近一级子（g1 右侧；左带 g2/g3 同 dc 取 lateral 小者 g2）
+    expect(navigate('root', 'right', boxes, 'mindmap')).toBe('g1');
+    expect(navigate('root', 'left', boxes, 'mindmap')).toBe('g2');
+    // 一级向左回根；向右命中子（真几何：gb 盒窄中心更近，先于加宽的 ga）
+    expect(navigate('g1', 'left', boxes, 'mindmap')).toBe('root');
+    expect(navigate('g1', 'right', boxes, 'mindmap')).toBe('gb');
+    // 同侧纵向：叶间上下互达；同一几何的跨侧对照见 logic 用例
+    expect(navigate('ga', 'down', boxes, 'mindmap')).toBe('gb');
+    expect(navigate('gb', 'up', boxes, 'mindmap')).toBe('ga');
+    expect(navigate('gc', 'down', boxes, 'mindmap')).toBe('g3');
+    // 跨侧诱饵不选：gb 下方几何更近的是左侧 gc（dc 34）与 g2（dc 34），分侧限制全排除 → null
+    expect(navigate('gb', 'down', boxes, 'mindmap')).toBeNull();
+  });
+
+  it('logic：全部右侧逐层推进（同 dc 一级带取 lateral 居中者）', () => {
+    const boxes = goldenBoxes('logic');
+    // 三个一级子 dc 相同 → 横向偏移最小的 g2 胜出（几何居中涌现，非文档序）
+    expect(navigate('root', 'right', boxes, 'logic')).toBe('g2');
+    // g2 向右：dc 主键下兄弟子树的窄叶 gb（dc 94）近于自己的宽叶 gc（dc 114）——
+    // 「最近者」是纯几何语义，可能落在别家子树（真金样几何的诚实结果）
+    expect(navigate('g2', 'right', boxes, 'logic')).toBe('gb');
+    expect(navigate('ga', 'down', boxes, 'logic')).toBe('gb');
+    // 纵向无分侧限制（与 mindmap 同几何对照）：gb 下方最近者正是左侧 gc
+    expect(navigate('gb', 'down', boxes, 'logic')).toBe('gc');
+    // dc 主键的诚实结果：g1 下方 root 中心（dc 34）近于同级 g2（dc 51）→ 命中根
+    expect(navigate('g1', 'down', boxes, 'logic')).toBe('root');
+  });
+
+  it('org：上下沿层级轴、左右限兄弟带（root 向下命中横向居中的 g2）', () => {
+    const boxes = goldenBoxes('org');
+    // 三个一级子同 dc → 父（居子带中点）下方取 lateral 最小的居中子 g2
+    expect(navigate('root', 'down', boxes, 'org')).toBe('g2');
+    expect(navigate('g2', 'up', boxes, 'org')).toBe('root');
+    expect(navigate('ga', 'up', boxes, 'org')).toBe('g1'); // 叶向上 → 父
+    // 左右仅在同级（depth 相等）兄弟带内移动
+    expect(navigate('g1', 'right', boxes, 'org')).toBe('g2');
+    expect(navigate('g2', 'right', boxes, 'org')).toBe('g3');
+    expect(navigate('g1', 'left', boxes, 'org')).toBeNull(); // 带左端
+    expect(navigate('g3', 'right', boxes, 'org')).toBeNull(); // 带右端
+    expect(navigate('gb', 'right', boxes, 'org')).toBe('gc'); // 叶层带内移动
+  });
+
+  it('结构不变量：沿「子方向」必命中且只命中更深层的节点；siblingEnd 命中同级首末', () => {
+    // 「子方向」= 该结构里远离根的方向（mindmap/logic 沿父→子的侧向；org 向下）。
+    // 命中节点可能属于别家子树（dc 主键的纯几何语义，见 logic 用例），但结构布局
+    // 保证深度单调：x/层随 depth 递增，向子方向不存在更浅层的候选。
+    const childWard = (structure: 'mindmap' | 'logic' | 'org', child: NodeBox): 'right' | 'left' | 'down' => {
+      if (structure === 'org') return 'down';
+      return child.side === 'left' ? 'left' : 'right';
+    };
+    for (const structure of ['mindmap', 'logic', 'org'] as const) {
+      const boxes = goldenBoxes(structure);
+      const depthOf = new Map(boxes.map((b) => [b.id, b.depth]));
+      for (const parent of boxes) {
+        const kids = kidsOf(boxes, parent.id);
+        if (kids.length === 0) continue;
+        const hit = navigate(parent.id, childWard(structure, kids[0] as NodeBox), boxes, structure);
+        expect(hit, `${structure}/${parent.id} 沿子方向应有命中`).not.toBeNull();
+        expect(
+          (depthOf.get(hit as string) as number) > parent.depth,
+          `${structure}/${parent.id} 沿子方向命中 ${hit} 应深于当前层`,
+        ).toBe(true);
+      }
+      // siblingEnd：叶子级（无子）任一成员的首末与文档序同级序列两端一致
+      for (const member of boxes) {
+        if (!member.parentId || kidsOf(boxes, member.id).length > 0) continue;
+        const siblings = kidsOf(boxes, member.parentId).map((b) => b.id);
+        expect(siblingEnd(member.id, boxes, 'first')).toBe(siblings[0]);
+        expect(siblingEnd(member.id, boxes, 'last')).toBe(siblings[siblings.length - 1]);
+      }
+    }
   });
 });
