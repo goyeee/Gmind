@@ -2,12 +2,15 @@ import { useEffect, useRef, useState } from 'react';
 import * as Y from 'yjs';
 import { createUndoManager, docFromState, ORIGIN_USER, setDocMeta } from '@gmind/core';
 import { api } from '../api/client';
+import { loadDocFromIndexedDB } from './collab';
 
 /**
- * 编辑器文档装载 hook — M1b Task 11。
+ * 编辑器文档装载 hook — M1b Task 11；M2 Task 3 增加离线刷新兜底。
  *
  * GET /api/files/:id → docState(base64) → docFromState（导入即 normalize）
  * → createUndoManager；随后 POST /:id/open（fire-and-forget，FR-ACC-004 打开标记）。
+ * GET 不可达（断网/后端失联）→ 从 IndexedDB 本地副本恢复（FR-EDT-035，collab.ts
+ * 装配的本地副本在离线编辑期间持续可写）；副本为空才落入错误态。
  * 标题编辑 = setDocMeta({title}, ORIGIN_USER)（可撤销）+ 防抖 PATCH /:id。
  */
 
@@ -58,7 +61,21 @@ export function useEditorDoc(fileId: string): {
         setState({ doc, um });
         void api(`/files/${fileId}/open`, { method: 'POST' }).catch(() => undefined);
       } catch (e) {
-        if (!cancelled) setError(e instanceof Error ? e.message : '加载失败');
+        if (cancelled) return;
+        // 离线刷新兜底（FR-EDT-035）：本地副本恢复；副本能给出完整文档（含 meta/root）
+        // 即视为装载成功，编辑能力与在线态一致
+        const restored = await loadDocFromIndexedDB(fileId);
+        if (cancelled) {
+          restored?.destroy();
+          return;
+        }
+        if (restored) {
+          const um = createUndoManager(restored);
+          setState({ doc: restored, um });
+          void api(`/files/${fileId}/open`, { method: 'POST' }).catch(() => undefined);
+        } else {
+          setError(e instanceof Error ? e.message : '加载失败');
+        }
       }
     })();
     return () => {

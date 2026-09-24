@@ -62,7 +62,8 @@ import {
   uploadImage,
 } from '../editor/imageUpload';
 import { RichPanel } from '../editor/RichPanel';
-import { startSaveLoop } from '../editor/saveLoop';
+import { startCollab, type CollabStatus } from '../editor/collab';
+import { QUOTA_STATUS, shouldPut, startSaveLoop } from '../editor/saveLoop';
 import { useEditorDoc } from '../editor/useEditorDoc';
 import { api } from '../api/client';
 import './editor.css';
@@ -109,6 +110,36 @@ const THEME_OPTIONS: { value: string; label: string }[] = [
 /** 缩放快捷档位（Task 15 FR-EDT-027，PRD 50%~200%）。 */
 const ZOOM_PRESETS = [50, 75, 100, 150, 200];
 
+/** WS 断开（或全断网）时的保存指示（M2 Task 3，FR-EDT-034）。 */
+const OFFLINE_STATUS = '离线编辑中，恢复联网后自动同步';
+
+/** CollabStatus → 保存指示文案（四值：已保存 HH:MM / 保存中 / 离线编辑中 / 配额非重试）。 */
+function statusText(status: CollabStatus, detail?: string): string | null {
+  switch (status) {
+    case 'synced':
+      return null; // 仅推进真值表状态（EditorPage 内联处理），不改指示
+    case 'offline':
+      return OFFLINE_STATUS;
+    case 'saved': {
+      const at = detail ? new Date(detail) : null;
+      const time =
+        at && !Number.isNaN(at.getTime())
+          ? `${String(at.getHours()).padStart(2, '0')}:${String(at.getMinutes()).padStart(2, '0')}`
+          : clockNow();
+      return `已保存 ${time}`;
+    }
+    case 'quota':
+      return QUOTA_STATUS; // 复用 M1 非重试文案（FR-ACC-003）
+    default:
+      return null; // connecting：不覆盖既有指示
+  }
+}
+
+function clockNow(): string {
+  const now = new Date();
+  return `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+}
+
 export function EditorPage() {
   const { fileId = '' } = useParams();
   const navigate = useNavigate();
@@ -150,6 +181,9 @@ export function EditorPage() {
 
   const [tick, setTick] = useState(0);
   const [status, setStatus] = useState('尚未编辑');
+  // 协同通道真值表状态（M2 Task 3）：startCollab 回调推进，saveLoop 经桥接消费。
+  // ref 而非 state：决策函数读的是最新值，不需要触发渲染。
+  const collabRef = useRef({ wsConnected: false, wsEverConnected: false });
   const [toast, setToast] = useState('');
   const [zoomPct, setZoomPct] = useState(100);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; nodeId: string } | null>(
@@ -858,7 +892,42 @@ export function EditorPage() {
 
     rebuildScene();
     themeRef.current = resolveThemeId(getMeta(d).themeId);
-    const stopSave = startSaveLoop(d, fileId, setStatus);
+    const stopSave = startSaveLoop(d, fileId, setStatus, {
+      collab: {
+        // 持久化真值表（binding）：WS 已连接（且曾同步）→ PUT 停用；否则 PUT 兜底
+        shouldPutNow: () =>
+          shouldPut({
+            wsConnected: collabRef.current.wsConnected,
+            wsEverConnected: collabRef.current.wsEverConnected,
+          }),
+        // WS 不可达 → PUT 失败按离线文案呈现（恢复联网后自动同步），维持 M1 重试文案
+        // 仅在「provider 自认在线但 REST 失败」的错位窗口出现
+        offlineHint: () => (collabRef.current.wsConnected ? null : OFFLINE_STATUS),
+      },
+    });
+    // 协同接入（FR-EDT-034）：provider 挂到 useEditorDoc 装配的同一 doc 上，
+    // GET 装配路径不变；状态事件 → 四值保存指示 + 真值表状态推进。
+    const collab = startCollab(fileId, d, {
+      onStatus: (collabStatus, detail) => {
+        if (collabStatus === 'synced') {
+          collabRef.current.wsConnected = true;
+          collabRef.current.wsEverConnected = true;
+          // 重连无待同步变更时不会有 persisted ack，主动清掉离线指示；
+          // 有待同步变更则等 ack 收尾（先落到「保存中」）
+          if (collab.provider.hasUnsyncedChanges) setStatus('保存中…');
+          else
+            setStatus((prev) =>
+              prev.startsWith('离线') || prev.startsWith('保存失败') ? `已保存 ${clockNow()}` : prev,
+            );
+          return;
+        }
+        if (collabStatus === 'offline' || collabStatus === 'connecting') {
+          collabRef.current.wsConnected = false;
+        }
+        const next = statusText(collabStatus, detail);
+        if (next !== null) setStatus(next);
+      },
+    });
     const detachKeys = attachKeyboardMap({
       // 覆盖层打开即让路（其 Enter/Esc 已 stopPropagation，此为其余按键的兜底）
       isEditorOpen: () => overlay.isOpen,
@@ -909,6 +978,7 @@ export function EditorPage() {
       document.removeEventListener('paste', onDocPaste);
       d.off('update', onDocUpdate);
       stopSave();
+      collab.destroy(); // provider + IndexedDB 本地副本一并收尾（顺序：先冲刷 saveLoop 决策再断链）
       detachKeys();
       overlay.close(false);
       dragRef.current?.destroy();
