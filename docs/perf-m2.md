@@ -43,6 +43,12 @@ cd apps/server && ./node_modules/.bin/tsx tools/latency-bots.mjs \
 
 ## 结果（2026-09-22，两次独立运行，同一 token/文件）
 
+> **2026-09-22 M2 终审修复轮补记——10 分钟长稳（`--duration 600000`，全新 token/文件）**：
+> 50 bot / 59,885 ops（~99.8 ops/s）/ 写失败 0 / 鉴权失败 0 / 未被远端观测 210（0.35%）；
+> **P50=2.5ms P95=7.2ms P99=10.4ms MAX=59.7ms，结论 PASS（退出码 0）**；结束后 docState
+> 复核 `countAliveReachable`=30、重复文本 0（结构完整、计数无膨胀）。此轮把
+> m2-acceptance FR-COL-001「连续 10 分钟」子项从待手动核验收口为机器执行。
+
 环境：Apple M4 Pro / 24GB / macOS 15.5 / Node 22.22.3 / @hocuspocus 4.7.0（server+provider）/ 本机 dev 服务器（NestJS tsx `:3001`，持久化防抖默认 2000/10000ms）。机器人与服务器同机（环回，无网络延迟）。
 
 | 指标 | Run 1 | Run 2 | 阈值 | 结论 |
