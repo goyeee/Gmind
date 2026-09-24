@@ -1,4 +1,4 @@
-import { expect, test, type BrowserContext, type Page } from '@playwright/test';
+import { expect, test, type APIRequestContext, type BrowserContext, type Page } from '@playwright/test';
 
 /**
  * 客户端协同接入与三态/离线 E2E — M2 Task 3（FR-EDT-034/035）。
@@ -44,14 +44,15 @@ async function goOnline(page: Page, context: BrowserContext): Promise<void> {
   });
 }
 
-async function registerAndLogin(page: Page): Promise<void> {
+async function registerAndLogin(page: Page, phone?: string): Promise<string> {
   await page.goto('/login');
-  const phone = '138' + String(Math.floor(10000000 + Math.random() * 89999999));
-  await page.getByPlaceholder('手机号').fill(phone);
+  const target = phone ?? '138' + String(Math.floor(10000000 + Math.random() * 89999999));
+  await page.getByPlaceholder('手机号').fill(target);
   await page.getByPlaceholder('验证码（开发环境固定 123456）').fill('123456');
   await page.getByRole('button', { name: '登录', exact: true }).click();
   await expect(page).toHaveURL(/\/workspace/);
   await expect(page.locator('.file-list li')).toHaveCount(3);
+  return target;
 }
 
 /** 打开种子文件进入编辑器，等待 root 文本渲染。 */
@@ -177,4 +178,141 @@ test('断网编辑 3 个节点恢复联网后无重复', async ({ page, context 
   await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '离线甲' })).toHaveCount(1);
   await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '离线乙' })).toHaveCount(1);
   await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '离线丙' })).toHaveCount(1);
+});
+
+// ---------------------------------------------------------------------------
+// M2 Task 5/6：Awareness 身份/选区广播 + 在线成员面板（FR-COL-002/005）
+//
+// 多用户编排：B/C 对 A 的文件没有权限（REST assertCanRead 与 WS canOpen 同口径），
+// 需要先经开发编排端点 POST /api/dev-e2e/grant-collaborator（NODE_ENV=production
+// 一律 404）补 file_collaborators 行。 Awareness 消失路径：页面关闭 → provider
+// destroy/pagehide 广播 removeAwarenessStates（或 WS 断开由服务端按连接清理），
+// 即时移除（不依赖 30s 超时），断言给 6s 轮询容忍。
+// ---------------------------------------------------------------------------
+
+function fileIdFromUrl(page: Page): string {
+  const m = /\/edit\/([0-9A-Za-z]+)/.exec(page.url());
+  if (!m || !m[1]) throw new Error(`URL 中无 fileId：${page.url()}`);
+  return m[1];
+}
+
+/** 当前登录用户的昵称（collab.ts 身份广播同源：GET /api/users/me）。 */
+async function nicknameOf(page: Page): Promise<string> {
+  return page.evaluate(async () => {
+    const res = await fetch('/api/users/me', {
+      headers: { Authorization: `Bearer ${localStorage.getItem('gmind.token') ?? ''}` },
+    });
+    const body = (await res.json()) as { nickname?: string };
+    if (!body.nickname) throw new Error('users/me 无昵称');
+    return body.nickname;
+  });
+}
+
+async function grantCollaborator(
+  request: APIRequestContext,
+  fileId: string,
+  phone: string,
+): Promise<void> {
+  const res = await request.post('/api/dev-e2e/grant-collaborator', { data: { fileId, phone } });
+  if (!res.ok()) throw new Error(`授予协作者失败：${res.status()}`);
+}
+
+// 用例 5 双端光标：A/B 同开一文件 → 互见昵称标签；A 选中「周三」→ B 出现 A 的
+// 选区框；A 关闭页面 → B 的 A 光标元素 6s 内消失
+test('双上下文远端光标：互见昵称标签与选区框，页面关闭即消失', async ({ browser, request }) => {
+  const ctxA = await browser.newContext();
+  const pageA = await ctxA.newPage();
+  await registerAndLogin(pageA);
+  await openSeedDoc(pageA, '本周计划');
+  const fileId = fileIdFromUrl(pageA);
+  const nickA = await nicknameOf(pageA);
+
+  const ctxB = await browser.newContext();
+  const pageB = await ctxB.newPage();
+  const phoneB = await registerAndLogin(pageB);
+  await grantCollaborator(request, fileId, phoneB);
+  await pageB.goto(`/edit/${fileId}`);
+  await expect(pageB.locator('.editor-canvas svg .gm-text', { hasText: '本周计划' })).toBeVisible({
+    timeout: 15_000,
+  });
+  const nickB = await nicknameOf(pageB);
+
+  // 初始装配即默认选中 root → 双方互见对方昵称标签
+  await expect(pageA.locator('.editor-canvas svg .gm-remote-cursor text')).toHaveText(nickB, {
+    timeout: 10_000,
+  });
+  await expect(pageB.locator('.editor-canvas svg .gm-remote-cursor text')).toHaveText(nickA, {
+    timeout: 10_000,
+  });
+
+  // A 选中「周三」节点 → B 侧该节点出现 A 的远端选区框
+  await pageA.locator('.editor-canvas svg .gm-text', { hasText: '周三' }).click();
+  await expect(
+    pageB
+      .locator('.editor-canvas svg [data-node-id]', { hasText: '周三' })
+      .locator('.gm-remote-selection[data-cursor-user]'),
+  ).toHaveCount(1, { timeout: 10_000 });
+
+  // A 关闭页面 → B 侧 A 的标签与选区框即时移除（provider destroy/pagehide 广播）
+  await ctxA.close();
+  await expect(pageB.locator('.editor-canvas svg .gm-remote-cursor')).toHaveCount(0, {
+    timeout: 6_000,
+  });
+  await expect(pageB.locator('.editor-canvas svg .gm-remote-selection')).toHaveCount(0, {
+    timeout: 6_000,
+  });
+});
+
+// 用例 6 成员面板：A(owner) 编辑 / B(协作者) 编辑 / C(协作者) 只看 → A 面板
+// 「正在编辑」= {A, B}、「正在查看」= {C}、A 行带「创建者」；C 关闭 → 6s 内从面板消失
+test('成员面板：编辑/查看分组、创建者标识与离线即时移除', async ({ browser, request }) => {
+  const ctxA = await browser.newContext();
+  const pageA = await ctxA.newPage();
+  await registerAndLogin(pageA);
+  await openSeedDoc(pageA, '本周计划');
+  const fileId = fileIdFromUrl(pageA);
+  const nickA = await nicknameOf(pageA);
+  await addChildNode(pageA, '甲的编辑'); // A 编辑 → editing=true（60s 静默窗内断言）
+
+  const ctxB = await browser.newContext();
+  const pageB = await ctxB.newPage();
+  const phoneB = await registerAndLogin(pageB);
+  await grantCollaborator(request, fileId, phoneB);
+  await pageB.goto(`/edit/${fileId}`);
+  await expect(pageB.locator('.editor-canvas svg .gm-text', { hasText: '本周计划' })).toBeVisible({
+    timeout: 15_000,
+  });
+  const nickB = await nicknameOf(pageB);
+  await addChildNode(pageB, '乙的编辑'); // B 编辑 → B 进「正在编辑」
+
+  const ctxC = await browser.newContext();
+  const pageC = await ctxC.newPage();
+  const phoneC = await registerAndLogin(pageC);
+  await grantCollaborator(request, fileId, phoneC);
+  await pageC.goto(`/edit/${fileId}`);
+  await expect(pageC.locator('.editor-canvas svg .gm-text', { hasText: '本周计划' })).toBeVisible({
+    timeout: 15_000,
+  });
+  const nickC = await nicknameOf(pageC); // C 只看不编辑 → editing=false
+
+  await pageA.getByTestId('members-btn').click();
+  const panel = pageA.getByTestId('member-panel');
+  await expect(panel).toBeVisible();
+  await expect(pageA.getByTestId('members-count')).toHaveText('3');
+  await expect(panel.getByTestId('member-group-editing')).toContainText(nickA, { timeout: 10_000 });
+  await expect(panel.getByTestId('member-group-editing')).toContainText(nickB);
+  await expect(panel.getByTestId('member-group-viewing')).toContainText(nickC);
+
+  // 创建者标识：owner（A 自己）行带「创建者」，B/C 行不带
+  const rowA = panel.locator('[data-testid="member-row"]', { hasText: nickA });
+  await expect(rowA.getByTestId('owner-badge')).toHaveText('创建者');
+  const rowB = panel.locator('[data-testid="member-row"]', { hasText: nickB });
+  await expect(rowB.getByTestId('owner-badge')).toHaveCount(0);
+
+  // C 关闭页面 → A 面板内 C 行即时移除（在线数回落 2）
+  await ctxC.close();
+  await expect(
+    panel.locator('[data-testid="member-row"]', { hasText: nickC }),
+  ).toHaveCount(0, { timeout: 6_000 });
+  await expect(pageA.getByTestId('members-count')).toHaveText('2');
 });

@@ -1,0 +1,101 @@
+/* 在线成员面板 — M2 Task 6（FR-COL-005）。定位：编辑器右上角工具栏下方浮层。 */
+
+.member-panel {
+  position: fixed;
+  top: 56px;
+  right: 16px;
+  width: 248px;
+  max-height: 60vh;
+  overflow: auto;
+  background: #fff;
+  border: 1px solid #e5e6eb;
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  z-index: 1150;
+  padding: 8px 12px 12px;
+  font-size: 13px;
+}
+
+.member-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 0 6px;
+  border-bottom: 1px solid #f2f3f5;
+}
+.member-panel-title {
+  font-weight: 600;
+}
+.member-panel-close {
+  border: none;
+  background: none;
+  font-size: 16px;
+  line-height: 1;
+  color: #86909c;
+  cursor: pointer;
+  padding: 2px 6px;
+}
+
+.member-group {
+  margin-top: 8px;
+}
+.member-group-title {
+  margin: 0 0 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #4e5969;
+}
+.member-group-count {
+  margin-left: 6px;
+  color: #86909c;
+  font-weight: 400;
+}
+.member-group-empty {
+  margin: 0;
+  color: #c9cdd4;
+  padding: 4px 0;
+}
+
+.member-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.member-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 0;
+}
+.member-avatar {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  color: #fff;
+  font-size: 12px;
+  line-height: 22px;
+  text-align: center;
+  user-select: none;
+}
+.member-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.member-owner-badge {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: #fff3e8;
+  color: #d25f00;
+  font-size: 11px;
+}
+.member-joined {
+  flex: none;
+  color: #86909c;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}

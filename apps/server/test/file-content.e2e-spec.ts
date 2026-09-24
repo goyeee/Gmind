@@ -25,6 +25,7 @@ describe('文件内容端点（读取/回写/改名/打开）', () => {
   let dataSource: DataSource;
   let ownerToken: string;
   let otherToken: string;
+  let ownerUserId: string;
   let fileId: string;
 
   const tokenFor = async (userId: string): Promise<string> => {
@@ -46,6 +47,7 @@ describe('文件内容端点（读取/回写/改名/打开）', () => {
     const users = app.get((await import('../src/users/users.service')).UsersService);
     const owner = await users.create({ method: 'phone', phone: '13900001001' });
     const other = await users.create({ method: 'phone', phone: '13900001002' });
+    ownerUserId = owner.id;
     ownerToken = await tokenFor(owner.id);
     otherToken = await tokenFor(other.id);
 
@@ -64,9 +66,11 @@ describe('文件内容端点（读取/回写/改名/打开）', () => {
   it('owner 读取返回 base64 docState，可被 docFromState 还原且 meta 正确', async () => {
     const res = await authed(ownerToken, 'get', `/api/files/${fileId}`);
     expect(res.status).toBe(200);
-    expect(Object.keys(res.body).sort()).toEqual(['docState', 'id', 'nodeCount', 'structure', 'themeId', 'title']);
+    expect(Object.keys(res.body).sort()).toEqual(['docState', 'id', 'nodeCount', 'ownerUserId', 'structure', 'themeId', 'title']);
     expect(res.body.title).toBe('内容文件');
     expect(res.body.nodeCount).toBe(2);
+    // M2 Task 6：ownerUserId 供前端创建者标识（FR-COL-005）
+    expect(res.body.ownerUserId).toBe(ownerUserId);
 
     const doc = docFromState(new Uint8Array(Buffer.from(res.body.docState, 'base64')));
     expect(doc.getMap('meta').get('title')).toBe('内容文件');

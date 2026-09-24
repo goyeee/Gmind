@@ -1,11 +1,12 @@
 import { HocuspocusProvider } from '@hocuspocus/provider';
 import { docFromState, docToState, ROOT_NODE_ID } from '@gmind/core';
+import { colorForUser, type RemoteCursor } from '@gmind/engine';
 import * as Y from 'yjs';
 import { IndexeddbPersistence } from 'y-indexeddb';
-import { getToken } from '../api/client';
+import { api, getToken } from '../api/client';
 
 /**
- * 协同接入封装（M2 Task 3，FR-EDT-034/035）。
+ * 协同接入封装（M2 Task 3，FR-EDT-034/035；Task 5 起 Awareness 身份/选区广播）。
  *
  * startCollab 在既有 doc（useEditorDoc 经 GET 装配的同一实例）上挂两条通道：
  * - IndexeddbPersistence(fileId, doc)：本地副本——所有 origin 的 update（本地写、
@@ -20,20 +21,130 @@ import { getToken } from '../api/client';
  * - saved：服务端 persisted ack（{type:'persisted', at}）——「已保存 HH:MM」的驱动；
  * - quota：服务端 quota-exceeded 广播（复用 M1 非重试文案）。
  *
+ * Awareness（M2 Task 5，FR-COL-002/005）：v4 provider 自动创建 provider.awareness
+ * （y-protocols Awareness）。本地身份经 GET /api/users/me 一次性装配（模块级缓存），
+ * 广播字段：user { userId, nickname, color }（color = colorForUser(userId)，会话内
+ * 恒定）、joinedAt（ISO）、editing（本地用户写置 true，连续 60s 无写自动回落——
+ * 「正在编辑」按最近写活动动态判定的裁定口径；短窗（3s）会在输入间隙把协作方
+ * 面板行反复抖出「正在编辑」组，60s 折中）、selection（SelectionModel.onChange
+ * 桥接的节点 id 列表）。
+ *
+ * 裁定：RemoteCursor.userId = awareness clientID 字符串（非账号 userId）——同一
+ * 账号开多个标签页时各占独立光标/选区元素，光标层的元素键互不覆盖；昵称/颜色
+ * 仍来自账号身份。
+ *
+ * 消失路径（FR-COL-005「5 秒内消失」）：页面关闭 → provider.destroy() /
+ * pagehide 广播 removeAwarenessStates（WS 断开时服务端亦按连接清理并转发）——
+ * 即时移除，不依赖 awareness 30s 陈旧回收。
+ *
  * 持久化真值表（binding）落在 saveLoop.shouldPut：WS 已连接 → 服务端持久化接管
- * （PUT 停用）；未连接/断开 → PUT 兜底。本模块不触碰 REST。
+ * （PUT 停用）；未连接/断开 → PUT 兜底。本模块不触碰内容类 REST。
  */
 
 export type CollabStatus = 'connecting' | 'synced' | 'offline' | 'saved' | 'quota';
 
+/** awareness 广播的本地身份（user 字段）。 */
+export interface PresenceUser {
+  userId: string;
+  nickname: string;
+  color: string;
+}
+
+/** 在线成员（awareness states → 成员面板数据面；含自己）。 */
+export interface PresenceMember extends PresenceUser {
+  joinedAt: string;
+  editing: boolean;
+  isSelf: boolean;
+}
+
 export interface CollabOptions {
   onStatus(status: CollabStatus, detail?: string): void;
+  /** 远端（非自己）光标/选区变化（EditorPage → CursorLayer.setCursors）。 */
+  onRemoteCursors?(cursors: RemoteCursor[]): void;
+  /** 在线成员变化（含自己；EditorPage → 成员面板 + 在线数角标）。 */
+  onPresence?(members: PresenceMember[]): void;
 }
 
 export interface CollabHandle {
   destroy(): void;
   provider: HocuspocusProvider;
+  /** 本地用户写后调用：editing=true；连续 60s 无写自动回落 false（裁定见文件头）。 */
+  markEditing(): void;
+  /** 本地选区广播（SelectionModel.onChange 桥接）。 */
+  setSelection(nodeIds: string[]): void;
 }
+
+/** GET /api/users/me 响应（collab 只消费 id/nickname）。 */
+interface MeResponse {
+  id: string;
+  nickname: string;
+}
+
+let mePromise: Promise<MeResponse> | null = null;
+
+/** 当前用户身份（模块级缓存：页面生命周期至多请求一次，多文件切换复用）。
+ *  获取失败（离线首开等）回落空身份——空 userId 不计入在线成员（无身份不广播）。 */
+function fetchMe(): Promise<MeResponse> {
+  mePromise ??= api<MeResponse>('/users/me').catch(() => ({ id: '', nickname: '用户' }));
+  return mePromise;
+}
+
+/** awareness 单客户端状态（宽松形状：字段可选，坏数据跳过不入面板）。 */
+export type AwarenessState = Record<string, unknown>;
+
+/** 宽松读取身份字段：无 userId 视为「身份未装配」，跳过。 */
+function userOf(state: AwarenessState): PresenceUser | null {
+  const user = state.user as Partial<PresenceUser> | undefined;
+  if (!user || typeof user.userId !== 'string' || user.userId === '') return null;
+  return {
+    userId: user.userId,
+    nickname: typeof user.nickname === 'string' && user.nickname !== '' ? user.nickname : '用户',
+    color: typeof user.color === 'string' ? user.color : colorForUser(user.userId),
+  };
+}
+
+/** awareness states → 在线成员列表（joinedAt 升序，稳定面板顺序；自身标 isSelf）。 */
+export function buildPresence(
+  states: Map<number, AwarenessState>,
+  selfClientID: number,
+): PresenceMember[] {
+  const members: PresenceMember[] = [];
+  for (const [clientID, state] of states) {
+    const user = userOf(state);
+    if (!user) continue;
+    members.push({
+      ...user,
+      joinedAt: typeof state.joinedAt === 'string' ? state.joinedAt : '',
+      editing: state.editing === true,
+      isSelf: clientID === selfClientID,
+    });
+  }
+  members.sort((a, b) => {
+    if (a.joinedAt !== b.joinedAt) return a.joinedAt < b.joinedAt ? -1 : 1;
+    return a.userId < b.userId ? -1 : 1;
+  });
+  return members;
+}
+
+/** awareness states → 远端光标（过滤自己与未装配身份者；空选区不出光标）。 */
+export function buildRemoteCursors(
+  states: Map<number, AwarenessState>,
+  selfClientID: number,
+): RemoteCursor[] {
+  const cursors: RemoteCursor[] = [];
+  for (const [clientID, state] of states) {
+    if (clientID === selfClientID) continue;
+    const user = userOf(state);
+    if (!user || !Array.isArray(state.selection)) continue;
+    const nodeIds = state.selection.filter((id): id is string => typeof id === 'string');
+    if (nodeIds.length === 0) continue;
+    cursors.push({ userId: String(clientID), name: user.nickname, color: user.color, nodeIds });
+  }
+  return cursors;
+}
+
+/** 「最近写活动」回落窗（裁定：60s，见文件头）。 */
+const EDITING_IDLE_MS = 60_000;
 
 export function startCollab(fileId: string, doc: Y.Doc, opts: CollabOptions): CollabHandle {
   const { onStatus } = opts;
@@ -48,6 +159,50 @@ export function startCollab(fileId: string, doc: Y.Doc, opts: CollabOptions): Co
     document: doc,
     token: getToken() ?? '',
   });
+
+  // —— Awareness 身份/选区广播（M2 Task 5）——
+  const awareness = provider.awareness;
+  const selfClientID = doc.clientID; // Awareness 构造沿用 doc.clientID：本地身份键
+  let destroyed = false;
+  // 本地选区镜像：身份装配（users/me）与选区onChange是两条异步线，谁先到都不许
+  // 互相覆盖——身份落定时回放当前选区，而不是重置为空。
+  let localSelection: string[] = [];
+
+  // 身份异步装配（users/me 模块级缓存）；装配后一次性写入本地字段，
+  // 此前（含远端）的 awareness 状态不含本端身份，面板/光标自然不显示。
+  void fetchMe().then((me) => {
+    if (destroyed || !awareness) return;
+    awareness.setLocalStateField('user', {
+      userId: me.id,
+      nickname: me.nickname,
+      color: colorForUser(me.id),
+    });
+    awareness.setLocalStateField('joinedAt', new Date().toISOString());
+    awareness.setLocalStateField('editing', false);
+    awareness.setLocalStateField('selection', localSelection);
+  });
+
+  const onAwarenessChange = (): void => {
+    const states = (awareness?.getStates() ?? new Map()) as Map<number, AwarenessState>;
+    if (opts.onPresence) opts.onPresence(buildPresence(states, selfClientID));
+    if (opts.onRemoteCursors) opts.onRemoteCursors(buildRemoteCursors(states, selfClientID));
+  };
+  awareness?.on('change', onAwarenessChange);
+
+  let editingTimer: ReturnType<typeof setTimeout> | null = null;
+  const markEditing = (): void => {
+    awareness?.setLocalStateField('editing', true);
+    if (editingTimer !== null) clearTimeout(editingTimer);
+    editingTimer = setTimeout(() => {
+      editingTimer = null;
+      awareness?.setLocalStateField('editing', false);
+    }, EDITING_IDLE_MS);
+  };
+
+  const setSelection = (nodeIds: string[]): void => {
+    localSelection = nodeIds;
+    awareness?.setLocalStateField('selection', nodeIds);
+  };
 
   const onStatusEvent = ({ status }: { status: string }): void => {
     // 'connected' ≠ 可展示态：等服务端 sync 完成再报 synced；连接失败/断开报 offline
@@ -93,14 +248,20 @@ export function startCollab(fileId: string, doc: Y.Doc, opts: CollabOptions): Co
 
   return {
     provider,
+    markEditing,
+    setSelection,
     destroy(): void {
+      destroyed = true;
+      if (editingTimer !== null) clearTimeout(editingTimer);
+      awareness?.off('change', onAwarenessChange);
       provider.off('status', onStatusEvent);
       provider.off('synced', onSynced);
       provider.off('stateless', onStateless);
       if (import.meta.env.DEV) {
         delete (window as unknown as { __gmindCollab?: unknown }).__gmindCollab;
       }
-      // 自管 socket：destroy 一并关停底层 WebSocket 与重连循环（v4 单 provider 形态）
+      // 自管 socket：destroy 一并关停底层 WebSocket 与重连循环（v4 单 provider 形态）。
+      // destroy 内部先 removeAwarenessStates 广播本端移除再断链——对端即时消失。
       provider.destroy();
       void idb.destroy().catch(() => undefined);
     },

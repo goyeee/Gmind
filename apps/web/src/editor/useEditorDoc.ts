@@ -17,6 +17,8 @@ import { loadDocFromIndexedDB } from './collab';
 export interface EditorDocState {
   doc: Y.Doc;
   um: Y.UndoManager;
+  /** 文件所有者（M2 Task 6，FR-COL-005 创建者标识）；离线恢复路径拿不到 → null。 */
+  ownerUserId: string | null;
 }
 
 interface FileContentResponse {
@@ -25,6 +27,7 @@ interface FileContentResponse {
   structure: string;
   themeId: string;
   nodeCount: number;
+  ownerUserId: string | null;
   docState: string;
 }
 
@@ -58,7 +61,7 @@ export function useEditorDoc(fileId: string): {
         const doc = docFromState(base64ToBytes(meta.docState));
         const um = createUndoManager(doc);
         if (cancelled) return;
-        setState({ doc, um });
+        setState({ doc, um, ownerUserId: meta.ownerUserId ?? null });
         void api(`/files/${fileId}/open`, { method: 'POST' }).catch(() => undefined);
       } catch (e) {
         if (cancelled) return;
@@ -71,7 +74,7 @@ export function useEditorDoc(fileId: string): {
         }
         if (restored) {
           const um = createUndoManager(restored);
-          setState({ doc: restored, um });
+          setState({ doc: restored, um, ownerUserId: null });
           void api(`/files/${fileId}/open`, { method: 'POST' }).catch(() => undefined);
         } else {
           setError(e instanceof Error ? e.message : '加载失败');

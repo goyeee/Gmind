@@ -99,11 +99,12 @@ export class FilesService {
     return file;
   }
 
-  /** 编辑器打开文件的完整状态；docState 以 base64 离开服务端（唯一内容出口）。 */
+  /** 编辑器打开文件的完整状态；docState 以 base64 离开服务端（唯一内容出口）。
+   *  ownerUserId（M2 Task 6，FR-COL-005）：前端创建者标识依据。 */
   async getOwnedFileWithState(
     userId: string,
     id: string,
-  ): Promise<{ id: string; title: string; structure: string; themeId: string; nodeCount: number; docState: string }> {
+  ): Promise<{ id: string; title: string; structure: string; themeId: string; nodeCount: number; ownerUserId: string; docState: string }> {
     const file = await this.findAliveOr404(userId, id);
     return {
       id: file.id,
@@ -111,6 +112,7 @@ export class FilesService {
       structure: file.structure,
       themeId: file.themeId,
       nodeCount: file.nodeCount,
+      ownerUserId: file.ownerUserId,
       docState: (file.docState ?? Buffer.alloc(0)).toString('base64'),
     };
   }

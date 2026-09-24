@@ -40,6 +40,19 @@
   font-size: 12px;
   white-space: nowrap;
 }
+/* 在线成员按钮角标（M2 Task 6，FR-COL-005）：awareness 在线数 */
+.members-badge {
+  display: inline-block;
+  min-width: 16px;
+  margin-left: 4px;
+  padding: 0 5px;
+  border-radius: 8px;
+  background: #3370ff;
+  color: #fff;
+  font-size: 11px;
+  line-height: 16px;
+  text-align: center;
+}
 
 .editor-canvas {
   flex: 1;

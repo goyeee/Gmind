@@ -29,7 +29,9 @@ import {
 import {
   copyNodes,
   createScene,
+  createCursorLayer,
   cutNodes,
+  type CursorLayer,
   DragController,
   type DocReader,
   type Direction,
@@ -43,6 +45,7 @@ import {
   pasteText,
   readFromSystemClipboard,
   renderScene,
+  type RemoteCursor,
   resolveNodeStyle,
   resolveThemeId,
   type SceneRoot,
@@ -61,8 +64,9 @@ import {
   readImageSize,
   uploadImage,
 } from '../editor/imageUpload';
+import { MemberPanel } from '../editor/MemberPanel';
 import { RichPanel } from '../editor/RichPanel';
-import { startCollab, type CollabStatus } from '../editor/collab';
+import { startCollab, type CollabHandle, type CollabStatus, type PresenceMember } from '../editor/collab';
 import { QUOTA_STATUS, shouldPut, startSaveLoop } from '../editor/saveLoop';
 import { useEditorDoc } from '../editor/useEditorDoc';
 import { api } from '../api/client';
@@ -146,6 +150,8 @@ export function EditorPage() {
   const { state, error, setTitle } = useEditorDoc(fileId);
   const doc = state?.doc ?? null;
   const um = state?.um ?? null;
+  // 创建者标识依据（M2 Task 6，FR-COL-005）：GET /api/files/:id 扩展字段
+  const ownerUserId = state?.ownerUserId ?? null;
 
   // dev-only 性能压测钩子（e2e/perf-editor.spec.ts 专用）：页面上下文经
   // window.__gmind.getDoc() 取活动 doc 实例（脚本另用 /@id/@gmind/core 动态导入
@@ -173,6 +179,16 @@ export function EditorPage() {
   const justDraggedRef = useRef(false);
   const themeRef = useRef<string>('');
   const fitPendingRef = useRef(false);
+  // 远端光标层（M2 Task 5）与最新远端光标集：awareness 变化写 ref，rerender 时
+  // （含主题切换重建场景后）随新布局盒子整集重画。
+  const cursorLayerRef = useRef<CursorLayer | null>(null);
+  const remoteCursorsRef = useRef<RemoteCursor[]>([]);
+  // collab 句柄 ref：afterUserWrite / selection.onChange 需要在装配完成后回调
+  // （markEditing / setSelection），时序晚于 startCollab 的调用点。
+  const collabHandleRef = useRef<CollabHandle | null>(null);
+  // 在线成员（FR-COL-005）：collab onPresence 推进；成员面板开合。
+  const [members, setMembers] = useState<PresenceMember[]>([]);
+  const [membersOpen, setMembersOpen] = useState(false);
   // 框选橡皮筋（Task 15 FR-EDT-008）：svg 直挂的 <rect class="gm-marquee">（不进
   // wrapper——橡皮筋按 svg 相对 screen 坐标自绘，不受视口 transform），锚点同步记
   // screen 坐标供 move 阶段重绘。
@@ -200,6 +216,8 @@ export function EditorPage() {
   /** 所有用户写后统一调用（carry-in 裁决：capUndoStack 集中封装）。 */
   const afterUserWrite = (): void => {
     if (um) capUndoStack(um);
+    // 「正在编辑」广播（FR-COL-005）：本地写置 true，60s 无写回落（裁定见 collab.ts）
+    collabHandleRef.current?.markEditing();
   };
 
   const syncZoom = (): void => {
@@ -761,6 +779,8 @@ export function EditorPage() {
     selectionRef.current = selection;
     selection.onChange = () => {
       applySelectionClasses();
+      // 选区广播（FR-COL-002）：远端据此渲染我的彩色选区框/昵称标签
+      collabHandleRef.current?.setSelection([...selection.selected]);
       setTick((t) => t + 1);
     };
 
@@ -784,6 +804,9 @@ export function EditorPage() {
       prev?.destroy();
       const scene = createScene(svgEl);
       sceneRef.current = scene;
+      // 远端光标层（M2 Task 5）：挂 nodesLayer 末尾最上层；主题切换重建场景时随
+      // 场景整体重建（createCursorLayer 幂等移除旧层），ref 换新句柄。
+      cursorLayerRef.current = createCursorLayer(scene);
       // 视口包装层（fix round 1）：createScene 的边/节点两层是 svg 直接子元素，
       // Viewport 只transform单个 g——必须包一层同时携带两层，否则平移/缩放时边脱节点。
       const wrapper = document.createElementNS('http://www.w3.org/2000/svg', 'g');
@@ -867,6 +890,9 @@ export function EditorPage() {
         nodeData,
       });
       applySelectionClasses();
+      // 远端光标重画（FR-COL-002）：awareness 变化与 rerender（布局/主题变化）双
+      // 触发点都会走到这里，boxes 取本帧最新布局（选区框随节点移动）。
+      cursorLayerRef.current?.setCursors(remoteCursorsRef.current, boxesRef.current);
       if (fitPendingRef.current) {
         fitPendingRef.current = false;
         vpFit(result);
@@ -927,7 +953,15 @@ export function EditorPage() {
         const next = statusText(collabStatus, detail);
         if (next !== null) setStatus(next);
       },
+      // Awareness → 页面（M2 Task 5/6，FR-COL-002/005）：远端光标经光标层渲染；
+      // 在线成员进 React state 驱动成员面板与角标。
+      onRemoteCursors: (cursors) => {
+        remoteCursorsRef.current = cursors;
+        cursorLayerRef.current?.setCursors(cursors, boxesRef.current);
+      },
+      onPresence: (next) => setMembers(next),
     });
+    collabHandleRef.current = collab;
     const detachKeys = attachKeyboardMap({
       // 覆盖层打开即让路（其 Enter/Esc 已 stopPropagation，此为其余按键的兜底）
       isEditorOpen: () => overlay.isOpen,
@@ -978,7 +1012,11 @@ export function EditorPage() {
       document.removeEventListener('paste', onDocPaste);
       d.off('update', onDocUpdate);
       stopSave();
+      collabHandleRef.current = null;
       collab.destroy(); // provider + IndexedDB 本地副本一并收尾（顺序：先冲刷 saveLoop 决策再断链）
+      cursorLayerRef.current = null;
+      remoteCursorsRef.current = [];
+      setMembers([]);
       detachKeys();
       overlay.close(false);
       dragRef.current?.destroy();
@@ -1069,6 +1107,16 @@ export function EditorPage() {
         <span className="save-status" data-testid="save-status">
           {status}
         </span>
+        <button
+          data-testid="members-btn"
+          title="在线成员"
+          onClick={() => setMembersOpen((v) => !v)}
+        >
+          成员
+          <span className="members-badge" data-testid="members-count">
+            {members.length}
+          </span>
+        </button>
       </header>
 
       <div className="editor-main">
@@ -1165,6 +1213,13 @@ export function EditorPage() {
           {toast}
         </div>
       )}
+
+      <MemberPanel
+        members={members}
+        ownerUserId={ownerUserId}
+        open={membersOpen}
+        onClose={() => setMembersOpen(false)}
+      />
       <span hidden>{tick}</span>
     </div>
   );
