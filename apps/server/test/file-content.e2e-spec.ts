@@ -68,7 +68,9 @@ describe('文件内容端点（读取/回写/改名/打开）', () => {
     expect(res.status).toBe(200);
     expect(Object.keys(res.body).sort()).toEqual(['docState', 'id', 'nodeCount', 'ownerUserId', 'structure', 'themeId', 'title']);
     expect(res.body.title).toBe('内容文件');
-    expect(res.body.nodeCount).toBe(2);
+    // 可达活跃口径（countAliveReachable，root 不计）：root + 1 子级 → 1
+    // ——createForUser 与保存路径统一（M2 终审修复轮，旧 countNodes 口径为 2）
+    expect(res.body.nodeCount).toBe(1);
     // M2 Task 6：ownerUserId 供前端创建者标识（FR-COL-005）
     expect(res.body.ownerUserId).toBe(ownerUserId);
 
@@ -76,7 +78,9 @@ describe('文件内容端点（读取/回写/改名/打开）', () => {
     expect(doc.getMap('meta').get('title')).toBe('内容文件');
     expect(doc.getMap('meta').get('structureType')).toBe(res.body.structure);
     expect(doc.getMap('meta').get('themeId')).toBe(res.body.themeId);
-    expect(countNodes(doc)).toBe(res.body.nodeCount);
+    // createForUser 与保存路径同口径：countAliveReachable（M2 终审修复轮收口，
+    // 旧 countNodes 计入墓碑的 ±N 语义差已消除）
+    expect(countAliveReachable(doc)).toBe(res.body.nodeCount);
   });
 
   it('非相关用户读取 → 404（不泄露存在性）', async () => {

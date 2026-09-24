@@ -48,7 +48,9 @@ describe('files 域', () => {
       .set('Authorization', `Bearer ${token}`)
       .send({ title: '测试新建' });
     expect(created.status).toBe(201);
-    expect(created.body.nodeCount).toBe(1);
+    // 空白模板仅含 root：可达活跃口径（countAliveReachable，root 不计）下 nodeCount=0
+    // ——与保存/协同持久化路径统一（M2 终审修复轮收口，旧 countNodes 口径为 1）
+    expect(created.body.nodeCount).toBe(0);
     // 响应必须符合 FileListItem 契约：docState（Buffer）绝不离开服务端
     expect(created.body.title).toBe('测试新建');
     expect(created.body.docState).toBeUndefined();

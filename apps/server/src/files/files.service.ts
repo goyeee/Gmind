@@ -3,7 +3,6 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { IsNull, Repository } from 'typeorm';
 import {
   countAliveReachable,
-  countNodes,
   createTemplateDoc,
   docFromState,
   docToState,
@@ -40,7 +39,10 @@ export class FilesService {
     if (input.state) {
       const doc = docFromState(input.state);
       file.docState = Buffer.from(input.state);
-      file.nodeCount = input.nodeCount ?? countNodes(doc);
+      // 口径统一（M2 终审修复轮，FR-ACC-003）：createForUser 与 saveDocState/协同
+      // 持久化同为 countAliveReachable（可达活跃、不含 root）——旧 countNodes 会计入
+      // 墓碑/孤儿，与保存路径 ±N 语义差（M2 准入清单 §1 遗留项收口）。
+      file.nodeCount = input.nodeCount ?? countAliveReachable(doc);
       // 从恢复 doc 的 meta 回填 structure/themeId，保证 files 列与 Y.Doc 元数据一致（如种子模板 org 结构）
       const meta = doc.getMap('meta');
       const structure = meta.get('structureType');
@@ -50,7 +52,7 @@ export class FilesService {
     } else {
       const doc = createTemplateDoc({ title: input.title, children: [] });
       file.docState = Buffer.from(docToState(doc));
-      file.nodeCount = countNodes(doc);
+      file.nodeCount = countAliveReachable(doc);
     }
     return this.repo.save(file);
   }
