@@ -114,10 +114,17 @@ export function WorkspacePage() {
     }
   }
 
-  function clearSearch(): void {
+  /** 清除搜索：回页签并回刷底层列表（fix round 1——搜索态的变更只重跑了搜索、
+   *  未回刷 items，不清列表会出现已删文件复现/旧标题/旧星标的陈旧列表）。 */
+  async function clearSearch(): Promise<void> {
     setSearch(null);
     setSearchText('');
     setError('');
+    try {
+      await loadFiles(view);
+    } catch (e) {
+      setError(msgOf(e));
+    }
   }
 
   async function createFile(): Promise<void> {
@@ -293,7 +300,7 @@ export function WorkspacePage() {
           {search ? (
             <div className="search-bar" data-testid="search-results">
               <h3>「{search.q}」的搜索结果（{search.results.length}）</h3>
-              <button data-testid="search-clear" onClick={clearSearch}>
+              <button data-testid="search-clear" onClick={() => void clearSearch()}>
                 清除搜索
               </button>
             </div>

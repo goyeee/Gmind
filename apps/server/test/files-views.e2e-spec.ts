@@ -600,6 +600,17 @@ describe('标题全局搜索（FR-FIL-008）', () => {
     // 无前缀命中时全部落「其余」组：updatedAt DESC（我的项目规划 更新）
     const noPrefix = await search(ownerToken, '规划');
     expect(noPrefix.body.map((f: { id: string }) => f.id)).toEqual([fContains, fPrefix]);
+
+    // LIMIT 20（fix round 1）：再造 22 个前缀命中 → 连同上述 2 个共 24 个匹配，仅返回 20
+    for (let i = 1; i <= 22; i += 1) {
+      const created = await authed(ownerToken, 'post', '/api/files').send({ title: `项目条目${i}` });
+      expect(created.status).toBe(201);
+    }
+    const limited = await search(ownerToken, '项目');
+    expect(limited.status).toBe(200);
+    expect(limited.body).toHaveLength(20);
+    expect(limited.body[0].title).toBe('项目条目22'); // 同为前缀组：updatedAt DESC，最新在前
+    expect(limited.body.map((f: { title: string }) => f.title)).not.toContain('我的项目规划'); // 非前缀组被截断
   });
 
   it('空/缺失/纯空白 q → 400「搜索关键词不能为空」', async () => {

@@ -159,6 +159,25 @@ test('搜索命中标题并展示结果，清除后回到视图页签', async ({
   await expect(page.locator('.file-list li')).toHaveCount(3);
 });
 
+test('搜索结果内变更后清除搜索，底层列表为最新数据（fix round 1）', async ({ page }) => {
+  await registerAndLogin(page);
+  await page.getByTestId('search-input').fill('本周');
+  await page.getByTestId('search-input').press('Enter');
+  await expect(page.getByTestId('search-results')).toBeVisible();
+  // 搜索态内重命名命中行
+  await page.locator('.file-list li', { hasText: '本周计划' }).getByTestId('row-menu').click();
+  await page.getByTestId('row-menu-popup').getByRole('button', { name: '重命名' }).click();
+  await page.getByTestId('rename-input').fill('本周新名');
+  await page.getByTestId('rename-confirm').click();
+  await expect(page.locator('.file-list li', { hasText: '本周新名' })).toBeVisible();
+  // 清除搜索 → 底层列表回刷为最新标题（旧标题不得复现）
+  await page.getByTestId('search-clear').click();
+  await expect(page.getByTestId('view-tabs')).toBeVisible();
+  await expect(page.locator('.file-list li', { hasText: '本周新名' })).toBeVisible();
+  await expect(page.locator('.file-list li', { hasText: '本周计划' })).toHaveCount(0);
+  await expect(page.locator('.file-list li')).toHaveCount(3);
+});
+
 test('四视图切换：shared 经 grant-collaborator，recent 随打开出现', async ({ page, request }) => {
   const phoneA = await registerAndLogin(page);
   // B 经 API 注册并新建文件，把 A 加为协作者（dev-e2e 编排端点）
