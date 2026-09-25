@@ -22,6 +22,9 @@ const envSchema = z.object({
   SMTP_PORT: z.coerce.number().optional(),
   // 邀请邮件（M3b Task 5，FR-SHR-004）注册链接基址：web dev 默认 5173，部署侧覆写。
   APP_URL: z.string().default('http://localhost:5173'),
+  // 站内跳转基址（M4 清偿包）：摘要邮件条目的文档深链（${WEB_ORIGIN}/edit/:fileId）与
+  // 正文尾部「打开 Gmind」行；缺省跟随本机 web dev 常用端口，部署侧覆写。
+  WEB_ORIGIN: z.string().default('http://localhost:5174'),
 });
 
 export const env = envSchema.parse(process.env);

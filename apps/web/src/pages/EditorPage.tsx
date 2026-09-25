@@ -1296,6 +1296,21 @@ export function EditorPage() {
     };
   }, [state, fileId]);
 
+  // —— 通知深链（M4 清偿包）——
+  // 装载完成后读 ?node=<ulid>：有效则 locateNode 定位（同评论面板「选中 + 展开折叠祖先」
+  // 语义），随即 history.replaceState 清参——刷新不重复定位。effect 声明在装配 effect
+  // 之后：同一 commit 内后执行，selectionRef/场景必已就绪；node 缺失/已删时 locateNode
+  // 自身 no-op，参数仍清除。依赖仅 [doc]：locateNode 每次渲染重建、清参后不会二次命中，
+  // 无需入依赖。
+  useEffect(() => {
+    if (!doc) return;
+    const nodeId = new URLSearchParams(window.location.search).get('node');
+    if (!nodeId) return;
+    locateNode(nodeId);
+    // 保留 history.state（react-router 的 usr/key/idx 内部态）：只清查询串，不动路由栈
+    window.history.replaceState(window.history.state, '', window.location.pathname);
+  }, [doc]);
+
   if (error) {
     return (
       <div className="editor-page">

@@ -139,7 +139,9 @@ export function WorkspacePage() {
   }
 
   /** 点击通知条目：未读则标记已读（POST :id/read）+ 角标重取，随后按 payload.fileId
-   *  跳转编辑页（mention/reply 均锚定文件）；无 fileId 的通知仅关闭下拉。 */
+   *  跳转编辑页（mention/reply 均锚定文件）；payload 带 nodeId 时拼深链
+   *  /edit/:fileId?node=:nodeId（M4 清偿包：编辑页装载后定位该节点）；
+   *  无 fileId 的通知仅关闭下拉。 */
   async function openNotification(n: NotifyItem): Promise<void> {
     setBellOpen(false);
     if (n.readAt === null) {
@@ -151,7 +153,10 @@ export function WorkspacePage() {
       void loadUnread();
     }
     const fileId = n.payload?.fileId;
-    if (fileId) navigate(`/edit/${fileId}`);
+    if (fileId) {
+      const nodeId = n.payload?.nodeId;
+      navigate(nodeId ? `/edit/${fileId}?node=${encodeURIComponent(nodeId)}` : `/edit/${fileId}`);
+    }
   }
 
   /** 变更后回刷：搜索态重跑同一关键词（更新 results），列表态回刷当前视图。 */

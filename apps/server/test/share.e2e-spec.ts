@@ -23,7 +23,7 @@ import { ShareLinkEntity } from '../src/share/share-link.entity';
  * - pending 重复邀请 no-op（不重复计）；已 accepted 再邀请 no-op；非法格式 400 并逐条回列；
  * - 注册回填（准入 7.10 起为登录回填）：按 email/phone 匹配 pending 邀请 → accepted +
  *   editor 协作者行，新用户首登与已注册用户再次登录均触发（幂等：pending 过滤 + uk_invite）；
- *   owner 侧零通知（仅登记，无感知）。
+ *   M4 清偿包起回填成功 → owner 收 permission 通知（M3b 的「owner 零通知」口径废止）。
  */
 describe('share 域', () => {
   let app: INestApplication;
@@ -416,14 +416,25 @@ describe('share 域', () => {
     expect(await inviteRepo.countBy({ fileId })).toBe(0);
   });
 
-  it('回填对 owner 零通知（owner 无感知，仅登记）', async () => {
+  it('M4 清偿：邀请回填成功 → owner 收 permission 通知（payload.memberName/action=joined）', async () => {
+    // M4 清偿包推翻 M3b「owner 零通知」口径：回填写入协作者行成功后，owner 收到
+    // type='permission'、payload {fileId, title, memberName, action:'joined'} 的站内通知
+    // （口径与 joinByToken 一致；通知失败静默，不波及回填主流程）。
     const owner = await newUser('13800120010');
     const fileId = await makeFile(owner);
     await invite(owner, fileId, ['invite-h@test.dev', '13700020005']);
     await loginByCode({ email: 'invite-h@test.dev' });
     await loginByCode({ phone: '13700020005' });
 
-    expect(await notifRepo.countBy({ userId: owner.id })).toBe(0);
+    const rows = await notifRepo.find({ where: { userId: owner.id } });
+    expect(rows).toHaveLength(2); // 两位受邀者各一条（同文件不去重——不同 memberName）
+    expect(rows.every((r) => r.type === 'permission')).toBe(true);
+    const payloads = rows.map((r) => JSON.parse(r.payload ?? '{}') as Record<string, unknown>);
+    for (const p of payloads) {
+      expect(p).toMatchObject({ fileId, title: '批量邀请域用例', action: 'joined' });
+      expect(typeof p.memberName).toBe('string');
+      expect(p.memberName as string).not.toBe('');
+    }
   });
 
   it('revoked 邀请不因注册回填复活：行保持 revoked、accepted_user_id 空、无协作者行', async () => {

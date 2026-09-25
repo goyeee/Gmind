@@ -1,6 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, IsNull, LessThanOrEqual, Repository } from 'typeorm';
+import { env } from '../config/env';
 import { MailService } from '../mail/mail.service';
 import { NotificationEntity } from '../notifications/notification.entity';
 import { UserEntity } from '../users/user.entity';
@@ -85,15 +86,19 @@ export class DigestService {
       // 文件标题取组内第一条非空 payload.title（mention/reply/system 均带），缺失兜底「文档」
       const title = group.rows.map((r) => payloadString(r.payload, 'title')).find((t): t is string => !!t) ?? '文档';
       const subject = `Gmind：${title} 有 ${group.rows.length} 条新通知`;
+      // 条目行附文档深链（M4 清偿包）：payload 带 fileId 才加链接（system 类无 fileId 不加），
+      // 点击直达 ${WEB_ORIGIN}/edit/:fileId；正文尾部统一「打开 Gmind」入口行
       const body = group.rows
         .map((r) => {
           const payload = parsePayload(r.payload);
           const label = TYPE_LABELS[r.type] ?? '通知';
           const who = typeof payload?.commenterName === 'string' && payload.commenterName ? `${payload.commenterName}：` : '';
           const content = typeof payload?.content === 'string' ? payload.content.slice(0, CONTENT_SLICE) : '';
-          return `- [${label}] ${who}${content}`;
+          const link = typeof payload?.fileId === 'string' && payload.fileId ? ` — ${env.WEB_ORIGIN}/edit/${payload.fileId}` : '';
+          return `- [${label}] ${who}${content}${link}`;
         })
-        .join('\n');
+        .join('\n')
+        .concat(`\n\n打开 Gmind：${env.WEB_ORIGIN}`);
       if (await this.mail.sendMail(email, subject, body)) {
         await this.markEmailed(group.rows, now);
         emailed++;

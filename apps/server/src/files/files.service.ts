@@ -19,6 +19,7 @@ import type { FileListItem, FileListItemDetailed, FilePatchResult } from '@gmind
 import { CollabService } from '../collab/collab.service';
 import { StorageService } from '../storage/storage.service';
 import { UserEntity } from '../users/user.entity';
+import { isDuplicateKeyError } from '../utils/duplicate-key';
 import { FileCollaboratorEntity } from './file-collaborator.entity';
 import { FileEntity } from './file.entity';
 import { FileStarEntity } from './file-star.entity';
@@ -573,17 +574,3 @@ export class FilesService {
 }
 
 export class QuotaError extends Error {}
-
-/** mysql2 唯一键冲突判定（清偿包）：ER_DUP_ENTRY / errno 1062。TypeORM
- *  QueryFailedError 会把驱动错误的自身可枚举属性（code/errno）拷贝到实例上，
- *  同时保留 driverError 引用——两层都查，跨驱动包装形态不漏判。 */
-function isDuplicateKeyError(err: unknown): boolean {
-  const e = err as { code?: string; errno?: number; driverError?: { code?: string; errno?: number } } | null;
-  if (!e) return false;
-  return (
-    e.code === 'ER_DUP_ENTRY' ||
-    e.errno === 1062 ||
-    e.driverError?.code === 'ER_DUP_ENTRY' ||
-    e.driverError?.errno === 1062
-  );
-}

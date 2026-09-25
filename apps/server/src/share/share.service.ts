@@ -1,10 +1,12 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { IsNull, Repository } from 'typeorm';
 import { randomBytes } from 'node:crypto';
 import { FileCollaboratorEntity } from '../files/file-collaborator.entity';
 import { FileEntity } from '../files/file.entity';
+import { NotifyService } from '../notify/notify.service';
 import { UserEntity } from '../users/user.entity';
+import { isDuplicateKeyError } from '../utils/duplicate-key';
 import { ShareLinkEntity } from './share-link.entity';
 
 /** join 对 closed/missing 的统一拒绝文案（binding 裁定：404 与 GET 的 closed 语义对齐，
@@ -30,6 +32,8 @@ export class ShareService {
     @InjectRepository(FileEntity) private readonly fileRepo: Repository<FileEntity>,
     @InjectRepository(FileCollaboratorEntity) private readonly collabRepo: Repository<FileCollaboratorEntity>,
     @InjectRepository(UserEntity) private readonly userRepo: Repository<UserEntity>,
+    // tsx 不发射装饰器元数据，类 token 注入必须显式 @Inject（约定同 comments.service.ts）
+    @Inject(NotifyService) private readonly notify: NotifyService,
   ) {}
 
   /** owner 创建分享链接：文件须存活且归本人（404 同口径）；已有 active 链接直接返回
@@ -79,7 +83,10 @@ export class ShareService {
 
   /** 凭 token 加入协作（登录态）：active 且文件存活 → 幂等写 editor 协作者行 → {fileId}；
    *  其余统一 404「链接已失效」。幂等扩展到并发形态：uk_fc_file_user 冲突（双插败者）
-   *  捕获后归并为幂等成功（口径同 FilesService.star）。 */
+   *  捕获后归并为幂等成功（口径同 FilesService.star）。
+   *  加入通知（M4 清偿包）：真实新增协作者行成功后 owner 收 permission 通知——
+   *  重复 join（既有行 no-op）与并发双插败者不重发（胜者请求已通知）；
+   *  owner 自己开链接为上游 no-op，不进入本路径。 */
   async joinByToken(userId: string, token: string): Promise<{ fileId: string }> {
     const link = await this.shareRepo.findOneBy({ token });
     if (!link || link.status !== 'active') throw new NotFoundException(SHARE_LINK_INVALID_MESSAGE);
@@ -92,26 +99,32 @@ export class ShareService {
       row.fileId = file.id;
       row.userId = userId;
       row.role = 'editor';
+      let joined = false;
       try {
         await this.collabRepo.save(row);
+        joined = true;
       } catch (err) {
-        if (!isDuplicateKeyError(err)) throw err; // 并发双插的败者：幂等 no-op
+        if (!isDuplicateKeyError(err)) throw err; // 并发双插的败者：幂等 no-op（胜者请求已通知）
       }
+      if (joined) await this.notifyOwnerJoined(file, userId);
     }
     return { fileId: file.id };
   }
-}
 
-/** mysql2 唯一键冲突判定（口径同 files.service.ts 的 isDuplicateKeyError）：
- *  ER_DUP_ENTRY / errno 1062，TypeORM 实例与 driverError 两层都查。
- *  导出供同域 InviteService 复用（join / 注册回填写协作者行的幂等口径一致）。 */
-export function isDuplicateKeyError(err: unknown): boolean {
-  const e = err as { code?: string; errno?: number; driverError?: { code?: string; errno?: number } } | null;
-  if (!e) return false;
-  return (
-    e.code === 'ER_DUP_ENTRY' ||
-    e.errno === 1062 ||
-    e.driverError?.code === 'ER_DUP_ENTRY' ||
-    e.driverError?.errno === 1062
-  );
+  /** 加入通知（M4 清偿包）：owner 收 type='permission'、payload {fileId, title, memberName,
+   *  action:'joined'}（binding 形状；TYPE_LABELS.permission='权限' 复用既有标签）。
+   *  尽力而为旁路（口径同 comments.dispatchNotifications）：内部捕获，绝不波及 join 主流程。 */
+  private async notifyOwnerJoined(file: FileEntity, memberUserId: string): Promise<void> {
+    try {
+      const member = await this.userRepo.findOneBy({ id: memberUserId });
+      await this.notify.notify(file.ownerUserId, 'permission', {
+        fileId: file.id,
+        title: file.title,
+        memberName: member?.nickname ?? '',
+        action: 'joined',
+      });
+    } catch {
+      // 通知是 join 主流程的旁路：失败静默（不炸响应、不回滚已写入的协作者行）
+    }
+  }
 }

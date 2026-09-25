@@ -9,7 +9,9 @@ import { expect, test, type APIRequestContext, type Page } from '@playwright/tes
  * 否则 A 的 @mention 会被服务端过滤）：
  * - A 评论 @B → B 浏览器经 SSE 收到推送 → 工作台铃铛未读角标 +1（data-testid="notify-badge"）；
  * - B 点开铃铛 → 通知下拉（data-testid="notify-list"）显示 mention 条目；
- * - 点击条目 → POST read → 角标清零（badge 消失）→ 跳转 payload.fileId 的编辑页。
+ * - 点击条目 → POST read → 角标清零（badge 消失）→ 跳转 payload.fileId 的编辑页；
+ * - M4 清偿：payload 带 nodeId → 深链 /edit/:fileId?node=:nodeId → 装载后定位节点
+ *   （.gm-selected，同评论面板 locate 语义）并 replaceState 清参。
  *
  * 评论经页面内 fetch 带 mentions 直发（评论输入框的 @ 选择器不在本任务范围；
  * SSE/铃铛链路是纯端到端断言）。SSE 就绪以 window.__gmindNotifyReady 标记
@@ -100,6 +102,68 @@ test('A @B → B 铃铛 +1 → 下拉显示 → 点击已读 → badge 清零并
   await expect(pageB.getByTestId('notify-list')).toBeVisible();
   await expect(pageB.getByTestId('notify-item').first()).toContainText(filesA[0]!.title);
   await expect(pageB.getByTestId('notify-badge')).toHaveCount(0);
+
+  await ctxA.close();
+  await ctxB.close();
+});
+
+test('M4 清偿：通知点击深链 ?node= → 装载后定位对应节点并清参', async ({ browser, request }) => {
+  test.setTimeout(90_000);
+  const ctxA = await browser.newContext();
+  const ctxB = await browser.newContext();
+  const pageA = await ctxA.newPage();
+  const pageB = await ctxB.newPage();
+
+  await registerAndLogin(pageA);
+  const phoneB = await registerAndLogin(pageB);
+
+  const meB = await apiInPage<{ id: string; nickname: string }>(pageB, '/api/users/me');
+  const filesA = await apiInPage<Array<{ id: string; title: string }>>(pageA, '/api/files?view=mine');
+  // 深链要锚定一个**非 root** 节点（root 是装配默认选中，断言会假阳性）：
+  // 用种子文件「欢迎使用 Gmind」的「基本操作」子节点
+  const fileId = filesA.find((f) => f.title === '欢迎使用 Gmind')!.id;
+  await grantCollaborator(request, fileId, phoneB);
+
+  // A 打开文件取子节点 id（模板生成的 ULID 不可预知；dev-only __gmind 钩子口径同 collab e2e）
+  await pageA.goto(`/edit/${fileId}`);
+  await expect
+    .poll(() => pageA.evaluate(() => (window as unknown as Record<string, unknown>).__gmind !== undefined), {
+      timeout: 15_000,
+    })
+    .toBe(true);
+  const childId = await pageA.evaluate(() => {
+    const hook = (window as unknown as { __gmind?: { getDoc(): unknown } }).__gmind;
+    if (!hook) throw new Error('window.__gmind 未就绪');
+    const doc = hook.getDoc() as { getMap(name: string): Map<string, { get(key: string): unknown }> };
+    for (const [id, node] of doc.getMap('nodes').entries()) {
+      if (node.get('text') === '基本操作') return id;
+    }
+    throw new Error('页面内未找到「基本操作」节点');
+  });
+
+  // B 的 SSE 就绪后，A 在该节点评论并 @B
+  await expect
+    .poll(() => pageB.evaluate(() => (window as unknown as Record<string, unknown>).__gmindNotifyReady === true), {
+      timeout: 15_000,
+    })
+    .toBe(true);
+  await apiInPage(pageA, `/api/files/${fileId}/comments`, {
+    method: 'POST',
+    body: { nodeId: childId, content: '这一支请看下', mentions: [meB.id] },
+  });
+
+  await expect(pageB.getByTestId('notify-badge')).toHaveText('1', { timeout: 15_000 });
+  await pageB.getByTestId('notify-bell').click();
+  const item = pageB.getByTestId('notify-item').first();
+  await expect(item).toContainText('提到了你');
+  await item.click();
+
+  // 深链：payload 带 nodeId → 跳 /edit/:fileId?node=:nodeId → 装载后节点 .gm-selected；
+  // 随即 history.replaceState 清参（断言最终 URL 无查询串，刷新不重复定位）
+  await expect(pageB.locator(`.editor-canvas svg [data-node-id="${childId}"]`)).toHaveClass(/gm-selected/, {
+    timeout: 15_000,
+  });
+  await expect(pageB).toHaveURL(new RegExp(`/edit/${fileId}$`));
 
   await ctxA.close();
   await ctxB.close();

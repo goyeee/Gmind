@@ -4,10 +4,11 @@ import { In, IsNull, Repository } from 'typeorm';
 import { env } from '../config/env';
 import { FileCollaboratorEntity } from '../files/file-collaborator.entity';
 import { FileEntity } from '../files/file.entity';
+import { NotifyService } from '../notify/notify.service';
 import { UserEntity } from '../users/user.entity';
 import { MailService } from '../mail/mail.service';
 import { InviteEntity, InviteContactType } from './invite.entity';
-import { isDuplicateKeyError } from './share.service';
+import { isDuplicateKeyError } from '../utils/duplicate-key';
 
 /** 联系人分类（binding）：先邮箱后手机号（两类模式不相交，先后无歧义）。 */
 export const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -36,7 +37,8 @@ export function classifyContact(raw: string): Classified | null {
  *   经 MailService 尽力而为旁路（无 SMTP 仅 log，绝不波及邀请主流程）；
  * - 注册回填（acceptPendingForNewUser）：由 AuthService 登录路径触发（准入 7.10：新旧
  *   用户每次登录尽力触发，幂等由 pending 过滤 + uk_invite 保证；失败保持 pending 天然重试），
- *   非 owner 侧通知——登记即可，owner 无感知；新用户种子文件与回填互不干扰。
+ *   回填成功后逐文件通知 owner（M4 清偿包，permission/joined，尽力而为旁路）；
+ *   新用户种子文件与回填互不干扰。
  */
 @Injectable()
 export class InviteService {
@@ -45,6 +47,7 @@ export class InviteService {
     @InjectRepository(FileEntity) private readonly fileRepo: Repository<FileEntity>,
     // tsx 不发射装饰器元数据，类 token 注入必须显式 @Inject（约定见任务说明）
     @Inject(MailService) private readonly mail: MailService,
+    @Inject(NotifyService) private readonly notify: NotifyService,
   ) {}
 
   /** owner 批量邀请：返回 { invited, skipped }（skipped = pending/accepted 重邀 no-op 数）。 */
@@ -96,13 +99,15 @@ export class InviteService {
    *  find 与 update 两处都限 pending 双保险）。事务化且协作者行先写、accepted 标记后落
    *  （fix 2）：任一步非 dup-key 失败整体回滚，绝不残留「已 accepted 无协作者行」的
    *  静默丢协作脏状态。调用方（AuthService）须 try/catch 隔离——回填失败不得波及登录，
-   *  失败邀请保持 pending（每次登录天然重试，准入 7.10）。 */
+   *  失败邀请保持 pending（每次登录天然重试，准入 7.10）。
+   *  回填成功（事务提交后）逐文件通知 owner（M4 清偿包，口径同 joinByToken）。 */
   async acceptPendingForNewUser(user: UserEntity): Promise<void> {
     const conds: Array<Pick<InviteEntity, 'contactType' | 'contact' | 'status'>> = [];
     if (user.email) conds.push({ contactType: 'email', contact: user.email, status: 'pending' });
     if (user.phone) conds.push({ contactType: 'phone', contact: user.phone, status: 'pending' });
     if (conds.length === 0) return;
 
+    let acceptedFileIds: string[] = [];
     await this.inviteRepo.manager.transaction(async (em) => {
       // 事务内统一走 em 仓库，保证 SELECT/INSERT/UPDATE 同一 queryRunner（可整体回滚）
       const inviteRepo = em.getRepository(InviteEntity);
@@ -126,7 +131,31 @@ export class InviteService {
         { id: In(pending.map((i) => i.id)), status: 'pending' },
         { status: 'accepted', acceptedUserId: user.id },
       );
+      acceptedFileIds = [...new Set(pending.map((i) => i.fileId))];
     });
+    // 通知在事务提交之后（口径同 comments 域「事务提交后触发」）：回滚路径（含事务中途
+    // 失败）不会产生任何通知，绝不出现「owner 被通知但回填实际失败」
+    if (acceptedFileIds.length > 0) await this.notifyOwnersJoined(acceptedFileIds, user);
+  }
+
+  /** 回填加入通知（M4 清偿包）：逐文件通知 owner type='permission'、payload
+   *  {fileId, title, memberName, action:'joined'}（binding 形状，与 joinByToken 一致；
+   *  同文件多联系号命中时去重为一条）。尽力而为旁路（口径同 comments.dispatchNotifications）：
+   *  内部捕获，失败静默——已提交的 accepted/协作者行不回滚，也不惊动 AuthService 的隔离 catch。 */
+  private async notifyOwnersJoined(fileIds: string[], member: UserEntity): Promise<void> {
+    try {
+      const files = await this.fileRepo.find({ where: { id: In(fileIds) } });
+      for (const file of files) {
+        await this.notify.notify(file.ownerUserId, 'permission', {
+          fileId: file.id,
+          title: file.title,
+          memberName: member.nickname || '',
+          action: 'joined',
+        });
+      }
+    } catch {
+      // 通知是回填主流程的旁路：失败静默
+    }
   }
 
   /** 邀请邮件：邀请人/文件名/注册链接（APP_URL 默认 web dev 端口）。永不抛错（MailService 旁路口径）。 */

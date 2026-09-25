@@ -292,6 +292,43 @@ describe('站内通知（FR-CMT-005）', () => {
     expect((await request(app.getHttpServer()).post('/api/notifications/01ABC/read')).status).toBe(401);
     expect((await request(app.getHttpServer()).get('/api/notifications/unread-count')).status).toBe(401);
   });
+
+  it('清偿：join 后 owner 收 permission 通知（SSE + unread）', async () => {
+    // owner 建 active 分享链接；路人（非协作者、非 owner）凭 token 加入——
+    // owner 侧实时 SSE 推送 + unread-count 相对基线 +1，payload 为 binding 形状
+    const share = await authed(ownerToken, 'post', `/api/files/${fileId}/share`);
+    expect(share.status).toBe(201);
+    const shareToken = share.body.shareToken as string;
+
+    const sse = openSse(ownerToken);
+    await sse.ready;
+
+    const before = await authed(ownerToken, 'get', '/api/notifications/unread-count');
+    const baseCount = (before.body as { count: number }).count;
+
+    const join = await authed(outsiderToken, 'post', `/api/share/${shareToken}/join`);
+    expect(join.status).toBe(201);
+
+    const text = await waitForSse(sse, '"type":"permission"');
+    const dataLine = text.split('\n').find((l) => l.startsWith('data: ') && l.includes('"type":"permission"'));
+    expect(dataLine).toBeTruthy();
+    const event = JSON.parse((dataLine as string).slice('data: '.length)) as {
+      type: string;
+      payload: Record<string, unknown>;
+    };
+    expect(event.type).toBe('permission');
+    expect(event.payload).toEqual({ fileId, title: '通知文件', memberName: outsider.nickname, action: 'joined' });
+    sse.close();
+
+    const after = await authed(ownerToken, 'get', '/api/notifications/unread-count');
+    expect((after.body as { count: number }).count).toBe(baseCount + 1);
+
+    const list = await authed(ownerToken, 'get', '/api/notifications');
+    const perm = (list.body as Array<{ type: string; payload: Record<string, unknown> }>).find(
+      (r) => r.type === 'permission',
+    );
+    expect(perm?.payload).toEqual({ fileId, title: '通知文件', memberName: outsider.nickname, action: 'joined' });
+  });
 });
 
 /**
@@ -393,6 +430,18 @@ describe('邮件摘要（FR-CMT-006，15 分钟未读合并单封）', () => {
     const bEmails = await emailedAtOf(userB.id);
     expect(bEmails).toHaveLength(1);
     expect(bEmails[0]).not.toBeNull();
+  });
+
+  it('清偿：摘要邮件条目含跳转链接与「打开 Gmind」行', async () => {
+    const fileId = ulid();
+    await insertNotif(userA.id, 'mention', { fileId, title: '跳转文档', commenterId: userB.id, commenterName: '阿乙', content: '这条要能点回文档' }, back16min());
+
+    const res = await digest.runDigest(new Date());
+    expect(res).toEqual({ emailed: 1, users: 1 });
+    expect(calls).toHaveLength(1);
+    // 条目行附 `${WEB_ORIGIN}/edit/${fileId}` 深链 + 正文尾部「打开 Gmind」行（WEB_ORIGIN 默认值）
+    expect(calls[0]?.body).toContain(`- [提及] 阿乙：这条要能点回文档 — http://localhost:5174/edit/${fileId}`);
+    expect(calls[0]?.body).toContain('打开 Gmind：http://localhost:5174');
   });
 
   it('15 分钟窗口内的新通知与已读通知均不入摘要（0 封，emailed_at 保持 NULL）', async () => {
