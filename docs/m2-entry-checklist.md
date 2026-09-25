@@ -69,6 +69,18 @@
    Ctrl+Z 可复活超限子树——ack 复查仅在拦截标志置位时运行，复活后标志已清、服务端
    边缘触发器也不会重播，闸无法重新闭合。M3 增强：撤销后的 ack 复查改为无条件（或
    撤销事务触发本地可达数复查）。
+8. **【M3b 必须】复制图片对象迁移或 deletePrefix 引用防护**（M3a 终审 Important #1，
+   计划裁定盲区）：copyForUser 不迁移对象（副本图片 key 仍指 files/{源fileId}/）×
+   purgeFile 无条件 deletePrefix——复制含图文件 → 删原件 → 30 天自动清理 → 幸存副本
+   图片全部 404（跨用户变体：owner purge 原件 → 协作者副本丢图）。修复方向：复制时
+   逐 key 走 StorageService.copyImage 迁移（基础设施现成）或 deletePrefix 前存活引用
+   扫描。验收：复制含图文件 → 删原件 → runCleanup(+30d) → 副本图片仍 200 的 e2e。
+9. **【M3b 必须】提醒去重加入 deletedAt 分量 + 还原时清除旧提醒**（M3a 终审 Important
+   #2）：hasReminded 仅锚 (owner, fileId)——提醒 → 还原 → 再删 → 第二个 27 天不再
+   提醒，条目 30 天静默彻底删，违反 FR-FIL-010 再删周期语义。修复：去重 marker 加
+   deletedAt（和/或还原时清除该 fileId 既有提醒行）；通知中心（M3b 交付物）消费
+   payload 契约 {fileId,title,deletedAt,action:'restore'} 的死链还原需 404 兜底 UI。
+   验收：提醒 → 还原 → 再删 → runCleanup(+27d) 产生第二条提醒的 e2e。
 ：quota 拦截解除以「用户删除 / persisted
    ack 复查 ≤ 上限」为准（M1b 终审裁定口径）；删除后仍超限时服务端边缘触发器在回落
    限内前不会重复广播，该窗口内新增不受客户端拦截、仅服务端 advisory——M3 若收紧
