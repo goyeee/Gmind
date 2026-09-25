@@ -81,6 +81,15 @@
    deletedAt（和/或还原时清除该 fileId 既有提醒行）；通知中心（M3b 交付物）消费
    payload 契约 {fileId,title,deletedAt,action:'restore'} 的死链还原需 404 兜底 UI。
    验收：提醒 → 还原 → 再删 → runCleanup(+27d) 产生第二条提醒的 e2e。
+10. **【M4 前置裁定】已注册用户被邀请是死路**（M3b 终审 Important #1，计划缺陷）：
+    回填仅在新用户创建路径触发（auth.service `if (!user)` 门控），对已注册邮箱/手机
+    号发邀请 → pending 行 + 邀请邮件（文案承诺「注册/登录后自动加入」）但登录永不
+    触发回填、无接受端点/UI——邀请永久悬挂。M4 建邀请对话框 UI 前必须裁定：扩展现
+    有用户登录回填 / 加接受流 / 修文案。验收：已注册受邀者完成授权的 e2e。
+11. **【M4 首批】回收站提醒双重邮件**（M3b 终审 Important #2，跨任务交互）：cleanup
+    remind() 即时发邮件且所写通知行不带 emailed_at → 15 分钟后 DigestService 再发一
+    封（MailHog 接通后每次回收站提醒=两封邮件）。一行修复：remind() 写自己的行带
+    emailed_at（或 digest 跳过 type='system'）。须在邮件环境接通前修掉。
 ：quota 拦截解除以「用户删除 / persisted
    ack 复查 ≤ 上限」为准（M1b 终审裁定口径）；删除后仍超限时服务端边缘触发器在回落
    限内前不会重复广播，该窗口内新增不受客户端拦截、仅服务端 advisory——M3 若收紧
