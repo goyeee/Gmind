@@ -39,3 +39,9 @@ export async function api<T>(path: string, init: { method?: string; body?: unkno
   }
   return (await res.json()) as T;
 }
+
+/** 语义化便捷封装（M3a Task 9）：PATCH/PUT/POST/DELETE 走同一鉴权与错误通道。 */
+export const apiPost = <T>(path: string, body?: unknown): Promise<T> => api<T>(path, { method: 'POST', body });
+export const apiPut = <T>(path: string, body?: unknown): Promise<T> => api<T>(path, { method: 'PUT', body });
+export const apiPatch = <T>(path: string, body?: unknown): Promise<T> => api<T>(path, { method: 'PATCH', body });
+export const apiDel = <T>(path: string): Promise<T> => api<T>(path, { method: 'DELETE' });

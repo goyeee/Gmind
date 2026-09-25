@@ -1,6 +1,7 @@
 import { Controller, Delete, Get, HttpCode, Inject, Param, Post, Req, UseGuards } from '@nestjs/common';
+import type { TrashItem } from '@gmind/shared';
 import { UserGuard } from '../auth/user.guard';
-import { TrashService, TrashItem } from './trash.service';
+import { TrashService } from './trash.service';
 
 /** 回收站域（M3a Task 7，FR-FIL-005~007/010）。全端点 owner=me（UserGuard 鉴权 +
  *  service 层 owner 校验双层）；文件本体仍走 /api/files（软删入口不变）。 */

@@ -1,24 +1,10 @@
 import { Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
+import type { TrashItem } from '@gmind/shared';
 import { FileEntity } from '../files/file.entity';
 import { FolderEntity } from '../folders/folder.entity';
 import { StorageService } from '../storage/storage.service';
-
-/** 回收站条目（M3a Task 7，FR-FIL-005）：GET /api/trash 的返回形态（服务端契约，
- *  服务内自持——仅回收站使用，web 侧接入任务时再上移 @gmind/shared）。 */
-export interface TrashItem {
-  id: string;
-  title: string;
-  nodeCount: number;
-  /** 删除时刻（ISO）。 */
-  deletedAt: string;
-  /** 删除人昵称（deleted_by → users.nickname；异常缺失 → null）。 */
-  deletedByName: string | null;
-  /** 删除时所在文件夹名（files.folder_id → folders.name，**不筛 deleted_at**——
-   *  原文件夹随后被删时按旧名回显；根目录文件 → null）。 */
-  folderName: string | null;
-}
 
 /** 原始行 → ISO 时刻（mysql2 对 datetime(3) 返回 Date；容错字符串形态；口径同 files.service）。 */
 function toIso(v: unknown): string | null {
