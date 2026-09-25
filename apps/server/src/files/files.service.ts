@@ -13,6 +13,7 @@ import type { FileListItem, FileListItemDetailed, FilePatchResult } from '@gmind
 import { CollabService } from '../collab/collab.service';
 import { FileCollaboratorEntity } from './file-collaborator.entity';
 import { FileEntity } from './file.entity';
+import { FileStarEntity } from './file-star.entity';
 import { FolderEntity } from '../folders/folder.entity';
 
 export const MAX_FILES_PER_USER = 100;
@@ -36,16 +37,20 @@ export class FilesService {
   constructor(
     @InjectRepository(FileEntity) private readonly repo: Repository<FileEntity>,
     @InjectRepository(FileCollaboratorEntity) private readonly collabRepo: Repository<FileCollaboratorEntity>,
+    // 星标行读写（M3a Task 6，FR-FIL-004）
+    @InjectRepository(FileStarEntity) private readonly starRepo: Repository<FileStarEntity>,
     // 文件移动目标校验（M3a Task 5，FR-FIL-002）：folderId 须为本人存活文件夹
     @InjectRepository(FolderEntity) private readonly folderRepo: Repository<FolderEntity>,
     // tsx 不发射装饰器元数据，类 token 注入必须显式 @Inject（约定同 session.service.ts）
     @Inject(CollabService) private readonly collab: CollabService,
   ) {}
 
-  /** 新建文件；无 doc 状态时用空白模板。配额 100 文件（FR-ACC-003）。 */
+  /** 新建文件；无 doc 状态时用空白模板。配额 100 文件（FR-ACC-003）。
+   *  folderId/lastModifierUserId（M3a Task 6）：复制路径的显式落点（同文件夹）与
+   *  修改人标记；缺省 null，普通新建（POST /api/files）行为不变。 */
   async createForUser(
     userId: string,
-    input: { title: string; state?: Uint8Array; nodeCount?: number },
+    input: { title: string; state?: Uint8Array; nodeCount?: number; folderId?: string | null; lastModifierUserId?: string },
   ): Promise<FileEntity> {
     const count = await this.repo.countBy({ ownerUserId: userId, deletedAt: IsNull() });
     if (count >= MAX_FILES_PER_USER) {
@@ -54,6 +59,8 @@ export class FilesService {
     const file = this.repo.create();
     file.ownerUserId = userId;
     file.title = input.title;
+    if (input.folderId !== undefined) file.folderId = input.folderId;
+    if (input.lastModifierUserId !== undefined) file.lastModifierUserId = input.lastModifierUserId;
     if (input.state) {
       const doc = docFromState(input.state);
       file.docState = Buffer.from(input.state);
@@ -93,14 +100,6 @@ export class FilesService {
       lastOpenedAt: file.lastOpenedAt?.toISOString() ?? null,
       updatedAt: file.updatedAt.toISOString(),
     };
-  }
-
-  async listOwned(userId: string): Promise<FileListItem[]> {
-    const rows = await this.repo.find({
-      where: { ownerUserId: userId, deletedAt: IsNull() },
-      order: { updatedAt: 'DESC' },
-    });
-    return rows.map((f) => this.toListItem(f));
   }
 
   /**
@@ -148,7 +147,18 @@ export class FilesService {
           .addOrderBy('f.updated_at', 'DESC');
         break;
       case 'starred':
-        qb.andWhere('st.id IS NOT NULL').addOrderBy('st.created_at', 'DESC');
+        // carry-in（T4 review 裁定，Task 6 收口）：星标随文件可见性失效——文件须仍对
+        // 星标人可见（owner 本人或协作者行仍在）。否则协作者被移除后，其星标条目仍会
+        // 经本视图外泄 title/ownerName 等展示字段（star JOIN 本身只判行存在，不判权）。
+        qb.andWhere('st.id IS NOT NULL')
+          .andWhere(
+            new Brackets((w) =>
+              w.where('f.owner_user_id = :userId').orWhere(
+                'EXISTS (SELECT 1 FROM file_collaborators fc WHERE fc.file_id = f.id AND fc.user_id = :userId)',
+              ),
+            ),
+          )
+          .addOrderBy('st.created_at', 'DESC');
         break;
       case 'recent':
         qb.andWhere('f.last_opened_at IS NOT NULL')
@@ -295,6 +305,37 @@ export class FilesService {
     return { ...this.toListItem(file), folderId: file.folderId };
   }
 
+  /** 文件复制（M3a Task 6，FR-FIL-003）：可编辑权限（canAccess 即 owner-or-collaborator
+   *  ——PRD「复制需可编辑权限」，一期 collaborator 即可编辑，语义一致）。
+   *  副本语义：新 id、标题「原名-副本」（title 列 varchar(255)，超长先按 MySQL 字符数
+   *  口径截源标题——JS Array.from 按码点切分与 utf8mb4 计数一致——保「-副本」后缀完整）、
+   *  内容经 docFromState→docToState round-trip 归一化落库；folderId 随源复制（同文件夹
+   *  落点）；last_modifier=调用人；nodeCount/structure/themeId 复用 createForUser 的
+   *  doc meta 回填链路。配额（FR-ACC-003）：副本同占 100 文件上限——createForUser 内
+   *  强制，复制路径无旁路。
+   *  图片 key 共享（M3a plan 裁定）：docState 内图片 key 仍指向原文件命名空间，一期
+   *  复制不迁移对象——copy 的属主校验（canAccess）已覆盖跨用户写，key 共享合法。
+   *  评论/版本不复制（本就不跟随 docState）。 */
+  async copyForUser(userId: string, id: string): Promise<FileEntity> {
+    const source = await this.findAliveOr404(userId, id);
+    // 源 docState 先解析（损坏 → 400，文案与 saveDocState 同口径），再 round-trip 落库
+    let doc;
+    try {
+      doc = docFromState(new Uint8Array(source.docState ?? Buffer.alloc(0)));
+    } catch {
+      throw new BadRequestException('文档解析失败');
+    }
+    const suffix = '-副本';
+    const maxBase = 255 - suffix.length;
+    const base = source.title.length > maxBase ? Array.from(source.title).slice(0, maxBase).join('') : source.title;
+    return this.createForUser(userId, {
+      title: base + suffix,
+      state: docToState(doc),
+      folderId: source.folderId,
+      lastModifierUserId: userId,
+    });
+  }
+
   /** 回写最近打开时间；1 分钟内重复打开直接返回旧值（写摊销）。
    *  落库走 repo.update 定点更新：UpdateQueryBuilder 对 @UpdateDateColumn 会自动回填
    *  CURRENT_TIMESTAMP，必须显式把 updated_at 钉回自身（updatedAt: () => 'updated_at'）
@@ -339,6 +380,29 @@ export class FilesService {
     const file = await this.repo.findOne({ where: { id, deletedAt: IsNull() } });
     if (!file || file.ownerUserId !== userId) throw new NotFoundException('文件不存在');
     await this.softDeleteFile(file, userId);
+  }
+
+  /** 加星（M3a Task 6，FR-FIL-004）：canAccess 口径（owner 或协作者），用户级星标。
+   *  幂等：已有星行直接返回 200（裁定：重复加星 no-op 不 409）；uk_star_file_user
+   *  唯一键在 DB 层兜底并发重复插入。星行 created_at 即 starred 视图的排序依据。 */
+  async star(userId: string, id: string): Promise<{ starred: true }> {
+    const file = await this.findAliveOr404(userId, id);
+    const existing = await this.starRepo.findOneBy({ fileId: file.id, userId });
+    if (!existing) {
+      const row = this.starRepo.create();
+      row.fileId = file.id;
+      row.userId = userId;
+      await this.starRepo.save(row);
+    }
+    return { starred: true };
+  }
+
+  /** 取消加星：幂等删除——无星行同样 200 no-op（裁定口径与加星一致）。
+   *  文件须仍对调用人可见（canAccess），否则 404 同口径不泄露存在性。 */
+  async unstar(userId: string, id: string): Promise<{ starred: false }> {
+    const file = await this.findAliveOr404(userId, id);
+    await this.starRepo.delete({ fileId: file.id, userId });
+    return { starred: false };
   }
 }
 

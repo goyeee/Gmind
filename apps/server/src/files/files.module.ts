@@ -4,6 +4,7 @@ import { CollabModule } from '../collab/collab.module';
 import { UsersModule } from '../users/users.module';
 import { FileEntity } from './file.entity';
 import { FileCollaboratorEntity } from './file-collaborator.entity';
+import { FileStarEntity } from './file-star.entity';
 import { FolderEntity } from '../folders/folder.entity';
 import { FilesService } from './files.service';
 import { FilesController } from './files.controller';
@@ -13,7 +14,8 @@ import { FilesController } from './files.controller';
   // CollabModule（无环：collab 不反向依赖 FilesModule）——saveDocState 的陈旧写序守卫
   // （M3a 准入 7.1）需查询 CollabService 持有的活跃内存 doc。
   // FolderEntity（M3a Task 5）：文件移动目标（folderId）归属+存活校验用
-  imports: [TypeOrmModule.forFeature([FileEntity, FileCollaboratorEntity, FolderEntity]), UsersModule, CollabModule],
+  // FileStarEntity（M3a Task 6，FR-FIL-004）：加星/取消端点的 file_stars 行读写
+  imports: [TypeOrmModule.forFeature([FileEntity, FileCollaboratorEntity, FileStarEntity, FolderEntity]), UsersModule, CollabModule],
   providers: [FilesService],
   controllers: [FilesController],
   exports: [FilesService],

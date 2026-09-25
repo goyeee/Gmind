@@ -73,6 +73,25 @@ export class FilesController {
     return this.files.markOpened(req.user.id, id);
   }
 
+  @Post(':id/copy')
+  async copy(@Req() req: { user: { id: string } }, @Param('id') id: string) {
+    // POST 创建新资源 → 201；响应走 toListItem 契约（与 POST /api/files 一致，docState 不外泄）
+    const created = await this.files.copyForUser(req.user.id, id);
+    return this.files.toListItem(created);
+  }
+
+  @Put(':id/star')
+  @HttpCode(200) // 加星是幂等动作（重复加星 no-op）而非资源创建，返回 200
+  star(@Req() req: { user: { id: string } }, @Param('id') id: string) {
+    return this.files.star(req.user.id, id);
+  }
+
+  @Delete(':id/star')
+  @HttpCode(200) // 取消星标幂等（无星行 no-op），非资源删除语义之外的创建/查询
+  unstar(@Req() req: { user: { id: string } }, @Param('id') id: string) {
+    return this.files.unstar(req.user.id, id);
+  }
+
   @Delete(':id')
   @HttpCode(200) // 软删是幂等动作（重复删 404 除外），非资源创建；owner only（PRD 2.2.1）
   async remove(@Req() req: { user: { id: string } }, @Param('id') id: string) {

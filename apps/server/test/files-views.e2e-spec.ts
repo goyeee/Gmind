@@ -3,16 +3,18 @@ import request from 'supertest';
 import { ulid } from 'ulid';
 import type { INestApplication } from '@nestjs/common';
 import { DataSource } from 'typeorm';
-import { createTemplateDoc, docToState } from '@gmind/core';
+import { createTemplateDoc, docFromState, docToState } from '@gmind/core';
 import { createTestApp } from './support/app-test';
 import { FileEntity } from '../src/files/file.entity';
 
 /**
- * 文件域四视图 + 删除 + last_modifier e2e（M3a Task 4，FR-FIL-001）。
+ * 文件域四视图 + 删除 + last_modifier e2e（M3a Task 4，FR-FIL-001）+ 文件复制与星标
+ * （M3a Task 6，FR-FIL-003/004）。
  *
  * 种子：三个用户（owner「文件甲」/ collaborator「协作者乙」/ outsider「路人丙」）；
  * 文件矩阵覆盖 mine / shared / starred / recent 四视图与删除流。
- * file_stars / folders 无实体（Task 6 才建星标端点），经 DataSource 直插行。
+ * Task 4 铺垫的 file_stars 行经 DataSource 直插（彼时星标端点未建）；
+ * Task 6 起走正式端点（folders 仍无实体，直插行）。
  */
 describe('文件四视图 + 删除 + last_modifier（FR-FIL-001）', () => {
   let app: INestApplication;
@@ -268,5 +270,231 @@ describe('文件四视图 + 删除 + last_modifier（FR-FIL-001）', () => {
     expect((await authed(ownerToken, 'get', `/api/files/${fMine2}`)).status).toBe(404);
     expect((await authed(collaboratorToken, 'get', `/api/files/${fShared}`)).status).toBe(404);
     expect((await authed(ownerToken, 'delete', `/api/files/${fMine2}`)).status).toBe(404);
+  });
+});
+
+/**
+ * 文件复制与星标（M3a Task 6，FR-FIL-003/004）。
+ *
+ * 独立 describe：createTestApp 每次清库重建，与本文件第一组（四视图） fixtures 解耦。
+ * 复制：POST /api/files/:id/copy（canAccess）→ 新 id/「原名-副本」/内容一致/源不变/
+ * 配额联动；星标：PUT/DELETE /api/files/:id/star（幂等 200）+ starred 视图访问权过滤
+ * （T4 review carry-in：协作者被移除后星标条目不再外泄）。
+ */
+describe('文件复制与星标（FR-FIL-003/004）', () => {
+  let app: INestApplication;
+  let ds: DataSource;
+  let ownerId: string;
+  let ownerToken: string;
+  let collaboratorId: string;
+  let collaboratorToken: string;
+  let outsiderToken: string;
+  let fSource: string; // 复制流主角：有内容、挂文件夹
+  let fShared: string; // owner 拥有，共享给 collaborator（协作者复制/加星主角）
+  let folderId: string;
+
+  const tokenFor = async (userId: string): Promise<string> => {
+    const { SessionService } = await import('../src/session/session.service');
+    const redisMod = await import('ioredis');
+    const svc = new SessionService(new redisMod.default('redis://127.0.0.1:63790/1'));
+    return (await svc.create(userId, false)).token;
+  };
+
+  type Method = 'get' | 'post' | 'put' | 'delete';
+  const authed = (token: string, method: Method, url: string) =>
+    request(app.getHttpServer())[method](url).set('Authorization', `Bearer ${token}`);
+
+  const list = (token: string, view?: string): Promise<request.Response> =>
+    authed(token, 'get', view ? `/api/files?view=${view}` : '/api/files');
+
+  /** base64 docState → 排序后的节点文本集（root + 子树；内容一致性对比用）。 */
+  const textsOf = (stateB64: string): string[] => {
+    const doc = docFromState(new Uint8Array(Buffer.from(stateB64, 'base64')));
+    const texts: string[] = [];
+    doc.getMap('nodes').forEach((node) => texts.push(String(node.get('text'))));
+    return texts.sort();
+  };
+
+  beforeAll(async () => {
+    app = await createTestApp();
+    ds = app.get(DataSource);
+
+    const users = app.get((await import('../src/users/users.service')).UsersService);
+    const owner = await users.create({ method: 'phone', phone: '13800080001', nickname: '复制甲' });
+    const collaborator = await users.create({ method: 'phone', phone: '13800080002', nickname: '复制乙' });
+    const outsider = await users.create({ method: 'phone', phone: '13800080003', nickname: '复制丙' });
+    ownerId = owner.id;
+    collaboratorId = collaborator.id;
+    ownerToken = await tokenFor(owner.id);
+    collaboratorToken = await tokenFor(collaborator.id);
+    outsiderToken = await tokenFor(outsider.id);
+
+    const create = async (token: string, title: string): Promise<string> => {
+      const res = await authed(token, 'post', '/api/files').send({ title });
+      expect(res.status).toBe(201);
+      return res.body.id as string;
+    };
+    fSource = await create(ownerToken, '复制源');
+    fShared = await create(ownerToken, '共享给乙');
+
+    // 授权协作者（dev-e2e 编排端点，与上方同款）
+    const granted = await authed(ownerToken, 'post', '/api/dev-e2e/grant-collaborator')
+      .send({ fileId: fShared, phone: '13800080002' });
+    expect(granted.status).toBe(201);
+
+    // fSource 写入内容并挂文件夹（PUT 走正式写路径，last_modifier=owner）
+    const state = Buffer.from(
+      docToState(createTemplateDoc({ title: '复制源', children: [{ text: '节点一' }, { text: '节点二' }] })),
+    ).toString('base64');
+    const put = await authed(ownerToken, 'put', `/api/files/${fSource}/doc-state`)
+      .send({ docState: state, lastEditorUserId: ownerId });
+    expect(put.status).toBe(200);
+    folderId = ulid();
+    await ds.query(
+      'INSERT INTO folders (id, owner_user_id, name, depth, created_at, updated_at) VALUES (?, ?, ?, 1, NOW(3), NOW(3))',
+      [folderId, ownerId, '复制夹'],
+    );
+    await ds.query('UPDATE files SET folder_id = ? WHERE id = ?', [folderId, fSource]);
+  });
+
+  afterAll(async () => {
+    await app.close();
+  });
+
+  it('复制成功：新 id/标题-副本/节点文本集一致/源不变（标题与 updated_at 均未动）', async () => {
+    const sourceBefore = await authed(ownerToken, 'get', `/api/files/${fSource}`);
+    expect(sourceBefore.status).toBe(200);
+
+    const res = await authed(ownerToken, 'post', `/api/files/${fSource}/copy`);
+    expect(res.status).toBe(201);
+    // FileListItem 契约（与 POST /api/files 一致），docState 绝不外泄
+    expect(Object.keys(res.body).sort()).toEqual(['id', 'lastOpenedAt', 'nodeCount', 'structure', 'title', 'updatedAt']);
+    expect(res.body.id).not.toBe(fSource);
+    expect(res.body.title).toBe('复制源-副本');
+    expect(res.body.nodeCount).toBe(sourceBefore.body.nodeCount);
+    expect(res.body.docState).toBeUndefined();
+
+    // 内容一致：docState decode 对比节点文本集
+    const copy = await authed(ownerToken, 'get', `/api/files/${res.body.id}`);
+    expect(copy.status).toBe(200);
+    expect(textsOf(copy.body.docState)).toEqual(textsOf(sourceBefore.body.docState));
+
+    // 源不变：标题/updatedAt/内容原样
+    const sourceAfter = await authed(ownerToken, 'get', `/api/files/${fSource}`);
+    expect(sourceAfter.body.title).toBe('复制源');
+    expect(sourceAfter.body.updatedAt).toBe(sourceBefore.body.updatedAt);
+    expect(textsOf(sourceAfter.body.docState)).toEqual(textsOf(sourceBefore.body.docState));
+  });
+
+  it('副本落点：同文件夹 + last_modifier=调用人（mine 视图详细投影验证）', async () => {
+    const res = await authed(ownerToken, 'post', `/api/files/${fSource}/copy`);
+    expect(res.status).toBe(201);
+    const mine = await list(ownerToken);
+    const copy = mine.body.find((f: { id: string }) => f.id === res.body.id);
+    expect(copy).toBeDefined();
+    expect(copy.folderId).toBe(folderId);
+    expect(copy.folderName).toBe('复制夹');
+    expect(copy.ownerUserId).toBe(ownerId);
+    expect(copy.lastModifierName).toBe('复制甲');
+  });
+
+  it('标题超 255 截断：254 字标题复制后总长恰 255 且以「-副本」结尾', async () => {
+    const longTitle = '长'.repeat(254);
+    const created = await authed(ownerToken, 'post', '/api/files').send({ title: longTitle });
+    expect(created.status).toBe(201);
+    const res = await authed(ownerToken, 'post', `/api/files/${created.body.id}/copy`);
+    expect(res.status).toBe(201);
+    expect(res.body.title).toHaveLength(255);
+    expect(res.body.title.endsWith('-副本')).toBe(true);
+  });
+
+  it('配额联动：owner 已满 100 个时复制 → 403「文件数量已达上限（100 个）」（FR-ACC-003）', async () => {
+    const users = app.get((await import('../src/users/users.service')).UsersService);
+    const full = await users.create({ method: 'phone', phone: '13800080004', nickname: '满额丁' });
+    const fullToken = await tokenFor(full.id);
+    const filesRepo = ds.getRepository(FileEntity);
+    for (let i = 0; i < 99; i += 1) {
+      const f = filesRepo.create();
+      f.ownerUserId = full.id;
+      f.title = `full-${i}`;
+      await filesRepo.save(f);
+    }
+    const source = await authed(fullToken, 'post', '/api/files').send({ title: '满额的源' });
+    expect(source.status).toBe(201); // 第 100 个
+
+    const res = await authed(fullToken, 'post', `/api/files/${source.body.id}/copy`);
+    expect(res.status).toBe(403);
+    expect(res.body.message).toBe('文件数量已达上限（100 个）');
+  });
+
+  it('权限：协作者可复制（副本 owner=协作者）；无权与不存在一律 404 不泄露', async () => {
+    const collabCopy = await authed(collaboratorToken, 'post', `/api/files/${fShared}/copy`);
+    expect(collabCopy.status).toBe(201);
+    const mine = await list(collaboratorToken);
+    const copy = mine.body.find((f: { id: string }) => f.id === collabCopy.body.id);
+    expect(copy).toBeDefined();
+    expect(copy.ownerUserId).toBe(collaboratorId);
+    expect(copy.title).toBe('共享给乙-副本');
+
+    expect((await authed(outsiderToken, 'post', `/api/files/${fShared}/copy`)).status).toBe(404);
+    expect((await authed(ownerToken, 'post', `/api/files/${ulid()}/copy`)).status).toBe(404);
+  });
+
+  it('加星：PUT → 200 {starred:true}，starred 视图含且按加星时间倒序；无权 404', async () => {
+    const star1 = await authed(ownerToken, 'put', `/api/files/${fShared}/star`);
+    expect(star1.status).toBe(200);
+    expect(star1.body).toEqual({ starred: true });
+    await new Promise((r) => setTimeout(r, 20)); // 星时间错开（datetime(3)）
+    const star2 = await authed(ownerToken, 'put', `/api/files/${fSource}/star`);
+    expect(star2.status).toBe(200);
+
+    const starred = await list(ownerToken, 'starred');
+    expect(starred.status).toBe(200);
+    expect(starred.body.map((f: { id: string }) => f.id)).toEqual([fSource, fShared]); // 星时间 DESC
+    for (const item of starred.body) expect(item.starred).toBe(true);
+
+    // 无权用户加星 → 404 不泄露（canAccess 口径）
+    expect((await authed(outsiderToken, 'put', `/api/files/${fShared}/star`)).status).toBe(404);
+  });
+
+  it('重复加星幂等（仅一行）；取消移出视图且幂等（无行也 200）；他人星标互不影响', async () => {
+    const again = await authed(ownerToken, 'put', `/api/files/${fShared}/star`);
+    expect(again.status).toBe(200);
+    expect(again.body).toEqual({ starred: true });
+    const rows = await ds.query('SELECT COUNT(*) AS n FROM file_stars WHERE file_id = ? AND user_id = ?', [fShared, ownerId]);
+    expect(Number(rows[0].n)).toBe(1);
+
+    // 他人星标独立：乙加星自己的视角，甲的视图不受影响（甲仍含 fShared）
+    const bStar = await authed(collaboratorToken, 'put', `/api/files/${fShared}/star`);
+    expect(bStar.status).toBe(200);
+    expect((await list(collaboratorToken, 'starred')).body.map((f: { id: string }) => f.id)).toEqual([fShared]);
+    expect((await list(ownerToken, 'starred')).body.map((f: { id: string }) => f.id)).toContain(fShared);
+
+    // 乙取消 → 移出乙的 starred 视图；甲的星标不受影响
+    const unstar = await authed(collaboratorToken, 'delete', `/api/files/${fShared}/star`);
+    expect(unstar.status).toBe(200);
+    expect(unstar.body).toEqual({ starred: false });
+    expect((await list(collaboratorToken, 'starred')).body).toHaveLength(0);
+    expect((await list(ownerToken, 'starred')).body.map((f: { id: string }) => f.id)).toContain(fShared);
+
+    // 取消幂等：无星行再删仍 200
+    const unstarAgain = await authed(collaboratorToken, 'delete', `/api/files/${fShared}/star`);
+    expect(unstarAgain.status).toBe(200);
+    expect(unstarAgain.body).toEqual({ starred: false });
+  });
+
+  it('starred 访问权过滤（carry-in）：协作者被移除后，其星标条目不再出现（title 不外泄）', async () => {
+    // 乙已加星 fShared（前一用例取消过，重新加）
+    const star = await authed(collaboratorToken, 'put', `/api/files/${fShared}/star`);
+    expect(star.status).toBe(200);
+    let starred = await list(collaboratorToken, 'starred');
+    expect(starred.body.map((f: { id: string }) => f.id)).toEqual([fShared]);
+
+    // owner 直接删除协作者行（正式协作管理 API 属后续任务）
+    await ds.query('DELETE FROM file_collaborators WHERE file_id = ? AND user_id = ?', [fShared, collaboratorId]);
+
+    starred = await list(collaboratorToken, 'starred');
+    expect(starred.body.map((f: { id: string }) => f.id)).not.toContain(fShared);
+    expect(starred.body.map((f: { title: string }) => f.title)).not.toContain('共享给乙');
   });
 });
