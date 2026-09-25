@@ -74,8 +74,10 @@ describe('文件内容端点（读取/回写/改名/打开）', () => {
   it('owner 读取返回 base64 docState，可被 docFromState 还原且 meta 正确', async () => {
     const res = await authed(ownerToken, 'get', `/api/files/${fileId}`);
     expect(res.status).toBe(200);
-    expect(Object.keys(res.body).sort()).toEqual(['docState', 'id', 'nodeCount', 'ownerUserId', 'structure', 'themeId', 'title', 'updatedAt']);
+    // starred（M3b 清偿包，FR-FIL-004）：编辑器加星入口的当前视角星标状态
+    expect(Object.keys(res.body).sort()).toEqual(['docState', 'id', 'nodeCount', 'ownerUserId', 'starred', 'structure', 'themeId', 'title', 'updatedAt']);
     expect(res.body.title).toBe('内容文件');
+    expect(res.body.starred).toBe(false);
     // 可达活跃口径（countAliveReachable，root 不计）：root + 1 子级 → 1
     // ——createForUser 与保存路径统一（M2 终审修复轮，旧 countNodes 口径为 2）
     expect(res.body.nodeCount).toBe(1);

@@ -483,6 +483,39 @@ describe('文件复制与星标（FR-FIL-003/004）', () => {
     expect(unstarAgain.body).toEqual({ starred: false });
   });
 
+  it('并发加星竞态（M3b 清偿包）：两端同时 PUT star 均不 500（no-op 200），DB 仅一行', async () => {
+    // 全新文件（未加星）才有竞态窗口：check-then-insert 在并发下双插，第二发命中
+    // uk_star_file_user 唯一键——服务端须捕获 ER_DUP_ENTRY 归并为幂等 200（不 500）
+    const created = await authed(ownerToken, 'post', '/api/files').send({ title: '竞态加星' });
+    expect(created.status).toBe(201);
+    const target = created.body.id as string;
+    const [a, b] = await Promise.all([
+      authed(ownerToken, 'put', `/api/files/${target}/star`),
+      authed(ownerToken, 'put', `/api/files/${target}/star`),
+    ]);
+    expect(a.status).toBe(200);
+    expect(b.status).toBe(200);
+    expect(a.body).toEqual({ starred: true });
+    expect(b.body).toEqual({ starred: true });
+    const rows = await ds.query('SELECT COUNT(*) AS n FROM file_stars WHERE file_id = ? AND user_id = ?', [
+      target,
+      ownerId,
+    ]);
+    expect(Number(rows[0].n)).toBe(1);
+  });
+
+  it('GET /api/files/:id 增 starred 布尔（M3b 清偿包，FR-FIL-004 编辑器加星入口的数据源）', async () => {
+    const created = await authed(ownerToken, 'post', '/api/files').send({ title: '编辑器加星视角' });
+    expect(created.status).toBe(201);
+    const fid = created.body.id as string;
+    let detail = await authed(ownerToken, 'get', `/api/files/${fid}`);
+    expect(detail.status).toBe(200);
+    expect(detail.body.starred).toBe(false);
+    await authed(ownerToken, 'put', `/api/files/${fid}/star`);
+    detail = await authed(ownerToken, 'get', `/api/files/${fid}`);
+    expect(detail.body.starred).toBe(true);
+  });
+
   it('starred 访问权过滤（carry-in）：协作者被移除后，其星标条目不再出现（title 不外泄）', async () => {
     // 乙已加星 fShared（前一用例取消过，重新加）
     const star = await authed(collaboratorToken, 'put', `/api/files/${fShared}/star`);

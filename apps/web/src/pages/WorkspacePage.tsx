@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type MouseEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { FileListItemDetailed, FolderItem } from '@gmind/shared';
 import { api, apiDel, apiPatch, apiPost, apiPut } from '../api/client';
@@ -27,9 +27,25 @@ function fmtTime(iso: string): string {
   return new Date(iso).toLocaleString();
 }
 
+/** 搜索结果标题高亮（M3b 清偿包，FR-FIL-008）：首个匹配片段（大小写不敏感，与服务端
+ *  utf8mb4_unicode_ci 的 LIKE 口径对齐）包 <mark data-testid="search-hit">；未命中
+ *  （如搜索态内改名后标题不再含 q）原样返回不折行。 */
+function highlightTitle(title: string, q: string): ReactNode {
+  const idx = q ? title.toLowerCase().indexOf(q.toLowerCase()) : -1;
+  if (idx === -1) return title;
+  return (
+    <>
+      {title.slice(0, idx)}
+      <mark data-testid="search-hit">{title.slice(idx, idx + q.length)}</mark>
+      {title.slice(idx + q.length)}
+    </>
+  );
+}
+
 export function WorkspacePage() {
   const navigate = useNavigate();
-  const [me, setMe] = useState<{ nickname: string } | null>(null);
+  // me.id（M3b 清偿包）：行菜单删除/移动的 owner-only 判定（视图无关）
+  const [me, setMe] = useState<{ id: string; nickname: string } | null>(null);
   const [view, setView] = useState<View>('mine');
   const [items, setItems] = useState<FileListItemDetailed[]>([]);
   const [folders, setFolders] = useState<FolderItem[]>([]);
@@ -45,6 +61,20 @@ export function WorkspacePage() {
   const [moveTarget, setMoveTarget] = useState<FileListItemDetailed | null>(null);
   const [moveTo, setMoveTo] = useState('');
   const [menuFor, setMenuFor] = useState<string | null>(null);
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Ctrl/Cmd+Shift+F 聚焦搜索框（M3b 清偿包，FR-FIL-008）：document 级监听，
+  // Shift 使 key 为 'F'，统一按小写比较；Ctrl 与 Cmd（macOS）都算命中。
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && !e.altKey && e.key.toLowerCase() === 'f') {
+        e.preventDefault();
+        searchInputRef.current?.focus();
+      }
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, []);
 
   const loadFiles = useCallback(async (v: View) => {
     setItems(await api<FileListItemDetailed[]>(`/files?view=${v}`));
@@ -241,6 +271,7 @@ export function WorkspacePage() {
         <input
           className="search-input"
           data-testid="search-input"
+          ref={searchInputRef}
           placeholder="搜索文件标题，回车确认"
           value={searchText}
           onChange={(e) => setSearchText(e.target.value)}
@@ -325,7 +356,7 @@ export function WorkspacePage() {
           <ul className="file-list">
             {shownItems.map((f) => (
               <li key={f.id} className="file-row" onClick={() => navigate(`/edit/${f.id}`)}>
-                <span className="cell title">{f.title}</span>
+                <span className="cell title">{search ? highlightTitle(f.title, search.q) : f.title}</span>
                 <span className="cell">{f.ownerName ?? '—'}</span>
                 <span className="cell">{fmtTime(f.updatedAt)}</span>
                 <span className="cell">{f.lastModifierName ?? '—'}</span>
@@ -345,19 +376,26 @@ export function WorkspacePage() {
                   {menuFor === f.id && (
                     <div className="row-menu" data-testid="row-menu-popup">
                       <button onClick={() => openPrompt({ kind: 'file-rename', fileId: f.id, title: f.title })}>重命名</button>
-                      <button
-                        onClick={() => {
-                          setMoveTarget(f);
-                          setMoveTo(f.folderId ?? '');
-                          setMenuFor(null);
-                        }}
-                      >
-                        移动到文件夹
-                      </button>
+                      {/* 删除/移动仅 owner（M3b 清偿包，PRD 2.2.1）：按归属判定、视图无关
+                          ——shared 视图（及 recent/starred 中他人文件）不出现这两项，
+                          避免点了必 404 的入口；重命名/复制/星标对所有可访问文件保留。 */}
+                      {f.ownerUserId === me?.id && (
+                        <button
+                          onClick={() => {
+                            setMoveTarget(f);
+                            setMoveTo(f.folderId ?? '');
+                            setMenuFor(null);
+                          }}
+                        >
+                          移动到文件夹
+                        </button>
+                      )}
                       <button onClick={withReload(() => apiPost(`/files/${f.id}/copy`))}>复制</button>
-                      <button className="danger" onClick={withReload(() => apiDel(`/files/${f.id}`))}>
-                        删除
-                      </button>
+                      {f.ownerUserId === me?.id && (
+                        <button className="danger" onClick={withReload(() => apiDel(`/files/${f.id}`))}>
+                          删除
+                        </button>
+                      )}
                     </div>
                   )}
                 </span>

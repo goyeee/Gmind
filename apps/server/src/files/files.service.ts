@@ -298,12 +298,15 @@ export class FilesService {
 
   /** 编辑器打开文件的完整状态；docState 以 base64 离开服务端（唯一内容出口）。
    *  ownerUserId（M2 Task 6，FR-COL-005）：前端创建者标识依据。
-   *  updatedAt（M3a 准入 7.1）：客户端陈旧写序守卫的初始 base（PUT 携带回服务端）。 */
+   *  updatedAt（M3a 准入 7.1）：客户端陈旧写序守卫的初始 base（PUT 携带回服务端）。
+   *  starred（M3b 清偿包，FR-FIL-004）：调用人视角的星标状态（file_stars 存在行），
+   *  编辑器工具栏加星切换的初始值——与四视图的 starred 同为当前用户视角。 */
   async getOwnedFileWithState(
     userId: string,
     id: string,
-  ): Promise<{ id: string; title: string; structure: string; themeId: string; nodeCount: number; ownerUserId: string; updatedAt: string; docState: string }> {
+  ): Promise<{ id: string; title: string; structure: string; themeId: string; nodeCount: number; ownerUserId: string; updatedAt: string; starred: boolean; docState: string }> {
     const file = await this.findAliveOr404(userId, id);
+    const starred = (await this.starRepo.countBy({ fileId: file.id, userId })) > 0;
     return {
       id: file.id,
       title: file.title,
@@ -312,6 +315,7 @@ export class FilesService {
       nodeCount: file.nodeCount,
       ownerUserId: file.ownerUserId,
       updatedAt: file.updatedAt.toISOString(),
+      starred,
       docState: (file.docState ?? Buffer.alloc(0)).toString('base64'),
     };
   }
@@ -504,7 +508,8 @@ export class FilesService {
 
   /** 加星（M3a Task 6，FR-FIL-004）：canAccess 口径（owner 或协作者），用户级星标。
    *  幂等：已有星行直接返回 200（裁定：重复加星 no-op 不 409）；uk_star_file_user
-   *  唯一键在 DB 层兜底并发重复插入。星行 created_at 即 starred 视图的排序依据。 */
+   *  唯一键在 DB 层兜底并发重复插入——check-then-insert 竞态下的第二发插入命中
+   *  ER_DUP_ENTRY（M3b 清偿包），捕获后归并为幂等 200（同一语义扩展到并发形态）。 */
   async star(userId: string, id: string): Promise<{ starred: true }> {
     const file = await this.findAliveOr404(userId, id);
     const existing = await this.starRepo.findOneBy({ fileId: file.id, userId });
@@ -512,7 +517,11 @@ export class FilesService {
       const row = this.starRepo.create();
       row.fileId = file.id;
       row.userId = userId;
-      await this.starRepo.save(row);
+      try {
+        await this.starRepo.save(row);
+      } catch (err) {
+        if (!isDuplicateKeyError(err)) throw err; // 并发双插的败者：幂等 no-op
+      }
     }
     return { starred: true };
   }
@@ -527,3 +536,17 @@ export class FilesService {
 }
 
 export class QuotaError extends Error {}
+
+/** mysql2 唯一键冲突判定（清偿包）：ER_DUP_ENTRY / errno 1062。TypeORM
+ *  QueryFailedError 会把驱动错误的自身可枚举属性（code/errno）拷贝到实例上，
+ *  同时保留 driverError 引用——两层都查，跨驱动包装形态不漏判。 */
+function isDuplicateKeyError(err: unknown): boolean {
+  const e = err as { code?: string; errno?: number; driverError?: { code?: string; errno?: number } } | null;
+  if (!e) return false;
+  return (
+    e.code === 'ER_DUP_ENTRY' ||
+    e.errno === 1062 ||
+    e.driverError?.code === 'ER_DUP_ENTRY' ||
+    e.driverError?.errno === 1062
+  );
+}

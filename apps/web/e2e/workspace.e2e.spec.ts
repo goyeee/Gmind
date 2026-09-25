@@ -159,6 +159,68 @@ test('搜索命中标题并展示结果，清除后回到视图页签', async ({
   await expect(page.locator('.file-list li')).toHaveCount(3);
 });
 
+// —— M3b 清偿包（FR-FIL-008 收口两项 + 视图菜单收敛） ——
+
+test('搜索结果标题命中片段以 <mark> 高亮（含大小写不敏感）', async ({ page }) => {
+  await registerAndLogin(page);
+  await page.getByTestId('search-input').fill('本周');
+  await page.getByTestId('search-input').press('Enter');
+  await expect(page.getByTestId('search-results')).toBeVisible();
+  const row = page.locator('.file-list li', { hasText: '本周计划' });
+  await expect(row).toBeVisible();
+  // 命中片段（首个出现处）被 mark 包裹，前后文保留在标记外
+  const title = row.locator('.cell.title');
+  await expect(title.getByTestId('search-hit')).toHaveText('本周');
+  await expect(title).toHaveText(/本周计划/);
+
+  // 大小写不敏感：q 的大小写形态不影响命中高亮
+  await page.getByTestId('search-input').fill('GMIND');
+  await page.getByTestId('search-input').press('Enter');
+  const gRow = page.locator('.file-list li', { hasText: '欢迎使用 Gmind' });
+  await expect(gRow.locator('.cell.title').getByTestId('search-hit')).toHaveText('Gmind');
+});
+
+test('Ctrl/Cmd+Shift+F 聚焦搜索框（FR-FIL-008 收口）', async ({ page }) => {
+  await registerAndLogin(page);
+  await expect(page.getByTestId('search-input')).not.toBeFocused();
+  await page.keyboard.press('Control+Shift+F');
+  await expect(page.getByTestId('search-input')).toBeFocused();
+});
+
+test('shared 视图行菜单收敛：无删除/移动（owner-only），mine 视图保留', async ({ page, request }) => {
+  const phoneA = await registerAndLogin(page);
+  // B 经 API 注册并新建文件，把 A 加为协作者（dev-e2e 编排端点）
+  const phoneB = '138' + String(Math.floor(10000000 + Math.random() * 89999999));
+  const tokenB = await apiLogin(request, phoneB);
+  const created = await request.post('/api/files', {
+    headers: { Authorization: `Bearer ${tokenB}` },
+    data: { title: '乙的共享件' },
+  });
+  expect(created.ok()).toBeTruthy();
+  const granted = await request.post('/api/dev-e2e/grant-collaborator', { data: { fileId: ((await created.json()) as { id: string }).id, phone: phoneA } });
+  expect(granted.ok()).toBeTruthy();
+
+  // shared（非 owner）行菜单：重命名/复制保留，删除/移动不出现
+  await page.getByTestId('view-tabs').getByRole('button', { name: '与我协作' }).click();
+  const sharedRow = page.locator('.file-list li', { hasText: '乙的共享件' });
+  await expect(sharedRow).toBeVisible();
+  await sharedRow.getByTestId('row-menu').click();
+  const sharedPopup = page.getByTestId('row-menu-popup');
+  await expect(sharedPopup.getByRole('button', { name: '重命名' })).toBeVisible();
+  await expect(sharedPopup.getByRole('button', { name: '复制' })).toBeVisible();
+  await expect(sharedPopup.getByRole('button', { name: '移动到文件夹' })).toHaveCount(0);
+  await expect(sharedPopup.getByRole('button', { name: '删除', exact: true })).toHaveCount(0);
+
+  // mine（owner）行菜单：删除/移动保留
+  await page.getByTestId('view-tabs').getByRole('button', { name: '我的文件' }).click();
+  const mineRow = page.locator('.file-list li', { hasText: '本周计划' });
+  await expect(mineRow).toBeVisible();
+  await mineRow.getByTestId('row-menu').click();
+  const minePopup = page.getByTestId('row-menu-popup');
+  await expect(minePopup.getByRole('button', { name: '移动到文件夹' })).toBeVisible();
+  await expect(minePopup.getByRole('button', { name: '删除', exact: true })).toBeVisible();
+});
+
 test('搜索结果内变更后清除搜索，底层列表为最新数据（fix round 1）', async ({ page }) => {
   await registerAndLogin(page);
   await page.getByTestId('search-input').fill('本周');

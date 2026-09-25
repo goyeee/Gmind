@@ -24,6 +24,9 @@ export interface EditorDocState {
   um: Y.UndoManager;
   /** 文件所有者（M2 Task 6，FR-COL-005 创建者标识）；离线恢复路径拿不到 → null。 */
   ownerUserId: string | null;
+  /** 调用人视角的星标状态（M3b 清偿包，FR-FIL-004）：编辑器工具栏加星切换的初始值；
+   *  离线恢复路径拿不到 → false。 */
+  starred: boolean;
 }
 
 interface FileContentResponse {
@@ -34,6 +37,7 @@ interface FileContentResponse {
   nodeCount: number;
   ownerUserId: string | null;
   updatedAt: string;
+  starred: boolean;
   docState: string;
 }
 
@@ -74,7 +78,7 @@ export function useEditorDoc(fileId: string): {
         const um = createUndoManager(doc);
         if (cancelled) return;
         baseUpdatedAtRef.current = meta.updatedAt; // 写序 base 初始值（准入 7.1）
-        setState({ doc, um, ownerUserId: meta.ownerUserId ?? null });
+        setState({ doc, um, ownerUserId: meta.ownerUserId ?? null, starred: meta.starred ?? false });
         void api(`/files/${fileId}/open`, { method: 'POST' }).catch(() => undefined);
       } catch (e) {
         if (cancelled) return;
@@ -87,7 +91,7 @@ export function useEditorDoc(fileId: string): {
         }
         if (restored) {
           const um = createUndoManager(restored);
-          setState({ doc: restored, um, ownerUserId: null });
+          setState({ doc: restored, um, ownerUserId: null, starred: false }); // 离线恢复拿不到星标态
           void api(`/files/${fileId}/open`, { method: 'POST' }).catch(() => undefined);
         } else {
           setError(e instanceof Error ? e.message : '加载失败');

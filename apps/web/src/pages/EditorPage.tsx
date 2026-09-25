@@ -209,6 +209,8 @@ export function EditorPage() {
 
   const [tick, setTick] = useState(0);
   const [status, setStatus] = useState('尚未编辑');
+  // 星标态（M3b 清偿包，FR-FIL-004）：GET /:id 的 starred 为初始值，工具栏切换乐观更新
+  const [starred, setStarred] = useState(false);
   // 协同通道真值表状态（M2 Task 3）：startCollab 回调推进，saveLoop 经桥接消费。
   // ref 而非 state：决策函数读的是最新值，不需要触发渲染。
   const collabRef = useRef({ wsConnected: false, wsEverConnected: false });
@@ -260,6 +262,16 @@ export function EditorPage() {
   const syncZoom = (): void => {
     const vp = viewportRef.current;
     if (vp) setZoomPct(Math.round(vp.scale * 100));
+  };
+
+  /** 加星切换（M3b 清偿包，FR-FIL-004）：乐观更新，请求失败回滚；PUT/DELETE 端点
+   *  均幂等 200，并发重复加星由服务端唯一键兜底（no-op 不 500）。 */
+  const toggleStar = (): void => {
+    const next = !starred;
+    setStarred(next);
+    void api(`/files/${fileId}/star`, { method: next ? 'PUT' : 'DELETE' }).catch(() =>
+      setStarred(!next),
+    );
   };
 
   const fitCanvas = (): void => {
@@ -812,6 +824,11 @@ export function EditorPage() {
       ? ([...selectionNow.selected][0] ?? null)
       : null;
 
+  // 星标初始态随文件装载/切换同步（useEditorDoc 对每次 fileId 装载产出新 state）
+  useEffect(() => {
+    if (state) setStarred(state.starred);
+  }, [state]);
+
   // —— 引擎装配主 effect ——
   useEffect(() => {
     if (!state) return;
@@ -1177,6 +1194,14 @@ export function EditorPage() {
           }}
           placeholder="文档标题"
         />
+        <button
+          data-testid="star-toggle"
+          className={'star-toggle' + (starred ? ' starred' : '')}
+          title={starred ? '取消星标' : '加星标'}
+          onClick={toggleStar}
+        >
+          {starred ? '★' : '☆'}
+        </button>
         <span className="save-status" data-testid="save-status">
           {status}
         </span>

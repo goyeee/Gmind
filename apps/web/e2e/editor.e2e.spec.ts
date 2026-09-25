@@ -232,3 +232,31 @@ test('编辑器：复制节点后选中另一节点 Ctrl+V 粘贴为其子级', 
   // 原「周三」仍在 root 下：复制不动原节点
   expect(childIds('root').map(textOf)).toContain('周三');
 });
+
+// —— M3b 清偿包（FR-FIL-004 编辑器加星入口） ——
+
+// 工具栏星标切换：GET /:id 的 starred 为初始态（☆）；点击 PUT → ★，工作台星标视图
+// 同步包含；取消 DELETE → 移出星标视图；刷新后状态保持。
+test('编辑器：工具栏加星切换与工作台星标视图同步', async ({ page }) => {
+  await openSeedDoc(page, '本周计划');
+  const toggle = page.getByTestId('star-toggle');
+  await expect(toggle).toHaveText('☆');
+  await toggle.click();
+  await expect(toggle).toHaveText('★');
+
+  // 工作台星标视图包含该文件
+  await page.getByTestId('back-btn').click();
+  await expect(page).toHaveURL(/\/workspace/);
+  await page.getByTestId('view-tabs').getByRole('button', { name: '星标' }).click();
+  await expect(page.locator('.file-list li', { hasText: '本周计划' })).toBeVisible();
+
+  // 编辑器内取消：刷新进编辑器显示 ★（持久化），取消后工作台星标视图移出
+  await page.locator('.file-list li', { hasText: '本周计划' }).click();
+  await expect(page).toHaveURL(/\/edit\//);
+  await expect(page.getByTestId('star-toggle')).toHaveText('★');
+  await page.getByTestId('star-toggle').click();
+  await expect(page.getByTestId('star-toggle')).toHaveText('☆');
+  await page.getByTestId('back-btn').click();
+  await page.getByTestId('view-tabs').getByRole('button', { name: '星标' }).click();
+  await expect(page.locator('.file-list li', { hasText: '本周计划' })).toHaveCount(0);
+});
