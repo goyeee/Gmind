@@ -99,3 +99,47 @@
   font-size: 12px;
   font-variant-numeric: tabular-nums;
 }
+
+/* 邀请区（M4 Task 2，FR-SHR-004 UI 面）：owner 专属，面板底部整宽。 */
+.member-invite {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid #f2f3f5;
+}
+.member-invite-hint {
+  margin: 0 0 6px;
+  color: #86909c;
+  font-size: 12px;
+}
+.member-invite-input {
+  box-sizing: border-box;
+  width: 100%;
+  height: 56px;
+  padding: 6px 8px;
+  border: 1px solid #e5e6eb;
+  border-radius: 6px;
+  font-family: inherit;
+  font-size: 12px;
+  resize: none;
+}
+.member-invite-input:focus {
+  border-color: #94bfff;
+  outline: none;
+}
+.member-invite-submit {
+  width: 100%;
+  margin-top: 6px;
+  padding: 5px 0;
+  border: 1px solid #e5e6eb;
+  border-radius: 6px;
+  background: #f2f3f5;
+  cursor: pointer;
+  font-size: 12px;
+}
+.member-invite-submit:hover:not(:disabled) {
+  background: #e5e6eb;
+}
+.member-invite-submit:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
