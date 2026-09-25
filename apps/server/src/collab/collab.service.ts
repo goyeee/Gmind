@@ -144,6 +144,14 @@ export class CollabService implements OnApplicationShutdown {
     this.hocuspocus.closeConnections(fileId);
   }
 
+  /** Stateless 广播（M3b Task 6，FR-CMT-003）：向该文件的在线协同客户端转发一条
+   *  stateless 消息（评论域创建/回复 → {type:'comment-updated'}，payload 由调用方序列化）。
+   *  文档不在内存（无人在线）时为 no-op——广播的受众本就只有在线连接；各业务域共用
+   *  本单一入口（quota-exceeded/persisted 为网关内部路径，不经此处）。 */
+  broadcastStateless(fileId: string, payload: string): void {
+    this.hocuspocus.documents.get(fileId)?.broadcastStateless(payload);
+  }
+
   async onApplicationShutdown(): Promise<void> {
     if (this.httpServer && this.upgradeHandler) {
       this.httpServer.off('upgrade', this.upgradeHandler);

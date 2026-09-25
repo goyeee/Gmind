@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { AuthModule } from './auth/auth.module';
 import { CollabModule } from './collab/collab.module';
+import { CommentsModule } from './comments/comments.module';
 import { DatabaseModule } from './database/database.module';
 import { DevE2eModule } from './dev/dev-e2e.module';
 import { FilesModule } from './files/files.module';
@@ -14,7 +15,7 @@ import { TrashModule } from './trash/trash.module';
 import { UsersModule } from './users/users.module';
 
 @Module({
-  imports: [DatabaseModule, SessionModule, UsersModule, FilesModule, FoldersModule, AuthModule, StorageModule, CollabModule, TrashModule, JobsModule, ShareModule, DevE2eModule],
+  imports: [DatabaseModule, SessionModule, UsersModule, FilesModule, FoldersModule, AuthModule, StorageModule, CollabModule, CommentsModule, TrashModule, JobsModule, ShareModule, DevE2eModule],
   controllers: [HealthController],
 })
 export class AppModule {}
