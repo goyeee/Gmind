@@ -78,6 +78,7 @@ import {
   startSaveLoop,
 } from '../editor/saveLoop';
 import { useEditorDoc } from '../editor/useEditorDoc';
+import { exportXmind } from '../editor/xmind-export';
 import { api, apiPost } from '../api/client';
 import './editor.css';
 
@@ -235,6 +236,9 @@ export function EditorPage() {
   const quotaBlockedRef = useRef(false);
   const [toast, setToast] = useState('');
   const [zoomPct, setZoomPct] = useState(100);
+  // 导出菜单（M4 Task 5，FR-IO-004）：工具栏「导出」按钮的下拉开合。
+  const [exportOpen, setExportOpen] = useState(false);
+  const exportWrapRef = useRef<HTMLDivElement | null>(null);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; nodeId: string } | null>(
     null,
   );
@@ -258,6 +262,18 @@ export function EditorPage() {
     if (toastTimer.current !== null) clearTimeout(toastTimer.current);
     toastTimer.current = setTimeout(() => setToast(''), 2500);
   };
+
+  // 导出菜单外点关闭（菜单打开期间挂 document mousedown，命中按钮/菜单之外即收起）
+  useEffect(() => {
+    if (!exportOpen) return;
+    const onDocMouseDown = (e: MouseEvent): void => {
+      if (exportWrapRef.current && !exportWrapRef.current.contains(e.target as Node)) {
+        setExportOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', onDocMouseDown);
+    return () => document.removeEventListener('mousedown', onDocMouseDown);
+  }, [exportOpen]);
 
   /**
    * 配额拦截闸（M2 终审修复轮）：置位期间阻止**新增**节点（PRD FR-ACC-003 语义），
@@ -1304,6 +1320,32 @@ export function EditorPage() {
         <button data-testid="fullscreen-btn" title="全屏（Esc 退出）" onClick={toggleFullscreen}>
           全屏
         </button>
+        {/* 导出菜单（M4 Task 5，FR-IO-004）：本任务仅 XMind 一项；PNG/JPG 由
+            Task 9 就地追加，不预置死按钮。文件名与 header 标题同源 getMeta(doc).title。 */}
+        <div className="export-wrap" ref={exportWrapRef}>
+          <button data-testid="export-menu" onClick={() => setExportOpen((v) => !v)}>
+            导出
+          </button>
+          {exportOpen && (
+            <div className="export-menu" role="menu">
+              <button
+                data-testid="export-xmind"
+                role="menuitem"
+                onClick={() => {
+                  setExportOpen(false);
+                  if (!doc || !meta) return;
+                  try {
+                    exportXmind(doc, meta.title);
+                  } catch (e) {
+                    showToast(e instanceof Error ? e.message : '导出失败');
+                  }
+                }}
+              >
+                导出 XMind
+              </button>
+            </div>
+          )}
+        </div>
         <input
           data-testid="title-input"
           className="title-input"

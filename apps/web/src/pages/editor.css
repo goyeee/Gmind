@@ -337,3 +337,35 @@
 .context-menu button:hover {
   background: #f2f3f5;
 }
+
+/* 导出菜单（M4 Task 5，FR-IO-004）：工具栏「导出」按钮的下拉，项样式对齐 .context-menu */
+.export-wrap {
+  position: relative;
+}
+.export-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 1200;
+  background: #fff;
+  border: 1px solid #e5e6eb;
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  display: flex;
+  flex-direction: column;
+  min-width: 128px;
+  padding: 4px;
+}
+.export-menu button {
+  border: none;
+  background: none;
+  text-align: left;
+  padding: 8px 12px;
+  font-size: 13px;
+  border-radius: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.export-menu button:hover {
+  background: #f2f3f5;
+}
