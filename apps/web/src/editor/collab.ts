@@ -70,6 +70,10 @@ export interface CollabOptions {
    *  更新（saveLoop PUT 的 baseUpdatedAt 依据）。缺 updatedAt 字段的旧载荷不回调
    *  （向后兼容，M1 的 {type:'persisted', at} 不变）。 */
   onPersisted?(updatedAt: string): void;
+  /** 评论更新广播（FR-CMT-003，Task 7）：服务端 comment-updated 无状态消息 →
+   *  EditorPage 再拉取 GET /comments（刷新角标计数与面板线程；自身 REST POST 也
+   *  会收到该广播，调用方以 in-flight 去重收敛重复拉取）。 */
+  onCommentUpdated?(): void;
 }
 
 export interface CollabHandle {
@@ -256,6 +260,8 @@ export function startCollab(fileId: string, doc: Y.Doc, opts: CollabOptions): Co
         if (typeof msg.updatedAt === 'string' && msg.updatedAt !== '') opts.onPersisted?.(msg.updatedAt);
       } else if (msg.type === 'quota-exceeded') {
         onStatus('quota');
+      } else if (msg.type === 'comment-updated') {
+        opts.onCommentUpdated?.();
       }
     } catch {
       // 非 JSON stateless 广播：与本页无关，忽略

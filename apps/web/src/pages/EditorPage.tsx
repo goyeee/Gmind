@@ -12,6 +12,7 @@ import {
   markLastEditor,
   moveNode,
   ORIGIN_USER,
+  pathToRoot,
   redo as coreRedo,
   ROOT_NODE_ID,
   setDocMeta,
@@ -67,6 +68,7 @@ import {
 } from '../editor/imageUpload';
 import { MemberPanel } from '../editor/MemberPanel';
 import { RichPanel } from '../editor/RichPanel';
+import { CommentPanel, type CommentThreadView } from '../editor/CommentPanel';
 import { startCollab, getCurrentUser, type CollabHandle, type CollabStatus, type PresenceMember } from '../editor/collab';
 import {
   QUOTA_ADD_BLOCKED,
@@ -76,7 +78,7 @@ import {
   startSaveLoop,
 } from '../editor/saveLoop';
 import { useEditorDoc } from '../editor/useEditorDoc';
-import { api } from '../api/client';
+import { api, apiPost } from '../api/client';
 import './editor.css';
 
 /**
@@ -223,6 +225,19 @@ export function EditorPage() {
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; nodeId: string } | null>(
     null,
   );
+  // 评论域（M3b Task 7，FR-CMT-002）：进入文档 GET /comments 全量拉取，之后仅由
+  // comment-updated 无状态广播（含自身 POST 触发的广播）驱动再拉取——评论不进
+  // Y.Doc，独立于协同文档通道。
+  const [comments, setComments] = useState<{ threads: CommentThreadView[]; counts: Record<string, number> }>(
+    { threads: [], counts: {} },
+  );
+  // 角标计数走 ref：rerender()（场景协调）读最新 counts，无需为此推进 React state
+  const commentCountsRef = useRef<Record<string, number>>({});
+  // 面板/角标点击的刷新入口（装配 effect 内定义；POST 成功后直接触发，广播路径
+  // 由 in-flight 去重收敛，离线无广播时此入口兜底）
+  const commentsRefreshRef = useRef<(() => void) | null>(null);
+  // 单节点筛选视图（角标点击进入，「查看全部」退出）
+  const [commentFilter, setCommentFilter] = useState<string | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const showToast = (message: string): void => {
@@ -654,6 +669,13 @@ export function EditorPage() {
       }
       return;
     }
+    // 评论角标（FR-CMT-002）：点击 → 评论面板过滤到该节点线程；先于节点选择
+    // 处理并直接 return——不触发选中/反选（与链接角标同一「让位」纪律）。
+    if (target.closest('.gm-comment-badge')) {
+      const nodeId = target.closest('[data-node-id]')?.getAttribute('data-node-id');
+      if (nodeId) setCommentFilter(nodeId);
+      return;
+    }
     const badge = target.closest('[data-for-id]');
     if (badge) {
       const id = badge.getAttribute('data-for-id');
@@ -824,6 +846,54 @@ export function EditorPage() {
       ? ([...selectionNow.selected][0] ?? null)
       : null;
 
+  // —— 评论动作（M3b Task 7，FR-CMT-002）——
+
+  /**
+   * 面板条目 → 画布定位：selectOnly + 沿 pathToRoot 展开折叠祖先（pathToRoot 自身
+   * 起步至 root；祖先 collapsed=true 才 toggleCollapse——system origin 不进撤销栈）。
+   * 定位裁决：选区 + 展开即满足「定位」，不做视口居中（过扰）；选中高亮由
+   * .gm-selected 样式承担（rerender 每帧回填类，新展开的节点同样命中）。
+   */
+  const locateNode = (nodeId: string): void => {
+    if (!doc) return;
+    const selection = selectionRef.current;
+    if (!selection) return;
+    const snap = getNode(doc, nodeId);
+    if (!snap || snap.deleted) return; // 已删节点无线索可定位（面板标记原节点已删除）
+    try {
+      for (const ancestorId of pathToRoot(doc, nodeId)) {
+        if (ancestorId === nodeId) continue;
+        const anc = getNode(doc, ancestorId);
+        if (anc && !anc.deleted && anc.collapsed) toggleCollapse(doc, ancestorId);
+      }
+      selection.selectOnly(nodeId);
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : '定位失败');
+    }
+  };
+
+  /** 选中节点添加评论（面板顶部输入）：POST 成功后直接触发再拉取（离线无广播的
+   *  兜底；在线时服务端广播也会触发同一路径，由 in-flight 去重收敛）。 */
+  const submitComment = async (content: string): Promise<void> => {
+    if (!selectedNodeId) return;
+    try {
+      await apiPost(`/files/${fileId}/comments`, { nodeId: selectedNodeId, content });
+      commentsRefreshRef.current?.();
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : '评论发送失败');
+    }
+  };
+
+  /** 楼中楼回复：一律挂线程楼主（服务端拍平语义），成功后再拉取。 */
+  const submitReply = async (threadId: string, content: string): Promise<void> => {
+    try {
+      await apiPost(`/files/${fileId}/comments/${threadId}/replies`, { content });
+      commentsRefreshRef.current?.();
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : '回复发送失败');
+    }
+  };
+
   // 星标初始态随文件装载/切换同步（useEditorDoc 对每次 fileId 装载产出新 state）
   useEffect(() => {
     if (state) setStarred(state.starred);
@@ -942,6 +1012,9 @@ export function EditorPage() {
           note: snap.note,
           href: snap.href,
           image: snap.image,
+          // 评论角标计数（FR-CMT-002）：仅存活节点携带（服务端 counts 已排除
+          // 已删节点线程与 resolved）；无评论的节点不设键 → 引擎按 0 处理不渲染
+          commentCount: commentCountsRef.current[id],
         });
       }
       renderScene(scene, {
@@ -976,6 +1049,37 @@ export function EditorPage() {
         rerender();
       });
     };
+
+    // —— 评论拉取（FR-CMT-002）：进入文档全量 GET；此后仅 comment-updated 广播
+    // （服务端在创建/回复成功后广播，含本端自己的 POST——广播经 WS 回来同样触发
+    // 本回调）与「本端 POST 成功后的直接触发」两条路径会重入。以 in-flight +
+    // queued 尾随去重收敛：进行中则记一次尾随，完成后补拉一轮，循环自然收敛。 ——
+    let refreshInFlight = false;
+    let refreshQueued = false;
+    const refreshComments = async (): Promise<void> => {
+      if (refreshInFlight) {
+        refreshQueued = true;
+        return;
+      }
+      refreshInFlight = true;
+      try {
+        const data = await api<{ threads: CommentThreadView[]; counts: Record<string, number> }>(
+          `/files/${fileId}/comments`,
+        );
+        commentCountsRef.current = data.counts;
+        setComments(data);
+        scheduleRerender(); // 角标计数走场景协调，需推进一次重渲染
+      } catch {
+        // 拉取失败（离线/权限抖动）：保持既有数据，等下一次广播或重新装载
+      } finally {
+        refreshInFlight = false;
+        if (refreshQueued) {
+          refreshQueued = false;
+          await refreshComments();
+        }
+      }
+    };
+    commentsRefreshRef.current = () => void refreshComments();
 
     rebuildScene();
     themeRef.current = resolveThemeId(getMeta(d).themeId);
@@ -1049,6 +1153,10 @@ export function EditorPage() {
       onPersisted: (updatedAt) => {
         baseUpdatedAtRef.current = updatedAt;
       },
+      // 评论更新广播（FR-CMT-003，Task 7）：无状态消息 → 再拉取评论
+      onCommentUpdated: () => {
+        void refreshComments();
+      },
     });
     collabHandleRef.current = collab;
     const detachKeys = attachKeyboardMap({
@@ -1093,6 +1201,7 @@ export function EditorPage() {
     rerender();
     selection.selectOnly(ROOT_NODE_ID); // 默认选中中心主题（「选中 root 按 Tab」起点）
     requestAnimationFrame(() => fitCanvas());
+    void refreshComments(); // 进入文档全量拉取评论（此后靠 comment-updated 广播）
 
     return () => {
       cancelAnimationFrame(rafId);
@@ -1104,6 +1213,10 @@ export function EditorPage() {
       collabHandleRef.current = null;
       quotaBlockedRef.current = false; // 文件切换不继承上一文件的配额拦截
       collab.destroy(); // provider + IndexedDB 本地副本一并收尾（顺序：先冲刷 saveLoop 决策再断链）
+      commentsRefreshRef.current = null; // 文件切换不继承上一文件的评论刷新入口
+      commentCountsRef.current = {};
+      setComments({ threads: [], counts: {} });
+      setCommentFilter(null);
       cursorLayerRef.current = null;
       remoteCursorsRef.current = [];
       setMembers([]);
@@ -1236,15 +1349,30 @@ export function EditorPage() {
           />
         </div>
 
-        {doc && um && selectedNodeId && (
-          <RichPanel
-            doc={doc}
-            fileId={fileId}
-            nodeId={selectedNodeId}
-            afterUserWrite={afterUserWrite}
-            showToast={showToast}
+        {/*
+          右列（M3b Task 7 装配裁决）：RichPanel + CommentPanel 同列纵排——
+          评论面板常驻下方（data-testid="comment-panel"），选中节点后富内容面板在上。
+        */}
+        <div className="editor-right">
+          {doc && um && selectedNodeId && (
+            <RichPanel
+              doc={doc}
+              fileId={fileId}
+              nodeId={selectedNodeId}
+              afterUserWrite={afterUserWrite}
+              showToast={showToast}
+            />
+          )}
+          <CommentPanel
+            threads={comments.threads}
+            filterNodeId={commentFilter}
+            selectedNodeId={selectedNodeId}
+            onClearFilter={() => setCommentFilter(null)}
+            onLocate={locateNode}
+            onAddComment={(content) => void submitComment(content)}
+            onReply={(threadId, content) => void submitReply(threadId, content)}
           />
-        )}
+        </div>
       </div>
 
       {contextMenu && (

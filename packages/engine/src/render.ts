@@ -12,7 +12,9 @@
  *   fill/字体取解析样式）、<text class="gm-icons">（图标字符映射，固定组序
  *   priority→progress→flag→star，未知组忽略；M1b 值后缀不区分字形，视觉打磨后置）、
  *   <text class="gm-note-badge">（note 非空渲染 'N'）、<text class="gm-link-badge">
- *   （href 非空渲染）、<image class="gm-image">（href=/api/images/{key}，宽高用
+ *   （href 非空渲染）、<text class="gm-comment-badge">（commentCount>0 渲染计数，
+ *   FR-CMT-002；与 note/link 同一右上角错位方案，自右缘起 link→note→comment 让位）、
+ *   <image class="gm-image">（href=/api/images/{key}，宽高用
  *   image.w/h——页面侧负责 ≤200px 等比钳制；盒高计入图片高度（图与文本的节点内堆叠视觉仍后置））、
  *   折叠徽标 <g class="gm-collapse-badge" data-for-id>（「+N」，N=collapsedCounts；
  *   位置按 box.side 确定：right→盒右、left→盒左、down→盒下）。
@@ -49,7 +51,7 @@ const BADGE_FONT_SIZE = 12;
 const CORNER_BADGE_BASELINE = 12;
 const CORNER_BADGE_FONT_SIZE = 12;
 const CORNER_BADGE_PAD = 6;
-/** link 角标与 note 角标的水平错位步长（同时存在时不重叠）。 */
+/** link/note/comment 角标的水平错位步长（同时存在时不重叠，自右缘依次让位）。 */
 const CORNER_BADGE_STEP = 18;
 
 /** 数值 → 属性串：统一保留两位小数并去掉尾零（坐标/尺寸全走此格式，输出确定）。 */
@@ -78,6 +80,7 @@ export interface NodeEntry {
   icons: SVGTextElement | null;
   noteBadge: SVGTextElement | null;
   linkBadge: SVGTextElement | null;
+  commentBadge: SVGTextElement | null;
   image: SVGImageElement | null;
   badge: SVGGElement | null;
   badgeText: SVGTextElement | null;
@@ -109,6 +112,8 @@ export interface NodeVisual {
   note?: string;
   href?: string;
   image?: { key: string; w: number; h: number } | null;
+  /** 未解决评论数（FR-CMT-002）：>0 渲染右上角计数角标；仅存活节点携带。 */
+  commentCount?: number;
 }
 
 /** 渲染输入：布局结果 + 主题 + 样式解析 + 文档视觉数据。 */
@@ -184,6 +189,13 @@ function badgeTransform(b: NodeBox): string {
   }
 }
 
+/** 评论角标 x：自右缘起被 link/note 各让一位（同 render 的确定性槽位公式）。 */
+function commentBadgeX(b: NodeBox, hasLink: boolean, hasNote: boolean): number {
+  return (
+    b.w - CORNER_BADGE_PAD - (hasLink ? CORNER_BADGE_STEP : 0) - (hasNote ? CORNER_BADGE_STEP : 0)
+  );
+}
+
 /** 单节点协调：不存在则创建，存在则就地改属性（g/rect/text 引用恒定）。 */
 function applyNode(
   scene: SceneRoot,
@@ -208,6 +220,7 @@ function applyNode(
       icons: null,
       noteBadge: null,
       linkBadge: null,
+      commentBadge: null,
       image: null,
       badge: null,
       badgeText: null,
@@ -319,6 +332,30 @@ function applyNode(
     const titleEl = el('title');
     titleEl.textContent = preview;
     entry.noteBadge.appendChild(titleEl);
+  }
+
+  // 评论角标（FR-CMT-002）：commentCount>0 渲染计数字符，与 note/link 同一右上角
+  // CORNER_BADGE 方案——槽位自右缘起 link→note→comment 依次让位一步（确定性不重叠）。
+  // 镜像 note 角标纪律：syncOptional 增删 + 每次渲染回填 x/fill（元素引用保持）。
+  const commentCount = visual.commentCount ?? 0;
+  entry.commentBadge = syncOptional(
+    entry.commentBadge,
+    commentCount > 0,
+    g,
+    () =>
+      el('text', {
+        class: 'gm-comment-badge',
+        x: fmt(commentBadgeX(b, hasLink, hasNote)),
+        y: fmt(CORNER_BADGE_BASELINE),
+        'text-anchor': 'end',
+        'font-size': fmt(CORNER_BADGE_FONT_SIZE),
+        fill: style.textColor,
+      }),
+  );
+  if (entry.commentBadge) {
+    entry.commentBadge.textContent = String(commentCount);
+    entry.commentBadge.setAttribute('x', fmt(commentBadgeX(b, hasLink, hasNote)));
+    entry.commentBadge.setAttribute('fill', style.textColor);
   }
 
   // image：href 走 /api/images/{key}；宽高直用 image.w/h（页面负责 ≤200px 钳制）。

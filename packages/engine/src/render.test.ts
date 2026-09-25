@@ -320,6 +320,68 @@ describe('renderScene：协调更新（保元素引用）', () => {
   });
 });
 
+describe('renderScene：评论角标（FR-CMT-002）', () => {
+  it('count>0 渲染 .gm-comment-badge（内容=计数）；0/缺省不渲染', () => {
+    const data = baseData();
+    data.set('b', { text: 'x', commentCount: 2 });
+    renderScene(createScene(svg), makeInput(baseLayout(), data));
+    const badge = nodeG('b')?.querySelector('.gm-comment-badge');
+    expect(badge?.textContent).toBe('2');
+    expect(badge?.getAttribute('text-anchor')).toBe('end');
+    // 未计数的节点与 count=0 均不渲染
+    expect(nodeG('a')?.querySelector('.gm-comment-badge')).toBeNull();
+    const scene2 = createScene(svg);
+    const data0 = baseData();
+    data0.set('b', { text: 'x', commentCount: 0 });
+    renderScene(scene2, makeInput(baseLayout(), data0));
+    expect(nodeG('b')?.querySelector('.gm-comment-badge')).toBeNull();
+  });
+
+  it('槽位确定：与 note/link 同一右上角方案，从右缘起每步 18 错位且 fill 随样式', () => {
+    const data = baseData();
+    data.set('b', { text: 'x', commentCount: 3 });
+    renderScene(createScene(svg), makeInput(baseLayout(), data));
+    const badge = nodeG('b')?.querySelector('.gm-comment-badge') as SVGTextElement;
+    expect(badge.getAttribute('x')).toBe('94'); // w=100 − 6（仅评论角标 → 最右位）
+    expect(badge.getAttribute('y')).toBe('12');
+    expect(badge.getAttribute('fill')).toBe('#3d4757');
+    // 与 note/link 共存：link 最右、note 次之、comment 第三位
+    const data2 = baseData();
+    data2.set('b', { text: 'x', commentCount: 3, note: '有笔记', href: 'https://example.com' });
+    renderScene(createScene(svg), makeInput(baseLayout(), data2));
+    const stacked = nodeG('b')?.querySelector('.gm-comment-badge') as SVGTextElement;
+    expect(stacked.getAttribute('x')).toBe('58'); // 100 − 6 − 18 − 18
+    // 仅 note 共存：让一位
+    const data3 = baseData();
+    data3.set('b', { text: 'x', commentCount: 3, note: '有笔记' });
+    renderScene(createScene(svg), makeInput(baseLayout(), data3));
+    const withNote = nodeG('b')?.querySelector('.gm-comment-badge') as SVGTextElement;
+    expect(withNote.getAttribute('x')).toBe('76'); // 100 − 6 − 18
+  });
+
+  it('计数变化就地更新（元素引用不变，内容/x 回填）；归零移除、再增重建', () => {
+    const scene = createScene(svg);
+    const data1 = baseData();
+    data1.set('b', { text: 'x', commentCount: 1 });
+    renderScene(scene, makeInput(baseLayout(), data1));
+    const badge = nodeG('b')?.querySelector('.gm-comment-badge') as SVGTextElement;
+    const data2 = baseData();
+    data2.set('b', { text: 'x', commentCount: 5, note: '有笔记' });
+    renderScene(scene, makeInput(baseLayout(), data2));
+    expect(nodeG('b')?.querySelector('.gm-comment-badge')).toBe(badge); // 身份保持
+    expect(badge.textContent).toBe('5');
+    expect(badge.getAttribute('x')).toBe('76'); // note 出现 → 让位回填
+    const data3 = baseData();
+    data3.set('b', { text: 'x' });
+    renderScene(scene, makeInput(baseLayout(), data3));
+    expect(nodeG('b')?.querySelector('.gm-comment-badge')).toBeNull();
+    const data4 = baseData();
+    data4.set('b', { text: 'x', commentCount: 2 });
+    renderScene(scene, makeInput(baseLayout(), data4));
+    expect(nodeG('b')?.querySelector('.gm-comment-badge')?.textContent).toBe('2');
+  });
+});
+
 describe('renderScene：清理与幂等', () => {
   it('更新为空布局后无孤儿元素：两层清空，svg 只剩两层', () => {
     const scene = createScene(svg);

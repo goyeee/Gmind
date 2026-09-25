@@ -145,11 +145,172 @@
   border-radius: 6px;
 }
 
-/* 主区：画布 + 富内容面板并排（Task 12） */
+/* 主区：画布 + 右列（富内容面板 + 评论面板）并排（Task 12 / M3b Task 7） */
 .editor-main {
   flex: 1;
   display: flex;
   min-height: 0;
+}
+
+/* 右列装配（M3b Task 7 裁决）：RichPanel 在上（滚动），CommentPanel 常驻下方。
+   原 rich-panel 的宽度/左边框上移到列容器，面板自身撑满列宽。 */
+.editor-right {
+  flex: 0 0 280px;
+  width: 280px;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid #e5e6eb;
+  background: #fff;
+  overflow: hidden;
+}
+.editor-right .rich-panel {
+  width: auto;
+  flex: 1 1 auto;
+  min-height: 0;
+  border-left: none;
+}
+
+/* 评论面板（FR-CMT-002）：线程列表 + 顶部选中节点评论输入 */
+.comment-panel {
+  flex: 0 1 auto;
+  max-height: 46%;
+  border-top: 1px solid #e5e6eb;
+  padding: 12px 14px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  font-size: 13px;
+}
+.comment-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.comment-panel-head h3 {
+  margin: 0;
+  font-size: 14px;
+  color: #1f2329;
+}
+.comment-panel-head button {
+  padding: 2px 8px;
+  border: 1px solid #e5e6eb;
+  border-radius: 6px;
+  background: #fff;
+  font-size: 12px;
+  cursor: pointer;
+}
+.comment-composer {
+  display: flex;
+  gap: 6px;
+}
+.comment-composer input {
+  flex: 1;
+  min-width: 0;
+  padding: 7px 8px;
+  border: 1px solid #e5e6eb;
+  border-radius: 6px;
+  font: inherit;
+}
+.comment-composer button,
+.comment-reply-box button {
+  flex: none;
+  padding: 5px 12px;
+  border: none;
+  border-radius: 6px;
+  background: #3370ff;
+  color: #fff;
+  font-size: 12px;
+  cursor: pointer;
+}
+.comment-composer button:disabled,
+.comment-reply-box button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.comment-threads {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.comment-thread {
+  border: 1px solid #f0f1f3;
+  border-radius: 8px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  cursor: pointer;
+}
+.comment-thread:hover {
+  background: #f7f8fa;
+}
+.comment-thread-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.comment-node {
+  color: #86909c;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 节点解耦标记（FR-CMT-002 验收）：线程保留全文 + 「原节点已删除」徽标 */
+.comment-node-deleted {
+  flex: none;
+  font-size: 11px;
+  line-height: 16px;
+  color: #f53f3f;
+  border: 1px solid #f53f3f;
+  border-radius: 4px;
+  padding: 0 4px;
+}
+.comment-main,
+.comment-reply {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.comment-author {
+  color: #3370ff;
+  font-size: 12px;
+}
+.comment-content {
+  word-break: break-all;
+}
+.comment-replies {
+  list-style: none;
+  margin: 0;
+  padding: 2px 0 2px 12px;
+  border-left: 2px solid #f0f1f3;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.comment-reply-box {
+  display: flex;
+  gap: 6px;
+}
+.comment-reply-box input {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 8px;
+  border: 1px solid #e5e6eb;
+  border-radius: 6px;
+  font: inherit;
+  font-size: 12px;
+}
+.comment-empty {
+  margin: 8px 0;
+  color: #86909c;
+  text-align: center;
 }
 
 .context-menu {
