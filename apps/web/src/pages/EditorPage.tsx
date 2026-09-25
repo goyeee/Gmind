@@ -6,6 +6,7 @@ import {
   capUndoStack,
   childrenIds,
   countAliveReachable,
+  countCollapsedWithChildren,
   deleteNodes,
   getMeta,
   getNode,
@@ -80,7 +81,8 @@ import {
 } from '../editor/saveLoop';
 import { useEditorDoc } from '../editor/useEditorDoc';
 import { exportXmind } from '../editor/xmind-export';
-import { api, apiPost } from '../api/client';
+import { exportImage } from '../editor/image-export';
+import { api, apiPost, getToken } from '../api/client';
 import './editor.css';
 
 /**
@@ -241,6 +243,8 @@ export function EditorPage() {
   const [zoomPct, setZoomPct] = useState(100);
   // 导出菜单（M4 Task 5，FR-IO-004）：工具栏「导出」按钮的下拉开合。
   const [exportOpen, setExportOpen] = useState(false);
+  // PNG 透明背景勾选（M4 Task 9，FR-IO-003）：默认勾选；JPG 无 alpha 恒白底。
+  const [exportTransparent, setExportTransparent] = useState(true);
   const exportWrapRef = useRef<HTMLDivElement | null>(null);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; nodeId: string } | null>(
     null,
@@ -319,6 +323,31 @@ export function EditorPage() {
     void api(`/files/${fileId}/star`, { method: next ? 'PUT' : 'DELETE' }).catch(() =>
       setStarred(!next),
     );
+  };
+
+  /** export_done 埋点（M4 Task 9；Task 7 端点 204 无返回体——api() 的 json 解析
+   *  不适用，fetch 直发）。fire-and-forget：失败静默忽略，遥测不干扰导出主流程。 */
+  const postExportDone = (format: string, scale: number): void => {
+    void fetch('/api/events', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${getToken() ?? ''}`,
+      },
+      body: JSON.stringify({ type: 'export_done', fileId, payload: { format, scale } }),
+    }).catch(() => undefined);
+  };
+
+  /** PNG/JPG 导出（M4 Task 9，FR-IO-003）：折叠处数 >0 先 confirm 提示自动展开
+   *  （取消即中止），再走 image-export 链路（失败 toast，成功后上报埋点）。 */
+  const runImageExport = (format: 'png' | 'jpg', scale: 1 | 2 | 3): void => {
+    if (!doc || !meta) return;
+    setExportOpen(false);
+    const folded = countCollapsedWithChildren(doc);
+    if (folded > 0 && !window.confirm(`检测到 ${folded} 处折叠，将自动展开后导出`)) return;
+    void exportImage(doc, meta.title, { format, scale, transparent: exportTransparent })
+      .then(() => postExportDone(format, scale))
+      .catch((e: unknown) => showToast(e instanceof Error ? e.message : '导出失败'));
   };
 
   const fitCanvas = (): void => {
@@ -1323,8 +1352,8 @@ export function EditorPage() {
         <button data-testid="fullscreen-btn" title="全屏（Esc 退出）" onClick={toggleFullscreen}>
           全屏
         </button>
-        {/* 导出菜单（M4 Task 5，FR-IO-004）：本任务仅 XMind 一项；PNG/JPG 由
-            Task 9 就地追加，不预置死按钮。文件名与 header 标题同源 getMeta(doc).title。 */}
+        {/* 导出菜单（M4 Task 5，FR-IO-004）：XMind + PNG/JPG（Task 9 就地追加，
+            不改动既有 XMind 项）。文件名与 header 标题同源 getMeta(doc).title。 */}
         <div className="export-wrap" ref={exportWrapRef}>
           <button data-testid="export-menu" onClick={() => setExportOpen((v) => !v)}>
             导出
@@ -1346,6 +1375,37 @@ export function EditorPage() {
               >
                 导出 XMind
               </button>
+              {/* PNG/JPG（M4 Task 9，FR-IO-003）：透明背景仅 PNG 生效（JPG 恒白底，
+                  JPG 项标注白底），默认勾选。1x/2x/3x = 布局包围盒整倍放大。 */}
+              <label className="export-option">
+                <input
+                  type="checkbox"
+                  data-testid="export-transparent"
+                  checked={exportTransparent}
+                  onChange={(e) => setExportTransparent(e.target.checked)}
+                />
+                透明背景（PNG）
+              </label>
+              {[1, 2, 3].map((n) => (
+                <button
+                  key={`png-${n}`}
+                  data-testid={`export-png-${n}x`}
+                  role="menuitem"
+                  onClick={() => runImageExport('png', n as 1 | 2 | 3)}
+                >
+                  PNG {n}x
+                </button>
+              ))}
+              {[1, 2, 3].map((n) => (
+                <button
+                  key={`jpg-${n}`}
+                  data-testid={`export-jpg-${n}x`}
+                  role="menuitem"
+                  onClick={() => runImageExport('jpg', n as 1 | 2 | 3)}
+                >
+                  JPG {n}x（白底）
+                </button>
+              ))}
             </div>
           )}
         </div>

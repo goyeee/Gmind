@@ -34,6 +34,9 @@ export * from './restore';
 // clipboard（子树 ⇄ 缩进大纲剪贴板数据层）
 export * from './clipboard';
 
+// export（导出辅助：展开克隆，M4 Task 9）
+export * from './export';
+
 // doc / templates（文档构建与序列化；SEED_TEMPLATES 数据本体在 templates.ts）
 export * from './doc';
 export * from './templates';

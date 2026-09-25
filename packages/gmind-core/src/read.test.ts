@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import * as Y from 'yjs';
 import { ROOT_NODE_ID, countNodes, createTemplateDoc, docFromState, docToState } from './doc';
 import { GmindCoreError } from './errors';
-import { childrenIds, countAlive, countAliveReachable, getLastEditor, getMeta, getNode, isAlive, markLastEditor, pathToRoot, requireAliveNode, setDocMeta, subtreeIds } from './read';
+import { childrenIds, countAlive, countAliveReachable, countCollapsedWithChildren, getLastEditor, getMeta, getNode, isAlive, markLastEditor, pathToRoot, requireAliveNode, setDocMeta, subtreeIds } from './read';
+import { deleteNodes, setCollapsed } from './operations';
 import { ORIGIN_USER, createUndoManager, undo } from './undo';
 
 describe('getMeta / setDocMeta', () => {
@@ -266,5 +267,33 @@ describe('markLastEditor / getLastEditor（last_modifier 链路，M3a Task 4）'
     expect(getLastEditor(doc)).toBeNull();
     doc.getMap('meta').set('lastEditorUserId', 42);
     expect(getLastEditor(doc)).toBeNull();
+  });
+});
+
+describe('countCollapsedWithChildren（M4 Task 9，FR-IO-003 导出折叠提示口径）', () => {
+  it('countCollapsedWithChildren：仅统计存活且折叠且有子级的节点（3 折叠 1 无子 → 2）', () => {
+    const doc = createTemplateDoc({
+      title: 'T',
+      children: [
+        { text: 'A', children: [{ text: 'A1' }, { text: 'A2' }] },
+        { text: 'B', children: [{ text: 'B1' }] },
+        { text: 'C' },
+      ],
+    });
+    const root = getNode(doc, ROOT_NODE_ID)!;
+    const [a, b, c] = root.childIds;
+    setCollapsed(doc, a!, true); // 有子级 → 计
+    setCollapsed(doc, b!, true); // 有子级 → 计
+    setCollapsed(doc, c!, true); // 无子级：空折叠不产生视觉折叠态 → 不计
+    expect(countCollapsedWithChildren(doc)).toBe(2);
+  });
+
+  it('countCollapsedWithChildren：可达口径同 countAliveReachable——墓碑不计', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A', children: [{ text: 'A1' }] }] });
+    const a = getNode(doc, ROOT_NODE_ID)!.childIds[0]!;
+    setCollapsed(doc, a, true);
+    expect(countCollapsedWithChildren(doc)).toBe(1);
+    deleteNodes(doc, [a]); // 墓碑子树整枝剪除
+    expect(countCollapsedWithChildren(doc)).toBe(0);
   });
 });

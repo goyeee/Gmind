@@ -369,3 +369,18 @@
 .export-menu button:hover {
   background: #f2f3f5;
 }
+/* PNG 透明背景勾选行（M4 Task 9，FR-IO-003）：与菜单项同宽，下缘分隔 XMind 项 */
+.export-menu .export-option {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  font-size: 13px;
+  border-bottom: 1px solid #f0f1f3;
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+.export-menu .export-option input {
+  cursor: pointer;
+}

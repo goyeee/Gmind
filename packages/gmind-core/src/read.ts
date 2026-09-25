@@ -181,6 +181,30 @@ export function countAliveReachable(doc: Y.Doc): number {
   return n;
 }
 
+/** 折叠处数（M4 Task 9，FR-IO-003 导出折叠提示口径）：自 root 可达的存活节点中
+ * collapsed=true 且 childIds.length>0 的个数。可达口径与 countAliveReachable 一致——
+ * 提示的 N 必须等于导出实际展开的处数（cloneExpanded 只展开可达集）；childIds 为空
+ * 的「空折叠」不产生视觉折叠态，不计。visited 集合防御 children 侧环（同上）。 */
+export function countCollapsedWithChildren(doc: Y.Doc): number {
+  const root = nodesMap(doc).get(ROOT_NODE_ID);
+  if (!root || root.get('deleted') === true) return 0;
+  let n = 0;
+  const visited = new Set<string>();
+  const stack: string[] = [ROOT_NODE_ID];
+  while (stack.length > 0) {
+    const id = stack.pop() as string;
+    if (visited.has(id)) continue; // 环防御：跳过已访问
+    visited.add(id);
+    const node = nodesMap(doc).get(id);
+    if (!node || node.get('deleted') === true) continue; // 墓碑子树整枝剪除
+    const children = node.get('children') as Y.Array<string> | undefined;
+    const childIds = children ? children.toArray() : [];
+    if (node.get('collapsed') === true && childIds.length > 0) n += 1;
+    stack.push(...childIds);
+  }
+  return n;
+}
+
 /** 内部取节点：缺失抛 NODE_NOT_FOUND，墓碑抛 NODE_DELETED。 */
 export function requireAliveNode(doc: Y.Doc, id: string): Y.Map<unknown> {
   const node = nodesMap(doc).get(id);

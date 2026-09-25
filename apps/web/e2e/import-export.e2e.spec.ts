@@ -32,6 +32,14 @@ async function registerAndLogin(page: Page): Promise<void> {
   await expect(page.locator('.file-list li')).toHaveCount(3);
 }
 
+/** 打开种子文件进入编辑器，等待 root 文本渲染（同 editor.e2e.spec.ts 的既定模式）。 */
+async function openSeedDoc(page: Page, title: string): Promise<void> {
+  await registerAndLogin(page);
+  await page.locator('.file-list li', { hasText: title }).click();
+  await expect(page).toHaveURL(/\/edit\//);
+  await expect(page.locator('.editor-canvas svg .gm-text', { hasText: title })).toBeVisible();
+}
+
 test('工作台导入 .xmind：新文件出现且层级/备注正确渲染', async ({ page }) => {
   await registerAndLogin(page);
   await page.getByTestId('import-button').click();
@@ -142,4 +150,56 @@ test('导出 XMind 并往返导入：层级/文本/备注一致', async ({ page 
   await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '周一' })).toBeVisible();
   await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '周会对齐' })).toBeVisible();
   await expect(page.locator('.editor-canvas svg .gm-note-badge')).toHaveCount(1);
+});
+
+// ─────────────── M4 Task 9：PNG/JPG 导出（FR-IO-003） ───────────────
+
+// 用例 4：无折叠直接导出 PNG 3x——下载产物为合法 PNG 且 IHDR 尺寸可被 3 整除
+// （1x 布局包围盒取整 ×3，binding 意图「3x 输出为 1x 布局的三倍」）。
+test('导出 PNG 3x：下载产物 IHDR 尺寸可被 3 整除；无折叠不弹确认', async ({ page }) => {
+  await openSeedDoc(page, '本周计划');
+  let dialogCount = 0;
+  page.on('dialog', () => {
+    dialogCount += 1;
+  });
+  await page.getByTestId('export-menu').click();
+  // 透明背景勾选默认开启（PNG 生效；JPG 恒白底）
+  await expect(page.getByTestId('export-transparent')).toBeChecked();
+  const [download] = await Promise.all([
+    page.waitForEvent('download'),
+    page.getByTestId('export-png-3x').click(),
+  ]);
+  expect(dialogCount).toBe(0); // 无折叠：直接导出，不弹 confirm
+  expect(download.suggestedFilename()).toBe('本周计划.png');
+  const png = await fs.promises.readFile(await download.path());
+  expect(png.subarray(1, 4).toString()).toBe('PNG');
+  const w = png.readUInt32BE(16);
+  const h = png.readUInt32BE(20); // IHDR
+  expect(w).toBeGreaterThan(0);
+  expect(w % 3).toBe(0);
+  expect(h % 3).toBe(0);
+});
+
+// 用例 5：折叠时先提示「检测到 N 处折叠，将自动展开后导出」，确认才导出；
+// 导出只作用于快照克隆——画布折叠态不变（徽标仍在、孙节点仍隐藏）。
+test('折叠提示：检测到 1 处折叠 → 确认后导出（画布折叠态不变）', async ({ page }) => {
+  await openSeedDoc(page, '本周计划');
+  // 折叠 root（默认选中）：Ctrl+/（同 editor.e2e.spec.ts 用例 6 的操作路径）
+  await page.keyboard.press('Control+/');
+  await expect(page.locator('.editor-canvas svg .gm-collapse-badge')).toHaveCount(1);
+  let dialogMessage = '';
+  page.on('dialog', (d) => {
+    dialogMessage = d.message();
+    void d.accept();
+  });
+  await page.getByTestId('export-menu').click();
+  const [download] = await Promise.all([
+    page.waitForEvent('download'),
+    page.getByTestId('export-png-1x').click(),
+  ]);
+  expect(dialogMessage).toContain('1 处折叠');
+  expect(download.suggestedFilename()).toBe('本周计划.png');
+  // 折叠态不变：徽标仍在、孙节点仍隐藏（仅导出快照不改画布）
+  await expect(page.locator('.editor-canvas svg .gm-collapse-badge')).toHaveCount(1);
+  await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '周会对齐' })).toHaveCount(0);
 });

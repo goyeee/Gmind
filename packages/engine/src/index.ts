@@ -10,6 +10,7 @@
  * M1b Task 9：拖拽换父/浮动主题手势（drag）与 IME 安全文本编辑覆盖层（texteditor）。
  * M1b Task 10：浏览器剪贴板层——内部结构化 + 文本大纲双格式（clipboard）。
  * M2 Task 4：远端光标层——彩色选区与昵称标签（cursors）。
+ * M4 Task 9：离屏渲染与 SVG 序列化（export，FR-IO-003）。
  */
 
 export * from './types';
@@ -23,3 +24,4 @@ export * from './drag';
 export * from './texteditor';
 export * from './clipboard';
 export * from './cursors';
+export * from './export';
