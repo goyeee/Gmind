@@ -506,6 +506,50 @@ describe('版本恢复（REST FR-VER-004）+ events 埋点端点', () => {
     expect(resForeign.status).toBe(404);
   });
 
+  it('列表上限：>200 行只返回最新 200 条（终审修复：列表不取 LONGBLOB state，条数封顶）', async () => {
+    const { file } = await mkFileWithVersion('列表-上限', '上限早期文本');
+    // 直插 201 行 thin 版本（state 用小 dummy——列表层断言只看元数据与条数）；每行
+    // createdAt +1ms 错开且晚于 mkFileWithVersion 的 manual 行，全序确定。nodeCount
+    // 作身份标记（第 i 行 → 10+i）：cap 后应恰好留下最新 200 行 = nodeCount 11..210。
+    const repo = versionsRepo();
+    const base = Date.now() + 1000;
+    for (let i = 0; i < 201; i += 1) {
+      const row = repo.create();
+      row.id = ulid();
+      row.fileId = file.id;
+      row.nodeCount = 10 + i;
+      row.createdBy = owner.id;
+      row.type = 'auto';
+      row.state = Buffer.from('thin');
+      row.createdAt = new Date(base + i);
+      row.restoredFrom = null;
+      await repo.save(row);
+    }
+
+    const res = await request(app.getHttpServer())
+      .get(`/api/files/${file.id}/versions`)
+      .set('Authorization', `Bearer ${owner.token}`);
+    expect(res.status).toBe(200);
+    // 共 202 行（201 直插 + 1 manual），恰返回最新 200 条且 createdAt DESC：
+    // 最老的 manual 行与 nodeCount 10（i=0）被上限裁掉
+    const counts = (res.body.items as { nodeCount: number }[]).map((r) => r.nodeCount);
+    expect(counts).toHaveLength(200);
+    expect(counts).toEqual(Array.from({ length: 200 }, (_, k) => 210 - k));
+
+    // key-set 口径：列表条目只含元数据列，state 绝不出现在列表响应（取态走 getState 唯一出口）
+    expect(Object.keys((res.body.items as Record<string, unknown>[])[0]).sort()).toEqual([
+      'createdAt',
+      'createdByName',
+      'id',
+      'nodeCount',
+      'restoredFrom',
+      'type',
+    ]);
+    for (const item of res.body.items as Record<string, unknown>[]) {
+      expect(item).not.toHaveProperty('state');
+    }
+  });
+
   it('dev 快照路由（Task 8）：live 脏文档 POST 即落 auto 行；无变更不落', async () => {
     const { file, nodeId } = await mkFileWithVersion('快照路由', '路由早期文本');
     const client = await connectSynced(file.id, owner.token);

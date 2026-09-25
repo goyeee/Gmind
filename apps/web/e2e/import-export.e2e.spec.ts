@@ -203,3 +203,19 @@ test('折叠提示：检测到 1 处折叠 → 确认后导出（画布折叠态
   await expect(page.locator('.editor-canvas svg .gm-collapse-badge')).toHaveCount(1);
   await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '周会对齐' })).toHaveCount(0);
 });
+
+// 用例 6：JPG 导出冒烟（终审修复补覆盖——FR-IO-003 JPG 链路此前零自动化）：
+// 无图片节点种子文档 → export-menu → export-jpg-1x → 下载产物为 JPEG（FF D8 FF
+// 魔数：SOI + 下一段标记高字节）且非空、命名 .jpg。
+test('导出 JPG 1x：下载产物为 JPEG 魔数（FF D8 FF）且 .jpg 命名', async ({ page }) => {
+  await openSeedDoc(page, '本周计划');
+  await page.getByTestId('export-menu').click();
+  const [download] = await Promise.all([
+    page.waitForEvent('download'),
+    page.getByTestId('export-jpg-1x').click(),
+  ]);
+  expect(download.suggestedFilename()).toBe('本周计划.jpg');
+  const jpg = await fs.promises.readFile(await download.path());
+  expect(jpg.length).toBeGreaterThan(0);
+  expect(jpg.subarray(0, 3).toString('hex')).toBe('ffd8ff');
+});

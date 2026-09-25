@@ -63,9 +63,14 @@ export class VersionsService {
   /** GET /api/files/:id/versions → {items}：created_at DESC（同毫秒按 ulid 单调性兜底）。 */
   async list(userId: string, fileId: string): Promise<{ items: VersionListItem[] }> {
     const file = await this.files.findAliveOr404(userId, fileId);
+    // 终审修复：列表只取元数据列——state 是 LONGBLOB，列表视图从不需要它（此前每行
+    // 整块物化快照 blob，数百行时面板一开即全史拉取）；取态仍走 getState 唯一出口。
     const rows = await this.repo.find({
       where: { fileId: file.id },
       order: { createdAt: 'DESC', id: 'DESC' },
+      select: ['id', 'fileId', 'nodeCount', 'createdBy', 'type', 'createdAt', 'restoredFrom'],
+      // 200 条上限——PRD 口径为「最近 90 天」而非「全部」，分页/加载更多随 M5 面板打磨裁定（产品侧决策）
+      take: 200,
     });
     const names = await this.nicknamesOf(rows.map((r) => r.createdBy).filter((v): v is string => v !== null));
     return { items: rows.map((r) => this.toListItem(r, names)) };

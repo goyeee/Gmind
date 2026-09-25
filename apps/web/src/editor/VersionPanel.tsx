@@ -26,8 +26,9 @@ import './version-panel.css';
 /**
  * 版本历史面板 — M4 Task 8（FR-VER-004 UI：时间轴/只读预览/一键恢复）。
  *
- * 装配模式同 MemberPanel（EditorPage 持 open/onClose，关闭即整树卸载，下次打开
- * 重拉列表——恢复后的列表刷新同样由重新 GET 完成）。
+ * 装配模式同 MemberPanel（EditorPage 持 open/onClose；open=false 时组件保持挂载，
+ * 仅 return null 隐藏而非整树卸载——open→false 的 effect 重置预览态，重开时列表
+ * effect 自然重拉，恢复后的列表刷新同样由重新 GET 完成）。
  *
  * - 时间轴：GET /files/:id/versions → {items}（服务端 createdAt DESC，新→旧直渲染）。
  *   条目 = 时间（当天 HH:mm，跨日 MM-DD HH:mm）+ 类型徽标（auto='自动' /
@@ -43,9 +44,9 @@ import './version-panel.css';
  *   广播自动更新（不 reload）。权限不前端判角色（一期 owner/editor 全员可恢复），
  *   服务端 404/401 由错误 message 透出 toast 兜底。
  *
- * 预览 Y.Doc 生命周期：openPreview 换预览/关预览/面板卸载三条路径都 destroy
- * （ref 收口 + unmount 兜底 effect，StrictMode 双调用安全——销毁走显式动作而非
- * effect cleanup）。
+ * 预览 Y.Doc 生命周期：openPreview 换预览/关预览/面板关闭（open→false）/卸载兜底
+ * 四条路径都 destroy（ref 收口 + open 变化与 unmount 两个兜底 effect，StrictMode
+ * 双调用安全——销毁走显式动作而非 effect cleanup）。
  */
 
 interface VersionItem {
@@ -160,7 +161,7 @@ function renderPreview(svg: SVGSVGElement, doc: Y.Doc): void {
 }
 
 export function VersionPanel({ fileId, open, onClose, showToast }: VersionPanelProps) {
-  // null = 加载中；[] = 无版本。面板关闭即卸载，重开自然重拉（含恢复后的刷新）。
+  // null = 加载中；[] = 无版本。重开面板（open 上升沿）自然重拉，含恢复后的刷新。
   const [items, setItems] = useState<VersionItem[] | null>(null);
   const [preview, setPreview] = useState<{ item: VersionItem; doc: Y.Doc } | null>(null);
   const previewSvgRef = useRef<SVGSVGElement | null>(null);
@@ -197,6 +198,18 @@ export function VersionPanel({ fileId, open, onClose, showToast }: VersionPanelP
       previewDocRef.current = null;
     };
   }, []);
+
+  // 面板关闭（open→false）重置预览态（终审修复）：组件 open=false 时保持挂载（下方
+  // return null 隐藏而非卸载），不重置则重开面板立即渲染陈旧 dialog——新挂载的空
+  // <svg> 不触发渲染 effect（deps [preview] 未变）→ 空白遮罩挡住面板。teardown 与
+  // × 按钮的 closePreview 同款：seq 失效在途请求 + destroy 预览 Y.Doc + 清 state。
+  useEffect(() => {
+    if (open) return;
+    previewSeqRef.current += 1;
+    previewDocRef.current?.destroy();
+    previewDocRef.current = null;
+    setPreview(null);
+  }, [open]);
 
   // 预览渲染 effect：preview 就绪后静态渲染一次（无监听，无需清理）
   useEffect(() => {
