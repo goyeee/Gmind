@@ -9,6 +9,9 @@ export interface StorageProvider {
   get(key: string): Promise<{ data: Buffer; contentType: string } | null>;
   /** 服务端对象复制（Task 15 FR-EDT-010：跨文件粘贴图片随迁）。源不存在时实现层抛错。 */
   copy(key: string, newKey: string): Promise<void>;
+  /** 前缀递归删除（M3a Task 7 回收站彻底删除，FR-FIL-007）：前缀下全部对象移除；
+   *  前缀不存在时静默成功（多数文件无图片，purge 不能因此失败）。 */
+  deletePrefix(prefix: string): Promise<void>;
 }
 
 /** 扩展名 → Content-Type 白名单（键由 StorageService 生成，扩展名必属白名单；读回据此回填）。 */
@@ -59,5 +62,15 @@ export class LocalDiskProvider implements StorageProvider {
     const dst = this.resolve(newKey);
     await fsp.mkdir(path.dirname(dst), { recursive: true });
     await fsp.copyFile(this.resolve(key), dst);
+  }
+
+  /** 递归删目录（deletePrefix 的 LocalDisk 实现）：resolve 越界防御与 get 同源；
+   *  空前缀会解析到根目录本身（rm 根 = 清空整个存储），显式拒绝；force 使前缀不存在
+   *  （ENOENT）静默成功。 */
+  async deletePrefix(prefix: string): Promise<void> {
+    if (!prefix) throw new BadRequestException('非法的存储键');
+    const full = this.resolve(prefix);
+    if (full === this.root) throw new BadRequestException('非法的存储键');
+    await fsp.rm(full, { recursive: true, force: true });
   }
 }

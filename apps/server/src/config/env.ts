@@ -16,6 +16,10 @@ const envSchema = z.object({
   // 默认与 Hocuspocus 内置一致（2000/10000）；e2e 压低以加速回写断言。
   COLLAB_DEBOUNCE_MS: z.coerce.number().default(2000),
   COLLAB_MAX_DEBOUNCE_MS: z.coerce.number().default(10000),
+  // 邮件（M3a Task 7 裁定）：SMTP 缺省不配置 → MailService 仅 log（M0 MailHog 容器未起的
+  // 兜底口径，调用方照常落 notifications）；MailHog 就绪后补 env 即接通。
+  SMTP_HOST: z.string().optional(),
+  SMTP_PORT: z.coerce.number().optional(),
 });
 
 export const env = envSchema.parse(process.env);

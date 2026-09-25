@@ -105,4 +105,14 @@ export class StorageService {
     await this.provider.copy(sourceKey, newKey);
     return { key: newKey };
   }
+
+  /** 前缀清理（M3a Task 7 回收站彻底删除，FR-FIL-007）：与 getImage 同口径拒绝 '..'
+   *  与空前缀（provider 层 resolve 再做越界防御 + 拒删根目录）；前缀不存在静默成功
+   *  （purgeFile 对无图片文件不得失败）。 */
+  async deletePrefix(prefix: string): Promise<void> {
+    if (!prefix || prefix.includes('..')) {
+      throw new BadRequestException('非法的存储键');
+    }
+    await this.provider.deletePrefix(prefix);
+  }
 }
