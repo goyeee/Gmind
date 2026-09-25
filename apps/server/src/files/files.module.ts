@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { CollabModule } from '../collab/collab.module';
+import { StorageCoreModule } from '../storage/storage-core.module';
 import { UsersModule } from '../users/users.module';
 import { FileEntity } from './file.entity';
 import { FileCollaboratorEntity } from './file-collaborator.entity';
@@ -15,7 +16,14 @@ import { FilesController, SearchController } from './files.controller';
   // （M3a 准入 7.1）需查询 CollabService 持有的活跃内存 doc。
   // FolderEntity（M3a Task 5）：文件移动目标（folderId）归属+存活校验用
   // FileStarEntity（M3a Task 6，FR-FIL-004）：加星/取消端点的 file_stars 行读写
-  imports: [TypeOrmModule.forFeature([FileEntity, FileCollaboratorEntity, FileStarEntity, FolderEntity]), UsersModule, CollabModule],
+  // StorageCoreModule（M3b Task 1，准入 7.8）：copyForUser 的图片对象迁移需
+  // StorageService.copyImage——叶子模块（不含鉴权端点层），不与 StorageModule 成环
+  imports: [
+    TypeOrmModule.forFeature([FileEntity, FileCollaboratorEntity, FileStarEntity, FolderEntity]),
+    UsersModule,
+    CollabModule,
+    StorageCoreModule,
+  ],
   providers: [FilesService],
   controllers: [FilesController, SearchController],
   exports: [FilesService],

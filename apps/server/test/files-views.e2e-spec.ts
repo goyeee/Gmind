@@ -3,7 +3,7 @@ import request from 'supertest';
 import { ulid } from 'ulid';
 import type { INestApplication } from '@nestjs/common';
 import { DataSource } from 'typeorm';
-import { createTemplateDoc, docFromState, docToState } from '@gmind/core';
+import { createTemplateDoc, docFromState, docToState, getNode, ROOT_NODE_ID, setImage } from '@gmind/core';
 import { createTestApp } from './support/app-test';
 import { FileEntity } from '../src/files/file.entity';
 
@@ -496,6 +496,57 @@ describe('文件复制与星标（FR-FIL-003/004）', () => {
     starred = await list(collaboratorToken, 'starred');
     expect(starred.body.map((f: { id: string }) => f.id)).not.toContain(fShared);
     expect(starred.body.map((f: { title: string }) => f.title)).not.toContain('共享给乙');
+  });
+
+  it('复制图片对象迁移（准入 7.8）：副本 key 落副本命名空间，purge 源后副本图片仍可读', async () => {
+    // 1×1 透明 PNG（与 storage.e2e-spec.ts 同款魔数合法体）
+    const PNG_1X1 = Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==',
+      'base64',
+    );
+    // 1) 建源文件 → 真实上传图片（multipart 走正式上传端点）
+    const created = await authed(ownerToken, 'post', '/api/files').send({ title: '含图源' });
+    expect(created.status).toBe(201);
+    const fImage = created.body.id as string;
+    const upload = await request(app.getHttpServer())
+      .post(`/api/files/${fImage}/images`)
+      .set('Authorization', `Bearer ${ownerToken}`)
+      .attach('file', PNG_1X1, 'x.png');
+    expect(upload.status).toBe(201);
+    const oldKey = upload.body.key as string;
+    expect(oldKey.startsWith(`files/${fImage}/`)).toBe(true);
+
+    // 2) docState 挂图：上传 key 写入节点 image（前端真实链路即 docState 内嵌 key）
+    const doc = createTemplateDoc({ title: '含图源', children: [{ text: '图节点' }] });
+    const childId = getNode(doc, ROOT_NODE_ID).childIds[0];
+    setImage(doc, childId, { key: oldKey, w: 1, h: 1 });
+    const put = await authed(ownerToken, 'put', `/api/files/${fImage}/doc-state`)
+      .send({ docState: Buffer.from(docToState(doc)).toString('base64'), lastEditorUserId: ownerId });
+    expect(put.status).toBe(200);
+
+    // 3) 复制 → 副本节点 image key 已迁移至 files/{copyId}/ 命名空间
+    const copyRes = await authed(ownerToken, 'post', `/api/files/${fImage}/copy`);
+    expect(copyRes.status).toBe(201);
+    const copyId = copyRes.body.id as string;
+    const copyGet = await authed(ownerToken, 'get', `/api/files/${copyId}`);
+    expect(copyGet.status).toBe(200);
+    const copyDoc = docFromState(new Uint8Array(Buffer.from(copyGet.body.docState, 'base64')));
+    const copyNode = getNode(copyDoc, getNode(copyDoc, ROOT_NODE_ID).childIds[0]);
+    expect(copyNode?.image).not.toBeNull();
+    const newKey = copyNode!.image!.key;
+    expect(newKey.startsWith(`files/${copyId}/`)).toBe(true);
+    expect(newKey).not.toBe(oldKey);
+
+    // 4) 源软删 → 彻底删除（purge 清 files/{sourceId}/ 前缀）
+    expect((await authed(ownerToken, 'delete', `/api/files/${fImage}`)).status).toBe(200);
+    expect((await authed(ownerToken, 'delete', `/api/trash/${fImage}`)).status).toBe(200);
+
+    // 5) 副本图片读回 200（字节一致）；旧 key（已随源 purge）404
+    const migrated = await request(app.getHttpServer()).get(`/api/images/${newKey}`);
+    expect(migrated.status).toBe(200);
+    const bytes = Buffer.isBuffer(migrated.body) ? migrated.body : Buffer.from(migrated.body);
+    expect(bytes.equals(PNG_1X1)).toBe(true);
+    expect((await request(app.getHttpServer()).get(`/api/images/${oldKey}`)).status).toBe(404);
   });
 });
 

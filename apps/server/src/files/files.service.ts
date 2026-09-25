@@ -1,16 +1,23 @@
-import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Brackets, In, IsNull, Repository } from 'typeorm';
+import type * as Y from 'yjs';
 import {
   countAliveReachable,
   createTemplateDoc,
   docFromState,
   docToState,
+  getNode,
+  ORIGIN_SYSTEM,
+  ROOT_NODE_ID,
+  setImage,
+  subtreeIds,
   SEED_TEMPLATES,
 } from '@gmind/core';
 import { MAX_DOC_NODES } from '@gmind/shared';
 import type { FileListItem, FileListItemDetailed, FilePatchResult } from '@gmind/shared';
 import { CollabService } from '../collab/collab.service';
+import { StorageService } from '../storage/storage.service';
 import { FileCollaboratorEntity } from './file-collaborator.entity';
 import { FileEntity } from './file.entity';
 import { FileStarEntity } from './file-star.entity';
@@ -52,12 +59,29 @@ export class FilesService {
     @InjectRepository(FolderEntity) private readonly folderRepo: Repository<FolderEntity>,
     // tsx 不发射装饰器元数据，类 token 注入必须显式 @Inject（约定同 session.service.ts）
     @Inject(CollabService) private readonly collab: CollabService,
+    // 图片对象迁移（M3b Task 1，准入 7.8）：copyForUser 需 copyImage 把源命名空间对象
+    // 复制进副本命名空间；经 StorageCoreModule（叶子）注入，与 StorageModule 无环
+    @Inject(StorageService) private readonly storage: StorageService,
   ) {}
+
+  private readonly logger = new Logger(FilesService.name);
 
   /** 新建文件；无 doc 状态时用空白模板。配额 100 文件（FR-ACC-003）。
    *  folderId/lastModifierUserId（M3a Task 6）：复制路径的显式落点（同文件夹）与
    *  修改人标记；缺省 null，普通新建（POST /api/files）行为不变。 */
   async createForUser(
+    userId: string,
+    input: { title: string; state?: Uint8Array; nodeCount?: number; folderId?: string | null; lastModifierUserId?: string },
+  ): Promise<FileEntity> {
+    const file = await this.buildForUser(userId, input);
+    return this.repo.save(file);
+  }
+
+  /** 新建文件构建（不落库；M3b Task 1 从 createForUser 提取）：配额（FR-ACC-003）与
+   *  doc meta 回填链路（nodeCount/structure/themeId）在此完成，返回的实体已带
+   *  entity 默认生成的 id——copyForUser 需先持有副本 id 才能以 files/{副本id}/ 命名空间
+   *  迁移图片对象（准入 7.8「落库前完成迁移」的单体一致复制语义）。 */
+  private async buildForUser(
     userId: string,
     input: { title: string; state?: Uint8Array; nodeCount?: number; folderId?: string | null; lastModifierUserId?: string },
   ): Promise<FileEntity> {
@@ -88,7 +112,7 @@ export class FilesService {
       file.docState = Buffer.from(docToState(doc));
       file.nodeCount = countAliveReachable(doc);
     }
-    return this.repo.save(file);
+    return file;
   }
 
   /** 注册赠送 3 个示例脑图（FR-ACC-001）。 */
@@ -366,10 +390,14 @@ export class FilesService {
    *  口径截源标题——JS Array.from 按码点切分与 utf8mb4 计数一致——保「-副本」后缀完整）、
    *  内容经 docFromState→docToState round-trip 归一化落库；folderId 随源复制（同文件夹
    *  落点）；last_modifier=调用人；nodeCount/structure/themeId 复用 createForUser 的
-   *  doc meta 回填链路。配额（FR-ACC-003）：副本同占 100 文件上限——createForUser 内
+   *  doc meta 回填链路。配额（FR-ACC-003）：副本同占 100 文件上限——buildForUser 内
    *  强制，复制路径无旁路。
-   *  图片 key 共享（M3a plan 裁定）：docState 内图片 key 仍指向原文件命名空间，一期
-   *  复制不迁移对象——copy 的属主校验（canAccess）已覆盖跨用户写，key 共享合法。
+   *  图片对象迁移（M3b Task 1，准入 7.8，取代 M3a「key 共享」裁定）：docState 内图片
+   *  key 迁至副本命名空间（files/{副本id}/{ulid}.{ext}，源键扩展名原样保留）——否则
+   *  副本仍指向 files/{源id}/，源被彻底删除（purge 前缀清理）后副本图片全部失联
+   *  （M3a 终审 Important #1）。迁移在 buildForUser（持副本 id）之后、repo.save 之前
+   *  完成——单体一致复制：新文件行只在迁移尝试全部结束后落库；单个 key 迁移失败
+   *  （源对象缺失等）不阻塞复制，保留旧 key 并记日志（binding 裁定）。
    *  评论/版本不复制（本就不跟随 docState）。 */
   async copyForUser(userId: string, id: string): Promise<FileEntity> {
     const source = await this.findAliveOr404(userId, id);
@@ -383,12 +411,49 @@ export class FilesService {
     const suffix = '-副本';
     const maxBase = 255 - suffix.length;
     const base = source.title.length > maxBase ? Array.from(source.title).slice(0, maxBase).join('') : source.title;
-    return this.createForUser(userId, {
+    // 构建未落库实体：配额在此强制；file.id 即副本命名空间（图片迁移目标）
+    const file = await this.buildForUser(userId, {
       title: base + suffix,
       state: docToState(doc),
       folderId: source.folderId,
       lastModifierUserId: userId,
     });
+    await this.migrateImagesForCopy(doc, file.id);
+    // buildForUser 落的是未迁移 round-trip 态，统一以迁移后的 doc 为最终落库态
+    file.docState = Buffer.from(docToState(doc));
+    return this.repo.save(file);
+  }
+
+  /** 复制图片对象迁移（M3b Task 1，准入 7.8）：先序遍历存活子树（subtreeIds 自 root，
+   *  与 nodeCount 同口径），节点 image.key 经 StorageService.copyImage 复制到
+   *  files/{newFileId}/ 命名空间后以 system origin 回写（服务端事实修正，不进撤销栈；
+   *  副本为全新 Y.Doc，撤销栈语义无观察面，system origin 免去多余 undo 记录）。
+   *  同一 key 被多节点引用只复制一次（Map 去重，ulid 保证新键唯一）。单个 key 失败
+   *  （源对象缺失/存储异常）不抛出：保留旧 key 继续其余迁移——binding「失败不阻塞
+   *  复制」；失败 key 仍指向源前缀，源 purge 后该图 404，属可接受的降级态。 */
+  private async migrateImagesForCopy(doc: Y.Doc, newFileId: string): Promise<void> {
+    // 旧 key → 新 key（null = 该 key 迁移失败，出现于其全部节点保留旧 key）
+    const migrated = new Map<string, string | null>();
+    for (const nodeId of subtreeIds(doc, ROOT_NODE_ID)) {
+      const image = getNode(doc, nodeId)?.image;
+      if (!image) continue;
+      if (!migrated.has(image.key)) {
+        try {
+          migrated.set(image.key, (await this.storage.copyImage(newFileId, image.key)).key);
+        } catch (err) {
+          this.logger.warn(
+            `复制迁移图片对象失败，保留原 key（file=${newFileId} key=${image.key}）: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          );
+          migrated.set(image.key, null);
+        }
+      }
+      // get 形参上 undefined 与「迁移失败」null 语义合并（map 此前必有 set，undefined 不可达）
+      const newKey = migrated.get(image.key) ?? null;
+      if (newKey === null) continue;
+      setImage(doc, nodeId, { key: newKey, w: image.w, h: image.h }, ORIGIN_SYSTEM);
+    }
   }
 
   /** 回写最近打开时间；1 分钟内重复打开直接返回旧值（写摊销）。
