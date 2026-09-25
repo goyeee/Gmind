@@ -302,4 +302,42 @@ describe('回收站域（FR-FIL-005~007/010）', () => {
     const list = await authed('get', '/api/trash');
     expect(list.body.map((x: { id: string }) => x.id)).not.toContain(payload.fileId);
   });
+
+  it('准入 7.9：提醒 → 还原（旧提醒行被清）→ 再删 → 新 27 天窗口再次提醒', async () => {
+    const cleanup = app.get((await import('../src/jobs/cleanup.service')).CleanupService);
+    // 清掉前序用例遗留的回收站条目（未到期文件），使本用例计数断言精确
+    const leftovers = await authed('get', '/api/trash');
+    for (const item of leftovers.body as { id: string }[]) {
+      expect((await authed('delete', `/api/trash/${item.id}`)).status).toBe(200);
+    }
+    const reminderCount = async (fileId: string): Promise<number> => {
+      const rows: { c: string }[] = await ds.query(
+        "SELECT COUNT(*) AS c FROM notifications WHERE type = 'system' AND payload LIKE ?",
+        [`%"fileId":"${fileId}"%`],
+      );
+      return Number(rows[0]?.c ?? 0);
+    };
+
+    const file = await createFile('再删提醒文件');
+    // 第一轮：软删 → 满 27 天 → 提醒一次
+    expect((await authed('delete', `/api/files/${file.id}`)).status).toBe(200);
+    expect(await cleanup.runCleanup(new Date(Date.now() + 27 * DAY_MS))).toEqual({ purged: 0, reminded: 1 });
+    expect(await reminderCount(file.id)).toBe(1);
+
+    // 还原：该文件的旧提醒行随之清除（M3a 终审 Important #2——防死链通知累积）
+    expect((await authed('post', `/api/trash/${file.id}/restore`)).status).toBe(200);
+    expect(await reminderCount(file.id)).toBe(0);
+
+    // 再删：新一轮 27 天窗口 → 再次提醒（旧口径仅按 fileId 判重会漏提，FR-FIL-010 re-delete 语义）
+    expect((await authed('delete', `/api/files/${file.id}`)).status).toBe(200);
+    expect(await cleanup.runCleanup(new Date(Date.now() + 27 * DAY_MS))).toEqual({ purged: 0, reminded: 1 });
+    expect(await reminderCount(file.id)).toBe(1);
+    // 新提醒携带新一轮删除时刻（而非还原前的旧 deletedAt）
+    const rows: { payload: string }[] = await ds.query(
+      "SELECT payload FROM notifications WHERE type = 'system' AND payload LIKE ?",
+      [`%"fileId":"${file.id}"%`],
+    );
+    const payload = JSON.parse(rows[0]?.payload ?? '{}') as { deletedAt: string };
+    expect(Date.now() - new Date(payload.deletedAt).getTime()).toBeLessThan(DAY_MS);
+  });
 });

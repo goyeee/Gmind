@@ -50,37 +50,49 @@ export class CleanupService {
       where: { deletedAt: And(LessThanOrEqual(remindBefore), MoreThan(purgeBefore)) },
     });
     for (const file of due) {
-      if (await this.hasReminded(file.ownerUserId, file.id)) continue; // 幂去重：同一条目只提醒一次
-      await this.remind(file);
+      // 准入 7.9：判重标记 = fileId + deletedAt 双分量，且写入 payload 的 deletedAt ISO
+      // 与判重读取用同一表达式——「还原→再删」开启的新 27 天窗口不被旧提醒挡住
+      // （FR-FIL-010 re-delete 语义）。
+      const deletedAtIso = (file.deletedAt ?? new Date(0)).toISOString();
+      if (await this.hasReminded(file.ownerUserId, file.id, deletedAtIso)) continue; // 幂去重：同一删除周期只提醒一次
+      await this.remind(file, deletedAtIso);
       reminded++;
     }
     return { purged, reminded };
   }
 
   /** 幂去重（任务绑定裁定）：notifications 表量级极小（个人提醒），MySQL 5.6 无 JSON
-   *  类型、payload LIKE 文本匹配在此规模可接受。标记取 `"fileId":"<ulid>"`——ULID 定长
-   *  26 且以闭合引号定界，不会命中更长 id 的前缀；type=system 收窄命中面。 */
-  private async hasReminded(userId: string, fileId: string): Promise<boolean> {
-    const marker = `%\"fileId\":\"${fileId}\"%`;
+   *  类型、payload LIKE 文本匹配在此规模可接受。标记取 `"fileId":"<ulid>"` AND
+   *  `"deletedAt":"<iso>"` 两段独立 LIKE——ULID 定长 26 且以闭合引号定界，不会命中更长
+   *  id 的前缀；deletedAt 分量保证「还原→再删」的新一轮窗口可再次提醒（准入 7.9）。
+   *  payload 由本服务 remind() 写入（键序固定、ISO 串无 LIKE 通配符 %/_），两段匹配与
+   *  键序无耦合；type=system 收窄命中面。 */
+  private async hasReminded(userId: string, fileId: string, deletedAtIso: string): Promise<boolean> {
     const count = await this.notifRepo.countBy({
       userId,
       type: 'system',
-      payload: Raw((alias) => `${alias} LIKE :marker`, { marker }),
+      payload: Raw(
+        (alias) => `${alias} LIKE :fileMarker AND ${alias} LIKE :deletedMarker`,
+        {
+          fileMarker: `%\"fileId\":\"${fileId}\"%`,
+          deletedMarker: `%\"deletedAt\":\"${deletedAtIso}\"%`,
+        },
+      ),
     });
     return count > 0;
   }
 
   /** 落一条 system 通知（payload 供通知中心/前端直接驱动还原）+ 尽力而为邮件。
-   *  MailService 永不抛错（内部兜底），提醒主流程不受邮件失败影响。 */
-  private async remind(file: FileEntity): Promise<void> {
-    const deletedAt = file.deletedAt ?? new Date(0); // due 查询保证 deleted_at 非空，兜底仅为类型收窄
+   *  MailService 永不抛错（内部兜底），提醒主流程不受邮件失败影响。
+   *  deletedAtIso 由 runCleanup 传入（与 hasReminded 判重同源，准入 7.9）。 */
+  private async remind(file: FileEntity, deletedAtIso: string): Promise<void> {
     const notification = this.notifRepo.create();
     notification.userId = file.ownerUserId;
     notification.type = 'system';
     notification.payload = JSON.stringify({
       fileId: file.id,
       title: file.title,
-      deletedAt: deletedAt.toISOString(),
+      deletedAt: deletedAtIso,
       action: 'restore',
     });
     await this.notifRepo.save(notification);

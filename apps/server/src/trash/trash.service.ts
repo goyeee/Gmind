@@ -4,6 +4,7 @@ import { DataSource, Repository } from 'typeorm';
 import type { TrashItem } from '@gmind/shared';
 import { FileEntity } from '../files/file.entity';
 import { FolderEntity } from '../folders/folder.entity';
+import { NotificationEntity } from '../notifications/notification.entity';
 import { StorageService } from '../storage/storage.service';
 
 /** 原始行 → ISO 时刻（mysql2 对 datetime(3) 返回 Date；容错字符串形态；口径同 files.service）。 */
@@ -26,6 +27,8 @@ export class TrashService {
     // file_collaborators/file_stars 与 files 行一并事务硬删）；tsx 不发射装饰器元数据，
     // 类 token 注入必须显式 @Inject（约定同 session.service.ts）
     @Inject(DataSource) private readonly dataSource: DataSource,
+    // 准入 7.9：restore 清旧到期提醒（notifications 表）
+    @InjectRepository(NotificationEntity) private readonly notifRepo: Repository<NotificationEntity>,
     @Inject(StorageService) private readonly storage: StorageService,
   ) {}
 
@@ -62,7 +65,10 @@ export class TrashService {
   /** 还原（FR-FIL-006）：owner=me；不在回收站（存活/缺失/他人）→ 404「文件不存在」，
    *  同口径不泄露存在性。落点：原文件夹存活 → 回原处；已删/缺失 → 根（folderId=null）。
    *  定点 update（updatedAt: () => 'updated_at'）不推进 updated_at——还原非内容修改，
-   *  不应使文件浮到 mine 视图首位（口径同 markOpened，M1 遗留裁定）。 */
+   *  不应使文件浮到 mine 视图首位（口径同 markOpened，M1 遗留裁定）。
+   *  准入 7.9（M3a 终审 Important #2）：还原 update 与旧提醒清除同事务——文件回到存活态
+   *  时，其 type=system 且 payload 含 fileId 的到期提醒行原子消亡（防死链通知累积），
+   *  且「还原→再删」进入的新 27 天窗口可再次提醒（配合 CleanupService 的 deletedAt 判重）。 */
   async restore(userId: string, fileId: string): Promise<{ ok: true }> {
     const file = await this.fileRepo.findOne({ where: { id: fileId, ownerUserId: userId } });
     if (!file || file.deletedAt == null) throw new NotFoundException('文件不存在');
@@ -71,11 +77,24 @@ export class TrashService {
       const folder = await this.folderRepo.findOne({ where: { id: folderId, ownerUserId: userId } });
       if (!folder || folder.deletedAt != null) folderId = null; // 原文件夹已删/缺失 → 回根
     }
-    await this.fileRepo.update(file.id, {
-      deletedAt: null,
-      deletedBy: null,
-      folderId,
-      updatedAt: () => 'updated_at',
+    await this.dataSource.transaction(async (em) => {
+      await em.update(FileEntity, file.id, {
+        deletedAt: null,
+        deletedBy: null,
+        folderId,
+        updatedAt: () => 'updated_at',
+      });
+      // 提醒 payload 无 file_id 列可等值删，按写端同款 LIKE 标记命中（写端见 CleanupService.remind）
+      await em
+        .createQueryBuilder()
+        .delete()
+        .from(NotificationEntity)
+        .where('user_id = :userId AND type = :type AND payload LIKE :marker', {
+          userId,
+          type: 'system',
+          marker: `%\"fileId\":\"${fileId}\"%`,
+        })
+        .execute();
     });
     return { ok: true };
   }
