@@ -28,3 +28,7 @@ export interface FileListItemDetailed extends FileListItem {
   /** 当前用户视角是否已加星。 */
   starred: boolean;
 }
+
+/** PATCH /api/files/:id 响应（M3a Task 5，FR-FIL-002）：FileListItem + 落点 folderId——
+ *  改名与/或移动后的最新值，客户端无需回查列表即知落点（null = 根目录）。 */
+export type FilePatchResult = FileListItem & { folderId: string | null };

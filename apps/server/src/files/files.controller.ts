@@ -18,6 +18,18 @@ const docStateSchema = z.object({
 // GET /api/files 的视图参数（M3a Task 4，FR-FIL-001）：缺省 mine；非法值 400。
 const listViewSchema = z.object({ view: z.enum(['mine', 'shared', 'starred', 'recent']).default('mine') });
 
+// PATCH /api/files/:id（M3a Task 5，FR-FIL-002）：title 与 folderId 均可选、至少其一；
+// folderId null → 移回根目录。title 规则复用 createFileSchema（ZodOptional 短路 undefined，
+// 缺省「未命名脑图」的 default 不触发）。
+const patchFileSchema = z
+  .object({
+    title: createFileSchema.shape.title.optional(),
+    folderId: z.string().min(1).max(26).nullable().optional(),
+  })
+  .refine((v) => v.title !== undefined || v.folderId !== undefined, {
+    message: '至少提供 title 或 folderId',
+  });
+
 @Controller('api/files')
 @UseGuards(UserGuard)
 export class FilesController {
@@ -51,10 +63,8 @@ export class FilesController {
   }
 
   @Patch(':id')
-  async rename(@Req() req: { user: { id: string } }, @Param('id') id: string, @Body() body: unknown) {
-    // 复用 createFileSchema 的 title 规则（min 1 / max 255 / 默认「未命名脑图」）；shape.title.parse 返回字符串本体
-    const title = createFileSchema.shape.title.parse((body as { title?: string } | null)?.title);
-    return this.files.rename(req.user.id, id, title);
+  async update(@Req() req: { user: { id: string } }, @Param('id') id: string, @Body() body: unknown) {
+    return this.files.renameAndMove(req.user.id, id, patchFileSchema.parse(body ?? {}));
   }
 
   @Post(':id/open')

@@ -1,6 +1,6 @@
 import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Brackets, IsNull, Repository } from 'typeorm';
+import { Brackets, In, IsNull, Repository } from 'typeorm';
 import {
   countAliveReachable,
   createTemplateDoc,
@@ -9,10 +9,11 @@ import {
   SEED_TEMPLATES,
 } from '@gmind/core';
 import { MAX_DOC_NODES } from '@gmind/shared';
-import type { FileListItem, FileListItemDetailed } from '@gmind/shared';
+import type { FileListItem, FileListItemDetailed, FilePatchResult } from '@gmind/shared';
 import { CollabService } from '../collab/collab.service';
 import { FileCollaboratorEntity } from './file-collaborator.entity';
 import { FileEntity } from './file.entity';
+import { FolderEntity } from '../folders/folder.entity';
 
 export const MAX_FILES_PER_USER = 100;
 /** 打开时间戳写摊销节流：1 分钟内重复打开不回写 last_opened_at。 */
@@ -35,6 +36,8 @@ export class FilesService {
   constructor(
     @InjectRepository(FileEntity) private readonly repo: Repository<FileEntity>,
     @InjectRepository(FileCollaboratorEntity) private readonly collabRepo: Repository<FileCollaboratorEntity>,
+    // 文件移动目标校验（M3a Task 5，FR-FIL-002）：folderId 须为本人存活文件夹
+    @InjectRepository(FolderEntity) private readonly folderRepo: Repository<FolderEntity>,
     // tsx 不发射装饰器元数据，类 token 注入必须显式 @Inject（约定同 session.service.ts）
     @Inject(CollabService) private readonly collab: CollabService,
   ) {}
@@ -115,7 +118,7 @@ export class FilesService {
       .createQueryBuilder('f')
       .leftJoin('users', 'owner_u', 'owner_u.id = f.owner_user_id')
       .leftJoin('users', 'mod_u', 'mod_u.id = f.last_modifier_user_id')
-      .leftJoin('folders', 'fold', 'fold.id = f.folder_id')
+      .leftJoin('folders', 'fold', 'fold.id = f.folder_id AND fold.deleted_at IS NULL')
       .leftJoin('file_stars', 'st', 'st.file_id = f.id AND st.user_id = :viewerId')
       .setParameter('viewerId', userId)
       .where('f.deleted_at IS NULL')
@@ -268,12 +271,28 @@ export class FilesService {
     return { nodeCount };
   }
 
-  /** 重命名（title 已在 controller 经 createFileSchema.title 校验）。 */
-  async rename(userId: string, id: string, title: string): Promise<FileListItem> {
+  /** 重命名与/或移动（M3a Task 5，FR-FIL-002）：title 与 folderId 均可选、至少其一
+   *  （controller schema 保证）；folderId null → 移回根目录，非空须为本人存活文件夹
+   *  （否则 400「目标文件夹不存在」——不区分不存在/他人，不泄露文件夹存在性）。 */
+  async renameAndMove(
+    userId: string,
+    id: string,
+    input: { title?: string; folderId?: string | null },
+  ): Promise<FilePatchResult> {
     const file = await this.findAliveOr404(userId, id);
-    file.title = title;
+    if (input.title !== undefined) file.title = input.title;
+    if (input.folderId !== undefined && input.folderId !== file.folderId) {
+      if (input.folderId !== null) {
+        const folder = await this.folderRepo.findOne({
+          where: { id: input.folderId, ownerUserId: userId, deletedAt: IsNull() },
+        });
+        if (!folder) throw new BadRequestException('目标文件夹不存在');
+      }
+      file.folderId = input.folderId;
+    }
     await this.repo.save(file);
-    return this.toListItem(file);
+    // 追加 folderId：移动是本端点的第一语义，客户端无需回查列表即知落点
+    return { ...this.toListItem(file), folderId: file.folderId };
   }
 
   /** 回写最近打开时间；1 分钟内重复打开直接返回旧值（写摊销）。
@@ -293,16 +312,33 @@ export class FilesService {
     return { lastOpenedAt: openedAt.toISOString() };
   }
 
+  /** 软删核心（M3a Task 5 提取，文件夹整体入回收站复用）：deleted_at=now、
+   *  deleted_by=删除人，并主动断开该文档的全部协同连接（v4 closeConnections 按
+   *  documentName；重连被 onAuthenticate 的 deletedAt 检查天然阻止；在途防抖持久化
+   *  受 storeDocument 的存活条件保护，不回写已删行）。 */
+  async softDeleteFile(file: FileEntity, byUserId: string): Promise<void> {
+    await this.repo.update(file.id, { deletedAt: new Date(), deletedBy: byUserId });
+    this.collab.closeDocumentConnections(file.id);
+  }
+
+  /** 文件夹整体入回收站（M3a Task 5，FR-FIL-002）：folderIds（调用方算好的整棵子树，
+   *  含自身）下的存活文件逐个走 softDeleteFile 核心——deleted_by 记调用删除文件夹的人。 */
+  async softDeleteFilesInFolders(folderIds: string[], byUserId: string): Promise<number> {
+    if (folderIds.length === 0) return 0;
+    const files = await this.repo.find({
+      where: { ownerUserId: byUserId, folderId: In(folderIds), deletedAt: IsNull() },
+    });
+    for (const f of files) await this.softDeleteFile(f, byUserId);
+    return files.length;
+  }
+
   /** 删除（M3a Task 4，FR-FIL-001；PRD 2.2.1）：**仅 owner**——协作者无删除权。
    *  软删（deleted_at=now、deleted_by=owner）；非 owner（含协作者）与已删/不存在
-   *  一律 404「文件不存在」，不泄露文件存在性。删除后主动断开该文档的全部协同
-   *  连接（v4 closeConnections 按 documentName；重连被 onAuthenticate 的 deletedAt
-   *  检查天然阻止；在途防抖持久化受 storeDocument 的存活条件保护，不回写已删行）。 */
+   *  一律 404「文件不存在」，不泄露文件存在性。 */
   async deleteOwned(userId: string, id: string): Promise<void> {
     const file = await this.repo.findOne({ where: { id, deletedAt: IsNull() } });
     if (!file || file.ownerUserId !== userId) throw new NotFoundException('文件不存在');
-    await this.repo.update(id, { deletedAt: new Date(), deletedBy: userId });
-    this.collab.closeDocumentConnections(id);
+    await this.softDeleteFile(file, userId);
   }
 }
 

@@ -173,9 +173,11 @@ describe('文件内容端点（读取/回写/改名/打开）', () => {
   it('PATCH 改名 → GET title 变化且列表同步', async () => {
     const res = await authed(ownerToken, 'patch', `/api/files/${fileId}`).send({ title: '新名字' });
     expect(res.status).toBe(200);
-    // 响应必须符合 FileListItem 契约（toListItem 唯一出口）
-    expect(Object.keys(res.body).sort()).toEqual(['id', 'lastOpenedAt', 'nodeCount', 'structure', 'title', 'updatedAt']);
+    // 响应 = FileListItem 契约（toListItem 唯一出口）+ folderId（M3a Task 5 移动语义，
+    // 客户端移动后无需回查列表即知落点；未移动时为当前落点 null/文件夹 id）
+    expect(Object.keys(res.body).sort()).toEqual(['folderId', 'id', 'lastOpenedAt', 'nodeCount', 'structure', 'title', 'updatedAt']);
     expect(res.body.title).toBe('新名字');
+    expect(res.body.folderId).toBeNull();
 
     const got = await authed(ownerToken, 'get', `/api/files/${fileId}`);
     expect(got.body.title).toBe('新名字');
