@@ -11,6 +11,7 @@ import type {
   onStoreDocumentPayload,
 } from '@hocuspocus/server';
 import * as Y from 'yjs';
+import { ulid } from 'ulid';
 import {
   countAliveReachable,
   createTemplateDoc,
@@ -23,12 +24,16 @@ import { MAX_DOC_NODES } from '@gmind/shared';
 import { FileCollaboratorEntity } from '../files/file-collaborator.entity';
 import { FileEntity } from '../files/file.entity';
 import { SessionService } from '../session/session.service';
+import { VersionEntity } from '../versions/version.entity';
 
 /** 协同 WebSocket 升级路由（挂在与 REST API 相同的 HTTP server 上）。 */
 export const COLLAB_WS_PATH = '/collab';
 
 /** fileId（ULID 26 位）形状校验：畸形 documentName 不进 DB。 */
 const FILE_ID_RE = /^[0-9A-Z]{26}$/;
+
+/** 版本快照类型（versions.type 枚举；manual/pre_restore 由 versions 域与恢复路径写入）。 */
+export type VersionSnapshotType = 'auto' | 'manual' | 'pre_restore';
 
 /**
  * 服务端 Hocuspocus 网关（M2 Task 1）。
@@ -59,12 +64,19 @@ export class CollabService implements OnApplicationShutdown {
   private upgradeHandler?: (request: NodeIncomingMessage, socket: unknown, head: Buffer) => void;
   /** 越线告警的边缘触发标记（documentName → 已告警）。 */
   private readonly overQuotaDocs = new Set<string>();
+  /** 版本快照节流窗口（FR-VER-001）：同一文档两次 auto 快照的最小间隔。 */
+  private static readonly SNAPSHOT_INTERVAL_MS = 3 * 60 * 1000;
+  /** 每文档快照元数据（documentName → 上次 auto 快照时刻 + 脏标记）。
+   *  onChange 置脏；快照落行清脏；卸载收尾整项删除——生命周期与活跃文档一致，
+   *  Map 有界（≤ 在内存文档数），无泄漏。 */
+  private readonly snapMeta = new Map<string, { lastAutoAt: number; dirty: boolean }>();
 
   // tsx 不发射装饰器元数据，类 token 注入必须显式 @Inject（约定同 session.service.ts）
   constructor(
     @Inject(SessionService) private readonly sessions: SessionService,
     @InjectRepository(FileEntity) private readonly files: Repository<FileEntity>,
     @InjectRepository(FileCollaboratorEntity) private readonly collaborators: Repository<FileCollaboratorEntity>,
+    @InjectRepository(VersionEntity) private readonly versions: Repository<VersionEntity>,
   ) {
     this.hocuspocus = new Hocuspocus({
       quiet: true,
@@ -75,6 +87,16 @@ export class CollabService implements OnApplicationShutdown {
       onChange: async (data) => this.handleChange(data),
       onStoreDocument: async (data) => this.storeDocument(data),
       beforeUnloadDocument: async (data) => {
+        // 卸载兜底（FR-VER-001）：会话结束仍有未快照的变更 → 立即落行（补「编辑 1 分钟
+        // 即关页」窗口；v4 在最终 store 之后、文档仍在内存时调用本钩子）。快照失败不
+        // 阻断卸载——v4 对 beforeUnloadDocument 抛错的处置是放弃卸载（文档滞留内存
+        // 泄漏），且丢失的快照可由下次会话的编辑重新置脏兜底。收尾清除 per-file 元数据。
+        try {
+          await this.snapshotIfDirty(data.documentName, Date.now());
+        } catch (err) {
+          console.error(`[collab] 卸载快照失败（${data.documentName}）`, err);
+        }
+        this.snapMeta.delete(data.documentName);
         this.overQuotaDocs.delete(data.documentName);
       },
     });
@@ -136,6 +158,13 @@ export class CollabService implements OnApplicationShutdown {
     return (this.hocuspocus.documents.get(fileId)?.getConnectionsCount() ?? 0) > 0;
   }
 
+  /** 活跃文档直读（M4 Task 7 恢复路径复用）：文档在内存时以其执行 fn 并返回结果；
+   *  不在内存（无人在线，无活跃 doc）返回 null——调用方回落 DB 侧 doc_state 路径。 */
+  withLiveDocument<T>(fileId: string, fn: (doc: Y.Doc) => T): T | null {
+    const doc = this.hocuspocus.documents.get(fileId);
+    return doc ? fn(doc) : null;
+  }
+
   /** 断开某文档的全部协同连接（M3a Task 4：owner 删除文件后踢除在途协作者；
    *  v4 closeConnections 支持按 documentName 定向，文档未在内存时为 no-op）。
    *  重连被 onAuthenticate 的 deletedAt 检查天然阻止；软删后的在途防抖持久化
@@ -191,6 +220,19 @@ export class CollabService implements OnApplicationShutdown {
     const allowed = await this.canOpen(data.documentName, session.userId);
     if (!allowed) throw new Error('permission-denied');
     data.context.userId = session.userId;
+    // 快照基线：会话建立即计时（lastAutoAt=当前时刻，dirty=false）——首窗口内编辑
+    // 只走防抖落库，不立即产生版本行
+    this.ensureSnapMeta(data.documentName);
+  }
+
+  /** 每文档快照元数据 get-or-init（lastAutoAt=初始化时刻，dirty=false）。 */
+  private ensureSnapMeta(name: string): { lastAutoAt: number; dirty: boolean } {
+    let meta = this.snapMeta.get(name);
+    if (!meta) {
+      meta = { lastAutoAt: Date.now(), dirty: false };
+      this.snapMeta.set(name, meta);
+    }
+    return meta;
   }
 
   /** FilesService.findAliveOr404 + assertCanRead 的布尔口径（owner 或 collaborator 行，
@@ -215,8 +257,11 @@ export class CollabService implements OnApplicationShutdown {
     Y.applyUpdate(data.document, docToState(source));
   }
 
-  /** 配额告警（advisory）：越线边缘触发一次广播；回落限内后再次越线可再告警。 */
+  /** 配额告警（advisory）：越线边缘触发一次广播；回落限内后再次越线可再告警。
+   *  同时承担快照脏标记（FR-VER-001）：onUpdate 仅在装载完成后注册，装载期
+   *  applyUpdate 不触发——到达此处的都是真实编辑。 */
   private async handleChange(data: onChangePayload): Promise<void> {
+    this.ensureSnapMeta(data.documentName).dirty = true;
     const nodeCount = countAliveReachable(data.document);
     const over = nodeCount > MAX_DOC_NODES;
     if (over && !this.overQuotaDocs.has(data.documentName)) {
@@ -261,6 +306,14 @@ export class CollabService implements OnApplicationShutdown {
       console.error(`[collab] onStoreDocument 失败（${data.documentName}）`, err);
       throw err;
     }
+    // auto 快照（FR-VER-001）：落库成功后、ack 广播前按节流窗口尝试（await 只约束时序，
+    // 不耦合失败）——快照写失败不上抛：persist 已成功，抛错会令 v4 重试整个 store（文档
+    // 滞留内存 + doc_state 重复回写），而快照另有卸载兜底与下个 3 分钟窗口，丢一次不丢数据。
+    try {
+      await this.snapshotIfDue(data.documentName, Date.now());
+    } catch (err) {
+      console.error(`[collab] auto 快照失败（${data.documentName}）`, err);
+    }
     // ack 只在成功写入后广播（放在 try 之外，失败路径不可达此处）
     data.document.broadcastStateless(
       JSON.stringify({
@@ -269,5 +322,54 @@ export class CollabService implements OnApplicationShutdown {
         ...(persistedUpdatedAt ? { updatedAt: persistedUpdatedAt } : {}),
       }),
     );
+  }
+
+  /** auto 快照节流入口（M4 Task 6，FR-VER-001；public 供 e2e 注入时钟 / T7 复用）：
+   *  脏文档且距上次 auto 快照 ≥3 分钟 → 写 auto 行。「有变更才写」由 dirty 保证。
+   *  文档不在内存或无元数据（未建立会话/已卸载）一律 false。 */
+  async snapshotIfDue(fileId: string, now: number): Promise<boolean> {
+    const meta = this.snapMeta.get(fileId);
+    const doc = this.hocuspocus.documents.get(fileId);
+    if (!meta?.dirty || !doc || now - meta.lastAutoAt < CollabService.SNAPSHOT_INTERVAL_MS) return false;
+    await this.insertVersionSnapshot(fileId, doc, 'auto', now);
+    meta.lastAutoAt = now;
+    meta.dirty = false;
+    return true;
+  }
+
+  /** 卸载兜底（FR-VER-001；public 供 e2e / T7 复用）：会话结束时有未落快照的变更 →
+   *  立即落行，不看节流间隔（补「编辑 1 分钟即关页」窗口——3 分钟节流只约束 auto
+   *  常规快照，不应吞掉会话末尾的最后一次变更）。 */
+  async snapshotIfDirty(fileId: string, now: number): Promise<boolean> {
+    const meta = this.snapMeta.get(fileId);
+    const doc = this.hocuspocus.documents.get(fileId);
+    if (!meta?.dirty || !doc) return false;
+    await this.insertVersionSnapshot(fileId, doc, 'auto', now);
+    meta.dirty = false;
+    return true;
+  }
+
+  /** 写一行版本快照（auto/manual/pre_restore 通用；restoredFrom 由恢复路径传入，
+   *  常规快照为 null）。id 服务端 ulid() 生成（users/files 同款来源）；nodeCount/
+   *  createdBy/state 取自内存 doc 的同一口径（可达活跃计数 / meta 最后编辑人 /
+   *  docToState 序列化）；createdAt 显式取调用方时钟（datetime(3)，与 ack 同款纪律）。 */
+  private async insertVersionSnapshot(
+    fileId: string,
+    doc: Y.Doc,
+    type: VersionSnapshotType,
+    now: number,
+    restoredFrom: string | null = null,
+  ): Promise<string> {
+    const row = this.versions.create();
+    row.id = ulid();
+    row.fileId = fileId;
+    row.nodeCount = countAliveReachable(doc);
+    row.createdBy = getLastEditor(doc); // null 合法（从未标记的文档），显示层兜底
+    row.type = type;
+    row.state = Buffer.from(docToState(doc));
+    row.createdAt = new Date(now);
+    row.restoredFrom = restoredFrom;
+    const saved = await this.versions.save(row);
+    return saved.id;
   }
 }

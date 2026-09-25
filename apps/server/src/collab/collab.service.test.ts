@@ -7,19 +7,26 @@ import { createTemplateDoc, docToState, markLastEditor } from '@gmind/core';
 import { FileCollaboratorEntity } from '../files/file-collaborator.entity';
 import { FileEntity } from '../files/file.entity';
 import { SessionService } from '../session/session.service';
+import { VersionEntity } from '../versions/version.entity';
 import { CollabService } from './collab.service';
 
 /** onStoreDocument 契约（fix round 1）：持久化失败必须上抛——v4 依赖 hook 抛错把文档
  *  保留在内存并在下次防抖重试；若吞错，unloadImmediately 会在落库失败后照常卸载，
- *  最后一次断开前的编辑永久丢失。persisted ack 只允许在成功写入之后广播。 */
+ *  最后一次断开前的编辑永久丢失。persisted ack 只允许在成功写入之后广播。
+ *  M4 Task 6 追加：storeDocument 内嵌的 auto 快照失败不耦合 persist（吞错仅 log）——
+ *  persist 已成功，快照另有卸载兜底与下个窗口。 */
 
 const FILE_ID = '01ARZ3NDEKTSV4RRFFQ69G5FAV';
 
-const makeService = (files: Pick<Repository<FileEntity>, 'update'>): CollabService =>
+const makeService = (
+  files: Pick<Repository<FileEntity>, 'update'>,
+  versions: Partial<Repository<VersionEntity>> = {},
+): CollabService =>
   new CollabService(
     {} as SessionService,
     files as Repository<FileEntity>,
     {} as Repository<FileCollaboratorEntity>,
+    versions as Repository<VersionEntity>,
   );
 
 const makePayload = () => {
@@ -94,6 +101,55 @@ describe('CollabService.storeDocument（last_modifier 回写，M3a Task 4）', (
 
     const patch = update.mock.calls[0]?.[1] as Record<string, unknown>;
     expect(patch).not.toHaveProperty('lastModifierUserId');
+  });
+});
+
+describe('CollabService.storeDocument（auto 快照失败不耦合 persist，M4 Task 6）', () => {
+  /** 预置快照状态机入口条件：脏标记 + 文档在内存（storeDocument 内 snapshotIfDue 的放行条件）。 */
+  const armSnapshot = (service: CollabService, doc: Y.Doc): void => {
+    const inner = service as unknown as {
+      snapMeta: Map<string, { lastAutoAt: number; dirty: boolean }>;
+      hocuspocus: { documents: Map<string, Document> };
+    };
+    inner.snapMeta.set(FILE_ID, { lastAutoAt: Date.now() - 10 * 60 * 1000, dirty: true });
+    inner.hocuspocus.documents.set(FILE_ID, doc as Document);
+  };
+
+  it('versions.save 抛错 → store 仍成功返回且 ack 照常广播（仅 log）', async () => {
+    const consoleErr = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const update = vi.fn(async () => ({ generatedMaps: [], raw: 0 }) as UpdateResult);
+    const save = vi.fn(async () => {
+      throw new Error('snapshot db down');
+    });
+    const service = makeService(
+      { update },
+      { create: (() => ({})) as unknown as Repository<VersionEntity>['create'], save: save as unknown as Repository<VersionEntity>['save'] },
+    );
+    const { payload, doc, ackSpy } = makePayload();
+    armSnapshot(service, doc);
+
+    await expect(callStore(service, payload)).resolves.toBeUndefined(); // persist 不被快照失败拖垮
+    expect(update).toHaveBeenCalledTimes(1);
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(ackSpy).toHaveBeenCalledTimes(1); // ack 照常广播
+    expect(consoleErr).toHaveBeenCalled(); // 失败仅 log
+    consoleErr.mockRestore();
+  });
+
+  it('窗口内（lastAutoAt 距今 < 3min）→ 不写版本行，ack 时序不变', async () => {
+    const update = vi.fn(async () => ({ generatedMaps: [], raw: 0 }) as UpdateResult);
+    const save = vi.fn();
+    const service = makeService({ update }, { save: save as unknown as Repository<VersionEntity>['save'] });
+    const { payload, doc, ackSpy } = makePayload();
+    const inner = service as unknown as { snapMeta: Map<string, { lastAutoAt: number; dirty: boolean }> };
+    inner.snapMeta.set(FILE_ID, { lastAutoAt: Date.now(), dirty: true }); // 未越 3 分钟窗口
+    const hocus = (service as unknown as { hocuspocus: { documents: Map<string, Document> } }).hocuspocus;
+    hocus.documents.set(FILE_ID, doc);
+
+    await callStore(service, payload);
+
+    expect(save).not.toHaveBeenCalled();
+    expect(ackSpy).toHaveBeenCalledTimes(1);
   });
 });
 

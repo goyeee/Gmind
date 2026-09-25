@@ -5,12 +5,15 @@ import { FileEntity } from '../files/file.entity';
 import { MailService } from '../mail/mail.service';
 import { NotificationEntity } from '../notifications/notification.entity';
 import { UserEntity } from '../users/user.entity';
+import { VersionEntity } from '../versions/version.entity';
 import { TrashService } from '../trash/trash.service';
 
 /** 回收站保留期（FR-FIL-007）：删除满 30 天彻底清除。 */
 export const TRASH_RETENTION_DAYS = 30;
 /** 到期提醒（FR-FIL-010）：剩 3 天（删除满 27 天）提醒一次。 */
 export const TRASH_REMIND_DAYS = 27;
+/** 版本快照保留期（FR-VER-001）：落库满 90 天随清理任务硬删。 */
+export const VERSION_RETENTION_DAYS = 90;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -23,18 +26,21 @@ export class CleanupService {
     @InjectRepository(NotificationEntity) private readonly notifRepo: Repository<NotificationEntity>,
     // 提醒邮件收件人（owner 的 email；手机号注册无 email 则跳过邮件只落通知）
     @InjectRepository(UserEntity) private readonly userRepo: Repository<UserEntity>,
+    // 版本快照 90 天清理（M4 Task 6，FR-VER-001）
+    @InjectRepository(VersionEntity) private readonly versionRepo: Repository<VersionEntity>,
     // tsx 不发射装饰器元数据，类 token 注入必须显式 @Inject（约定同 session.service.ts）
     @Inject(TrashService) private readonly trash: TrashService,
     @Inject(MailService) private readonly mail: MailService,
   ) {}
 
-  /** 单轮清理（FR-FIL-007/010）：
+  /** 单轮清理（FR-FIL-007/010 + FR-VER-001）：
    *  - 满 30 天（deleted_at ≤ now-30d）→ 逐个 purgeFile 硬删（复用 TrashService 核心）；
    *  - 剩 3 天（deleted_at ≤ now-27d 且 > now-30d）→ 给 owner 落 system 通知 +
-   *    尽力而为的邮件（无 SMTP 仅 log，MailHog 接线后零改动生效）。
-   *  返回 { purged, reminded } 计数供测试断言。顺序先清后提醒：purge 集与 remind 集以
-   *  now-30d 为界互斥（MoreThan），同一条目不会既被清除又被提醒。 */
-  async runCleanup(now: Date): Promise<{ purged: number; reminded: number }> {
+   *    尽力而为的邮件（无 SMTP 仅 log，MailHog 接线后零改动生效）；
+   *  - 满 90 天（created_at ≤ now-90d）的版本快照行单条 DELETE 硬删。
+   *  返回 { purged, reminded, versionsPurged } 计数供测试断言。顺序先清后提醒：purge 集与
+   *  remind 集以 now-30d 为界互斥（MoreThan），同一条目不会既被清除又被提醒。 */
+  async runCleanup(now: Date): Promise<{ purged: number; reminded: number; versionsPurged: number }> {
     const purgeBefore = new Date(now.getTime() - TRASH_RETENTION_DAYS * DAY_MS);
     const remindBefore = new Date(now.getTime() - TRASH_REMIND_DAYS * DAY_MS);
 
@@ -58,7 +64,13 @@ export class CleanupService {
       await this.remind(file, deletedAtIso);
       reminded++;
     }
-    return { purged, reminded };
+
+    // 版本快照 90 天清理（FR-VER-001）：单条 DELETE 按 created_at 过滤，不加新索引——
+    // versions 现有索引 (file_id, created_at) 命中不了全表时间窗过滤；而快照写入受
+    // 3 分钟节流约束、行只存活 90 天，量级可控，全表扫描成本可接受，索引维护反而得不偿失。
+    const versionBefore = new Date(now.getTime() - VERSION_RETENTION_DAYS * DAY_MS);
+    const purgedVersions = await this.versionRepo.delete({ createdAt: LessThanOrEqual(versionBefore) });
+    return { purged, reminded, versionsPurged: purgedVersions.affected ?? 0 };
   }
 
   /** 幂去重（任务绑定裁定）：notifications 表量级极小（个人提醒），MySQL 5.6 无 JSON

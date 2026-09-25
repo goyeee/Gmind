@@ -257,7 +257,7 @@ describe('回收站域（FR-FIL-005~007/010）', () => {
     await authed('delete', `/api/files/${due.id}`);
 
     const first = await cleanup.runCleanup(new Date(Date.now() + 27 * DAY_MS));
-    expect(first).toEqual({ purged: 0, reminded: 1 });
+    expect(first).toEqual({ purged: 0, reminded: 1, versionsPurged: 0 });
     let rows: { user_id: string; type: string; payload: string }[] = await ds.query(
       'SELECT user_id, type, payload FROM notifications ORDER BY created_at ASC',
     );
@@ -285,7 +285,7 @@ describe('回收站域（FR-FIL-005~007/010）', () => {
     const early = await createFile('未到期文件');
     await authed('delete', `/api/files/${early.id}`);
     const third = await cleanup.runCleanup(new Date(Date.now() + 26 * DAY_MS));
-    expect(third).toEqual({ purged: 0, reminded: 0 });
+    expect(third).toEqual({ purged: 0, reminded: 0, versionsPurged: 0 });
     rows = await ds.query('SELECT user_id, type, payload FROM notifications');
     expect(rows).toHaveLength(1);
   });
@@ -321,7 +321,7 @@ describe('回收站域（FR-FIL-005~007/010）', () => {
     const file = await createFile('再删提醒文件');
     // 第一轮：软删 → 满 27 天 → 提醒一次
     expect((await authed('delete', `/api/files/${file.id}`)).status).toBe(200);
-    expect(await cleanup.runCleanup(new Date(Date.now() + 27 * DAY_MS))).toEqual({ purged: 0, reminded: 1 });
+    expect(await cleanup.runCleanup(new Date(Date.now() + 27 * DAY_MS))).toEqual({ purged: 0, reminded: 1, versionsPurged: 0 });
     expect(await reminderCount(file.id)).toBe(1);
 
     // 还原：该文件的旧提醒行随之清除（M3a 终审 Important #2——防死链通知累积）
@@ -330,7 +330,7 @@ describe('回收站域（FR-FIL-005~007/010）', () => {
 
     // 再删：新一轮 27 天窗口 → 再次提醒（旧口径仅按 fileId 判重会漏提，FR-FIL-010 re-delete 语义）
     expect((await authed('delete', `/api/files/${file.id}`)).status).toBe(200);
-    expect(await cleanup.runCleanup(new Date(Date.now() + 27 * DAY_MS))).toEqual({ purged: 0, reminded: 1 });
+    expect(await cleanup.runCleanup(new Date(Date.now() + 27 * DAY_MS))).toEqual({ purged: 0, reminded: 1, versionsPurged: 0 });
     expect(await reminderCount(file.id)).toBe(1);
     // 新提醒携带新一轮删除时刻（而非还原前的旧 deletedAt）
     const rows: { payload: string }[] = await ds.query(
@@ -360,7 +360,7 @@ describe('回收站域（FR-FIL-005~007/010）', () => {
     const file = await files.createForUser(mailOwner.id, { title: '7.11 提醒去重文件' });
     await files.deleteOwned(mailOwner.id, file.id);
     // 触发提醒（同 7.9 用例的编排：软删 → runCleanup(+27d)）；7.9 遗留条目已有 marker 行，不会重复提醒
-    expect(await cleanup.runCleanup(new Date(Date.now() + 27 * DAY_MS))).toEqual({ purged: 0, reminded: 1 });
+    expect(await cleanup.runCleanup(new Date(Date.now() + 27 * DAY_MS))).toEqual({ purged: 0, reminded: 1, versionsPurged: 0 });
     expect(mails).toEqual([mailOwner.email]); // 即时邮件已发
 
     // 提醒行按 fileId 收窄恰好 1 条（表内另有 7.9 用例遗留行），且落行即带 emailed_at
