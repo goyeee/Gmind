@@ -7,7 +7,7 @@ import { FileCollaboratorEntity } from './file-collaborator.entity';
 import { FileStarEntity } from './file-star.entity';
 import { FolderEntity } from '../folders/folder.entity';
 import { FilesService } from './files.service';
-import { FilesController } from './files.controller';
+import { FilesController, SearchController } from './files.controller';
 
 @Module({
   // UserGuard 依赖 UsersService；UsersModule 非 global，FilesModule 必须显式引入才能解析
@@ -17,7 +17,7 @@ import { FilesController } from './files.controller';
   // FileStarEntity（M3a Task 6，FR-FIL-004）：加星/取消端点的 file_stars 行读写
   imports: [TypeOrmModule.forFeature([FileEntity, FileCollaboratorEntity, FileStarEntity, FolderEntity]), UsersModule, CollabModule],
   providers: [FilesService],
-  controllers: [FilesController],
+  controllers: [FilesController, SearchController],
   exports: [FilesService],
 })
 export class FilesModule {}

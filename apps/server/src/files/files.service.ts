@@ -23,6 +23,8 @@ const OPEN_THROTTLE_MS = 60_000;
 export const STALE_SNAPSHOT_MESSAGE = '文档已在别处更新，请刷新后重试';
 /** recent 视图条数上限（FR-FIL-001）。 */
 const RECENT_LIMIT = 50;
+/** 全局搜索返回条数上限（FR-FIL-008）。 */
+const SEARCH_LIMIT = 20;
 
 export type FileView = 'mine' | 'shared' | 'starred' | 'recent';
 
@@ -30,6 +32,13 @@ export type FileView = 'mine' | 'shared' | 'starred' | 'recent';
 function toIso(v: unknown): string | null {
   if (v == null) return null;
   return (v instanceof Date ? v : new Date(String(v))).toISOString();
+}
+
+/** LIKE 通配符转义（FR-FIL-008）：q 中的 \\ % _ 前加反斜杠，使其按字面量匹配。
+ *  pattern 经参数绑定进入 SQL（不经字符串字面量拼接），MySQL LIKE 的默认转义符
+ *  恒为反斜杠（与 sql_mode 无关），故无需 ESCAPE 子句。 */
+function escapeLike(q: string): string {
+  return q.replace(/[\\%_]/g, (ch) => `\\${ch}`);
 }
 
 @Injectable()
@@ -113,26 +122,8 @@ export class FilesService {
    * （uk_fc_file_user 保证命中面），shared/recent 两视图共用。
    */
   async listByView(userId: string, view: FileView): Promise<FileListItemDetailed[]> {
-    const qb = this.repo
-      .createQueryBuilder('f')
-      .leftJoin('users', 'owner_u', 'owner_u.id = f.owner_user_id')
-      .leftJoin('users', 'mod_u', 'mod_u.id = f.last_modifier_user_id')
-      .leftJoin('folders', 'fold', 'fold.id = f.folder_id AND fold.deleted_at IS NULL')
-      .leftJoin('file_stars', 'st', 'st.file_id = f.id AND st.user_id = :viewerId')
-      .setParameter('viewerId', userId)
-      .where('f.deleted_at IS NULL')
-      .select('f.id', 'id')
-      .addSelect('f.title', 'title')
-      .addSelect('f.structure', 'structure')
-      .addSelect('f.node_count', 'nodeCount')
-      .addSelect('f.last_opened_at', 'lastOpenedAt')
-      .addSelect('f.updated_at', 'updatedAt')
-      .addSelect('f.owner_user_id', 'ownerUserId')
-      .addSelect('owner_u.nickname', 'ownerName')
-      .addSelect('mod_u.nickname', 'lastModifierName')
-      .addSelect('f.folder_id', 'folderId')
-      .addSelect('fold.name', 'folderName')
-      .addSelect('st.id IS NOT NULL', 'starred');
+    const qb = this.detailedSelect(userId)
+      .where('f.deleted_at IS NULL');
 
     switch (view) {
       case 'mine':
@@ -176,7 +167,71 @@ export class FilesService {
     // 稳定次序：主排序键相同时按 id 决出（datetime(3) 同毫秒创建的文件不抖动）
     qb.addOrderBy('f.id', 'DESC').setParameter('userId', userId);
 
-    const raw = await qb.getRawMany<Record<string, unknown>>();
+    return this.mapDetailedRows(await qb.getRawMany<Record<string, unknown>>());
+  }
+
+  /**
+   * 标题全局搜索（M3a Task 8，FR-FIL-008）：GET /api/search?q=
+   * 范围 = 我的文件 ∪ 与我协作（owner=me 或 file_collaborators 行）的 alive 文件，
+   * 标题 LIKE %q%（utf8mb4_unicode_ci 大小写/全半角不敏感由列 collation 决定）。
+   * 相关度排序（5.6-safe CASE 表达式，无 CTE/无窗口）：前缀命中（title LIKE 'q%'）在前，
+   * 其余在后，组内 updatedAt DESC；同毫秒以 id 决出（口径同 listByView）。LIMIT 20。
+   * q 的 LIKE 通配符（\\ % _）已转义（escapeLike），按字面量参与匹配。
+   */
+  async searchByTitle(userId: string, q: string): Promise<FileListItemDetailed[]> {
+    const escaped = escapeLike(q);
+    const qb = this.detailedSelect(userId)
+      .where('f.deleted_at IS NULL')
+      .andWhere(
+        new Brackets((w) =>
+          w.where('f.owner_user_id = :userId').orWhere(
+            'EXISTS (SELECT 1 FROM file_collaborators fc WHERE fc.file_id = f.id AND fc.user_id = :userId)',
+          ),
+        ),
+      )
+      .andWhere('f.title LIKE :pattern')
+      .setParameter('userId', userId)
+      .setParameter('pattern', `%${escaped}%`)
+      .addSelect('CASE WHEN f.title LIKE :prefix THEN 0 ELSE 1 END', 'prefixHit')
+      .setParameter('prefix', `${escaped}%`)
+      .orderBy('prefixHit', 'ASC')
+      .addOrderBy('f.updated_at', 'DESC')
+      .addOrderBy('f.id', 'DESC')
+      .limit(SEARCH_LIMIT);
+    return this.mapDetailedRows(await qb.getRawMany<Record<string, unknown>>());
+  }
+
+  /** 详细投影公共 SELECT（listByView 与 searchByTitle 共用）：各 JOIN 至多一行
+   *  （users/folders 走主键，file_stars 受唯一键约束），不产生行复制。 */
+  private detailedSelect(userId: string) {
+    return this.repo
+      .createQueryBuilder('f')
+      .leftJoin('users', 'owner_u', 'owner_u.id = f.owner_user_id')
+      .leftJoin('users', 'mod_u', 'mod_u.id = f.last_modifier_user_id')
+      .leftJoin('folders', 'fold', 'fold.id = f.folder_id AND fold.deleted_at IS NULL')
+      .leftJoin('file_stars', 'st', 'st.file_id = f.id AND st.user_id = :viewerId')
+      .setParameter('viewerId', userId)
+      .select('f.id', 'id')
+      .addSelect('f.title', 'title')
+      .addSelect('f.structure', 'structure')
+      .addSelect('f.node_count', 'nodeCount')
+      .addSelect('f.last_opened_at', 'lastOpenedAt')
+      .addSelect('f.updated_at', 'updatedAt')
+      .addSelect('f.owner_user_id', 'ownerUserId')
+      .addSelect('owner_u.nickname', 'ownerName')
+      .addSelect('mod_u.nickname', 'lastModifierName')
+      .addSelect('f.folder_id', 'folderId')
+      .addSelect('fold.name', 'folderName')
+      // 星标投影取原始列 st.id 而非布尔表达式 `st.id IS NOT NULL`：MySQL 5.6 对表达式列
+      // 回报的 wire type 随执行计划在 BIGINT(→number) 与 VAR_STRING(→string) 间漂移，
+      // `=== 1` 判定是计划依赖的偶发错误源；char(26) 原始列恒为 string|null，
+      // 布尔值由 mapDetailedRows 统一派生（st.id IS NOT NULL 的过滤语义不受影响）。
+      .addSelect('st.id', 'starredId');
+  }
+
+  /** 原始行 → FileListItemDetailed（唯一出口：docState 等内部列绝不离开服务端）。
+   *  starred 由星标行主键是否存在派生（见 detailedSelect 注：不信任表达式列 wire type）。 */
+  private mapDetailedRows(raw: Array<Record<string, unknown>>): FileListItemDetailed[] {
     return raw.map((r) => ({
       id: String(r.id),
       title: String(r.title),
@@ -189,7 +244,7 @@ export class FilesService {
       lastModifierName: r.lastModifierName == null ? null : String(r.lastModifierName),
       folderId: r.folderId == null ? null : String(r.folderId),
       folderName: r.folderName == null ? null : String(r.folderName),
-      starred: r.starred === 1 || r.starred === true,
+      starred: r.starredId != null,
     }));
   }
 

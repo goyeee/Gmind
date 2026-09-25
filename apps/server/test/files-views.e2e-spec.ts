@@ -498,3 +498,139 @@ describe('文件复制与星标（FR-FIL-003/004）', () => {
     expect(starred.body.map((f: { title: string }) => f.title)).not.toContain('共享给乙');
   });
 });
+
+/**
+ * 标题全局搜索（M3a Task 8，FR-FIL-008）。
+ *
+ * 独立 describe（createTestApp 每次清库重建）：GET /api/search?q= 的范围=自己+协作的
+ * alive 文件；前缀命中排序在前；LIKE 通配符（% _）按字面量匹配；空/缺失 q → 400。
+ */
+describe('标题全局搜索（FR-FIL-008）', () => {
+  let app: INestApplication;
+  let ds: DataSource;
+  let ownerToken: string;
+  let collaboratorToken: string;
+  let outsiderToken: string; // 丙的搜索私有：负例主角（他人私有不含）
+  let fPrefix: string; // '项目规划书'：q='项目' 的前缀命中（updatedAt 定值较早）
+  let fContains: string; // '我的项目规划'：q='项目' 的非前缀命中（updatedAt 定值较晚）
+
+  const tokenFor = async (userId: string): Promise<string> => {
+    const { SessionService } = await import('../src/session/session.service');
+    const redisMod = await import('ioredis');
+    const svc = new SessionService(new redisMod.default('redis://127.0.0.1:63790/1'));
+    return (await svc.create(userId, false)).token;
+  };
+
+  type Method = 'get' | 'post' | 'put' | 'delete';
+  const authed = (token: string, method: Method, url: string) =>
+    request(app.getHttpServer())[method](url).set('Authorization', `Bearer ${token}`);
+
+  const search = (token: string, q?: string): Promise<request.Response> =>
+    authed(token, 'get', q === undefined ? '/api/search' : `/api/search?q=${encodeURIComponent(q)}`);
+
+  beforeAll(async () => {
+    app = await createTestApp();
+    ds = app.get(DataSource);
+
+    const users = app.get((await import('../src/users/users.service')).UsersService);
+    const owner = await users.create({ method: 'phone', phone: '13800091001', nickname: '搜索甲' });
+    const collaborator = await users.create({ method: 'phone', phone: '13800091002', nickname: '搜索乙' });
+    const outsider = await users.create({ method: 'phone', phone: '13800091003', nickname: '搜索丙' });
+    ownerToken = await tokenFor(owner.id);
+    collaboratorToken = await tokenFor(collaborator.id);
+    outsiderToken = await tokenFor(outsider.id);
+
+    const create = async (token: string, title: string): Promise<string> => {
+      const res = await authed(token, 'post', '/api/files').send({ title });
+      expect(res.status).toBe(201);
+      return res.body.id as string;
+    };
+    fPrefix = await create(ownerToken, '项目规划书');
+    fContains = await create(ownerToken, '我的项目规划');
+    const fShared = await create(ownerToken, '搜索共享件');
+    await create(collaboratorToken, '乙的搜索私有');
+    await create(outsiderToken, '丙的搜索私有');
+    await create(ownerToken, '100%完成');
+    await create(ownerToken, '进度_草稿');
+
+    // 授权协作者（dev-e2e 编排端点，同上两组 fixtures）
+    const granted = await authed(ownerToken, 'post', '/api/dev-e2e/grant-collaborator')
+      .send({ fileId: fShared, phone: '13800091002' });
+    expect(granted.status).toBe(201);
+
+    // 排序定值：非前缀命中 updatedAt 更晚——若相关度排序失效，updatedAt DESC 会把它排前
+    const filesRepo = ds.getRepository(FileEntity);
+    await filesRepo.update(fPrefix, { updatedAt: new Date('2026-01-01T00:00:01Z') });
+    await filesRepo.update(fContains, { updatedAt: new Date('2026-01-01T00:00:10Z') });
+  });
+
+  afterAll(async () => {
+    await app.close();
+  });
+
+  it('命中自己 + 协作文件；他人私有与不可见文件不含；键集封闭', async () => {
+    const res = await search(collaboratorToken, '搜索');
+    expect(res.status).toBe(200);
+    const ids = res.body.map((f: { id: string }) => f.id);
+    expect(ids).toContain(await findIdByTitle('乙的搜索私有')); // 自己的私有文件
+    expect(ids).toContain(await findIdByTitle('搜索共享件')); // 协作文件（owner=甲）
+    expect(ids).not.toContain(await findIdByTitle('丙的搜索私有')); // 他人私有
+    expect(ids).not.toContain(await findIdByTitle('项目规划书')); // 甲的私有不可见
+
+    // 详细投影键集封闭（复用 listByView 的投影契约；prefixHit 仅排序内部用，不外泄）
+    expect(Object.keys(res.body[0]).sort()).toEqual([
+      'folderId', 'folderName', 'id', 'lastModifierName', 'lastOpenedAt',
+      'nodeCount', 'ownerName', 'ownerUserId', 'starred', 'structure', 'title', 'updatedAt',
+    ]);
+    const sharedItem = res.body.find((f: { title: string }) => f.title === '搜索共享件');
+    expect(sharedItem.ownerName).toBe('搜索甲');
+
+    // owner 自己搜：自己的 + 自己拥有的（协作视角反向：乙的私有对甲不可见）
+    const selfRes = await search(ownerToken, '搜索');
+    const selfIds = selfRes.body.map((f: { title: string }) => f.title);
+    expect(selfIds).toContain('搜索共享件');
+    expect(selfIds).not.toContain('乙的搜索私有');
+  });
+
+  it('前缀命中排序在前，其余按 updatedAt DESC（q 与两段检索口径一致）', async () => {
+    const res = await search(ownerToken, '项目');
+    expect(res.status).toBe(200);
+    expect(res.body.map((f: { id: string }) => f.id)).toEqual([fPrefix, fContains]); // 前缀优先，尽管 updatedAt 更早
+
+    // 无前缀命中时全部落「其余」组：updatedAt DESC（我的项目规划 更新）
+    const noPrefix = await search(ownerToken, '规划');
+    expect(noPrefix.body.map((f: { id: string }) => f.id)).toEqual([fContains, fPrefix]);
+  });
+
+  it('空/缺失/纯空白 q → 400「搜索关键词不能为空」', async () => {
+    const missing = await search(ownerToken);
+    expect(missing.status).toBe(400);
+    expect(missing.body.message).toBe('搜索关键词不能为空');
+    const empty = await search(ownerToken, '');
+    expect(empty.status).toBe(400);
+    const blank = await search(ownerToken, '  ');
+    expect(blank.status).toBe(400);
+  });
+
+  it('LIKE 通配符 % 与 _ 转义：字面量匹配，不发生全量命中', async () => {
+    // q='%'：未转义时 pattern '%%%' 会命中全部文件；转义后只命中标题含字面量 % 者
+    const pct = await search(ownerToken, '%');
+    expect(pct.status).toBe(200);
+    expect(pct.body.map((f: { title: string }) => f.title)).toEqual(['100%完成']);
+
+    // q='_'：未转义时 '%_%' 会命中所有非空标题；转义后只命中字面量下划线者
+    const under = await search(ownerToken, '_');
+    expect(under.body.map((f: { title: string }) => f.title)).toEqual(['进度_草稿']);
+
+    // 反斜杠本身亦按字面量：无标题含 \ → 空
+    const bslash = await search(ownerToken, '\\');
+    expect(bslash.status).toBe(200);
+    expect(bslash.body).toHaveLength(0);
+  });
+
+  /** 按标题查文件 id（fixtures 无返回表时的可读性辅助）。 */
+  async function findIdByTitle(title: string): Promise<string> {
+    const rows = await ds.query('SELECT id FROM files WHERE title = ? AND deleted_at IS NULL', [title]);
+    return rows[0].id;
+  }
+});

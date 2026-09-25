@@ -99,3 +99,23 @@ export class FilesController {
     return { ok: true as const };
   }
 }
+
+// GET /api/search 的查询参数（M3a Task 8，FR-FIL-008）：q 必填（trim 后非空——缺失/
+// 空串/纯空白一律 400）；上限 255 与 title 列同宽（更长的关键词不可能命中）。
+export const searchQuerySchema = z.object({
+  q: z.string({ required_error: '搜索关键词不能为空' }).trim().min(1, '搜索关键词不能为空').max(255),
+});
+
+/** 标题全局搜索（M3a Task 8，FR-FIL-008）：GET /api/search?q= → FileListItemDetailed[]。
+ *  独立路由前缀（/api/search），与 /api/files/:id 的 Param 路由互不干扰。 */
+@Controller('api/search')
+@UseGuards(UserGuard)
+export class SearchController {
+  constructor(@Inject(FilesService) private readonly files: FilesService) {}
+
+  @Get()
+  search(@Req() req: { user: { id: string } }, @Query() query: unknown) {
+    const { q } = searchQuerySchema.parse(query ?? {});
+    return this.files.searchByTitle(req.user.id, q);
+  }
+}
