@@ -138,6 +138,9 @@ importers:
       '@gmind/shared':
         specifier: workspace:*
         version: link:../../packages/shared
+      '@gmind/xmind-io':
+        specifier: workspace:*
+        version: link:../../packages/xmind-io
       '@hocuspocus/provider':
         specifier: 4.7.0
         version: 4.7.0(y-protocols@1.0.7(yjs@13.6.32))(yjs@13.6.32)
@@ -223,6 +226,19 @@ importers:
       vitest:
         specifier: ^2.0.0
         version: 2.0.0(@types/node@22.20.3)(jsdom@30.1.0)
+
+  packages/xmind-io:
+    dependencies:
+      fflate:
+        specifier: ^0.8.3
+        version: 0.8.3
+    devDependencies:
+      jsdom:
+        specifier: ^30.1.0
+        version: 30.1.0
+      vitest:
+        specifier: ^2.0.0
+        version: 2.1.9(@types/node@22.20.3)(jsdom@30.1.0)
 
 packages:
 
