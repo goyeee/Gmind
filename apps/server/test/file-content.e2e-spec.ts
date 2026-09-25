@@ -395,18 +395,26 @@ describe('PUT 陈旧快照写序守卫（准入 7.1）', () => {
   });
 
   it('活跃内存 doc + baseUpdatedAt >= 当前 updated_at → 200（base 不旧于行值则放行）', async () => {
-    const freshBase = (await rowOf(guardFileId)).updatedAt.toISOString();
-    const res = await authed(ownerToken, 'put', `/api/files/${guardFileId}/doc-state`).send({
-      docState: toBase64State({ title: '守卫文件', children: [{ text: 'A的新快照' }] }),
-      baseUpdatedAt: freshBase,
-    });
-    expect(res.status).toBe(200);
-    expect(res.body).toEqual({ nodeCount: 1 });
-    // 严格比较语义：base 等于行值（PUT 自己就是最新写）不是「陈旧」，快照正常落库
-    const row = await rowOf(guardFileId);
-    const persisted = docFromState(new Uint8Array(row.docState as Buffer));
-    expect(getNode(persisted, ROOT_NODE_ID)?.text).toBe('守卫文件');
-    expect(getNode(persisted, childrenIds(persisted, ROOT_NODE_ID)[0] as string)?.text).toBe('A的新快照');
+    // fix round 1：必须先建立活跃内存 doc——否则 hasLiveDoc=false 短路，严格比较
+    // 边界（> vs >=）根本不参与判定，`>=` 回归会静默穿过全部用例
+    const client = await connectSynced(guardFileId, collaboratorToken);
+    try {
+      const freshBase = (await rowOf(guardFileId)).updatedAt.toISOString();
+      const res = await authed(ownerToken, 'put', `/api/files/${guardFileId}/doc-state`).send({
+        docState: toBase64State({ title: '守卫文件', children: [{ text: 'A的新快照' }] }),
+        baseUpdatedAt: freshBase,
+      });
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ nodeCount: 1 });
+      // 严格比较语义：base 等于行值（PUT 自己就是最新写）不是「陈旧」，快照正常落库
+      const row = await rowOf(guardFileId);
+      const persisted = docFromState(new Uint8Array(row.docState as Buffer));
+      expect(getNode(persisted, ROOT_NODE_ID)?.text).toBe('守卫文件');
+      expect(getNode(persisted, childrenIds(persisted, ROOT_NODE_ID)[0] as string)?.text).toBe('A的新快照');
+    } finally {
+      await closeClient(client);
+      await until(() => collabService.getDocumentsCount() === 0, '内存 doc 卸载');
+    }
   });
 
   it('缺省 baseUpdatedAt（旧客户端/首次保存）→ 200（即便内存 doc 活跃）', async () => {
