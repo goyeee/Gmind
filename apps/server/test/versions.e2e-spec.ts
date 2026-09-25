@@ -5,6 +5,7 @@ import { HocuspocusProvider } from '@hocuspocus/provider';
 import type { HocuspocusProviderConfiguration } from '@hocuspocus/provider';
 import { DataSource } from 'typeorm';
 import { ulid } from 'ulid';
+import request from 'supertest';
 import {
   ROOT_NODE_ID,
   childrenIds,
@@ -17,6 +18,8 @@ import {
 } from '@gmind/core';
 import { createTestApp } from './support/app-test';
 import { CollabService } from '../src/collab/collab.service';
+import { EventEntity } from '../src/events/event.entity';
+import { FileCollaboratorEntity } from '../src/files/file-collaborator.entity';
 import { FileEntity } from '../src/files/file.entity';
 import { VersionEntity } from '../src/versions/version.entity';
 
@@ -217,5 +220,307 @@ describe('版本快照（collab 网关 FR-VER-001）+ 90 天清理', () => {
     const rows = await versionRows(fileD.id);
     expect(rows).toHaveLength(1);
     expect(rows[0].createdAt.getTime()).toBeGreaterThan(Date.now() - 90 * DAY_MS);
+  });
+});
+
+/**
+ * 版本恢复（M4 Task 7，FR-VER-004）：REST 列表/取态/恢复 + events 埋点通道。
+ * - live 路径：provider 在线 → 恢复写内存 doc（y-sync 自动广播）→ pre_restore 行先落；
+ * - 离线路径：无人在线 → file.docState 上恢复 → files.docState/node_count 同步回写；
+ * - 权限：读=canAccess（owner/协作者），恢复=owner/editor，越权与不存在同口径 404；
+ * - events：POST /api/events 登录即可（204 落库），未登录 401。
+ * 各用例独立文件（与上一 describe 的行断言互不串扰；app 自建自清）。
+ */
+describe('版本恢复（REST FR-VER-004）+ events 埋点端点', () => {
+  let app: Awaited<ReturnType<typeof createTestApp>>;
+  let dataSource: DataSource;
+  let port: number;
+  let owner: { id: string; token: string };
+  let editor: { id: string; token: string };
+  let viewer: { id: string; token: string };
+  let outsider: { id: string; token: string };
+  const openClients: { provider: HocuspocusProvider }[] = [];
+
+  /** 直接经 SessionService 签发 token（collab.e2e-spec.ts 同款）。 */
+  const tokenFor = async (uid: string): Promise<string> => {
+    const { SessionService } = await import('../src/session/session.service');
+    const redisMod = await import('ioredis');
+    const svc = new SessionService(new redisMod.default('redis://127.0.0.1:63790/1'));
+    return (await svc.create(uid, false)).token;
+  };
+
+  /** 断言轮询：条件成立或超时（y-sync 广播/落库防抖都是异步的）。 */
+  async function until(pred: () => boolean | Promise<boolean>, label: string, ms = 8000): Promise<void> {
+    const deadline = Date.now() + ms;
+    while (Date.now() < deadline) {
+      if (await pred()) return;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    throw new Error(`condition not met: ${label}`);
+  }
+
+  const filesRepo = (): import('typeorm').Repository<FileEntity> => dataSource.getRepository(FileEntity);
+  const versionsRepo = (): import('typeorm').Repository<VersionEntity> => dataSource.getRepository(VersionEntity);
+  const eventsRepo = (): import('typeorm').Repository<EventEntity> => dataSource.getRepository(EventEntity);
+
+  const versionRows = (fid: string): Promise<VersionEntity[]> =>
+    versionsRepo().find({ where: { fileId: fid }, order: { createdAt: 'ASC' } });
+
+  /** 连接并等待完成首次 sync（鉴权失败会在此超时）。 */
+  const connectSynced = async (docId: string, tk: string): Promise<{ provider: HocuspocusProvider }> => {
+    const provider = new HocuspocusProvider({
+      url: `ws://127.0.0.1:${port}/collab`,
+      name: docId,
+      token: tk,
+      WebSocketPolyfill: WsImpl,
+    } as HocuspocusProviderConfiguration);
+    const client = { provider };
+    openClients.push(client);
+    await until(() => client.provider.isSynced, `provider synced: ${docId}`);
+    return client;
+  };
+
+  const closeClient = async (client: { provider: HocuspocusProvider }): Promise<void> => {
+    const idx = openClients.indexOf(client);
+    if (idx >= 0) openClients.splice(idx, 1);
+    client.provider.destroy();
+  };
+
+  /** 等待一次编辑落库（doc_state 反序列化后含该文本；onStoreDocument 防抖 300ms）。 */
+  const waitPersisted = async (fid: string, nodeId: string, text: string): Promise<void> => {
+    await until(async () => {
+      const row = await filesRepo().findOneByOrFail({ id: fid });
+      if (!row.docState || row.docState.length === 0) return false;
+      return getNode(docFromState(new Uint8Array(row.docState)), nodeId)?.text === text;
+    }, `doc_state persisted: ${text}`);
+  };
+
+  /** 按文本查存活节点 id（排除 root 与墓碑）——重建节点以新 ULID 落地，断言按文本口径。 */
+  const findAliveByText = (doc: Y.Doc, text: string): string | null => {
+    for (const [id, node] of doc.getMap('nodes').entries()) {
+      const n = node as Y.Map<unknown>;
+      if (id !== ROOT_NODE_ID && n.get('deleted') !== true && n.get('text') === text) return id;
+    }
+    return null;
+  };
+
+  /** 建文件（初始 doc 含一个文本节点）+ 直插该初始状态的 manual 版本行。 */
+  const mkFileWithVersion = async (
+    title: string,
+    earlyText: string,
+  ): Promise<{ file: FileEntity; nodeId: string; versionId: string; earlyState: Uint8Array }> => {
+    const earlyState = docToState(createTemplateDoc({ title, children: [{ text: earlyText }] }));
+    const created = await (app.get((await import('../src/files/files.service')).FilesService) as import('../src/files/files.service').FilesService).createForUser(owner.id, { title, state: earlyState });
+    const doc = docFromState(created.docState as Buffer);
+    const nodeId = childrenIds(doc, ROOT_NODE_ID)[0] as string;
+    const row = versionsRepo().create();
+    row.id = ulid();
+    row.fileId = created.id;
+    row.nodeCount = 1;
+    row.createdBy = owner.id;
+    row.type = 'manual';
+    row.state = Buffer.from(earlyState);
+    row.createdAt = new Date();
+    row.restoredFrom = null;
+    await versionsRepo().save(row);
+    return { file: created, nodeId, versionId: row.id, earlyState };
+  };
+
+  const addCollaborator = async (fid: string, uid: string, role: 'editor' | 'viewer'): Promise<void> => {
+    const row = dataSource.getRepository(FileCollaboratorEntity).create();
+    row.fileId = fid;
+    row.userId = uid;
+    row.role = role;
+    await dataSource.getRepository(FileCollaboratorEntity).save(row);
+  };
+
+  beforeAll(async () => {
+    app = await createTestApp();
+    await app.listen(0);
+    port = (app.getHttpServer().address() as AddressInfo).port;
+    dataSource = app.get(DataSource);
+
+    const usersMod = await import('../src/users/users.service');
+    const users = app.get(usersMod.UsersService);
+    const mk = async (phone: string): Promise<{ id: string; token: string }> => {
+      const u = await users.create({ method: 'phone', phone });
+      return { id: u.id, token: await tokenFor(u.id) };
+    };
+    owner = await mk('13900004001');
+    editor = await mk('13900004002');
+    viewer = await mk('13900004003');
+    outsider = await mk('13900004004');
+  });
+
+  afterAll(async () => {
+    for (const c of [...openClients]) await closeClient(c);
+    await app.close();
+  });
+
+  it('恢复：live 文档——REST 恢复后 WS 在线端收到回滚内容（恢复广播）', async () => {
+    const { file, nodeId, versionId } = await mkFileWithVersion('恢复-live', '早期文本');
+    const client = await connectSynced(file.id, owner.token);
+    markLastEditor(client.provider.document, owner.id);
+    setText(client.provider.document, nodeId, '漂移文本');
+    await waitPersisted(file.id, nodeId, '漂移文本');
+
+    const res = await request(app.getHttpServer())
+      .post(`/api/files/${file.id}/versions/${versionId}/restore`)
+      .set('Authorization', `Bearer ${owner.token}`);
+    expect(res.status).toBe(200);
+    expect(typeof res.body.preRestoreVersionId).toBe('string');
+
+    // y-sync 广播有传输延迟 → 轮询在线端 doc 内容回到早期状态
+    await until(() => getNode(client.provider.document, nodeId)?.text === '早期文本', 'live 回滚广播');
+
+    // pre_restore 行先于恢复落行：type/restoredFrom/createdBy/state=恢复前状态
+    const pre = (await versionRows(file.id)).find((r) => r.id === res.body.preRestoreVersionId);
+    expect(pre).toBeDefined();
+    expect(pre!.type).toBe('pre_restore');
+    expect(pre!.restoredFrom).toBe(versionId);
+    expect(pre!.createdBy).toBe(owner.id);
+    expect(getNode(docFromState(new Uint8Array(pre!.state)), nodeId)?.text).toBe('漂移文本');
+
+    // files.docState 随防抖落库为恢复后内容（storeDocument 钩子照常走）
+    await waitPersisted(file.id, nodeId, '早期文本');
+
+    // version_restore 事件已落 events 表
+    const ev = await eventsRepo().findOneBy({ type: 'version_restore', fileId: file.id });
+    expect(ev).not.toBeNull();
+    expect(ev!.userId).toBe(owner.id);
+
+    await closeClient(client);
+  });
+
+  it('恢复：无人在线——走落库路径，GET /api/files/:id 的 docState 与快照一致', async () => {
+    const { file, versionId } = await mkFileWithVersion('恢复-offline', '早期文本二');
+    // 无人连接：直接改落库态模拟离线编辑已保存
+    const modified = docToState(createTemplateDoc({ title: '恢复-offline', children: [{ text: '离线漂移' }] }));
+    await filesRepo().update(file.id, { docState: Buffer.from(modified), nodeCount: 1 });
+
+    const res = await request(app.getHttpServer())
+      .post(`/api/files/${file.id}/versions/${versionId}/restore`)
+      .set('Authorization', `Bearer ${owner.token}`);
+    expect(res.status).toBe(200);
+
+    // 落库路径同步回写：GET /api/files/:id 的 docState 与快照一致（docFromState 比对文本；
+    // 快照中被删节点以新 ULID 重建，故按文本而非旧 id 断言）
+    const view = await request(app.getHttpServer())
+      .get(`/api/files/${file.id}`)
+      .set('Authorization', `Bearer ${owner.token}`);
+    expect(view.status).toBe(200);
+    const doc = docFromState(new Uint8Array(Buffer.from(view.body.docState as string, 'base64')));
+    expect(findAliveByText(doc, '早期文本二')).not.toBeNull();
+
+    // pre_restore 行 state = 恢复前的 file.docState 原值（离线漂移态）
+    const pre = (await versionRows(file.id)).find((r) => r.id === res.body.preRestoreVersionId);
+    expect(pre).toBeDefined();
+    expect(pre!.type).toBe('pre_restore');
+    expect(pre!.restoredFrom).toBe(versionId);
+    expect(findAliveByText(docFromState(new Uint8Array(pre!.state)), '离线漂移')).not.toBeNull();
+  });
+
+  it('恢复权限：非 owner/editor 404；未登录 401；版本 id 属其他文件 404', async () => {
+    const { file, versionId } = await mkFileWithVersion('恢复-权限', '早期文本三');
+    const other = await mkFileWithVersion('恢复-其他文件', '其他早期文本');
+    await addCollaborator(file.id, editor.id, 'editor');
+    await addCollaborator(file.id, viewer.id, 'viewer');
+    const restoreUrl = `/api/files/${file.id}/versions/${versionId}/restore`;
+
+    // 一期角色集：editor 协作者可恢复（canAccess 与 restore 判定分离）
+    const resEditor = await request(app.getHttpServer())
+      .post(restoreUrl)
+      .set('Authorization', `Bearer ${editor.token}`);
+    expect(resEditor.status).toBe(200);
+    expect(typeof resEditor.body.preRestoreVersionId).toBe('string');
+
+    // viewer 协作者 / 路人：404 与「不存在」同口径（不泄露文件存在性）
+    const resViewer = await request(app.getHttpServer())
+      .post(restoreUrl)
+      .set('Authorization', `Bearer ${viewer.token}`);
+    expect(resViewer.status).toBe(404);
+    const resOutsider = await request(app.getHttpServer())
+      .post(restoreUrl)
+      .set('Authorization', `Bearer ${outsider.token}`);
+    expect(resOutsider.status).toBe(404);
+
+    // 未登录 401
+    const resAnon = await request(app.getHttpServer()).post(restoreUrl);
+    expect(resAnon.status).toBe(401);
+
+    // 版本 id 属其他文件 404；不存在的版本 404
+    const resForeign = await request(app.getHttpServer())
+      .post(`/api/files/${file.id}/versions/${other.versionId}/restore`)
+      .set('Authorization', `Bearer ${owner.token}`);
+    expect(resForeign.status).toBe(404);
+    const resMissing = await request(app.getHttpServer())
+      .post(`/api/files/${file.id}/versions/${ulid()}/restore`)
+      .set('Authorization', `Bearer ${owner.token}`);
+    expect(resMissing.status).toBe(404);
+  });
+
+  it('列表/取态：canAccess 可读，含 createdByName；其他文件版本 404', async () => {
+    const { file, nodeId, versionId, earlyState } = await mkFileWithVersion('恢复-列表', '列表早期文本');
+    await addCollaborator(file.id, editor.id, 'editor');
+
+    const resList = await request(app.getHttpServer())
+      .get(`/api/files/${file.id}/versions`)
+      .set('Authorization', `Bearer ${owner.token}`);
+    expect(resList.status).toBe(200);
+    expect(resList.body.items).toHaveLength(1);
+    const item = resList.body.items[0];
+    expect(item.id).toBe(versionId);
+    expect(item.type).toBe('manual');
+    expect(item.nodeCount).toBe(1);
+    expect(item.createdByName).toBeTruthy(); // join users 名字非空
+    expect(item.restoredFrom).toBeNull();
+    expect(typeof item.createdAt).toBe('string');
+
+    // 协作者（canAccess）同样可读；路人 404
+    const resListEditor = await request(app.getHttpServer())
+      .get(`/api/files/${file.id}/versions`)
+      .set('Authorization', `Bearer ${editor.token}`);
+    expect(resListEditor.status).toBe(200);
+    const resListOutsider = await request(app.getHttpServer())
+      .get(`/api/files/${file.id}/versions`)
+      .set('Authorization', `Bearer ${outsider.token}`);
+    expect(resListOutsider.status).toBe(404);
+    const resListAnon = await request(app.getHttpServer()).get(`/api/files/${file.id}/versions`);
+    expect(resListAnon.status).toBe(401);
+
+    // 取态：state 为 base64，解码后即版本 Yjs 状态（内容比对）
+    const resState = await request(app.getHttpServer())
+      .get(`/api/files/${file.id}/versions/${versionId}`)
+      .set('Authorization', `Bearer ${editor.token}`);
+    expect(resState.status).toBe(200);
+    expect(resState.body.id).toBe(versionId);
+    const stateDoc = docFromState(new Uint8Array(Buffer.from(resState.body.state as string, 'base64')));
+    expect(getNode(stateDoc, nodeId)?.text).toBe('列表早期文本');
+    expect(Buffer.from(resState.body.state as string, 'base64').equals(Buffer.from(earlyState))).toBe(true);
+
+    // 其他文件的版本 id → 404（owner 亦不例外）
+    const other = await mkFileWithVersion('恢复-列表-其他', '其他文本');
+    const resForeign = await request(app.getHttpServer())
+      .get(`/api/files/${file.id}/versions/${other.versionId}`)
+      .set('Authorization', `Bearer ${owner.token}`);
+    expect(resForeign.status).toBe(404);
+  });
+
+  it('events 端点：POST /api/events 登录 204 且落库；未登录 401', async () => {
+    const { file } = await mkFileWithVersion('events-挂靠文件', 'events 节点');
+    const res = await request(app.getHttpServer())
+      .post('/api/events')
+      .set('Authorization', `Bearer ${owner.token}`)
+      .send({ type: 'e2e-probe', fileId: file.id, payload: { k: 1 } });
+    expect(res.status).toBe(204);
+
+    const row = await eventsRepo().findOneBy({ type: 'e2e-probe' });
+    expect(row).not.toBeNull();
+    expect(row!.fileId).toBe(file.id);
+    expect(row!.userId).toBe(owner.id);
+    expect(JSON.parse(row!.payload ?? '{}')).toEqual({ k: 1 });
+
+    const resAnon = await request(app.getHttpServer()).post('/api/events').send({ type: 'e2e-probe' });
+    expect(resAnon.status).toBe(401);
   });
 });

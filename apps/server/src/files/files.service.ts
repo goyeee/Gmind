@@ -324,8 +324,9 @@ export class FilesService {
     if (!(await this.canAccess(userId, file.id))) throw new NotFoundException('文件不存在');
   }
 
-  /** 加载存活文件并校验权限；缺失/已删/无权限一律 404「文件不存在」。 */
-  private async findAliveOr404(userId: string, id: string): Promise<FileEntity> {
+  /** 加载存活文件并校验权限；缺失/已删/无权限一律 404「文件不存在」。
+   *  M4 Task 7 起为 public：versions 域（列表/取态/恢复）复用同一 404 单一口径。 */
+  async findAliveOr404(userId: string, id: string): Promise<FileEntity> {
     const file = await this.repo.findOne({ where: { id, deletedAt: IsNull() } });
     if (!file) throw new NotFoundException('文件不存在');
     await this.assertCanRead(userId, file);
