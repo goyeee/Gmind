@@ -91,7 +91,7 @@ test('复制出现「-副本」，源文件保留', async ({ page }) => {
   await registerAndLogin(page);
   await createFileNamed(page, '原始文档');
   await page.locator('.file-list li', { hasText: '原始文档' }).getByTestId('row-menu').click();
-  await page.getByTestId('row-menu-popup').getByRole('button', { name: '复制' }).click();
+  await page.getByTestId('row-menu-popup').getByRole('button', { name: '复制', exact: true }).click();
   await expect(page.locator('.file-list li', { hasText: '原始文档-副本' })).toBeVisible();
   await expect(page.locator('.file-list li', { hasText: '原始文档' })).toHaveCount(2);
 });
@@ -207,7 +207,7 @@ test('shared 视图行菜单收敛：无删除/移动（owner-only），mine 视
   await sharedRow.getByTestId('row-menu').click();
   const sharedPopup = page.getByTestId('row-menu-popup');
   await expect(sharedPopup.getByRole('button', { name: '重命名' })).toBeVisible();
-  await expect(sharedPopup.getByRole('button', { name: '复制' })).toBeVisible();
+  await expect(sharedPopup.getByRole('button', { name: '复制', exact: true })).toBeVisible();
   await expect(sharedPopup.getByRole('button', { name: '移动到文件夹' })).toHaveCount(0);
   await expect(sharedPopup.getByRole('button', { name: '删除', exact: true })).toHaveCount(0);
 

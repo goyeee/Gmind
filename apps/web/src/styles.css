@@ -87,3 +87,11 @@ button { cursor: pointer; }
 .trash-list .ops button { padding: 6px 10px; border: 1px solid #e5e6eb; background: #fff; border-radius: 6px; }
 .trash-list .ops button.danger { color: #f53f3f; }
 .trash-list .empty { color: #86909c; justify-content: center; }
+
+/* —— 分享链接（M3b Task 4，FR-SHR-001）—— */
+.workspace-toast { position: fixed; left: 50%; bottom: 64px; transform: translateX(-50%); background: rgba(31,35,41,.9); color: #fff; padding: 8px 16px; border-radius: 6px; font-size: 13px; z-index: 1100; }
+.share-landing { max-width: 420px; margin: 120px auto; padding: 0 16px; text-align: center; display: flex; flex-direction: column; gap: 12px; }
+.share-landing h1 { font-size: 20px; margin: 0; }
+.share-landing p { color: #86909c; margin: 0; font-size: 14px; }
+.share-landing button { align-self: center; padding: 8px 20px; border: 1px solid #e5e6eb; background: #fff; border-radius: 6px; }
+.share-landing button:hover { background: #f2f3f5; }

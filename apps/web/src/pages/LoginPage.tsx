@@ -1,12 +1,22 @@
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api, setToken } from '../api/client';
 import type { LoginResponse } from '@gmind/shared';
 
 type Tab = 'phone' | 'email' | 'wechat';
 
+/** 登录成功后的落点（M3b Task 4，FR-SHR-001）：缺省 /workspace；分享落地页经
+ *  /login?redirect=/s/:token 回跳。仅接受站内路径（以单个 / 开头，拒绝 // 与
+ *  外部 URL），防开放重定向。 */
+function safeRedirect(raw: string | null): string {
+  if (raw && raw.startsWith('/') && !raw.startsWith('//')) return raw;
+  return '/workspace';
+}
+
 export function LoginPage() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const redirect = safeRedirect(searchParams.get('redirect'));
   const [tab, setTab] = useState<Tab>('phone');
   const [phone, setPhone] = useState('');
   const [code, setCode] = useState('');
@@ -20,7 +30,7 @@ export function LoginPage() {
     try {
       const res = await api<LoginResponse>('/auth/login', { method: 'POST', body });
       setToken(res.token);
-      navigate('/workspace');
+      navigate(redirect);
     } catch (e) {
       setError(e instanceof Error ? e.message : '登录失败');
     }

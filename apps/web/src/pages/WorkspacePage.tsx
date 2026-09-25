@@ -61,6 +61,9 @@ export function WorkspacePage() {
   const [moveTarget, setMoveTarget] = useState<FileListItemDetailed | null>(null);
   const [moveTo, setMoveTo] = useState('');
   const [menuFor, setMenuFor] = useState<string | null>(null);
+  // 分享/复制等动作的轻提示（M3b Task 4，FR-SHR-001）：复用 EditorPage 的 toast 形态
+  const [toast, setToast] = useState('');
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
 
   // Ctrl/Cmd+Shift+F 聚焦搜索框（M3b 清偿包，FR-FIL-008）：document 级监听，
@@ -166,6 +169,26 @@ export function WorkspacePage() {
       setSearch(null);
       setSearchText('');
       await loadFiles('mine');
+    } catch (e) {
+      setError(msgOf(e));
+    }
+  }
+
+  function showToast(message: string): void {
+    if (toastTimer.current !== null) clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setToast(''), 2500);
+    setToast(message);
+  }
+
+  /** 复制分享链接（M3b Task 4，FR-SHR-001）：POST /api/files/:id/share（owner only，
+   *  重复创建返回既有 active token）→ 剪贴板写 `${origin}/s/${token}` → toast。
+   *  剪贴板失败（非安全上下文/权限拒绝）以错误提示兜底，不静默。 */
+  async function copyShareLink(fileId: string): Promise<void> {
+    setMenuFor(null);
+    try {
+      const { shareToken } = await apiPost<{ shareToken: string }>(`/files/${fileId}/share`);
+      await navigator.clipboard.writeText(`${location.origin}/s/${shareToken}`);
+      showToast('链接已复制');
     } catch (e) {
       setError(msgOf(e));
     }
@@ -390,6 +413,13 @@ export function WorkspacePage() {
                           移动到文件夹
                         </button>
                       )}
+                      {/* 复制分享链接（M3b Task 4，FR-SHR-001）：owner only（FR-SHR-001
+                          「文档所有者可创建」，与删除/移动同一归属判定） */}
+                      {f.ownerUserId === me?.id && (
+                        <button data-testid="share-action" onClick={() => void copyShareLink(f.id)}>
+                          复制分享链接
+                        </button>
+                      )}
                       <button onClick={withReload(() => apiPost(`/files/${f.id}/copy`))}>复制</button>
                       {f.ownerUserId === me?.id && (
                         <button className="danger" onClick={withReload(() => apiDel(`/files/${f.id}`))}>
@@ -407,6 +437,12 @@ export function WorkspacePage() {
           </ul>
         </section>
       </div>
+
+      {toast && (
+        <div className="workspace-toast" data-testid="toast" role="alert">
+          {toast}
+        </div>
+      )}
 
       {prompt && (
         <div className="modal-mask" data-testid="rename-modal">
