@@ -42,7 +42,6 @@ export class InviteService {
   constructor(
     @InjectRepository(InviteEntity) private readonly inviteRepo: Repository<InviteEntity>,
     @InjectRepository(FileEntity) private readonly fileRepo: Repository<FileEntity>,
-    @InjectRepository(FileCollaboratorEntity) private readonly collabRepo: Repository<FileCollaboratorEntity>,
     // tsx 不发射装饰器元数据，类 token 注入必须显式 @Inject（约定见任务说明）
     @Inject(MailService) private readonly mail: MailService,
   ) {}
@@ -90,29 +89,42 @@ export class InviteService {
     return { invited, skipped };
   }
 
-  /** 注册回填：新用户创建后按 email/phone 匹配 pending 邀请 → 批量置 accepted +
-   *  逐条写 editor 协作者行（uk_fc_file_user 冲突 = 并发双插败者，幂等 no-op）。 */
+  /** 注册回填：新用户创建后按 email/phone 匹配 pending 邀请 → 写 editor 协作者行 +
+   *  批量置 accepted。仅匹配 pending（fix 1：revoked 不复活——撤销语义专属 revoke 端点，
+   *  find 与 update 两处都限 pending 双保险）。事务化且协作者行先写、accepted 标记后落
+   *  （fix 2）：任一步非 dup-key 失败整体回滚，绝不残留「已 accepted 无协作者行」的
+   *  静默丢协作脏状态。调用方（AuthService）须 try/catch 隔离——回填失败不得波及登录，
+   *  失败邀请保持 pending（不自动重试，恢复需后续撤销/接受流）。 */
   async acceptPendingForNewUser(user: UserEntity): Promise<void> {
-    const conds: Array<Pick<InviteEntity, 'contactType' | 'contact'>> = [];
-    if (user.email) conds.push({ contactType: 'email', contact: user.email });
-    if (user.phone) conds.push({ contactType: 'phone', contact: user.phone });
+    const conds: Array<Pick<InviteEntity, 'contactType' | 'contact' | 'status'>> = [];
+    if (user.email) conds.push({ contactType: 'email', contact: user.email, status: 'pending' });
+    if (user.phone) conds.push({ contactType: 'phone', contact: user.phone, status: 'pending' });
     if (conds.length === 0) return;
 
-    const pending = await this.inviteRepo.find({ where: conds });
-    if (pending.length === 0) return;
+    await this.inviteRepo.manager.transaction(async (em) => {
+      // 事务内统一走 em 仓库，保证 SELECT/INSERT/UPDATE 同一 queryRunner（可整体回滚）
+      const inviteRepo = em.getRepository(InviteEntity);
+      const collabRepo = em.getRepository(FileCollaboratorEntity);
+      const pending = await inviteRepo.find({ where: conds });
+      if (pending.length === 0) return;
 
-    await this.inviteRepo.update({ id: In(pending.map((i) => i.id)) }, { status: 'accepted', acceptedUserId: user.id });
-    for (const invite of pending) {
-      const row = this.collabRepo.create();
-      row.fileId = invite.fileId;
-      row.userId = user.id;
-      row.role = 'editor';
-      try {
-        await this.collabRepo.save(row);
-      } catch (err) {
-        if (!isDuplicateKeyError(err)) throw err; // 并发双插的败者：幂等 no-op
+      // 协作者行先行、accepted 标记后落：同一事务，任一步失败即整体回滚
+      for (const invite of pending) {
+        const row = collabRepo.create();
+        row.fileId = invite.fileId;
+        row.userId = user.id;
+        row.role = 'editor';
+        try {
+          await collabRepo.save(row);
+        } catch (err) {
+          if (!isDuplicateKeyError(err)) throw err; // 并发双插的败者：幂等 no-op；其余失败上抛回滚
+        }
       }
-    }
+      await inviteRepo.update(
+        { id: In(pending.map((i) => i.id)), status: 'pending' },
+        { status: 'accepted', acceptedUserId: user.id },
+      );
+    });
   }
 
   /** 邀请邮件：邀请人/文件名/注册链接（APP_URL 默认 web dev 端口）。永不抛错（MailService 旁路口径）。 */

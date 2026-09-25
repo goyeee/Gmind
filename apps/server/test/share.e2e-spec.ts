@@ -424,4 +424,73 @@ describe('share 域', () => {
 
     expect(await notifRepo.countBy({ userId: owner.id })).toBe(0);
   });
+
+  it('revoked 邀请不因注册回填复活：行保持 revoked、accepted_user_id 空、无协作者行', async () => {
+    const owner = await newUser('13800120011');
+    const fileId = await makeFile(owner);
+    await invite(owner, fileId, ['invite-r@test.dev']);
+    // 模拟撤销端点后的状态（当前无端点，直改 DB 行）
+    const row = await inviteRepo.findOneByOrFail({ fileId, contactType: 'email', contact: 'invite-r@test.dev' });
+    row.status = 'revoked';
+    await inviteRepo.save(row);
+
+    const invitee = await loginByCode({ email: 'invite-r@test.dev' });
+
+    const after = await inviteRepo.findOneByOrFail({ fileId, contactType: 'email', contact: 'invite-r@test.dev' });
+    expect(after.status).toBe('revoked');
+    expect(after.acceptedUserId).toBeNull();
+    expect(await collabRepo.countBy({ fileId, userId: invitee.id })).toBe(0);
+  });
+
+  it('回填中途失败与登录隔离：登录仍 200、事务回滚（行保持 pending、无协作者行），二次登录不受影响', async () => {
+    const owner = await newUser('13800120012');
+    const fileId = await makeFile(owner);
+    await invite(owner, fileId, ['invite-x@test.dev']);
+
+    // 故障注入：首个 FileCollaborator save 抛非 dup-key 错误。回填在事务内经
+    // em.getRepository 取仓库（与注入的 app 级实例不同源），故用 Repository 原型级
+    // spy 精准命中该实体类型一次（createSeedFiles 只写 files/folders，不会误伤）。
+    const collabProto = Object.getPrototypeOf(collabRepo) as { save: (...args: unknown[]) => Promise<unknown> };
+    const originalSave = collabProto.save;
+    let injected = false;
+    const spy = vi.spyOn(collabProto, 'save').mockImplementation(async function (
+      this: { target?: unknown },
+      ...args: unknown[]
+    ) {
+      if (!injected && this.target === FileCollaboratorEntity) {
+        injected = true;
+        throw new Error('模拟协作者行写入失败');
+      }
+      return originalSave.apply(this, args);
+    });
+
+    let login: request.Response;
+    try {
+      login = await request(app.getHttpServer())
+        .post('/api/auth/login')
+        .send({ method: 'email', email: 'invite-x@test.dev', mode: 'code', code: '123456' });
+    } finally {
+      spy.mockRestore();
+    }
+    // 回填失败不得波及登录（best-effort 隔离，口径同邮件旁路）
+    expect(login.status).toBe(200);
+
+    // 事务整体回滚：无「已 accepted 无协作者行」脏状态
+    const row = await inviteRepo.findOneByOrFail({ fileId, contactType: 'email', contact: 'invite-x@test.dev' });
+    expect(row.status).toBe('pending');
+    expect(row.acceptedUserId).toBeNull();
+    const user = await users.findByIdentity({ method: 'email', email: 'invite-x@test.dev' });
+    expect(user).not.toBeNull();
+    expect(await collabRepo.countBy({ fileId, userId: user!.id })).toBe(0);
+
+    // 二次登录（用户已存在，创建路径跳过 → 回填不重跑）：仍 200、行仍 pending
+    // 残差记录在案：失败的回填需 owner 重邀补救（见报告 fix note）
+    const second = await request(app.getHttpServer())
+      .post('/api/auth/login')
+      .send({ method: 'email', email: 'invite-x@test.dev', mode: 'code', code: '123456' });
+    expect(second.status).toBe(200);
+    const after = await inviteRepo.findOneByOrFail({ fileId, contactType: 'email', contact: 'invite-x@test.dev' });
+    expect(after.status).toBe('pending');
+    expect(await collabRepo.countBy({ fileId, userId: user!.id })).toBe(0);
+  });
 });
