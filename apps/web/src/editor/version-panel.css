@@ -1,0 +1,172 @@
+/* 版本历史面板 — M4 Task 8（FR-VER-004 UI）。容器样式对齐 member-panel 抽屉模式
+   （编辑器右上角工具栏下方浮层），预览对话框为居中遮罩卡片。 */
+
+.version-panel {
+  position: fixed;
+  top: 56px;
+  right: 16px;
+  width: 288px;
+  max-height: 60vh;
+  overflow: auto;
+  background: #fff;
+  border: 1px solid #e5e6eb;
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  z-index: 1150;
+  padding: 8px 12px 12px;
+  font-size: 13px;
+}
+
+.version-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 0 6px;
+  border-bottom: 1px solid #f2f3f5;
+}
+.version-panel-title {
+  font-weight: 600;
+}
+.version-panel-close {
+  border: none;
+  background: none;
+  font-size: 16px;
+  line-height: 1;
+  color: #86909c;
+  cursor: pointer;
+  padding: 2px 6px;
+}
+.version-panel-empty {
+  margin: 8px 0;
+  color: #c9cdd4;
+  text-align: center;
+}
+
+/* 时间轴条目：时间 + 类型徽标 + 触发人 + 节点数 + hover 显恢复按钮 */
+.version-items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.version-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 0;
+  border-bottom: 1px solid #f7f8fa;
+}
+.version-item:last-child {
+  border-bottom: none;
+}
+.version-item-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+.version-item-time {
+  flex: none;
+  color: #1f2329;
+  font-variant-numeric: tabular-nums;
+}
+.version-item-badge {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  background: #f2f3f5;
+  color: #4e5969;
+}
+.version-item-badge-pre_restore {
+  background: #fff3e8;
+  color: #d25f00;
+}
+.version-item-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #4e5969;
+}
+.version-item-count {
+  flex: none;
+  color: #86909c;
+  font-size: 12px;
+}
+.version-item-restore {
+  flex: none;
+  opacity: 0;
+  transition: opacity 0.12s;
+  border: 1px solid #e5e6eb;
+  border-radius: 6px;
+  background: #fff;
+  padding: 2px 8px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.version-item:hover .version-item-restore,
+.version-item-restore:focus-visible {
+  opacity: 1;
+}
+.version-item-restore:hover {
+  background: #f2f3f5;
+}
+
+/* 只读预览对话框：居中遮罩卡片，固定高画布内嵌引擎渲染的 SVG */
+.version-preview-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 1300;
+  background: rgba(31, 35, 41, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.version-preview-dialog {
+  width: 720px;
+  max-width: 92vw;
+  background: #fff;
+  border-radius: 8px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.version-preview-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-bottom: 1px solid #f2f3f5;
+  font-size: 13px;
+  font-weight: 600;
+}
+.version-preview-close {
+  border: none;
+  background: none;
+  font-size: 16px;
+  line-height: 1;
+  color: #86909c;
+  cursor: pointer;
+  padding: 2px 6px;
+}
+.version-preview-canvas {
+  height: 460px;
+}
+.version-preview-canvas svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+.version-preview-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 14px;
+  border-top: 1px solid #f2f3f5;
+  color: #86909c;
+  font-size: 12px;
+}

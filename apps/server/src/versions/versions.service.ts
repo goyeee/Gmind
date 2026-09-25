@@ -79,6 +79,15 @@ export class VersionsService {
     return { ...this.toListItem(row, names), state: Buffer.from(row.state).toString('base64') };
   }
 
+  /** dev/e2e 快照触发（M4 Task 8；路由仅 NODE_ENV!=='production' 放行，见 controller）：
+   *  canAccess 口径过闸（findAliveOr404）后直调 collab.snapshotIfDirty——脏的活跃内存
+   *  doc 立即落 auto 行（不看 3 分钟节流）；无变更/不在内存返回 false 不落行。 */
+  async snapshotDev(userId: string, fileId: string): Promise<{ created: boolean }> {
+    const file = await this.files.findAliveOr404(userId, fileId);
+    const created = await this.collab.snapshotIfDirty(file.id, Date.now());
+    return { created };
+  }
+
   /** POST /api/files/:id/versions/:versionId/restore → {preRestoreVersionId}。 */
   async restore(userId: string, fileId: string, versionId: string): Promise<{ preRestoreVersionId: string }> {
     const file = await this.files.findAliveOr404(userId, fileId);

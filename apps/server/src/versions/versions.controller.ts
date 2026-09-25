@@ -1,4 +1,5 @@
-import { Controller, Get, HttpCode, Inject, Param, Post, Req, UseGuards } from '@nestjs/common';
+import { Controller, Get, HttpCode, Inject, NotFoundException, Param, Post, Req, UseGuards } from '@nestjs/common';
+import { env } from '../config/env';
 import { UserGuard } from '../auth/user.guard';
 import { VersionsService } from './versions.service';
 
@@ -38,5 +39,23 @@ export class VersionsController {
     @Param('versionId') versionId: string,
   ) {
     return this.versions.restore(req.user.id, id, versionId);
+  }
+
+  /**
+   * dev/e2e 专用快照触发（M4 Task 8）：按需落一行 auto 快照（不看 3 分钟节流），
+   * 供 web e2e 造数与手动验收共用。生产不生效——一行可读守卫（NODE_ENV!=='production'
+   * 才放行，等价于「生产一律 404」）；与 dev-e2e 的 fail-closed 纪律同方向，且本路由
+   * 另受 UserGuard + canAccess（service 内 findAliveOr404）双闸，无鉴权不可达。
+   * 生产模式下路由不可用不可在本套件内断言（vitest 恒为 test 环境），守卫为单行
+   * 直读 env 的纯比较，回归由代码评审钉死。
+   */
+  @Post(':id/versions/snapshot')
+  @HttpCode(200)
+  async snapshotDev(
+    @Req() req: { user: { id: string } },
+    @Param('id') id: string,
+  ): Promise<{ created: boolean }> {
+    if (env.NODE_ENV === 'production') throw new NotFoundException();
+    return this.versions.snapshotDev(req.user.id, id);
   }
 }

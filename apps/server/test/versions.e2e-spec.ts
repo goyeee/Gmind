@@ -506,6 +506,35 @@ describe('版本恢复（REST FR-VER-004）+ events 埋点端点', () => {
     expect(resForeign.status).toBe(404);
   });
 
+  it('dev 快照路由（Task 8）：live 脏文档 POST 即落 auto 行；无变更不落', async () => {
+    const { file, nodeId } = await mkFileWithVersion('快照路由', '路由早期文本');
+    const client = await connectSynced(file.id, owner.token);
+
+    // 经 WS 改文本 → 服务端 onChange 置脏（异步到达：轮询 POST 直至 created=true，
+    // 未置脏时路由幂等返回 created=false，无副作用）
+    setText(client.provider.document, nodeId, '路由触发文本');
+    await until(async () => {
+      const res = await request(app.getHttpServer())
+        .post(`/api/files/${file.id}/versions/snapshot`)
+        .set('Authorization', `Bearer ${owner.token}`);
+      return res.status === 200 && res.body.created === true;
+    }, 'dev snapshot created:true');
+
+    const rows = await versionRows(file.id);
+    expect(rows.some((r) => r.type === 'auto')).toBe(true);
+    const countAfterFirst = rows.length;
+
+    // 无变更再触发：dirty 闸收口，不重复落行
+    const res2 = await request(app.getHttpServer())
+      .post(`/api/files/${file.id}/versions/snapshot`)
+      .set('Authorization', `Bearer ${owner.token}`);
+    expect(res2.status).toBe(200);
+    expect(res2.body).toEqual({ created: false });
+    expect((await versionRows(file.id)).length).toBe(countAfterFirst);
+
+    await closeClient(client);
+  });
+
   it('events 端点：POST /api/events 登录 204 且落库；未登录 401', async () => {
     const { file } = await mkFileWithVersion('events-挂靠文件', 'events 节点');
     const res = await request(app.getHttpServer())

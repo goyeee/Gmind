@@ -69,6 +69,7 @@ import {
 import { MemberPanel } from '../editor/MemberPanel';
 import { RichPanel } from '../editor/RichPanel';
 import { CommentPanel, type CommentThreadView } from '../editor/CommentPanel';
+import { VersionPanel } from '../editor/VersionPanel';
 import { startCollab, getCurrentUser, type CollabHandle, type CollabStatus, type PresenceMember } from '../editor/collab';
 import {
   QUOTA_ADD_BLOCKED,
@@ -204,6 +205,8 @@ export function EditorPage() {
   // 在线成员（FR-COL-005）：collab onPresence 推进；成员面板开合。
   const [members, setMembers] = useState<PresenceMember[]>([]);
   const [membersOpen, setMembersOpen] = useState(false);
+  // 版本历史面板开合（M4 Task 8，FR-VER-004 UI）：装配模式同成员面板 open/onClose
+  const [versionsOpen, setVersionsOpen] = useState(false);
   // 当前用户身份（M4 Task 2 邀请区可见性）：与 awareness/last_editor 共用 users/me
   // 模块级缓存（不重发请求）；canInvite = 当前用户即创建者（WorkspacePage 行菜单
   // ownerUserId === me?.id 同口径），身份未装配（id 空串）一律不可见。
@@ -1373,6 +1376,10 @@ export function EditorPage() {
         <span className="save-status" data-testid="save-status">
           {status}
         </span>
+        {/* 版本历史（M4 Task 8，FR-VER-004 UI）：时间轴/只读预览/一键恢复入口 */}
+        <button data-testid="versions-toggle" title="版本历史" onClick={() => setVersionsOpen((v) => !v)}>
+          版本历史
+        </button>
         <button
           data-testid="members-btn"
           title="在线成员"
@@ -1495,6 +1502,12 @@ export function EditorPage() {
         </div>
       )}
 
+      <VersionPanel
+        fileId={fileId}
+        open={versionsOpen}
+        onClose={() => setVersionsOpen(false)}
+        showToast={showToast}
+      />
       <MemberPanel
         members={members}
         ownerUserId={ownerUserId}
