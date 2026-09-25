@@ -86,10 +86,16 @@
     号发邀请 → pending 行 + 邀请邮件（文案承诺「注册/登录后自动加入」）但登录永不
     触发回填、无接受端点/UI——邀请永久悬挂。M4 建邀请对话框 UI 前必须裁定：扩展现
     有用户登录回填 / 加接受流 / 修文案。验收：已注册受邀者完成授权的 e2e。
+    **已收口（M4 T1，commit d187f39）**：裁定＝扩展现有回填——已移出 `if (!user)` 门控，
+    新旧用户每次登录尽力触发（幂等＝pending 过滤 + uk_invite，失败隔离同邮件旁路）；
+    验收 e2e＝`apps/server/test/share.e2e-spec.ts`「准入 7.10：已注册用户被邀请，登录后自动获得授权（不再永久悬挂）」。
 11. **【M4 首批】回收站提醒双重邮件**（M3b 终审 Important #2，跨任务交互）：cleanup
     remind() 即时发邮件且所写通知行不带 emailed_at → 15 分钟后 DigestService 再发一
     封（MailHog 接通后每次回收站提醒=两封邮件）。一行修复：remind() 写自己的行带
     emailed_at（或 digest 跳过 type='system'）。须在邮件环境接通前修掉。
+    **已收口（M4 T1，commit d187f39）**：取「remind() 落行即置 emailed_at」方案（DigestService
+    扫描跳过本行；不取「digest 跳过 type='system'」——不排除将来 system 行入摘要）；
+    验收 e2e＝`apps/server/test/trash.e2e-spec.ts`「准入 7.11：回收站提醒的即时邮件不触发 15 分钟摘要重发（emailed_at 落行）」。
 ：quota 拦截解除以「用户删除 / persisted
    ack 复查 ≤ 上限」为准（M1b 终审裁定口径）；删除后仍超限时服务端边缘触发器在回落
    限内前不会重复广播，该窗口内新增不受客户端拦截、仅服务端 advisory——M3 若收紧
