@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, typ
 import { useNavigate } from 'react-router-dom';
 import type { FileListItemDetailed, FolderItem } from '@gmind/shared';
 import { api, apiDel, apiPatch, apiPost, apiPut } from '../api/client';
+import { degradedSummary, importXmindFile } from '../editor/xmind-import';
 import { onNotifyEvent, type NotifyItem } from '../notify';
 
 /** 四视图（FR-FIL-001）：GET /api/files?view= 的合法值与页签文案。 */
@@ -71,6 +72,8 @@ export function WorkspacePage() {
   const [toast, setToast] = useState('');
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
+  // XMind 导入入口（M4 Task 4）：隐藏 file input，由「导入」按钮代点
+  const importInputRef = useRef<HTMLInputElement | null>(null);
 
   // Ctrl/Cmd+Shift+F 聚焦搜索框（M3b 清偿包，FR-FIL-008）：document 级监听，
   // Shift 使 key 为 'F'，统一按小写比较；Ctrl 与 Cmd（macOS）都算命中。
@@ -230,6 +233,26 @@ export function WorkspacePage() {
       await loadFiles('mine');
     } catch (e) {
       setError(msgOf(e));
+    }
+  }
+
+  /** XMind 导入（M4 Task 4，FR-IO-001/002）：file → xmind-import 胶水（错误已按
+   *  FR-IO-001 归因为 Error.message）→ POST /api/files 携带 docState 建文件 →
+   *  与新建脑图同款回刷（退出过滤/搜索/其他视图，「导入即见」）。降级提示 toast
+   *  （degraded.length > 0，FR-IO-002）；失败 toast 显示归因文案（不进全局 error 条，
+   *  导入失败不阻断工作台其余操作）。 */
+  async function importXmind(file: File): Promise<void> {
+    try {
+      const { title, state, degraded } = await importXmindFile(file);
+      await apiPost('/files', { title, docState: state });
+      setView('mine');
+      setFolderId(null);
+      setSearch(null);
+      setSearchText('');
+      await loadFiles('mine');
+      if (degraded.length > 0) showToast(degradedSummary(degraded));
+    } catch (e) {
+      showToast(msgOf(e));
     }
   }
 
@@ -404,6 +427,22 @@ export function WorkspacePage() {
             )}
           </div>
           <button onClick={() => navigate('/trash')}>回收站</button>
+          <button data-testid="import-button" onClick={() => importInputRef.current?.click()}>
+            导入
+          </button>
+          {/* accept 仅为系统选择器提示；e2e setInputFiles 直接注入 bytes 不受其约束 */}
+          <input
+            ref={importInputRef}
+            type="file"
+            accept=".xmind"
+            data-testid="import-input"
+            style={{ display: 'none' }}
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              e.target.value = ''; // 复位以允许连续导入同名文件
+              if (file) void importXmind(file);
+            }}
+          />
           <button className="primary" onClick={() => void createFile()}>
             新建脑图
           </button>

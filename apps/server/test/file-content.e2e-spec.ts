@@ -9,6 +9,7 @@ import type { HocuspocusProviderConfiguration } from '@hocuspocus/provider';
 import type * as Y from 'yjs';
 import {
   ROOT_NODE_ID,
+  addChild,
   childrenIds,
   countAliveReachable,
   countNodes,
@@ -17,6 +18,7 @@ import {
   docFromState,
   docToState,
   getNode,
+  setNote,
   setText,
 } from '@gmind/core';
 import { createTestApp } from './support/app-test';
@@ -447,5 +449,100 @@ describe('PUT 陈旧快照写序守卫（准入 7.1）', () => {
       baseUpdatedAt: 'not-a-date',
     });
     expect(invalid.status).toBe(200);
+  });
+});
+
+/**
+ * POST /api/files 携带 docState（M4 Task 4，XMind 导入端到端的服务端半边，FR-IO-001）。
+ *
+ * 导入端把 .xmind 解析树经 @gmind/core 操作层组装为 Y.Doc，以 base64 docState 随
+ * POST /api/files 建文件。服务端约定：
+ * - nodeCount 一律服务端按 countAliveReachable 重算（不信任客户端传值——body schema
+ *   本就不收 nodeCount，service 侧也去掉入参直通）；
+ * - docState 损坏（docFromState 抛错）→ 400「文件已损坏」；
+ * - 可达活跃节点 > MAX_DOC_NODES → 400「文档节点数已达上限（500）」（文案与
+ *   saveDocState 的既有配额文案同口径，但按导入语义落 400 而非 403）。
+ */
+describe('POST /api/files 携带 docState（XMind 导入）', () => {
+  let app: INestApplication;
+  let ownerToken: string;
+
+  const tokenFor = async (userId: string): Promise<string> => {
+    const { SessionService } = await import('../src/session/session.service');
+    const redisMod = await import('ioredis');
+    const svc = new SessionService(new redisMod.default('redis://127.0.0.1:63790/1'));
+    return (await svc.create(userId, false)).token;
+  };
+
+  type Method = 'get' | 'post' | 'put' | 'patch';
+  const authed = (token: string, method: Method, url: string) =>
+    request(app.getHttpServer())[method](url).set('Authorization', `Bearer ${token}`);
+
+  /** 经 core 操作层组装导入文档（唯一写入口约束）：createTemplateDoc + addChild + setNote → base64。 */
+  const buildDocStateViaCore = (): string => {
+    const doc = createTemplateDoc({ title: '中心', children: [] });
+    const a = addChild(doc, ROOT_NODE_ID, { text: 'A' });
+    setNote(doc, a, 'A 的备注');
+    addChild(doc, ROOT_NODE_ID, { text: 'B' });
+    return Buffer.from(docToState(doc)).toString('base64');
+  };
+
+  beforeAll(async () => {
+    app = await createTestApp();
+    const users = app.get((await import('../src/users/users.service')).UsersService);
+    const owner = await users.create({ method: 'phone', phone: '13900004001' });
+    ownerToken = await tokenFor(owner.id);
+  });
+
+  afterAll(async () => {
+    await app.close();
+  });
+
+  it('导入：携带 docState 建文件——nodeCount 服务端重算、层级/备注落库', async () => {
+    const state = await buildDocStateViaCore();
+    // 客户端就算夹带 nodeCount 也必须被无视（schema 收窄 + service 重算）
+    const res = await authed(ownerToken, 'post', '/api/files')
+      .send({ title: '导入件', docState: state, nodeCount: 999 });
+    expect(res.status).toBe(201);
+    // POST 响应即 FileListItem 契约：nodeCount = 可达活跃口径（root 不计）：A + B → 2
+    expect(res.body.nodeCount).toBe(2);
+
+    const got = await authed(ownerToken, 'get', `/api/files/${res.body.id}`);
+    expect(got.status).toBe(200);
+    expect(got.body.nodeCount).toBe(2);
+    // 层级与备注落库：root 文本 = 中心，子节点 A/B，A 带备注。docState 忠实原样落库
+    // （meta.title 仍为组装时的 中心）；行标题来自 body.title（与复制路径同契约）
+    expect(got.body.title).toBe('导入件');
+    const doc = docFromState(new Uint8Array(Buffer.from(got.body.docState, 'base64')));
+    expect(doc.getMap('meta').get('title')).toBe('中心');
+    expect(getNode(doc, ROOT_NODE_ID)?.text).toBe('中心');
+    const kids = childrenIds(doc, ROOT_NODE_ID);
+    expect(kids).toHaveLength(2);
+    expect(getNode(doc, kids[0] as string)?.text).toBe('A');
+    expect(getNode(doc, kids[0] as string)?.note).toBe('A 的备注');
+    expect(getNode(doc, kids[1] as string)?.text).toBe('B');
+  });
+
+  it('导入：可达活跃节点 501（+root）→ 400，文案含「节点数」', async () => {
+    const state = Buffer.from(
+      docToState(
+        createTemplateDoc({
+          title: '超大导入',
+          children: Array.from({ length: 501 }, (_, i) => ({ text: `n${i}` })),
+        }),
+      ),
+    ).toString('base64');
+    const res = await authed(ownerToken, 'post', '/api/files').send({ title: '超限导入', docState: state });
+    expect(res.status).toBe(400);
+    expect(res.body.message).toContain('节点数');
+  });
+
+  it('导入：损坏 docState → 400「文件已损坏」', async () => {
+    const res = await authed(ownerToken, 'post', '/api/files').send({
+      title: '坏件',
+      docState: Buffer.from('this is definitely not a yjs update').toString('base64'),
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.message).toBe('文件已损坏');
   });
 });

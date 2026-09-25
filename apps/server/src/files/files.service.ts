@@ -71,10 +71,12 @@ export class FilesService {
 
   /** 新建文件；无 doc 状态时用空白模板。配额 100 文件（FR-ACC-003）。
    *  folderId/lastModifierUserId（M3a Task 6）：复制路径的显式落点（同文件夹）与
-   *  修改人标记；缺省 null，普通新建（POST /api/files）行为不变。 */
+   *  修改人标记；缺省 null，普通新建（POST /api/files）行为不变。
+   *  state（M4 Task 4）：XMind 导入端到端的初始状态——损坏 400、nodeCount 服务端
+   *  重算（不信任客户端传值）、超 MAX_DOC_NODES 400。 */
   async createForUser(
     userId: string,
-    input: { title: string; state?: Uint8Array; nodeCount?: number; folderId?: string | null; lastModifierUserId?: string },
+    input: { title: string; state?: Uint8Array; folderId?: string | null; lastModifierUserId?: string },
   ): Promise<FileEntity> {
     const file = await this.buildForUser(userId, input);
     return this.repo.save(file);
@@ -83,10 +85,15 @@ export class FilesService {
   /** 新建文件构建（不落库；M3b Task 1 从 createForUser 提取）：配额（FR-ACC-003）与
    *  doc meta 回填链路（nodeCount/structure/themeId）在此完成，返回的实体已带
    *  entity 默认生成的 id——copyForUser 需先持有副本 id 才能以 files/{副本id}/ 命名空间
-   *  迁移图片对象（准入 7.8「落库前完成迁移」的单体一致复制语义）。 */
+   *  迁移图片对象（准入 7.8「落库前完成迁移」的单体一致复制语义）。
+   *  state 路径（M4 Task 4）：docFromState 抛错 → 400「文件已损坏」（导入是外部状态
+   *  直入的第二入口，与 saveDocState/copyForUser 的解析守卫同口径收口于此）；
+   *  nodeCount 一律 countAliveReachable 重算——body schema 不收该字段，入参也不再有
+   *  直通口；> MAX_DOC_NODES → 400（文案与 saveDocState 既有配额文案同口径，导入
+   *  语义按 400 落——XMind 解析端已挡 20MB，超大纯文本树在此兜底）。 */
   private async buildForUser(
     userId: string,
-    input: { title: string; state?: Uint8Array; nodeCount?: number; folderId?: string | null; lastModifierUserId?: string },
+    input: { title: string; state?: Uint8Array; folderId?: string | null; lastModifierUserId?: string },
   ): Promise<FileEntity> {
     const count = await this.repo.countBy({ ownerUserId: userId, deletedAt: IsNull() });
     if (count >= MAX_FILES_PER_USER) {
@@ -98,12 +105,21 @@ export class FilesService {
     if (input.folderId !== undefined) file.folderId = input.folderId;
     if (input.lastModifierUserId !== undefined) file.lastModifierUserId = input.lastModifierUserId;
     if (input.state) {
-      const doc = docFromState(input.state);
+      let doc;
+      try {
+        doc = docFromState(input.state);
+      } catch {
+        throw new BadRequestException('文件已损坏');
+      }
       file.docState = Buffer.from(input.state);
       // 口径统一（M2 终审修复轮，FR-ACC-003）：createForUser 与 saveDocState/协同
       // 持久化同为 countAliveReachable（可达活跃、不含 root）——旧 countNodes 会计入
       // 墓碑/孤儿，与保存路径 ±N 语义差（M2 准入清单 §1 遗留项收口）。
-      file.nodeCount = input.nodeCount ?? countAliveReachable(doc);
+      const nodeCount = countAliveReachable(doc);
+      if (nodeCount > MAX_DOC_NODES) {
+        throw new BadRequestException(`文档节点数已达上限（${MAX_DOC_NODES}）`);
+      }
+      file.nodeCount = nodeCount;
       // 从恢复 doc 的 meta 回填 structure/themeId，保证 files 列与 Y.Doc 元数据一致（如种子模板 org 结构）
       const meta = doc.getMap('meta');
       const structure = meta.get('structureType');
@@ -122,7 +138,7 @@ export class FilesService {
   async createSeedFiles(userId: string): Promise<void> {
     for (const tpl of SEED_TEMPLATES) {
       const state = docToState(createTemplateDoc(tpl));
-      await this.createForUser(userId, { title: tpl.title, state, nodeCount: undefined });
+      await this.createForUser(userId, { title: tpl.title, state });
     }
   }
 

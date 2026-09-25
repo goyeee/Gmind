@@ -18,6 +18,15 @@ const docStateSchema = z.object({
 // GET /api/files 的视图参数（M3a Task 4，FR-FIL-001）：缺省 mine；非法值 400。
 const listViewSchema = z.object({ view: z.enum(['mine', 'shared', 'starred', 'recent']).default('mine') });
 
+// POST /api/files body（M4 Task 4，FR-IO-001）：在 createFileSchema 基础上扩展可选
+// docState（base64 Yjs update，XMind 导入端到端）——base64 后文本型文档远小于 2mb JSON
+// 上限（20MB 的 .xmind 中媒体已在解析端降级，不入 docState）。min(1) 与 PUT doc-state
+// 的 schema 对齐（空串不走导入路径）；nodeCount 不收：服务端一律按 countAliveReachable
+// 重算，不信任客户端传值。
+const createBodySchema = createFileSchema.extend({
+  docState: z.string().min(1).max(4_000_000).optional(),
+});
+
 // PATCH /api/files/:id（M3a Task 5，FR-FIL-002）：title 与 folderId 均可选、至少其一；
 // folderId null → 移回根目录。title 规则复用 createFileSchema（ZodOptional 短路 undefined，
 // 缺省「未命名脑图」的 default 不触发）。
@@ -44,9 +53,13 @@ export class FilesController {
 
   @Post()
   async create(@Req() req: { user: { id: string } }, @Body() body: unknown) {
-    const { title } = createFileSchema.parse(body ?? {});
+    const { title, docState } = createBodySchema.parse(body ?? {});
     // 按 FileListItem 契约序列化，避免裸实体（含 docState Buffer）被 Nest 原样序列化
-    const created = await this.files.createForUser(req.user.id, { title });
+    const created = await this.files.createForUser(req.user.id, {
+      title,
+      // docState 缺省 → 既有空白模板路径；存在 → 按导入初始状态落库（M4 Task 4）
+      state: docState === undefined ? undefined : new Uint8Array(Buffer.from(docState, 'base64')),
+    });
     return this.files.toListItem(created);
   }
 
