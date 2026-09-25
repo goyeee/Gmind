@@ -55,6 +55,13 @@ export class FilesController {
     return this.files.getOwnedFileWithState(req.user.id, id);
   }
 
+  /** 协作者/owner 候选列表（M3b Task 8，FR-CMT-005）：评论 @mention 的可选人
+   *  （owner + collaborators，JOIN users nickname）；canAccess 口径（含协作者）。 */
+  @Get(':id/collaborators')
+  listCollaborators(@Req() req: { user: { id: string } }, @Param('id') id: string) {
+    return this.files.listCollaborators(req.user.id, id);
+  }
+
   @Put(':id/doc-state')
   async saveDocState(@Req() req: { user: { id: string } }, @Param('id') id: string, @Body() body: unknown) {
     const { docState, baseUpdatedAt, lastEditorUserId } = docStateSchema.parse(body ?? {});

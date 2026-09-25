@@ -1,6 +1,7 @@
-import type { ReactElement } from 'react';
-import { Navigate, Route, Routes } from 'react-router-dom';
+import { useEffect, type ReactElement } from 'react';
+import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { getToken } from './api/client';
+import { connectNotifications } from './notify';
 import { LoginPage } from './pages/LoginPage';
 import { WorkspacePage } from './pages/WorkspacePage';
 import { TrashPage } from './pages/TrashPage';
@@ -12,6 +13,14 @@ function RequireAuth({ children }: { children: ReactElement }) {
 }
 
 export function App() {
+  const location = useLocation();
+  // 站内通知 SSE（M3b Task 8，FR-CMT-005）：每次路由挂载/切换尝试建连（幂等 no-op：
+  // 未登录或已连接直接跳过）——登录后的首次导航即建立连接，此后全应用仅此一条长连接；
+  // 断线后由下一次导航重建（连接策略详见 notify.ts）。
+  useEffect(() => {
+    connectNotifications();
+  }, [location]);
+
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />

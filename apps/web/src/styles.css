@@ -30,6 +30,21 @@ button { cursor: pointer; }
 .workspace-header button.primary { border: none; background: #3370ff; color: #fff; }
 .workspace-header .header-actions { display: flex; align-items: center; gap: 8px; }
 .user-nickname { color: #86909c; font-size: 13px; }
+/* —— 通知铃铛与下拉（M3b Task 8，FR-CMT-005）—— */
+.notify-wrap { position: relative; }
+.notify-bell { position: relative; display: inline-flex; align-items: center; justify-content: center; padding: 8px 10px !important; color: #4e5969; }
+.notify-badge { position: absolute; top: -6px; right: -6px; min-width: 18px; height: 18px; padding: 0 4px; border-radius: 9px; background: #f53f3f; color: #fff; font-size: 11px; line-height: 18px; text-align: center; font-weight: 600; }
+.notify-dropdown { position: absolute; right: 0; top: 44px; z-index: 1200; width: 340px; max-height: 420px; overflow-y: auto; background: #fff; border: 1px solid #e5e6eb; border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,.12); padding: 4px; }
+.notify-empty { padding: 16px 12px; color: #86909c; font-size: 13px; text-align: center; }
+.notify-item { display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border-radius: 6px; cursor: pointer; font-size: 13px; }
+.notify-item:hover { background: #f2f3f5; }
+.notify-item.unread { background: #f0f5ff; }
+.notify-item.unread:hover { background: #e8f0ff; }
+.notify-item-head { display: flex; align-items: center; gap: 6px; }
+.notify-type { flex: none; font-size: 11px; color: #3370ff; border: 1px solid #bedaff; border-radius: 4px; padding: 0 4px; }
+.notify-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.notify-content { color: #86909c; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.notify-time { color: #c9cdd4; font-size: 11px; }
 .search-input { flex: 1; max-width: 360px; padding: 8px 12px; border: 1px solid #e5e6eb; border-radius: 6px; }
 .workspace-body { display: flex; gap: 16px; margin-top: 16px; align-items: flex-start; }
 .folder-rail { width: 240px; flex: none; background: #fff; border-radius: 8px; padding: 12px; }

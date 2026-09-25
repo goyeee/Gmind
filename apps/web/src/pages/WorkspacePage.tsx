@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, typ
 import { useNavigate } from 'react-router-dom';
 import type { FileListItemDetailed, FolderItem } from '@gmind/shared';
 import { api, apiDel, apiPatch, apiPost, apiPut } from '../api/client';
+import { onNotifyEvent, type NotifyItem } from '../notify';
 
 /** 四视图（FR-FIL-001）：GET /api/files?view= 的合法值与页签文案。 */
 type View = 'mine' | 'shared' | 'starred' | 'recent';
@@ -61,6 +62,11 @@ export function WorkspacePage() {
   const [moveTarget, setMoveTarget] = useState<FileListItemDetailed | null>(null);
   const [moveTo, setMoveTo] = useState('');
   const [menuFor, setMenuFor] = useState<string | null>(null);
+  // 站内通知（M3b Task 8，FR-CMT-005）：未读角标 + 通知下拉；事件由 notify.ts 的
+  // SSE 连接分发（App.tsx 建连），此处只消费
+  const [unread, setUnread] = useState(0);
+  const [notifs, setNotifs] = useState<NotifyItem[]>([]);
+  const [bellOpen, setBellOpen] = useState(false);
   // 分享/复制等动作的轻提示（M3b Task 4，FR-SHR-001）：复用 EditorPage 的 toast 形态
   const [toast, setToast] = useState('');
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -91,6 +97,59 @@ export function WorkspacePage() {
     void loadFiles('mine').catch((e) => setError(msgOf(e)));
     void loadFolders().catch((e) => setError(msgOf(e)));
   }, [loadFiles, loadFolders]);
+
+  // ---- 通知中心（M3b Task 8，FR-CMT-005）----------------------------------
+  const loadUnread = useCallback(async () => {
+    try {
+      const { count } = await api<{ count: number }>('/notifications/unread-count');
+      setUnread(count);
+    } catch {
+      // 铃铛是非关键路径：失败保持现状（不进全局 error 条）
+    }
+  }, []);
+  const loadNotifs = useCallback(async () => {
+    try {
+      setNotifs(await api<NotifyItem[]>('/notifications'));
+    } catch {
+      // 同上：下拉打开失败静默，保留旧列表
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadUnread();
+  }, [loadUnread]);
+
+  // SSE 推送到达：未读数重取；下拉展开时连列表一起刷新
+  useEffect(
+    () =>
+      onNotifyEvent(() => {
+        void loadUnread();
+        if (bellOpen) void loadNotifs();
+      }),
+    [loadUnread, loadNotifs, bellOpen],
+  );
+
+  function toggleBell(): void {
+    const next = !bellOpen;
+    setBellOpen(next);
+    if (next) void loadNotifs();
+  }
+
+  /** 点击通知条目：未读则标记已读（POST :id/read）+ 角标重取，随后按 payload.fileId
+   *  跳转编辑页（mention/reply 均锚定文件）；无 fileId 的通知仅关闭下拉。 */
+  async function openNotification(n: NotifyItem): Promise<void> {
+    setBellOpen(false);
+    if (n.readAt === null) {
+      try {
+        await apiPost(`/notifications/${n.id}/read`);
+      } catch {
+        // 已读失败不阻断跳转（下次进入工作台角标自会纠正）
+      }
+      void loadUnread();
+    }
+    const fileId = n.payload?.fileId;
+    if (fileId) navigate(`/edit/${fileId}`);
+  }
 
   /** 变更后回刷：搜索态重跑同一关键词（更新 results），列表态回刷当前视图。 */
   async function refresh(): Promise<void> {
@@ -303,6 +362,47 @@ export function WorkspacePage() {
           }}
         />
         <div className="header-actions">
+          <div className="notify-wrap">
+            <button className="notify-bell" data-testid="notify-bell" title="通知" onClick={toggleBell}>
+              <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+                <path
+                  d="M12 22a2.2 2.2 0 0 0 2.2-2.2H9.8A2.2 2.2 0 0 0 12 22Zm7-5.6v-1.1l-1.8-1.8V9.8A5.2 5.2 0 0 0 13.3 4.7V4a1.3 1.3 0 1 0-2.6 0v.7A5.2 5.2 0 0 0 6.8 9.8v3.7L5 15.3v1.1Z"
+                  fill="currentColor"
+                />
+              </svg>
+              {unread > 0 && (
+                <span className="notify-badge" data-testid="notify-badge">
+                  {unread > 99 ? '99+' : unread}
+                </span>
+              )}
+            </button>
+            {bellOpen && (
+              <div className="notify-dropdown" data-testid="notify-list">
+                {notifs.length === 0 && <div className="notify-empty">暂无通知</div>}
+                {notifs.map((n) => (
+                  <div
+                    key={n.id}
+                    className={'notify-item' + (n.readAt === null ? ' unread' : '')}
+                    data-testid="notify-item"
+                    onClick={() => void openNotification(n)}
+                  >
+                    <span className="notify-item-head">
+                      <span className="notify-type">{n.type === 'mention' ? '提及' : n.type === 'reply' ? '回复' : '通知'}</span>
+                      <span className="notify-text">
+                        {n.type === 'mention'
+                          ? `${n.payload?.commenterName ?? '有人'} 在「${n.payload?.title ?? '文件'}」中提到了你`
+                          : n.type === 'reply'
+                            ? `${n.payload?.commenterName ?? '有人'} 在「${n.payload?.title ?? '文件'}」中回复了你`
+                            : n.payload?.title ?? ''}
+                      </span>
+                    </span>
+                    {n.payload?.content && <span className="notify-content">{n.payload.content}</span>}
+                    <span className="notify-time">{fmtTime(n.createdAt)}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
           <button onClick={() => navigate('/trash')}>回收站</button>
           <button className="primary" onClick={() => void createFile()}>
             新建脑图

@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { CollabModule } from '../collab/collab.module';
 import { StorageCoreModule } from '../storage/storage-core.module';
+import { UserEntity } from '../users/user.entity';
 import { UsersModule } from '../users/users.module';
 import { FileEntity } from './file.entity';
 import { FileCollaboratorEntity } from './file-collaborator.entity';
@@ -18,8 +19,9 @@ import { FilesController, SearchController } from './files.controller';
   // FileStarEntity（M3a Task 6，FR-FIL-004）：加星/取消端点的 file_stars 行读写
   // StorageCoreModule（M3b Task 1，准入 7.8）：copyForUser 的图片对象迁移需
   // StorageService.copyImage——叶子模块（不含鉴权端点层），不与 StorageModule 成环
+  // UserEntity（M3b Task 8，FR-CMT-005）：collaborators 候选列表的 nickname JOIN
   imports: [
-    TypeOrmModule.forFeature([FileEntity, FileCollaboratorEntity, FileStarEntity, FolderEntity]),
+    TypeOrmModule.forFeature([FileEntity, FileCollaboratorEntity, FileStarEntity, FolderEntity, UserEntity]),
     UsersModule,
     CollabModule,
     StorageCoreModule,

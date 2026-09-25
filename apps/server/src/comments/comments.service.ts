@@ -6,12 +6,15 @@ import { createTemplateDoc, docFromState, getNode } from '@gmind/core';
 import { CollabService } from '../collab/collab.service';
 import { FileCollaboratorEntity } from '../files/file-collaborator.entity';
 import { FilesService } from '../files/files.service';
+import { NotifyService } from '../notify/notify.service';
 import { UserEntity } from '../users/user.entity';
 import { CommentEntity } from './comment.entity';
 import type { CreateCommentInput, CreateReplyInput } from './comment.schema';
 
 /** 快照列宽（node_text_snapshot varchar(500)）：按码点截断，与 MySQL utf8mb4 字符计数一致。 */
 const SNAPSHOT_MAX_CHARS = 500;
+/** 通知 payload 里 content 的截断宽度（binding：≤100 slice，按码点）。 */
+const NOTIFY_CONTENT_MAX_CHARS = 100;
 /** 广播载荷类型（评论域唯一 stateless 消息，客户端据此拉取 GET /comments）。 */
 const COMMENT_UPDATED_EVENT = 'comment-updated';
 
@@ -49,6 +52,10 @@ export interface CommentThreadView extends CommentView {
  *
  * 广播（FR-CMT-003）：创建/回复成功后经 CollabService.broadcastStateless 向该文件在线
  * 客户端发 {type:'comment-updated'}；无人在线为 no-op（客户端打开文件时本就会全量拉取）。
+ *
+ * 站内通知（M3b Task 8，FR-CMT-005）：创建/回复落库后（binding：事务提交后）触发
+ * NotifyService——被提及的 owner/协作者收 mention、线程楼主收 reply（self 除外，
+ * 详见 dispatchNotifications）；mentions 已归一化为文件可见者，非协作者静默剔除不通知。
  */
 @Injectable()
 export class CommentsService {
@@ -59,6 +66,7 @@ export class CommentsService {
     // tsx 不发射装饰器元数据，类 token 注入必须显式 @Inject（约定同 session.service.ts）
     @Inject(FilesService) private readonly files: FilesService,
     @Inject(CollabService) private readonly collab: CollabService,
+    @Inject(NotifyService) private readonly notify: NotifyService,
   ) {}
 
   /** GET /api/files/:id/comments：{threads, counts}。 */
@@ -105,6 +113,16 @@ export class CommentsService {
       mentions,
     });
     this.broadcast(fileId);
+    // 通知触发在评论行落库之后（binding：事务提交后）；失败只影响通知不回滚评论
+    await this.dispatchNotifications({
+      fileId,
+      title: file.title,
+      commenterId: userId,
+      nodeId: input.nodeId,
+      content: input.content,
+      mentions,
+      rootAuthorId: null,
+    });
     return { ...this.toView(row, this.aliveNodeIds(doc), await this.nicknamesOf([row.authorId])), replies: [] };
   }
 
@@ -132,10 +150,57 @@ export class CommentsService {
       mentions,
     });
     this.broadcast(fileId);
+    // 通知触发在评论行落库之后（binding）；回复额外通知线程楼主（replier==楼主 除外）
+    await this.dispatchNotifications({
+      fileId,
+      title: file.title,
+      commenterId: userId,
+      nodeId: root.nodeId,
+      content: input.content,
+      mentions,
+      rootAuthorId: root.authorId,
+    });
     return this.toView(row, alive, await this.nicknamesOf([row.authorId]));
   }
 
   // ---- 内部 ---------------------------------------------------------------
+
+  /** 站内通知触发（M3b Task 8，FR-CMT-005，binding）：
+   * - mention：每个归一化后的被提及者（owner/协作者集合）收到 type='mention'——
+   *   commenter 自己提及自己不通知；mention 与 reply 同人重叠时各发一条（两种独立事由）；
+   * - reply：线程楼主收到 type='reply'，replier==楼主 除外；
+   * - payload 形状：{fileId, title, commenterId, commenterName, content(≤100 码点), nodeId}；
+   * - 通知失败不回滚评论（评论已提交，此处仅在响应通道抛错；notify 内部落库失败上抛
+   *   由调用方 catch——保持与广播同样的「尽力而为」边界由这里显式兜住）。 */
+  private async dispatchNotifications(input: {
+    fileId: string;
+    title: string;
+    commenterId: string;
+    nodeId: string;
+    content: string;
+    mentions: string[];
+    rootAuthorId: string | null;
+  }): Promise<void> {
+    try {
+      const payload = {
+        fileId: input.fileId,
+        title: input.title,
+        commenterId: input.commenterId,
+        commenterName: (await this.nicknamesOf([input.commenterId])).get(input.commenterId) ?? '',
+        content: Array.from(input.content).slice(0, NOTIFY_CONTENT_MAX_CHARS).join(''),
+        nodeId: input.nodeId,
+      };
+      for (const mentioned of input.mentions) {
+        if (mentioned === input.commenterId) continue; // self-mention 不通知
+        await this.notify.notify(mentioned, 'mention', payload);
+      }
+      if (input.rootAuthorId && input.rootAuthorId !== input.commenterId) {
+        await this.notify.notify(input.rootAuthorId, 'reply', payload);
+      }
+    } catch {
+      // 通知是评论主流程的旁路：失败静默（不炸响应、不回滚已提交评论）
+    }
+  }
 
   private async insert(input: {
     fileId: string;

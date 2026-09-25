@@ -8,6 +8,7 @@ import { FilesModule } from './files/files.module';
 import { FoldersModule } from './folders/folders.module';
 import { HealthController } from './health/health.controller';
 import { JobsModule } from './jobs/jobs.module';
+import { NotifyModule } from './notify/notify.module';
 import { SessionModule } from './session/session.module';
 import { ShareModule } from './share/share.module';
 import { StorageModule } from './storage/storage.module';
@@ -15,7 +16,7 @@ import { TrashModule } from './trash/trash.module';
 import { UsersModule } from './users/users.module';
 
 @Module({
-  imports: [DatabaseModule, SessionModule, UsersModule, FilesModule, FoldersModule, AuthModule, StorageModule, CollabModule, CommentsModule, TrashModule, JobsModule, ShareModule, DevE2eModule],
+  imports: [DatabaseModule, SessionModule, UsersModule, FilesModule, FoldersModule, AuthModule, StorageModule, CollabModule, CommentsModule, NotifyModule, TrashModule, JobsModule, ShareModule, DevE2eModule],
   controllers: [HealthController],
 })
 export class AppModule {}

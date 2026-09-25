@@ -18,6 +18,7 @@ import { MAX_DOC_NODES } from '@gmind/shared';
 import type { FileListItem, FileListItemDetailed, FilePatchResult } from '@gmind/shared';
 import { CollabService } from '../collab/collab.service';
 import { StorageService } from '../storage/storage.service';
+import { UserEntity } from '../users/user.entity';
 import { FileCollaboratorEntity } from './file-collaborator.entity';
 import { FileEntity } from './file.entity';
 import { FileStarEntity } from './file-star.entity';
@@ -57,6 +58,8 @@ export class FilesService {
     @InjectRepository(FileStarEntity) private readonly starRepo: Repository<FileStarEntity>,
     // 文件移动目标校验（M3a Task 5，FR-FIL-002）：folderId 须为本人存活文件夹
     @InjectRepository(FolderEntity) private readonly folderRepo: Repository<FolderEntity>,
+    // 协作者候选列表 nickname（M3b Task 8，FR-CMT-005）
+    @InjectRepository(UserEntity) private readonly userRepo: Repository<UserEntity>,
     // tsx 不发射装饰器元数据，类 token 注入必须显式 @Inject（约定同 session.service.ts）
     @Inject(CollabService) private readonly collab: CollabService,
     // 图片对象迁移（M3b Task 1，准入 7.8）：copyForUser 需 copyImage 把源命名空间对象
@@ -280,6 +283,23 @@ export class FilesService {
     if (!file) return false;
     if (file.ownerUserId === userId) return true;
     return (await this.collabRepo.countBy({ fileId: file.id, userId })) > 0;
+  }
+
+  /** 协作者候选列表（M3b Task 8，FR-CMT-005）：GET /api/files/:id/collaborators →
+   *  [{userId, nickname, role, isOwner}]——owner 首位（isOwner/role 'owner'）+ 协作者行；
+   *  mention 候选即本列表的 userId 集（CommentsService.filterMentions 的 allowed 同源）。
+   *  canAccess 口径（owner 或协作者可读），缺失/已删/无权限统一 404。 */
+  async listCollaborators(userId: string, fileId: string): Promise<Array<{ userId: string; nickname: string; role: string; isOwner: boolean }>> {
+    const file = await this.findAliveOr404(userId, fileId);
+    const rows = await this.collabRepo.find({ where: { fileId: file.id } });
+    const users = await this.userRepo.find({ where: { id: In([file.ownerUserId, ...rows.map((r) => r.userId)]) }, select: ['id', 'nickname'] });
+    const nicknames = new Map(users.map((u) => [u.id, u.nickname]));
+    const owner = { userId: file.ownerUserId, nickname: nicknames.get(file.ownerUserId) ?? '', role: 'owner', isOwner: true };
+    // owner 拥有 file_collaborators 行的脏数据防御：去重（owner 条目已覆盖其身份）
+    const collaborators = rows
+      .filter((r) => r.userId !== file.ownerUserId)
+      .map((r) => ({ userId: r.userId, nickname: nicknames.get(r.userId) ?? '', role: r.role, isOwner: false }));
+    return [owner, ...collaborators];
   }
 
   /** 读取/写入权限（spec §7.2）：owner 或 file_collaborators 存在行（一期协作者即可编辑）。
