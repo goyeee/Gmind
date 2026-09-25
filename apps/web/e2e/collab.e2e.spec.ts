@@ -316,3 +316,221 @@ test('成员面板：编辑/查看分组、创建者标识与离线即时移除'
   ).toHaveCount(0, { timeout: 6_000 });
   await expect(pageA.getByTestId('members-count')).toHaveText('2');
 });
+
+// ---------------------------------------------------------------------------
+// M3a Task 3：双页并发结构操作收敛 — attachRemoteNormalization 生产接线守卫（准入 7.3）
+//
+// 生产接线：apps/web/src/editor/collab.ts 的 attachRemoteNormalization(doc) 把 core
+// 的收敛（normalizeTreeFor/全量安全阀）挂到每个提交事务上——HocuspocusProvider 把
+// 远端 update 以裸 applyUpdate 写进 doc（不走 withTransaction），并发残留（move vs
+// delete 等）不接线则未治愈落库。语义本身由 core 级 remote-sync.test.ts / chaos.test.ts
+// 钉死，那里直接调 helper——拆除 collab.ts 的接线行，core 测试全绿、两端内存态也不炸；
+// 但「远端残留落地」只有本用例能抓：残留（墓碑 X 仍挂在新父 children）随服务端
+// onStoreDocument 落入 docState，reload 后 docFromState 入口全量 normalize 把它抹平
+// ——doc 全量快照「reload 后 ≠ reload 前」→ 本用例必红。**拆除 apps/web/src/editor/
+// collab.ts 的 attachRemoteNormalization 调用行（及 destroy 里的注销行），本用例必红。**
+//
+// 编排（用例 5 同款双上下文 + 确定性并发隔离）：
+//  A(owner)/B(协作者) 同开一文件（种子基线 6 节点）→ 双方短暂断 WS（本地提交与远端
+//  到达隔离，保证 move/delete 基于同一基线真并发）→ A moveNode(周三→周一)、
+//  B deleteNodes([周三]) 各自本地提交（页面 evaluate 经 '/@id/@gmind/core' 调 core，
+//  perf-editor 同款动态 import）→ 双方恢复 WS 交换 → 断言「删除胜」收敛 →
+//  reload 双页（从服务端 docState 装载）→ 断言 doc 快照与 reload 前一致。
+//  短暂断 WS 的本地写不会触发 PUT 整快照兜底：saveLoop 的 2s 防抖到期时重连已完成，
+//  真值表翻回「WS 持久化接管」，save() 直接返回——merge 只经 WS update 通道。
+// ---------------------------------------------------------------------------
+
+/** getNode 快照的守卫所需字段（宽松形状：页面内 core 返回真实 NodeSnapshot）。 */
+interface GuardNodeSnapshot {
+  id: string;
+  text: string;
+  parentId: string;
+  childIds: string[];
+  deleted: boolean;
+}
+
+/** doc 全量节点快照（id → getNode；core 级 fullSnapshot 的 e2e 口径）。 */
+type DocSnapshot = Record<string, GuardNodeSnapshot | null>;
+
+/** 页面上下文内取活动 doc（EditorPage dev-only 钩子；不存在即抛）。
+ *  注意：page.evaluate / waitForFunction 的函数体被序列化执行，页面侧不可见本文件
+ *  的模块级 helper——各函数体内一律就地内联 doc 解析（不引用外部函数）。 */
+
+/** 页面内按文本精确查节点 id（模板生成的 ULID 不可预知；同源 docState 各端 id 一致）。 */
+async function findNodeId(page: Page, text: string): Promise<string> {
+  return page.evaluate((t: string) => {
+    const hook = (window as unknown as { __gmind?: { getDoc(): unknown } }).__gmind;
+    if (!hook) throw new Error('window.__gmind 未就绪');
+    const doc = hook.getDoc() as {
+      getMap(name: string): Map<string, { get(key: string): unknown }>;
+    };
+    for (const [id, node] of doc.getMap('nodes').entries()) {
+      if (node.get('text') === t) return id;
+    }
+    throw new Error(`页面内未找到文本节点：${t}`);
+  }, text);
+}
+
+/** 页面内经 core 对活动 doc 执行 moveNode（user origin；A 侧并发操作）。 */
+async function coreMoveNode(page: Page, id: string, newParentId: string): Promise<void> {
+  await page.evaluate(async ({ id, newParentId }: { id: string; newParentId: string }) => {
+    const bare = ['/@id/', '@gmind/core'].join(''); // 动态拼串：vite dev 的 bare-id 路由
+    const core = (await import(bare)) as unknown as {
+      ORIGIN_USER: string;
+      moveNode(doc: unknown, id: string, newParentId: string, index: number | undefined, origin: string): void;
+    };
+    const hook = (window as unknown as { __gmind?: { getDoc(): unknown } }).__gmind;
+    if (!hook) throw new Error('window.__gmind 未就绪');
+    core.moveNode(hook.getDoc(), id, newParentId, undefined, core.ORIGIN_USER);
+  }, { id, newParentId });
+}
+
+/** 页面内经 core 对活动 doc 执行 deleteNodes（user origin；B 侧并发操作）。 */
+async function coreDeleteNodes(page: Page, ids: string[]): Promise<void> {
+  await page.evaluate(async (ids: string[]) => {
+    const bare = ['/@id/', '@gmind/core'].join('');
+    const core = (await import(bare)) as unknown as {
+      ORIGIN_USER: string;
+      deleteNodes(doc: unknown, ids: string[], origin: string): void;
+    };
+    const hook = (window as unknown as { __gmind?: { getDoc(): unknown } }).__gmind;
+    if (!hook) throw new Error('window.__gmind 未就绪');
+    core.deleteNodes(hook.getDoc(), ids, core.ORIGIN_USER);
+  }, ids);
+}
+
+/** 页面内取 doc 全量节点快照（getNode 逐节点；JSON 可序列化，跨端 deep-equal 用）。 */
+async function snapshotDoc(page: Page): Promise<DocSnapshot> {
+  return page.evaluate(async () => {
+    const bare = ['/@id/', '@gmind/core'].join('');
+    const core = (await import(bare)) as unknown as {
+      getNode(doc: unknown, id: string): GuardNodeSnapshot | null;
+    };
+    const hook = (window as unknown as { __gmind?: { getDoc(): unknown } }).__gmind;
+    if (!hook) throw new Error('window.__gmind 未就绪');
+    const doc = hook.getDoc() as { getMap(name: string): { keys(): Iterable<string> } };
+    const out: DocSnapshot = {};
+    for (const id of doc.getMap('nodes').keys()) out[id] = core.getNode(doc, id);
+    return out;
+  });
+}
+
+/** 仅断/恢复 WS 通道（不动 REST）：确定性并发隔离与恢复（用例 3 的注 2 纪律）。 */
+async function setWsReachable(page: Page, reachable: boolean): Promise<void> {
+  await page.evaluate((ok: boolean) => {
+    (window as unknown as { __gmindCollab?: CollabHooks }).__gmindCollab?.setReachable(ok);
+  }, reachable);
+}
+
+/** 等「删除胜」合并态在本端落地：X 墓碑且已被 move 改写父（两 op 均已到达），
+ *  可达存活数 = 6 − X 子树 2 = 4。接线与否该条件都成立（内存态不炸由 core 测试保证）。 */
+async function waitForMergeSettled(page: Page, xId: string, p1Id: string): Promise<void> {
+  await page.waitForFunction(
+    async ({ xId, p1Id, alive }: { xId: string; p1Id: string; alive: number }) => {
+      const bare = ['/@id/', '@gmind/core'].join('');
+      const core = (await import(bare)) as unknown as {
+        getNode(doc: unknown, id: string): GuardNodeSnapshot | null;
+        countAliveReachable(doc: unknown): number;
+      };
+      const hook = (window as unknown as { __gmind?: { getDoc(): unknown } }).__gmind;
+      if (!hook) return false;
+      const doc = hook.getDoc();
+      const snap = core.getNode(doc, xId);
+      return snap !== null && snap.deleted && snap.parentId === p1Id
+        && core.countAliveReachable(doc) === alive;
+    },
+    { xId, p1Id, alive: 4 },
+    { timeout: 15_000 },
+  );
+}
+
+test('双页并发结构操作收敛：move vs delete 删除胜，reload 后结构与 reload 前一致（准入 7.3 接线守卫）', async ({
+  browser,
+  request,
+}) => {
+  test.setTimeout(120_000); // 双页登录/装载 + 并发交换 + 持久化收尾 + 双页 reload
+
+  // —— A(owner) / B(协作者) 同开一文件（用例 5 编排）——
+  const ctxA = await browser.newContext();
+  const pageA = await ctxA.newPage();
+  await registerAndLogin(pageA);
+  await openSeedDoc(pageA, '本周计划');
+  const fileId = fileIdFromUrl(pageA);
+
+  const ctxB = await browser.newContext();
+  const pageB = await ctxB.newPage();
+  const phoneB = await registerAndLogin(pageB);
+  await grantCollaborator(request, fileId, phoneB);
+  await pageB.goto(`/edit/${fileId}`);
+  await expect(pageB.locator('.editor-canvas svg .gm-text', { hasText: '本周计划' })).toBeVisible({
+    timeout: 15_000,
+  });
+
+  // 基线：种子 6 节点（可达活跃，不含 root）
+  await expect(pageA.getByTestId('node-count')).toHaveText('6 节点', { timeout: 10_000 });
+  await expect(pageB.getByTestId('node-count')).toHaveText('6 节点', { timeout: 10_000 });
+
+  // 靶点：X=周三（带子节点 方案评审，验证子树随删）、P1=周一（换父目标）
+  const xId = await findNodeId(pageA, '周三');
+  const p1Id = await findNodeId(pageA, '周一');
+  expect(await findNodeId(pageB, '周三')).toBe(xId); // 同源 docState：各端 id 一致
+  expect(await findNodeId(pageB, '周一')).toBe(p1Id);
+
+  // —— 确定性并发：双方断 WS → 各自本地提交（同一基线）→ 恢复 WS 交换 ——
+  await setWsReachable(pageA, false);
+  await setWsReachable(pageB, false);
+  await coreMoveNode(pageA, xId, p1Id); // A：X 换父到 P1
+  await coreDeleteNodes(pageB, [xId]); // B：删除 X（墓碑级联子树）
+  await setWsReachable(pageA, true);
+  await setWsReachable(pageB, true);
+
+  // —— 收敛断言 1：两端合并态落地（删除胜 + 计数 6−2=4）——
+  await waitForMergeSettled(pageA, xId, p1Id);
+  await waitForMergeSettled(pageB, xId, p1Id);
+  await expect(pageA.getByTestId('node-count')).toHaveText('4 节点', { timeout: 10_000 });
+  await expect(pageB.getByTestId('node-count')).toHaveText('4 节点', { timeout: 10_000 });
+
+  // —— 收敛断言 2：两页画布均无 X 及其子树（无悬挂），幸存结构完整可见 ——
+  for (const page of [pageA, pageB]) {
+    await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '周三' })).toHaveCount(0);
+    await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '方案评审' })).toHaveCount(0);
+    await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '周一' })).toHaveCount(1);
+    await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '周会对齐' })).toHaveCount(1);
+    await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '周五' })).toHaveCount(1);
+  }
+
+  // —— 收敛断言 3：两端 doc 全量快照 deep-equal（CRDT 收敛一致性口径）——
+  const preA = await snapshotDoc(pageA);
+  const preB = await snapshotDoc(pageB);
+  expect(preA).toEqual(preB);
+
+  // —— 持久化收尾：persisted ack + 防抖余量，保证 reload 读到的 docState 是最终合并态
+  //    （接线在：含 heal 收尾；接线拆：含未治愈残留——正是守卫要抓的差异）——
+  await expect(pageA.getByTestId('save-status')).toHaveText(SAVED_RE, { timeout: 15_000 });
+  await expect(pageB.getByTestId('save-status')).toHaveText(SAVED_RE, { timeout: 15_000 });
+  await pageA.waitForTimeout(3_000); // onStoreDocument 防抖 2s + 余量
+
+  // —— reload 双页：从服务端 docState 装载 → doc 快照与 reload 前一致（核心守卫断言）——
+  await pageA.reload();
+  await pageB.reload();
+  await expect(pageA.locator('.editor-canvas svg .gm-text', { hasText: '本周计划' })).toBeVisible({
+    timeout: 15_000,
+  });
+  await expect(pageB.locator('.editor-canvas svg .gm-text', { hasText: '本周计划' })).toBeVisible({
+    timeout: 15_000,
+  });
+  await expect(pageA.getByTestId('node-count')).toHaveText('4 节点', { timeout: 10_000 });
+  await expect(pageB.getByTestId('node-count')).toHaveText('4 节点', { timeout: 10_000 });
+
+  const postA = await snapshotDoc(pageA);
+  const postB = await snapshotDoc(pageB);
+  expect(postA, 'reload 后结构必须与 reload 前一致（A）').toEqual(preA);
+  expect(postB, 'reload 后结构必须与 reload 前一致（B）').toEqual(preB);
+  expect(postA).toEqual(postB);
+
+  // 结构完整可读断言（诊断友好）：X 墓碑不在 P1 children（无残留悬挂）、root 幸存子完整
+  expect(postA[p1Id]?.childIds).not.toContain(xId);
+  expect(postA[xId]?.deleted).toBe(true);
+  await ctxA.close();
+  await ctxB.close();
+});

@@ -1,5 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { MAX_TEXT_LENGTH } from '@gmind/core';
+import {
+  MAX_TEXT_LENGTH,
+  ORIGIN_USER,
+  ROOT_NODE_ID,
+  createTemplateDoc,
+  getNode,
+  insertSpec,
+  outlineToSpec,
+} from '@gmind/core';
 import {
   copyNodes,
   cutNodes,
@@ -607,5 +615,71 @@ describe('fix round 1：remap 失败携带 pastedIds（页面恢复用）', () =
     expect(err!.message).toBe('storage down');
     expect(err!.pastedIds).toHaveLength(2); // r1 与 r2 两个已建节点
     expect(doc.adds()).toHaveLength(2);
+  });
+});
+
+// ─────────────────────────── 剪贴板 parity（M3a 准入 7.4） ───────────────────────────
+
+/**
+ * engine pasteText（IDocHandle 桩）⇄ core outlineToSpec + insertSpec（真 Y.Doc）的
+ * 契约钉死（M2 准入清单 §7.4）。engine 的 pasteText 按镜像注释（clipboard.ts 内
+ * 「保持同步」标记）重写了 core insertSpec 的 cursor 语义与 assertSpecValid 预校验，
+ * 却不直接调用 insertSpec（engine 不持有 Y.Doc）——两侧一旦一方改动而另一方未跟进
+ * 即在本套件红：同一缩进大纲样本分别经两条路径插入，产出树逐节点（text + children
+ * 顺序形状）deep-equal。若出现真实不一致：BLOCKED 报样本与差异，不许改一边凑齐。
+ */
+describe('parity：engine pasteText（桩）与 core outlineToSpec+insertSpec（真 doc）逐节点一致（准入 7.4）', () => {
+  interface TreeLike {
+    text: string;
+    children: TreeLike[];
+  }
+
+  /** core 侧真 doc 自 root 提取结构树（getNode/childIds 只读口径；root 本身不计）。 */
+  function coreTree(doc: ReturnType<typeof createTemplateDoc>, id: string): TreeLike {
+    const snap = getNode(doc, id);
+    if (!snap) throw new Error(`parity: core 节点缺失 ${id}`);
+    return { text: snap.text, children: snap.childIds.map((c) => coreTree(doc, c)) };
+  }
+
+  /** engine 侧桩自 root 提取结构树（快照 childIds 只读口径；root 本身不计）。 */
+  function stubTree(doc: StubDoc, id: string): TreeLike {
+    const snap = doc.getNode(id);
+    if (!snap) throw new Error(`parity: stub 节点缺失 ${id}`);
+    return { text: snap.text, children: snap.childIds.map((c) => stubTree(doc, c)) };
+  }
+
+  /** 固定样本（≥6 条，覆盖准入 7.4 列出的边界：空行 / 多空格 / 深回跳钳位 / 混合缩进）。 */
+  const SAMPLES: { name: string; text: string }[] = [
+    { name: '普通 2 层', text: '市场\n\t调研\n\t定价' },
+    { name: '3 层', text: '市场\n\t调研\n\t\t访谈提纲\n\t定价' },
+    { name: '空行夹杂（含行尾空行）', text: '根\n\n\t子1\n\t\t孙\n\n\n\t子2\n\n' },
+    { name: '2 空格缩进（空格数 ÷2 取整为层级）', text: '根\n  子1\n    孙\n  子2' },
+    { name: '深回跳钳位（跳深超过一层挂上一行子级）', text: 'A\n\tA1\n\t\t\t\t过深钳位' },
+    { name: 'Tab+空格混合（含 Tab 即按 Tab 数）', text: 'A\n\t  混合1\n  \t混合2\n\t\t混合3' },
+    { name: '回退弹空成林（多根森林）', text: 'A\n\tA1\nB\n\tB1\nC' },
+  ];
+
+  it.each(SAMPLES)('$name：两条插入路径产出树逐节点一致', ({ text }) => {
+    // core 路径：真 Y.Doc（模板空根）+ outlineToSpec → insertSpec（user origin）
+    const coreDoc = createTemplateDoc({ title: 'T', children: [] });
+    insertSpec(coreDoc, ROOT_NODE_ID, 0, outlineToSpec(text), ORIGIN_USER);
+
+    // engine 路径：内存树桩 + pasteText（镜像 core insertSpec 的写通道）
+    const stub = new StubDoc();
+    stub.addNode({ id: 'root' });
+    pasteText(stub, 'root', 0, text);
+
+    expect(stubTree(stub, 'root').children).toEqual(coreTree(coreDoc, ROOT_NODE_ID).children);
+  });
+
+  it('两路径对相同样本建出的节点数一致（先序 id 逐一对应）', () => {
+    for (const { text } of SAMPLES) {
+      const coreDoc = createTemplateDoc({ title: 'T', children: [] });
+      const coreIds = insertSpec(coreDoc, ROOT_NODE_ID, 0, outlineToSpec(text), ORIGIN_USER);
+      const stub = new StubDoc();
+      stub.addNode({ id: 'root' });
+      const stubIds = pasteText(stub, 'root', 0, text);
+      expect(stubIds, `样本节点数不一致：${text}`).toHaveLength(coreIds.length);
+    }
   });
 });
