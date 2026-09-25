@@ -1,4 +1,4 @@
-import { Body, Controller, Get, HttpCode, Inject, Param, Patch, Post, Put, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, Inject, Param, Patch, Post, Put, Query, Req, UseGuards } from '@nestjs/common';
 import { z } from 'zod';
 import { createFileSchema } from '@gmind/shared';
 import { UserGuard } from '../auth/user.guard';
@@ -7,8 +7,16 @@ import { FilesService } from './files.service';
 // PUT doc-state 的传输契约：Yjs 状态二进制以 base64 编码（body { docState }）；
 // baseUpdatedAt（M3a 准入 7.1）为客户端记录的行 updated_at（GET/持久化 ack 下发），
 // 缺省视为无 base——兼容旧客户端与首次保存（守卫永远放行，不在此处强校验格式：
-// 非法值由 service 按无 base 口径放行）。lastEditorUserId 属 Task 4，此处不收。
-const docStateSchema = z.object({ docState: z.string().min(1), baseUpdatedAt: z.string().optional() });
+// 非法值由 service 按无 base 口径放行）。lastEditorUserId（M3a Task 4）为客户端
+// last_modifier 离线补报：服务端仅在其值 === token 用户时落库（防代写）。
+const docStateSchema = z.object({
+  docState: z.string().min(1),
+  baseUpdatedAt: z.string().optional(),
+  lastEditorUserId: z.string().min(1).max(26).optional(),
+});
+
+// GET /api/files 的视图参数（M3a Task 4，FR-FIL-001）：缺省 mine；非法值 400。
+const listViewSchema = z.object({ view: z.enum(['mine', 'shared', 'starred', 'recent']).default('mine') });
 
 @Controller('api/files')
 @UseGuards(UserGuard)
@@ -17,8 +25,9 @@ export class FilesController {
   constructor(@Inject(FilesService) private readonly files: FilesService) {}
 
   @Get()
-  list(@Req() req: { user: { id: string } }) {
-    return this.files.listOwned(req.user.id);
+  list(@Req() req: { user: { id: string } }, @Query() query: unknown) {
+    const { view } = listViewSchema.parse(query ?? {});
+    return this.files.listByView(req.user.id, view);
   }
 
   @Post()
@@ -36,9 +45,9 @@ export class FilesController {
 
   @Put(':id/doc-state')
   async saveDocState(@Req() req: { user: { id: string } }, @Param('id') id: string, @Body() body: unknown) {
-    const { docState, baseUpdatedAt } = docStateSchema.parse(body ?? {});
+    const { docState, baseUpdatedAt, lastEditorUserId } = docStateSchema.parse(body ?? {});
     const state = new Uint8Array(Buffer.from(docState, 'base64'));
-    return this.files.saveDocState(req.user.id, id, state, baseUpdatedAt);
+    return this.files.saveDocState(req.user.id, id, state, baseUpdatedAt, lastEditorUserId);
   }
 
   @Patch(':id')
@@ -52,5 +61,12 @@ export class FilesController {
   @HttpCode(200) // 打开是幂等动作而非资源创建，返回 200
   markOpened(@Req() req: { user: { id: string } }, @Param('id') id: string) {
     return this.files.markOpened(req.user.id, id);
+  }
+
+  @Delete(':id')
+  @HttpCode(200) // 软删是幂等动作（重复删 404 除外），非资源创建；owner only（PRD 2.2.1）
+  async remove(@Req() req: { user: { id: string } }, @Param('id') id: string) {
+    await this.files.deleteOwned(req.user.id, id);
+    return { ok: true as const };
   }
 }

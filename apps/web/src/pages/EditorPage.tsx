@@ -9,6 +9,7 @@ import {
   deleteNodes,
   getMeta,
   getNode,
+  markLastEditor,
   moveNode,
   ORIGIN_USER,
   redo as coreRedo,
@@ -66,7 +67,7 @@ import {
 } from '../editor/imageUpload';
 import { MemberPanel } from '../editor/MemberPanel';
 import { RichPanel } from '../editor/RichPanel';
-import { startCollab, type CollabHandle, type CollabStatus, type PresenceMember } from '../editor/collab';
+import { startCollab, getCurrentUser, type CollabHandle, type CollabStatus, type PresenceMember } from '../editor/collab';
 import {
   QUOTA_ADD_BLOCKED,
   QUOTA_STATUS,
@@ -238,8 +239,19 @@ export function EditorPage() {
     return true;
   };
 
-  /** 所有用户写后统一调用（carry-in 裁决：capUndoStack 集中封装）。 */
+  /**
+   * 所有用户写后统一调用（carry-in 裁决：capUndoStack 集中封装）。
+   * 最后修改人标记（M3a Task 4，FR-FIL-001）：写 doc meta.lastEditorUserId（core
+   * markLastEditor，system origin 默认——不进撤销栈），随协同持久化或 PUT 兜底
+   * 到达服务端回写 files.last_modifier_user_id。身份经 users/me 模块级缓存异步
+   * 装配（与 awareness 共用），未装配（id 空串，离线首开/接口失败）跳过。
+   */
   const afterUserWrite = (): void => {
+    if (doc) {
+      void getCurrentUser().then((me) => {
+        if (me.id !== '') markLastEditor(doc, me.id);
+      });
+    }
     if (um) capUndoStack(um);
     // 「正在编辑」广播（FR-COL-005）：本地写置 true，60s 无写回落（裁定见 collab.ts）
     collabHandleRef.current?.markEditing();

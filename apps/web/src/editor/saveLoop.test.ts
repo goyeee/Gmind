@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as Y from 'yjs';
+import { markLastEditor } from '@gmind/core';
 import { MAX_DOC_NODES } from '@gmind/shared';
 import { STALE_DOC_STATUS, nextQuotaBlock, shouldPut, startSaveLoop } from './saveLoop';
 
@@ -152,6 +153,41 @@ describe('startSaveLoop（陈旧写序守卫客户端语义）', () => {
 
     expect(statuses.at(-1)).toBe(STALE_DOC_STATUS);
     expect(vi.mocked(fetch).mock.calls).toHaveLength(1);
+    stop();
+    doc.destroy();
+  });
+});
+
+describe('startSaveLoop（last_editor 补报，M3a Task 4）', () => {
+  it('PUT body 携带 doc meta 的 lastEditorUserId（离线兜底补报）', async () => {
+    vi.useFakeTimers();
+    const bodies: Array<Record<string, unknown> | undefined> = [];
+    const { doc, stop } = await withMockedSave(async (_path, init) => {
+      bodies.push(init?.body ? (JSON.parse(init.body) as Record<string, unknown>) : undefined);
+      return jsonResponse(200, { nodeCount: 1 });
+    });
+
+    markLastEditor(doc, 'USER_A');
+    doc.getMap('m').set('k', 'v');
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
+
+    expect(bodies[0]).toMatchObject({ lastEditorUserId: 'USER_A' });
+    stop();
+    doc.destroy();
+  });
+
+  it('doc 无 lastEditorUserId → PUT body 不带该字段（旧调用方兼容）', async () => {
+    vi.useFakeTimers();
+    const bodies: Array<Record<string, unknown> | undefined> = [];
+    const { doc, stop } = await withMockedSave(async (_path, init) => {
+      bodies.push(init?.body ? (JSON.parse(init.body) as Record<string, unknown>) : undefined);
+      return jsonResponse(200, { nodeCount: 1 });
+    });
+
+    doc.getMap('m').set('k', 'v');
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
+
+    expect(bodies[0]).not.toHaveProperty('lastEditorUserId');
     stop();
     doc.destroy();
   });

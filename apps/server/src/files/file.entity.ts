@@ -34,6 +34,10 @@ export class FileEntity {
   @Column({ type: 'datetime', precision: 3, nullable: true, name: 'last_opened_at' })
   lastOpenedAt: Date | null = null;
 
+  // 最后修改人（M3a Task 4，FR-FIL-001）：collab 持久化 / PUT 兜底经身份校验后回写
+  @Column({ type: 'char', length: 26, nullable: true, name: 'last_modifier_user_id' })
+  lastModifierUserId: string | null = null;
+
   @Column({ type: 'datetime', precision: 3, nullable: true, name: 'deleted_at' })
   deletedAt: Date | null = null;
 

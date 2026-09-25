@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import * as Y from 'yjs';
 import { ROOT_NODE_ID, countNodes, createTemplateDoc, docFromState, docToState } from './doc';
 import { GmindCoreError } from './errors';
-import { childrenIds, countAlive, countAliveReachable, getMeta, getNode, isAlive, pathToRoot, requireAliveNode, setDocMeta, subtreeIds } from './read';
+import { childrenIds, countAlive, countAliveReachable, getLastEditor, getMeta, getNode, isAlive, markLastEditor, pathToRoot, requireAliveNode, setDocMeta, subtreeIds } from './read';
+import { ORIGIN_USER, createUndoManager, undo } from './undo';
 
 describe('getMeta / setDocMeta', () => {
   it('读取模板文档 meta 完整', () => {
@@ -236,5 +237,34 @@ describe('parentId 环防御（遍历必须终止）', () => {
   it('pathToRoot 在 2 节点环上终止，返回有限前缀（visited 防御）', () => {
     const { doc, xId, yId } = cycleDoc();
     expect(pathToRoot(doc, xId)).toEqual([xId, yId]); // X → Y → X(已访问，断链)
+  });
+});
+
+describe('markLastEditor / getLastEditor（last_modifier 链路，M3a Task 4）', () => {
+  it('markLastEditor 写入 meta.lastEditorUserId，getLastEditor 读回；未写过为 null', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [] });
+    expect(getLastEditor(doc)).toBeNull();
+    markLastEditor(doc, 'USER_A');
+    expect(getLastEditor(doc)).toBe('USER_A');
+    markLastEditor(doc, 'USER_B');
+    expect(getLastEditor(doc)).toBe('USER_B'); // 最新写者覆盖
+  });
+
+  it('默认 system origin：不进撤销栈（撤销用户写不会回滚最后修改人标记）', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [] });
+    const um = createUndoManager(doc);
+    setDocMeta(doc, { title: 'T2' }, ORIGIN_USER); // 用户写，可撤销
+    markLastEditor(doc, 'USER_A');
+    undo(um);
+    expect(getMeta(doc).title).toBe('T'); // 用户写被撤销
+    expect(getLastEditor(doc)).toBe('USER_A'); // system 写不受影响
+  });
+
+  it('空串/非字符串值视同未标记（getLastEditor 返回 null）', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [] });
+    doc.getMap('meta').set('lastEditorUserId', '');
+    expect(getLastEditor(doc)).toBeNull();
+    doc.getMap('meta').set('lastEditorUserId', 42);
+    expect(getLastEditor(doc)).toBeNull();
   });
 });

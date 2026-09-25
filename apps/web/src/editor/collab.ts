@@ -90,13 +90,21 @@ interface MeResponse {
 let mePromise: Promise<MeResponse> | null = null;
 
 /** 当前用户身份（模块级缓存：成功后页面生命周期内复用，多文件切换不重发；
- *  失败不缓存——清空占位让下次 startCollab 重试，避免一次网络抖动永久匿名）。 */
+ *  失败不缓存——清空占位让下次 startCollab 重试，避免一次网络抖动永久匿名）。
+ *  身份未装配时 id 为空串（调用方据此跳过 last_editor 标记等身份动作）。 */
 function fetchMe(): Promise<MeResponse> {
   mePromise ??= api<MeResponse>('/users/me').catch(() => {
     mePromise = null;
     return { id: '', nickname: '用户' };
   });
   return mePromise;
+}
+
+/** 当前用户身份的公开读取口（M3a Task 4）：EditorPage afterUserWrite 的
+ *  markLastEditor 依据——与 awareness 广播共用同一模块级缓存，不重发请求。
+ *  身份未装配（GET 失败）时 id 为空串，调用方跳过标记。 */
+export function getCurrentUser(): Promise<MeResponse> {
+  return fetchMe();
 }
 
 /** awareness 单客户端状态（宽松形状：字段可选，坏数据跳过不入面板）。 */

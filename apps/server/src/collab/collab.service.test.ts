@@ -3,7 +3,7 @@ import { type Repository, type UpdateResult } from 'typeorm';
 import { Document } from '@hocuspocus/server';
 import type { onStoreDocumentPayload } from '@hocuspocus/server';
 import * as Y from 'yjs';
-import { createTemplateDoc, docToState } from '@gmind/core';
+import { createTemplateDoc, docToState, markLastEditor } from '@gmind/core';
 import { FileCollaboratorEntity } from '../files/file-collaborator.entity';
 import { FileEntity } from '../files/file.entity';
 import { SessionService } from '../session/session.service';
@@ -68,3 +68,32 @@ describe('CollabService.storeDocument（持久化失败上抛 + ack 时序）', 
     expect(update.mock.invocationCallOrder[0]).toBeLessThan(ackSpy.mock.invocationCallOrder[0]);
   });
 });
+
+describe('CollabService.storeDocument（last_modifier 回写，M3a Task 4）', () => {
+  const makeUpdate = (): ReturnType<typeof vi.fn> =>
+    vi.fn(async () => ({ generatedMaps: [], raw: 0 }) as UpdateResult);
+
+  it('doc meta.lastEditorUserId → 随持久化回写 last_modifier_user_id', async () => {
+    const update = makeUpdate();
+    const service = makeService({ update });
+    const { payload } = makePayload();
+    markLastEditor(payload.document as Y.Doc, 'USER_B');
+
+    await callStore(service, payload);
+
+    const patch = update.mock.calls[0]?.[1] as Record<string, unknown>;
+    expect(patch.lastModifierUserId).toBe('USER_B');
+  });
+
+  it('doc 无 lastEditorUserId → patch 不含该字段（保留 DB 既有值）', async () => {
+    const update = makeUpdate();
+    const service = makeService({ update });
+    const { payload } = makePayload(); // 未 markLastEditor
+
+    await callStore(service, payload);
+
+    const patch = update.mock.calls[0]?.[1] as Record<string, unknown>;
+    expect(patch).not.toHaveProperty('lastModifierUserId');
+  });
+});
+

@@ -2,6 +2,7 @@ import 'reflect-metadata';
 import { DataSource } from 'typeorm';
 import { env } from '../config/env';
 import { Init20260918000000 } from './migrations/20260918000000-init';
+import { FilesLastModifier20260925000000 } from './migrations/20260925000000-files-last-modifier';
 
 /** CLI 与 e2e 共用的数据源工厂；migration 在此显式注册。
  * 说明：不用 glob —— typeorm 的 glob 加载器会在运行时原生 require/import .ts 文件，
@@ -19,7 +20,7 @@ export function createDataSource(database: string): DataSource {
     charset: 'utf8mb4',
     timezone: 'Z',
     synchronize: false,
-    migrations: [Init20260918000000],
+    migrations: [Init20260918000000, FilesLastModifier20260925000000],
     logging: false,
   });
 }

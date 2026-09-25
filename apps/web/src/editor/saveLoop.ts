@@ -1,5 +1,5 @@
 import * as Y from 'yjs';
-import { docToState } from '@gmind/core';
+import { docToState, getLastEditor } from '@gmind/core';
 import { MAX_DOC_NODES } from '@gmind/shared';
 import { api, ApiError } from '../api/client';
 
@@ -119,10 +119,19 @@ function clockNow(): string {
 }
 
 /** PUT body 装配：docState 必带；baseUpdatedAt 仅有 base 时携带（缺省字段 = 旧客户端
- *  兼容口径，服务端视为无 base 永远放行）。 */
-function putBody(doc: Y.Doc, baseUpdatedAt: string | null): { docState: string; baseUpdatedAt?: string } {
-  const body: { docState: string; baseUpdatedAt?: string } = { docState: toBase64(docToState(doc)) };
+ *  兼容口径，服务端视为无 base 永远放行）；lastEditorUserId（M3a Task 4，FR-FIL-001）
+ *  为 doc meta 的最后修改人离线补报——服务端校验其值 === token 用户才落库，故远端
+ *  最新写者是别人（meta 被同步覆盖）时值不匹配，服务端保留既有修改人。 */
+function putBody(
+  doc: Y.Doc,
+  baseUpdatedAt: string | null,
+): { docState: string; baseUpdatedAt?: string; lastEditorUserId?: string } {
+  const body: { docState: string; baseUpdatedAt?: string; lastEditorUserId?: string } = {
+    docState: toBase64(docToState(doc)),
+  };
   if (baseUpdatedAt) body.baseUpdatedAt = baseUpdatedAt;
+  const lastEditorUserId = getLastEditor(doc);
+  if (lastEditorUserId) body.lastEditorUserId = lastEditorUserId;
   return body;
 }
 

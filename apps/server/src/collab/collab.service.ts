@@ -16,6 +16,7 @@ import {
   createTemplateDoc,
   docFromState,
   docToState,
+  getLastEditor,
 } from '@gmind/core';
 import { env } from '../config/env';
 import { MAX_DOC_NODES } from '@gmind/shared';
@@ -135,6 +136,14 @@ export class CollabService implements OnApplicationShutdown {
     return (this.hocuspocus.documents.get(fileId)?.getConnectionsCount() ?? 0) > 0;
   }
 
+  /** 断开某文档的全部协同连接（M3a Task 4：owner 删除文件后踢除在途协作者；
+   *  v4 closeConnections 支持按 documentName 定向，文档未在内存时为 no-op）。
+   *  重连被 onAuthenticate 的 deletedAt 检查天然阻止；软删后的在途防抖持久化
+   *  受 storeDocument 存活条件保护，不回写已删行。 */
+  closeDocumentConnections(fileId: string): void {
+    this.hocuspocus.closeConnections(fileId);
+  }
+
   async onApplicationShutdown(): Promise<void> {
     if (this.httpServer && this.upgradeHandler) {
       this.httpServer.off('upgrade', this.upgradeHandler);
@@ -213,6 +222,8 @@ export class CollabService implements OnApplicationShutdown {
   }
 
   /** 持久化（防抖后）：回写 doc_state + node_count（可达活跃口径，仅存活文件），
+   *  并回写 last_modifier_user_id（M3a Task 4，FR-FIL-001：doc meta.lastEditorUserId
+   *  由各编辑端 markLastEditor 维护；未标记时保留 DB 既有值），
    *  成功后广播 persisted ack。ack 载荷带 updatedAt（本次落库的行值，M3a 准入 7.1：
    *  客户端以此为 baseUpdatedAt 依据——写序守卫比较的是 DB 行值而非客户端时钟）。
    *  失败必须上抛（v4 契约：hook 抛错 → 文档保留在内存、下次防抖重试；静默吞掉会让
@@ -222,6 +233,7 @@ export class CollabService implements OnApplicationShutdown {
     try {
       const nodeCount = countAliveReachable(data.document);
       const docState = Buffer.from(docToState(data.document));
+      const lastEditorUserId = getLastEditor(data.document);
       // updated_at 显式取应用侧时钟（datetime(3) 毫秒精度）：MySQL 无 RETURNING，
       // 显式写入免去落库后的二次回读查询（回读会在关停等场景与连接销毁竞态），
       // 且 ack 的 updatedAt 与行值恒一致。写序守卫（准入 7.1）比较的 base 全部
@@ -229,7 +241,12 @@ export class CollabService implements OnApplicationShutdown {
       const updatedAt = new Date();
       await this.files.update(
         { id: data.documentName, deletedAt: IsNull() },
-        { docState, nodeCount, updatedAt },
+        {
+          docState,
+          nodeCount,
+          updatedAt,
+          ...(lastEditorUserId ? { lastModifierUserId: lastEditorUserId } : {}),
+        },
       );
       persistedUpdatedAt = updatedAt.toISOString();
     } catch (err) {

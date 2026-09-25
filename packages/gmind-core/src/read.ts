@@ -4,7 +4,7 @@ import { ROOT_NODE_ID } from './doc';
 import type { IconGroup } from './constants';
 import { GmindCoreError } from './errors';
 // undo 是叶子模块（仅依赖 yjs），此导入不构成新环（无 cycle 风险，评审轮已核）。
-import { ORIGIN_USER, type WriteOrigin } from './undo';
+import { ORIGIN_SYSTEM, ORIGIN_USER, type WriteOrigin } from './undo';
 
 export interface DocMeta {
   title: string;
@@ -58,6 +58,21 @@ export function setDocMeta(doc: Y.Doc, patch: Partial<DocMeta>, origin: WriteOri
     if (patch.structureType !== undefined) meta.set('structureType', patch.structureType);
     if (patch.themeId !== undefined) meta.set('themeId', patch.themeId);
   }, origin);
+}
+
+/** 最后修改人标记（M3a Task 4，FR-FIL-001）：写在 meta.lastEditorUserId，随协同同步
+ *  / PUT 落库由服务端回写 files.last_modifier_user_id。默认 system origin——
+ *  「谁改过」是文档事实而非用户编辑，不进撤销栈（Ctrl+Z 不回滚该标记）。 */
+export function markLastEditor(doc: Y.Doc, userId: string, origin: WriteOrigin = ORIGIN_SYSTEM): void {
+  doc.transact(() => {
+    doc.getMap('meta').set('lastEditorUserId', userId);
+  }, origin);
+}
+
+/** 读回最后修改人；未标记 / 空串 / 非字符串（远端坏数据）一律 null。 */
+export function getLastEditor(doc: Y.Doc): string | null {
+  const v = doc.getMap('meta').get('lastEditorUserId');
+  return typeof v === 'string' && v !== '' ? v : null;
 }
 
 export function getNode(doc: Y.Doc, id: string): NodeSnapshot | null {

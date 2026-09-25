@@ -1,6 +1,6 @@
 import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { IsNull, Repository } from 'typeorm';
+import { Brackets, IsNull, Repository } from 'typeorm';
 import {
   countAliveReachable,
   createTemplateDoc,
@@ -9,7 +9,7 @@ import {
   SEED_TEMPLATES,
 } from '@gmind/core';
 import { MAX_DOC_NODES } from '@gmind/shared';
-import type { FileListItem } from '@gmind/shared';
+import type { FileListItem, FileListItemDetailed } from '@gmind/shared';
 import { CollabService } from '../collab/collab.service';
 import { FileCollaboratorEntity } from './file-collaborator.entity';
 import { FileEntity } from './file.entity';
@@ -19,6 +19,16 @@ export const MAX_FILES_PER_USER = 100;
 const OPEN_THROTTLE_MS = 60_000;
 /** 陈旧快照 PUT 的拒绝文案（M3a 准入 7.1）；web 侧 saveLoop 以同一文案呈现终态。 */
 export const STALE_SNAPSHOT_MESSAGE = '文档已在别处更新，请刷新后重试';
+/** recent 视图条数上限（FR-FIL-001）。 */
+const RECENT_LIMIT = 50;
+
+export type FileView = 'mine' | 'shared' | 'starred' | 'recent';
+
+/** 原始行 → ISO 时刻（mysql2 对 datetime(3) 返回 Date；容错字符串形态）。 */
+function toIso(v: unknown): string | null {
+  if (v == null) return null;
+  return (v instanceof Date ? v : new Date(String(v))).toISOString();
+}
 
 @Injectable()
 export class FilesService {
@@ -90,6 +100,86 @@ export class FilesService {
     return rows.map((f) => this.toListItem(f));
   }
 
+  /**
+   * 四视图列表（M3a Task 4，FR-FIL-001）：GET /api/files?view=mine|shared|starred|recent。
+   * 统一 alive 过滤（deletedAt IS NULL）+ 详细投影（owner/最后修改人/文件夹/加星视角）。
+   *
+   * QueryBuilder 直查（MySQL 5.6-safe：无 CTE/无 JSON）：各 JOIN 均为至多一行——
+   * users/folders 走主键、file_stars 受 uk_star_file_user 唯一键约束——不产生行复制，
+   * recent 的 LIMIT 50 语义精确；starred 借同一 LEFT JOIN（st.id IS NOT NULL）兼作
+   * 布尔投影与 starred 视图的过滤/排序依据。协作者判定用 EXISTS 相关子查询
+   * （uk_fc_file_user 保证命中面），shared/recent 两视图共用。
+   */
+  async listByView(userId: string, view: FileView): Promise<FileListItemDetailed[]> {
+    const qb = this.repo
+      .createQueryBuilder('f')
+      .leftJoin('users', 'owner_u', 'owner_u.id = f.owner_user_id')
+      .leftJoin('users', 'mod_u', 'mod_u.id = f.last_modifier_user_id')
+      .leftJoin('folders', 'fold', 'fold.id = f.folder_id')
+      .leftJoin('file_stars', 'st', 'st.file_id = f.id AND st.user_id = :viewerId')
+      .setParameter('viewerId', userId)
+      .where('f.deleted_at IS NULL')
+      .select('f.id', 'id')
+      .addSelect('f.title', 'title')
+      .addSelect('f.structure', 'structure')
+      .addSelect('f.node_count', 'nodeCount')
+      .addSelect('f.last_opened_at', 'lastOpenedAt')
+      .addSelect('f.updated_at', 'updatedAt')
+      .addSelect('f.owner_user_id', 'ownerUserId')
+      .addSelect('owner_u.nickname', 'ownerName')
+      .addSelect('mod_u.nickname', 'lastModifierName')
+      .addSelect('f.folder_id', 'folderId')
+      .addSelect('fold.name', 'folderName')
+      .addSelect('st.id IS NOT NULL', 'starred');
+
+    switch (view) {
+      case 'mine':
+        qb.andWhere('f.owner_user_id = :userId').addOrderBy('f.updated_at', 'DESC');
+        break;
+      case 'shared':
+        qb.andWhere('f.owner_user_id != :userId')
+          // 协作者行存在且非本人文件（PRD：shared = 「他人共享给我的」）
+          .andWhere(
+            'EXISTS (SELECT 1 FROM file_collaborators fc WHERE fc.file_id = f.id AND fc.user_id = :userId)',
+          )
+          .addOrderBy('f.updated_at', 'DESC');
+        break;
+      case 'starred':
+        qb.andWhere('st.id IS NOT NULL').addOrderBy('st.created_at', 'DESC');
+        break;
+      case 'recent':
+        qb.andWhere('f.last_opened_at IS NOT NULL')
+          .andWhere(
+            new Brackets((w) =>
+              w.where('f.owner_user_id = :userId').orWhere(
+                'EXISTS (SELECT 1 FROM file_collaborators fc WHERE fc.file_id = f.id AND fc.user_id = :userId)',
+              ),
+            ),
+          )
+          .addOrderBy('f.last_opened_at', 'DESC')
+          .limit(RECENT_LIMIT);
+        break;
+    }
+    // 稳定次序：主排序键相同时按 id 决出（datetime(3) 同毫秒创建的文件不抖动）
+    qb.addOrderBy('f.id', 'DESC').setParameter('userId', userId);
+
+    const raw = await qb.getRawMany<Record<string, unknown>>();
+    return raw.map((r) => ({
+      id: String(r.id),
+      title: String(r.title),
+      structure: r.structure as FileListItem['structure'],
+      nodeCount: Number(r.nodeCount),
+      lastOpenedAt: toIso(r.lastOpenedAt),
+      updatedAt: toIso(r.updatedAt) as string,
+      ownerUserId: String(r.ownerUserId),
+      ownerName: r.ownerName == null ? null : String(r.ownerName),
+      lastModifierName: r.lastModifierName == null ? null : String(r.lastModifierName),
+      folderId: r.folderId == null ? null : String(r.folderId),
+      folderName: r.folderName == null ? null : String(r.folderName),
+      starred: r.starred === 1 || r.starred === true,
+    }));
+  }
+
   /** 存取授权布尔口径（spec §7.2）：owner 或 file_collaborators 存在行（一期协作者即可编辑），
    *  文件须存活（deletedAt null）。findAliveOr404 与存储写端点（M3a 准入 7.2）共用此单一判定源；
    *  返回布尔由调用方自决 404「文件不存在」——无权限与不存在同口径，不泄露文件存在性。 */
@@ -143,12 +233,16 @@ export class FilesService {
    *  updated_at **且** collab 持有活跃内存 doc（有 WS 通道在写，PUT 是陈旧整快照，
    *  落库会覆盖 WS 侧新编辑）→ 拒绝；二者缺一放行——纯 PUT 用户间无 WS 竞争面
    *  （无内存 doc 时最新落库者即 PUT 自己）；base 缺省/非法（旧客户端/首次保存）
-   *  视为无 base，永远放行。 */
+   *  视为无 base，永远放行。
+   *  last_modifier（M3a Task 4，FR-FIL-001）：body.lastEditorUserId 为客户端离线补报
+   *  通道——仅当其值 === token 用户才落库（防代写他人名号）；不一致（远端最新写者
+   *  是别人时客户端 meta 会被同步覆盖）静默忽略，保留 DB 既有值。 */
   async saveDocState(
     userId: string,
     id: string,
     state: Uint8Array,
     baseUpdatedAt?: string,
+    lastEditorUserId?: string,
   ): Promise<{ nodeCount: number }> {
     const file = await this.findAliveOr404(userId, id);
     let doc;
@@ -169,6 +263,7 @@ export class FilesService {
     }
     file.docState = Buffer.from(state);
     file.nodeCount = nodeCount;
+    if (lastEditorUserId === userId) file.lastModifierUserId = userId;
     await this.repo.save(file); // @UpdateDateColumn 自动回写 updated_at
     return { nodeCount };
   }
@@ -196,6 +291,18 @@ export class FilesService {
       updatedAt: () => 'updated_at', // 定点写：updated_at 设回自身，绕开自动 CURRENT_TIMESTAMP
     });
     return { lastOpenedAt: openedAt.toISOString() };
+  }
+
+  /** 删除（M3a Task 4，FR-FIL-001；PRD 2.2.1）：**仅 owner**——协作者无删除权。
+   *  软删（deleted_at=now、deleted_by=owner）；非 owner（含协作者）与已删/不存在
+   *  一律 404「文件不存在」，不泄露文件存在性。删除后主动断开该文档的全部协同
+   *  连接（v4 closeConnections 按 documentName；重连被 onAuthenticate 的 deletedAt
+   *  检查天然阻止；在途防抖持久化受 storeDocument 的存活条件保护，不回写已删行）。 */
+  async deleteOwned(userId: string, id: string): Promise<void> {
+    const file = await this.repo.findOne({ where: { id, deletedAt: IsNull() } });
+    if (!file || file.ownerUserId !== userId) throw new NotFoundException('文件不存在');
+    await this.repo.update(id, { deletedAt: new Date(), deletedBy: userId });
+    this.collab.closeDocumentConnections(id);
   }
 }
 
