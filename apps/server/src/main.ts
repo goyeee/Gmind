@@ -8,6 +8,7 @@ import { QuotaExceptionFilter } from './common/quota-exception.filter';
 import { MulterExceptionFilter } from './storage/storage.multer.filter';
 import { CollabService } from './collab/collab.service';
 import { CleanupService } from './jobs/cleanup.service';
+import { DigestService } from './jobs/digest.service';
 
 async function bootstrap(): Promise<void> {
   const app = await NestFactory.create(AppModule);
@@ -29,6 +30,16 @@ async function bootstrap(): Promise<void> {
     24 * 60 * 60 * 1000,
   );
   cleanupTimer.unref();
+  // 未读邮件摘要（M3b Task 9，FR-CMT-006）：每 60s 一轮——满 15 分钟未读的站内通知按
+  // （用户,文件）合并单封摘要，发送成功才回写 emailed_at（失败下轮重试；无邮箱行直接
+  // 回写收敛，见 DigestService.runDigest）。unref() 不阻止进程退出；逐轮 catch 防单轮
+  // 失败以 unhandled rejection 击穿进程。e2e 不经此路径（直调 runDigest）。
+  const digest = app.get(DigestService);
+  const digestTimer = setInterval(
+    () => void digest.runDigest(new Date()).catch((err: unknown) => console.error('[digest] run failed', err)),
+    60_000,
+  );
+  digestTimer.unref();
   console.log(`[gmind-server] listening on :${env.PORT} (collab at ${env.PORT}/collab)`);
 }
 
