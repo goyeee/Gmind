@@ -85,12 +85,20 @@ export class FilesService {
     return rows.map((f) => this.toListItem(f));
   }
 
+  /** 存取授权布尔口径（spec §7.2）：owner 或 file_collaborators 存在行（一期协作者即可编辑），
+   *  文件须存活（deletedAt null）。findAliveOr404 与存储写端点（M3a 准入 7.2）共用此单一判定源；
+   *  返回布尔由调用方自决 404「文件不存在」——无权限与不存在同口径，不泄露文件存在性。 */
+  async canAccess(userId: string, fileId: string): Promise<boolean> {
+    const file = await this.repo.findOne({ where: { id: fileId, deletedAt: IsNull() } });
+    if (!file) return false;
+    if (file.ownerUserId === userId) return true;
+    return (await this.collabRepo.countBy({ fileId: file.id, userId })) > 0;
+  }
+
   /** 读取/写入权限（spec §7.2）：owner 或 file_collaborators 存在行（一期协作者即可编辑）。
    *  无权限与「不存在」同口径 404，不泄露文件存在性。 */
   private async assertCanRead(userId: string, file: FileEntity): Promise<void> {
-    if (file.ownerUserId === userId) return;
-    const collaborators = await this.collabRepo.countBy({ fileId: file.id, userId });
-    if (collaborators === 0) throw new NotFoundException('文件不存在');
+    if (!(await this.canAccess(userId, file.id))) throw new NotFoundException('文件不存在');
   }
 
   /** 加载存活文件并校验权限；缺失/已删/无权限一律 404「文件不存在」。 */

@@ -14,6 +14,17 @@ export const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 /** 413 统一文案：StorageService 校验与 multer 限制（经 MulterExceptionFilter 映射）共用。 */
 export const IMAGE_TOO_LARGE_MESSAGE = '图片大小超出 10MB 限制';
 
+/** 从存储键解析源文件 id（键契约 files/{fileId}/{ulid}.{ext}，saveImage/copyImage 唯一产出）。
+ *  形态不符或 id 含路径成分（'\\'、'..'）返回 null——调用方跳过源属主校验，交由
+ *  copyImage 既有键校验（400/404）兜底，保证穿越键不因本 helper 改变既定状态码。 */
+export function sourceFileIdOf(key: string): string | null {
+  if (!key.startsWith('files/')) return null;
+  const [fileId, ...rest] = key.slice('files/'.length).split('/');
+  if (!fileId || rest.length === 0) return null;
+  if (fileId.includes('\\') || fileId.includes('..')) return null;
+  return fileId;
+}
+
 /** 按魔数识别图片扩展名（显式字节校验，白名单外返回 null）：png \x89PNG / jpg \xFF\xD8\xFF / gif GIF8 / webp RIFF....WEBP。 */
 function detectImageExt(buf: Buffer): string | null {
   if (buf.length >= 4 && buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) return 'png';

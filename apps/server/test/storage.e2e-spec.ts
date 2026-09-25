@@ -21,6 +21,12 @@ const TEST_STORAGE_DIR = `${process.cwd()}/.data/storage-e2e`;
 describe('storage 域（本地磁盘图片存储 Provider）', () => {
   let app: INestApplication;
   let token: string;
+  // 准入 7.2（M3a Task 1）装置：第二用户（非协作者）与真实文件行（属主校验按 files 表判定）
+  let otherToken: string;
+  const otherPhone = '13800005556';
+  let mineA: { id: string }; // owner 主上传文件（copy 源键出处，永不授权他人）
+  let mineB: { id: string }; // owner copy 目标文件（后授权给协作者）
+  let theirs: { id: string }; // 第二用户自己的文件（负例 copy 目的地）
   const tokenFor = async (userId: string): Promise<string> => {
     // 直接通过 SessionService 签发，登录接口在 Task 8 才有
     const { SessionService } = await import('../src/session/session.service');
@@ -35,6 +41,12 @@ describe('storage 域（本地磁盘图片存储 Provider）', () => {
     const users = app.get((await import('../src/users/users.service')).UsersService);
     const user = await users.create({ method: 'phone', phone: '13800005555' });
     token = await tokenFor(user.id);
+    const other = await users.create({ method: 'phone', phone: otherPhone });
+    otherToken = await tokenFor(other.id);
+    const files = app.get((await import('../src/files/files.service')).FilesService);
+    mineA = await files.createForUser(user.id, { title: '存储属主-A' });
+    mineB = await files.createForUser(user.id, { title: '存储属主-B' });
+    theirs = await files.createForUser(other.id, { title: '他人文件' });
   });
 
   afterAll(async () => {
@@ -44,7 +56,7 @@ describe('storage 域（本地磁盘图片存储 Provider）', () => {
 
   it('上传 1×1 PNG → { key }（files/ 前缀），GET 读回字节一致且带 image/png + immutable 缓存头', async () => {
     const upload = await request(app.getHttpServer())
-      .post('/api/files/file-abc/images')
+      .post(`/api/files/${mineA.id}/images`)
       .set('Authorization', `Bearer ${token}`)
       .attach('file', PNG_1X1, 'x.png');
     expect(upload.status).toBe(201);
@@ -61,20 +73,20 @@ describe('storage 域（本地磁盘图片存储 Provider）', () => {
 
   it('POST images/copy：上传的 key 复制到另一 file 前缀 → 新 key 字节一致，原 key 仍在（Task 15 FR-EDT-010）', async () => {
     const upload = await request(app.getHttpServer())
-      .post('/api/files/file-abc/images')
+      .post(`/api/files/${mineA.id}/images`)
       .set('Authorization', `Bearer ${token}`)
       .attach('file', PNG_1X1, 'x.png');
     expect(upload.status).toBe(201);
     const sourceKey = upload.body.key as string;
 
     const copy = await request(app.getHttpServer())
-      .post('/api/files/file-xyz/images/copy')
+      .post(`/api/files/${mineB.id}/images/copy`)
       .set('Authorization', `Bearer ${token}`)
       .send({ sourceKey });
     expect(copy.status).toBe(201);
     expect(typeof copy.body.key).toBe('string');
     expect(copy.body.key).not.toBe(sourceKey);
-    expect((copy.body.key as string).startsWith('files/file-xyz/')).toBe(true);
+    expect((copy.body.key as string).startsWith(`files/${mineB.id}/`)).toBe(true);
 
     const copied = await request(app.getHttpServer()).get(`/api/images/${copy.body.key}`);
     expect(copied.status).toBe(200);
@@ -87,21 +99,21 @@ describe('storage 域（本地磁盘图片存储 Provider）', () => {
 
   it('POST images/copy：源 key 不存在 → 404；含 .. → 400；扩展名白名单外 → 400', async () => {
     const missing = await request(app.getHttpServer())
-      .post('/api/files/file-xyz/images/copy')
+      .post(`/api/files/${mineB.id}/images/copy`)
       .set('Authorization', `Bearer ${token}`)
-      .send({ sourceKey: 'files/file-abc/nope.png' });
+      .send({ sourceKey: `files/${mineA.id}/nope.png` });
     expect(missing.status).toBe(404);
 
     const traversal = await request(app.getHttpServer())
-      .post('/api/files/file-xyz/images/copy')
+      .post(`/api/files/${mineB.id}/images/copy`)
       .set('Authorization', `Bearer ${token}`)
       .send({ sourceKey: '../etc/passwd.png' });
     expect(traversal.status).toBe(400);
 
     const badExt = await request(app.getHttpServer())
-      .post('/api/files/file-xyz/images/copy')
+      .post(`/api/files/${mineB.id}/images/copy`)
       .set('Authorization', `Bearer ${token}`)
-      .send({ sourceKey: 'files/file-abc/key.txt' });
+      .send({ sourceKey: `files/${mineA.id}/key.txt` });
     expect(badExt.status).toBe(400);
   });
 
@@ -113,7 +125,7 @@ describe('storage 域（本地磁盘图片存储 Provider）', () => {
     ];
     for (const c of cases) {
       const upload = await request(app.getHttpServer())
-        .post('/api/files/file-abc/images')
+        .post(`/api/files/${mineA.id}/images`)
         .set('Authorization', `Bearer ${token}`)
         .attach('file', c.buf, 'x.png');
       expect(upload.status).toBe(201);
@@ -125,7 +137,7 @@ describe('storage 域（本地磁盘图片存储 Provider）', () => {
 
   it('.txt 伪装 → 415「不支持的图片格式」', async () => {
     const res = await request(app.getHttpServer())
-      .post('/api/files/file-abc/images')
+      .post(`/api/files/${mineA.id}/images`)
       .set('Authorization', `Bearer ${token}`)
       .attach('file', Buffer.from('hello'), 'x.txt');
     expect(res.status).toBe(415);
@@ -137,7 +149,7 @@ describe('storage 域（本地磁盘图片存储 Provider）', () => {
     const countStoredFiles = (): number => readdirSync(TEST_STORAGE_DIR, { recursive: true }).length;
     const before = countStoredFiles();
     const res = await request(app.getHttpServer())
-      .post('/api/files/file-abc/images')
+      .post(`/api/files/${mineA.id}/images`)
       .set('Authorization', `Bearer ${token}`)
       .attach('file', OVER_10MB_PNG, 'big.png');
     expect(res.status).toBe(413);
@@ -153,5 +165,60 @@ describe('storage 域（本地磁盘图片存储 Provider）', () => {
   it('GET 含 .. 的 key（路径穿越）→ 400', async () => {
     const res = await request(app.getHttpServer()).get('/api/images/..%2Fetc%2Fpasswd');
     expect(res.status).toBe(400);
+  });
+
+  // —— 准入 7.2（M3a Task 1）：写端点属主校验（owner 或协作者，deletedAt null）——
+  it('非协作者上传到他人文件 → 404「文件不存在」（不泄露存在性）', async () => {
+    const res = await request(app.getHttpServer())
+      .post(`/api/files/${mineA.id}/images`)
+      .set('Authorization', `Bearer ${otherToken}`)
+      .attach('file', PNG_1X1, 'x.png');
+    expect(res.status).toBe(404);
+    expect(res.body.message).toBe('文件不存在');
+  });
+
+  it('非协作者 copy 他人 key 到自己命名空间 → 404「文件不存在」（源键归属文件须可访问）', async () => {
+    const upload = await request(app.getHttpServer())
+      .post(`/api/files/${mineA.id}/images`)
+      .set('Authorization', `Bearer ${token}`)
+      .attach('file', PNG_1X1, 'x.png');
+    expect(upload.status).toBe(201);
+    const sourceKey = upload.body.key as string;
+
+    const res = await request(app.getHttpServer())
+      .post(`/api/files/${theirs.id}/images/copy`)
+      .set('Authorization', `Bearer ${otherToken}`)
+      .send({ sourceKey });
+    expect(res.status).toBe(404);
+    expect(res.body.message).toBe('文件不存在');
+  });
+
+  it('非协作者 copy 目标为他人文件 → 404「文件不存在」（目标命名空间须可编辑）', async () => {
+    const upload = await request(app.getHttpServer())
+      .post(`/api/files/${mineA.id}/images`)
+      .set('Authorization', `Bearer ${token}`)
+      .attach('file', PNG_1X1, 'x.png');
+    expect(upload.status).toBe(201);
+
+    const res = await request(app.getHttpServer())
+      .post(`/api/files/${mineA.id}/images/copy`)
+      .set('Authorization', `Bearer ${otherToken}`)
+      .send({ sourceKey: upload.body.key });
+    expect(res.status).toBe(404);
+    expect(res.body.message).toBe('文件不存在');
+  });
+
+  it('协作者（dev-e2e grant-collaborator 授权）上传 → 201，key 落在授权文件命名空间', async () => {
+    const grant = await request(app.getHttpServer())
+      .post('/api/dev-e2e/grant-collaborator')
+      .send({ fileId: mineB.id, phone: otherPhone });
+    expect(grant.status).toBe(201);
+
+    const upload = await request(app.getHttpServer())
+      .post(`/api/files/${mineB.id}/images`)
+      .set('Authorization', `Bearer ${otherToken}`)
+      .attach('file', PNG_1X1, 'x.png');
+    expect(upload.status).toBe(201);
+    expect((upload.body.key as string).startsWith(`files/${mineB.id}/`)).toBe(true);
   });
 });
