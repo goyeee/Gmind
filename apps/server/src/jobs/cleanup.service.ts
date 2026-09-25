@@ -95,6 +95,9 @@ export class CleanupService {
       deletedAt: deletedAtIso,
       action: 'restore',
     });
+    // 准入 7.11：即时邮件已发（或无邮箱天然不可达），行级 emailed_at 置位使
+    // DigestService 扫描跳过本行——回收站提醒不再 15 分钟后重发第二封。
+    notification.emailedAt = new Date();
     await this.notifRepo.save(notification);
 
     const owner = await this.userRepo.findOne({ where: { id: file.ownerUserId } });

@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
 import type { INestApplication } from '@nestjs/common';
 import { DataSource } from 'typeorm';
@@ -339,5 +339,46 @@ describe('回收站域（FR-FIL-005~007/010）', () => {
     );
     const payload = JSON.parse(rows[0]?.payload ?? '{}') as { deletedAt: string };
     expect(Date.now() - new Date(payload.deletedAt).getTime()).toBeLessThan(DAY_MS);
+  });
+
+  it('准入 7.11：回收站提醒的即时邮件不触发 15 分钟摘要重发（emailed_at 落行）', async () => {
+    const cleanup = app.get((await import('../src/jobs/cleanup.service')).CleanupService);
+    const digest = app.get((await import('../src/jobs/digest.service')).DigestService);
+    const users = app.get((await import('../src/users/users.service')).UsersService);
+    const files = app.get((await import('../src/files/files.service')).FilesService);
+    // 有邮箱的 owner：即时邮件与（修复前的）15 分钟摘要重发都经 MailService——spy 全量捕获
+    // （同 notify spec 摘要组模式；e2e 无 SMTP，不 spy 则只 log 不发送、断言无从落脚）
+    const mails: string[] = [];
+    const spy = vi
+      .spyOn(app.get((await import('../src/mail/mail.service')).MailService), 'sendMail')
+      .mockImplementation(async (to: string) => {
+        mails.push(to);
+        return true;
+      });
+
+    const mailOwner = await users.create({ method: 'email', email: 'trash711@test.dev' });
+    const file = await files.createForUser(mailOwner.id, { title: '7.11 提醒去重文件' });
+    await files.deleteOwned(mailOwner.id, file.id);
+    // 触发提醒（同 7.9 用例的编排：软删 → runCleanup(+27d)）；7.9 遗留条目已有 marker 行，不会重复提醒
+    expect(await cleanup.runCleanup(new Date(Date.now() + 27 * DAY_MS))).toEqual({ purged: 0, reminded: 1 });
+    expect(mails).toEqual([mailOwner.email]); // 即时邮件已发
+
+    // 提醒行按 fileId 收窄恰好 1 条（表内另有 7.9 用例遗留行），且落行即带 emailed_at
+    // ← 修复点：旧代码为 NULL，15 分钟后 DigestService 会把它当候选重发第二封
+    const rows: { emailed_at: Date | string | null }[] = await ds.query(
+      "SELECT emailed_at FROM notifications WHERE type = 'system' AND payload LIKE ?",
+      [`%"fileId":"${file.id}"%`],
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.emailed_at).not.toBeNull();
+
+    // 清掉他例遗留提醒行（其 owner 无邮箱，digest 会走「无邮箱跳过」分支产生输出噪音、
+    // 返回值不可精确断言）；本用例是文件末例，不影响他人
+    await ds.query('DELETE FROM notifications WHERE payload NOT LIKE ?', [`%"fileId":"${file.id}"%`]);
+    // 15 分钟后 digest 扫描：该行已收敛（emailed_at 非空），不产生第二封
+    mails.length = 0;
+    expect(await digest.runDigest(new Date(Date.now() + 16 * 60 * 1000))).toEqual({ emailed: 0, users: 0 });
+    expect(mails).toHaveLength(0);
+    spy.mockRestore();
   });
 });

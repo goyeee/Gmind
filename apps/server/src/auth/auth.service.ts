@@ -27,19 +27,14 @@ export class AuthService {
         await this.users.save(user);
       }
       await this.files.createSeedFiles(user.id);
-      // 注册回填（FR-SHR-004）：仅新用户创建路径（二次登录不重复触发）——按 email/phone
-      // 接受登记中的 pending 邀请并写 editor 协作者行；owner 侧零通知（仅登记，无感知）。
-      // 尽力而为隔离（口径同邮件旁路）：回填在服务内事务化，失败此处必须捕获——
-      // 响亮记录、不得波及登录主流程。残差：失败邀请保持 pending（无脏状态、不自动
-      // 重试，回填仅创建路径跑一次）；恢复需后续撤销/接受流或人工修数，可接受。
-      try {
-        await this.invites.acceptPendingForNewUser(user);
-      } catch (err) {
-        console.error(
-          `[invite-backfill] 注册回填失败（事务已回滚，登录不受影响；残差：邀请保持 pending，不自动重试）user=${user.id}`,
-          err,
-        );
-      }
+    }
+    // 准入 7.10 裁定：回填对已注册用户同样生效（每次登录尽力触发，天然重试）；
+    // 幂等由 acceptPendingForNewUser 的 pending 过滤 + uk_invite 保证。失败隔离：
+    // 事务化且捕获记录，不波及登录主流程（口径同邮件旁路）。
+    try {
+      await this.invites.acceptPendingForNewUser(user);
+    } catch (err) {
+      console.error('[invite-backfill] 登录回填失败（已隔离）', err);
     }
     const { token, expiresAt } = await this.sessions.create(user.id, rememberMe);
     return { token, expiresAt, user: { id: user.id, nickname: user.nickname, avatarUrl: user.avatarUrl } };

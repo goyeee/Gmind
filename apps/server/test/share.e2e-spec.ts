@@ -21,8 +21,9 @@ import { ShareLinkEntity } from '../src/share/share-link.entity';
  *
  * 批量邀请（POST /api/files/:id/invites，owner only，1~50 个联系人）：
  * - pending 重复邀请 no-op（不重复计）；已 accepted 再邀请 no-op；非法格式 400 并逐条回列；
- * - 注册回填：新用户首登（仅创建路径）按 email/phone 匹配 pending 邀请 → accepted +
- *   editor 协作者行；owner 侧零通知（仅登记，无感知）。
+ * - 注册回填（准入 7.10 起为登录回填）：按 email/phone 匹配 pending 邀请 → accepted +
+ *   editor 协作者行，新用户首登与已注册用户再次登录均触发（幂等：pending 过滤 + uk_invite）；
+ *   owner 侧零通知（仅登记，无感知）。
  */
 describe('share 域', () => {
   let app: INestApplication;
@@ -442,7 +443,7 @@ describe('share 域', () => {
     expect(await collabRepo.countBy({ fileId, userId: invitee.id })).toBe(0);
   });
 
-  it('回填中途失败与登录隔离：登录仍 200、事务回滚（行保持 pending、无协作者行），二次登录不受影响', async () => {
+  it('回填中途失败与登录隔离：登录仍 200、事务回滚（行保持 pending、无协作者行）；二次登录按 7.10 天然重试成功', async () => {
     const owner = await newUser('13800120012');
     const fileId = await makeFile(owner);
     await invite(owner, fileId, ['invite-x@test.dev']);
@@ -483,14 +484,39 @@ describe('share 域', () => {
     expect(user).not.toBeNull();
     expect(await collabRepo.countBy({ fileId, userId: user!.id })).toBe(0);
 
-    // 二次登录（用户已存在，创建路径跳过 → 回填不重跑）：仍 200、行仍 pending
-    // 残差记录在案：失败的回填需 owner 重邀补救（见报告 fix note）
+    // 二次登录（准入 7.10：回填对已注册用户同样生效，每次登录尽力触发）：
+    // 首登失败的 pending 残差在本次登录天然重试并成功——行 accepted、协作者行补齐
     const second = await request(app.getHttpServer())
       .post('/api/auth/login')
       .send({ method: 'email', email: 'invite-x@test.dev', mode: 'code', code: '123456' });
     expect(second.status).toBe(200);
     const after = await inviteRepo.findOneByOrFail({ fileId, contactType: 'email', contact: 'invite-x@test.dev' });
-    expect(after.status).toBe('pending');
-    expect(await collabRepo.countBy({ fileId, userId: user!.id })).toBe(0);
+    expect(after.status).toBe('accepted');
+    expect(after.acceptedUserId).toBe(user!.id);
+    expect(await collabRepo.countBy({ fileId, userId: user!.id })).toBe(1);
+  });
+
+  // ---------- 准入 7.10（M4 T1）：已注册受邀者登录回填 ----------
+
+  it('准入 7.10：已注册用户被邀请，登录后自动获得授权（不再永久悬挂）', async () => {
+    // ① 受邀者先注册（产生既有账号；此时尚无邀请，回填空跑）
+    const invitee = await loginByCode({ email: 'reg710@test.dev' });
+    // ② owner 邀请该已注册邮箱 → pending 行 + 邀请邮件
+    const owner = await newUser('13800120013');
+    const fileId = await makeFile(owner, '准入 7.10 用例');
+    expect((await invite(owner, fileId, ['reg710@test.dev'])).status).toBe(201);
+    // ③ 受邀者用同一邮箱再次登录（修复前：回填仅新用户创建路径，此处必失败）
+    const again = await loginByCode({ email: 'reg710@test.dev' });
+    expect(again.id).toBe(invitee.id); // 命中同一既有账号，非新建
+    // ④ 回填生效：邀请 accepted + editor 协作者行 + shared 视图可见
+    const row = await inviteRepo.findOneByOrFail({ fileId, contactType: 'email', contact: 'reg710@test.dev' });
+    expect(row.status).toBe('accepted');
+    expect(row.acceptedUserId).toBe(invitee.id);
+    expect(await collabRepo.countBy({ fileId, userId: invitee.id })).toBe(1);
+    const shared = await request(app.getHttpServer())
+      .get('/api/files?view=shared')
+      .set('Authorization', `Bearer ${again.token}`);
+    expect(shared.status).toBe(200);
+    expect(shared.body.map((f: { id: string }) => f.id)).toContain(fileId);
   });
 });

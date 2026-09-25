@@ -34,7 +34,8 @@ export function classifyContact(raw: string): Classified | null {
  *   已 accepted 再邀 no-op；revoked 重邀复活为 pending（重新接受邀请）；
  * - 邀请邮件仅 email 类联系人（手机号无邮件通道），内容含邀请人/文件名/注册链接，
  *   经 MailService 尽力而为旁路（无 SMTP 仅 log，绝不波及邀请主流程）；
- * - 注册回填（acceptPendingForNewUser）：仅由 AuthService 的用户创建路径（首登）触发，
+ * - 注册回填（acceptPendingForNewUser）：由 AuthService 登录路径触发（准入 7.10：新旧
+ *   用户每次登录尽力触发，幂等由 pending 过滤 + uk_invite 保证；失败保持 pending 天然重试），
  *   非 owner 侧通知——登记即可，owner 无感知；新用户种子文件与回填互不干扰。
  */
 @Injectable()
@@ -89,12 +90,13 @@ export class InviteService {
     return { invited, skipped };
   }
 
-  /** 注册回填：新用户创建后按 email/phone 匹配 pending 邀请 → 写 editor 协作者行 +
-   *  批量置 accepted。仅匹配 pending（fix 1：revoked 不复活——撤销语义专属 revoke 端点，
+  /** 注册回填：登录时按 email/phone 匹配 pending 邀请 → 写 editor 协作者行 +
+   *  批量置 accepted（准入 7.10：不再限于新用户创建路径，已注册用户每次登录同样触发）。
+   *  仅匹配 pending（fix 1：revoked 不复活——撤销语义专属 revoke 端点，
    *  find 与 update 两处都限 pending 双保险）。事务化且协作者行先写、accepted 标记后落
    *  （fix 2）：任一步非 dup-key 失败整体回滚，绝不残留「已 accepted 无协作者行」的
    *  静默丢协作脏状态。调用方（AuthService）须 try/catch 隔离——回填失败不得波及登录，
-   *  失败邀请保持 pending（不自动重试，恢复需后续撤销/接受流）。 */
+   *  失败邀请保持 pending（每次登录天然重试，准入 7.10）。 */
   async acceptPendingForNewUser(user: UserEntity): Promise<void> {
     const conds: Array<Pick<InviteEntity, 'contactType' | 'contact' | 'status'>> = [];
     if (user.email) conds.push({ contactType: 'email', contact: user.email, status: 'pending' });
