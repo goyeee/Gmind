@@ -7,6 +7,7 @@ import { FileCollaboratorEntity } from '../files/file-collaborator.entity';
 import { FileStarEntity } from '../files/file-star.entity';
 import { FolderEntity } from '../folders/folder.entity';
 import { NotificationEntity } from '../notifications/notification.entity';
+import { InviteEntity } from '../share/invite.entity';
 import { ShareLinkEntity } from '../share/share-link.entity';
 import { UserEntity } from '../users/user.entity';
 
@@ -20,7 +21,7 @@ import { UserEntity } from '../users/user.entity';
         // 约定：新增实体必须同步追加到此处（forFeature 之外的运行时建元数据来源）。
         return {
           ...ds.options,
-          entities: [UserEntity, FileEntity, FileCollaboratorEntity, FileStarEntity, FolderEntity, NotificationEntity, ShareLinkEntity],
+          entities: [UserEntity, FileEntity, FileCollaboratorEntity, FileStarEntity, FolderEntity, NotificationEntity, ShareLinkEntity, InviteEntity],
         };
       },
     }),

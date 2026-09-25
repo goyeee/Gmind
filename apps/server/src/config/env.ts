@@ -20,6 +20,8 @@ const envSchema = z.object({
   // 兜底口径，调用方照常落 notifications）；MailHog 就绪后补 env 即接通。
   SMTP_HOST: z.string().optional(),
   SMTP_PORT: z.coerce.number().optional(),
+  // 邀请邮件（M3b Task 5，FR-SHR-004）注册链接基址：web dev 默认 5173，部署侧覆写。
+  APP_URL: z.string().default('http://localhost:5173'),
 });
 
 export const env = envSchema.parse(process.env);

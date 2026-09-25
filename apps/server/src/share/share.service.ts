@@ -103,8 +103,9 @@ export class ShareService {
 }
 
 /** mysql2 唯一键冲突判定（口径同 files.service.ts 的 isDuplicateKeyError）：
- *  ER_DUP_ENTRY / errno 1062，TypeORM 实例与 driverError 两层都查。 */
-function isDuplicateKeyError(err: unknown): boolean {
+ *  ER_DUP_ENTRY / errno 1062，TypeORM 实例与 driverError 两层都查。
+ *  导出供同域 InviteService 复用（join / 注册回填写协作者行的幂等口径一致）。 */
+export function isDuplicateKeyError(err: unknown): boolean {
   const e = err as { code?: string; errno?: number; driverError?: { code?: string; errno?: number } } | null;
   if (!e) return false;
   return (
