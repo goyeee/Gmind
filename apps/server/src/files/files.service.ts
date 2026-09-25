@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { IsNull, Repository } from 'typeorm';
 import {
@@ -10,18 +10,23 @@ import {
 } from '@gmind/core';
 import { MAX_DOC_NODES } from '@gmind/shared';
 import type { FileListItem } from '@gmind/shared';
+import { CollabService } from '../collab/collab.service';
 import { FileCollaboratorEntity } from './file-collaborator.entity';
 import { FileEntity } from './file.entity';
 
 export const MAX_FILES_PER_USER = 100;
 /** 打开时间戳写摊销节流：1 分钟内重复打开不回写 last_opened_at。 */
 const OPEN_THROTTLE_MS = 60_000;
+/** 陈旧快照 PUT 的拒绝文案（M3a 准入 7.1）；web 侧 saveLoop 以同一文案呈现终态。 */
+export const STALE_SNAPSHOT_MESSAGE = '文档已在别处更新，请刷新后重试';
 
 @Injectable()
 export class FilesService {
   constructor(
     @InjectRepository(FileEntity) private readonly repo: Repository<FileEntity>,
     @InjectRepository(FileCollaboratorEntity) private readonly collabRepo: Repository<FileCollaboratorEntity>,
+    // tsx 不发射装饰器元数据，类 token 注入必须显式 @Inject（约定同 session.service.ts）
+    @Inject(CollabService) private readonly collab: CollabService,
   ) {}
 
   /** 新建文件；无 doc 状态时用空白模板。配额 100 文件（FR-ACC-003）。 */
@@ -110,11 +115,12 @@ export class FilesService {
   }
 
   /** 编辑器打开文件的完整状态；docState 以 base64 离开服务端（唯一内容出口）。
-   *  ownerUserId（M2 Task 6，FR-COL-005）：前端创建者标识依据。 */
+   *  ownerUserId（M2 Task 6，FR-COL-005）：前端创建者标识依据。
+   *  updatedAt（M3a 准入 7.1）：客户端陈旧写序守卫的初始 base（PUT 携带回服务端）。 */
   async getOwnedFileWithState(
     userId: string,
     id: string,
-  ): Promise<{ id: string; title: string; structure: string; themeId: string; nodeCount: number; ownerUserId: string; docState: string }> {
+  ): Promise<{ id: string; title: string; structure: string; themeId: string; nodeCount: number; ownerUserId: string; updatedAt: string; docState: string }> {
     const file = await this.findAliveOr404(userId, id);
     return {
       id: file.id,
@@ -123,15 +129,27 @@ export class FilesService {
       themeId: file.themeId,
       nodeCount: file.nodeCount,
       ownerUserId: file.ownerUserId,
+      updatedAt: file.updatedAt.toISOString(),
       docState: (file.docState ?? Buffer.alloc(0)).toString('base64'),
     };
   }
 
-  /** 回写文档状态：先解析校验（失败 400），再校验节点配额 ≤ MAX_DOC_NODES（超限 403），最后落库。
+  /** 回写文档状态：先解析校验（失败 400），再校验节点配额 ≤ MAX_DOC_NODES（超限 403），
+   *  然后陈旧写序守卫（准入 7.1，快照落后且存在活跃 WS 内存 doc → 409），最后落库。
    *  配额口径（FR-ACC-003＝活跃文档规模）：countAliveReachable——docFromState 入口已
    *  全量 normalize，取自 root 可达的存活节点数；墓碑随编辑永久累积、孤儿不可达，
-   *  均不计入（countNodes 口径会使远低于上限的正常文档被墓碑余额永久卡死保存）。 */
-  async saveDocState(userId: string, id: string, state: Uint8Array): Promise<{ nodeCount: number }> {
+   *  均不计入（countNodes 口径会使远低于上限的正常文档被墓碑余额永久卡死保存）。
+   *  守卫口径（M2 终审复审 Important #2 的丢失场景）：baseUpdatedAt 严格早于行
+   *  updated_at **且** collab 持有活跃内存 doc（有 WS 通道在写，PUT 是陈旧整快照，
+   *  落库会覆盖 WS 侧新编辑）→ 拒绝；二者缺一放行——纯 PUT 用户间无 WS 竞争面
+   *  （无内存 doc 时最新落库者即 PUT 自己）；base 缺省/非法（旧客户端/首次保存）
+   *  视为无 base，永远放行。 */
+  async saveDocState(
+    userId: string,
+    id: string,
+    state: Uint8Array,
+    baseUpdatedAt?: string,
+  ): Promise<{ nodeCount: number }> {
     const file = await this.findAliveOr404(userId, id);
     let doc;
     try {
@@ -142,6 +160,12 @@ export class FilesService {
     const nodeCount = countAliveReachable(doc);
     if (nodeCount > MAX_DOC_NODES) {
       throw new QuotaError(`文档节点数已达上限（${MAX_DOC_NODES}）`);
+    }
+    if (baseUpdatedAt) {
+      const base = Date.parse(baseUpdatedAt);
+      if (!Number.isNaN(base) && file.updatedAt.getTime() > base && this.collab.hasLiveDoc(id)) {
+        throw new ConflictException(STALE_SNAPSHOT_MESSAGE);
+      }
     }
     file.docState = Buffer.from(state);
     file.nodeCount = nodeCount;

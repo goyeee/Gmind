@@ -4,8 +4,11 @@ import { createFileSchema } from '@gmind/shared';
 import { UserGuard } from '../auth/user.guard';
 import { FilesService } from './files.service';
 
-// PUT doc-state 的传输契约：Yjs 状态二进制以 base64 编码（body { docState }）
-const docStateSchema = z.object({ docState: z.string().min(1) });
+// PUT doc-state 的传输契约：Yjs 状态二进制以 base64 编码（body { docState }）；
+// baseUpdatedAt（M3a 准入 7.1）为客户端记录的行 updated_at（GET/持久化 ack 下发），
+// 缺省视为无 base——兼容旧客户端与首次保存（守卫永远放行，不在此处强校验格式：
+// 非法值由 service 按无 base 口径放行）。lastEditorUserId 属 Task 4，此处不收。
+const docStateSchema = z.object({ docState: z.string().min(1), baseUpdatedAt: z.string().optional() });
 
 @Controller('api/files')
 @UseGuards(UserGuard)
@@ -33,9 +36,9 @@ export class FilesController {
 
   @Put(':id/doc-state')
   async saveDocState(@Req() req: { user: { id: string } }, @Param('id') id: string, @Body() body: unknown) {
-    const { docState } = docStateSchema.parse(body ?? {});
+    const { docState, baseUpdatedAt } = docStateSchema.parse(body ?? {});
     const state = new Uint8Array(Buffer.from(docState, 'base64'));
-    return this.files.saveDocState(req.user.id, id, state);
+    return this.files.saveDocState(req.user.id, id, state, baseUpdatedAt);
   }
 
   @Patch(':id')

@@ -18,7 +18,8 @@ import { api, getToken } from '../api/client';
  * 状态回调（EditorPage 映射为四值指示）：
  * - synced：WS 同步完成（真值表「已连接」成立的依据）；
  * - offline：连接断开（「离线编辑中，恢复联网后自动同步」）；
- * - saved：服务端 persisted ack（{type:'persisted', at}）——「已保存 HH:MM」的驱动；
+ * - saved：服务端 persisted ack（{type:'persisted', at, updatedAt}）——「已保存 HH:MM」
+ *   的驱动；updatedAt（M3a 准入 7.1）经 onPersisted 回调刷新写序 base；
  * - quota：服务端 quota-exceeded 广播（复用 M1 非重试文案）。
  *
  * Awareness（M2 Task 5，FR-COL-002/005）：v4 provider 自动创建 provider.awareness
@@ -65,6 +66,10 @@ export interface CollabOptions {
   onRemoteCursors?(cursors: RemoteCursor[]): void;
   /** 在线成员变化（含自己；EditorPage → 成员面板 + 在线数角标）。 */
   onPresence?(members: PresenceMember[]): void;
+  /** persisted ack 携带的行 updated_at（M3a 准入 7.1）：EditorPage → baseUpdatedAtRef
+   *  更新（saveLoop PUT 的 baseUpdatedAt 依据）。缺 updatedAt 字段的旧载荷不回调
+   *  （向后兼容，M1 的 {type:'persisted', at} 不变）。 */
+  onPersisted?(updatedAt: string): void;
 }
 
 export interface CollabHandle {
@@ -236,9 +241,14 @@ export function startCollab(fileId: string, doc: Y.Doc, opts: CollabOptions): Co
   };
   const onStateless = ({ payload }: { payload: string }): void => {
     try {
-      const msg = JSON.parse(payload) as { type?: string; at?: string };
-      if (msg.type === 'persisted') onStatus('saved', msg.at);
-      else if (msg.type === 'quota-exceeded') onStatus('quota');
+      const msg = JSON.parse(payload) as { type?: string; at?: string; updatedAt?: string };
+      if (msg.type === 'persisted') {
+        onStatus('saved', msg.at);
+        // 写序 base 刷新（准入 7.1）：以落库后的行值为准；旧载荷无 updatedAt 不更新
+        if (typeof msg.updatedAt === 'string' && msg.updatedAt !== '') opts.onPersisted?.(msg.updatedAt);
+      } else if (msg.type === 'quota-exceeded') {
+        onStatus('quota');
+      }
     } catch {
       // 非 JSON stateless 广播：与本页无关，忽略
     }

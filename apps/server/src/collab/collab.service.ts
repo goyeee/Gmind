@@ -126,6 +126,15 @@ export class CollabService implements OnApplicationShutdown {
     return this.hocuspocus.getDocumentsCount();
   }
 
+  /** 是否持有该文件的活跃内存 doc（M3a 准入 7.1：PUT 陈旧快照写序守卫的判定面）。
+   *  v4 的 documents 是公开 Map<documentName, Document>（documentName 即 fileId），
+   *  最后一条连接断开后 unloadImmediately 立即落库并卸载——0 连接的残影只存在于
+   *  卸载收尾的瞬态窗口，故「活跃」按该 doc 的连接数判定（getConnectionsCount），
+   *  无需自行维护 Set/引用计数。 */
+  hasLiveDoc(fileId: string): boolean {
+    return (this.hocuspocus.documents.get(fileId)?.getConnectionsCount() ?? 0) > 0;
+  }
+
   async onApplicationShutdown(): Promise<void> {
     if (this.httpServer && this.upgradeHandler) {
       this.httpServer.off('upgrade', this.upgradeHandler);
@@ -204,24 +213,36 @@ export class CollabService implements OnApplicationShutdown {
   }
 
   /** 持久化（防抖后）：回写 doc_state + node_count（可达活跃口径，仅存活文件），
-   *  成功后广播 persisted ack。
+   *  成功后广播 persisted ack。ack 载荷带 updatedAt（本次落库的行值，M3a 准入 7.1：
+   *  客户端以此为 baseUpdatedAt 依据——写序守卫比较的是 DB 行值而非客户端时钟）。
    *  失败必须上抛（v4 契约：hook 抛错 → 文档保留在内存、下次防抖重试；静默吞掉会让
    *  unloadImmediately 在落库失败后照常卸载，最后一次断开前的编辑永久丢失）。 */
   private async storeDocument(data: onStoreDocumentPayload): Promise<void> {
+    let persistedUpdatedAt: string | null = null;
     try {
       const nodeCount = countAliveReachable(data.document);
       const docState = Buffer.from(docToState(data.document));
+      // updated_at 显式取应用侧时钟（datetime(3) 毫秒精度）：MySQL 无 RETURNING，
+      // 显式写入免去落库后的二次回读查询（回读会在关停等场景与连接销毁竞态），
+      // 且 ack 的 updatedAt 与行值恒一致。写序守卫（准入 7.1）比较的 base 全部
+      // 源自本列（GET/ack/PUT 守卫读的都是行值），时钟口径自洽。
+      const updatedAt = new Date();
       await this.files.update(
         { id: data.documentName, deletedAt: IsNull() },
-        { docState, nodeCount },
+        { docState, nodeCount, updatedAt },
       );
+      persistedUpdatedAt = updatedAt.toISOString();
     } catch (err) {
       console.error(`[collab] onStoreDocument 失败（${data.documentName}）`, err);
       throw err;
     }
     // ack 只在成功写入后广播（放在 try 之外，失败路径不可达此处）
     data.document.broadcastStateless(
-      JSON.stringify({ type: 'persisted', at: new Date().toISOString() }),
+      JSON.stringify({
+        type: 'persisted',
+        at: new Date().toISOString(),
+        ...(persistedUpdatedAt ? { updatedAt: persistedUpdatedAt } : {}),
+      }),
     );
   }
 }

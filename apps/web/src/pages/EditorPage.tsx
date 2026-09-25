@@ -158,7 +158,7 @@ function clockNow(): string {
 export function EditorPage() {
   const { fileId = '' } = useParams();
   const navigate = useNavigate();
-  const { state, error, setTitle } = useEditorDoc(fileId);
+  const { state, error, setTitle, baseUpdatedAtRef } = useEditorDoc(fileId);
   const doc = state?.doc ?? null;
   const um = state?.um ?? null;
   // 创建者标识依据（M2 Task 6，FR-COL-005）：GET /api/files/:id 扩展字段
@@ -962,6 +962,8 @@ export function EditorPage() {
         // 仅在「provider 自认在线但 REST 失败」的错位窗口出现
         offlineHint: () => (collabRef.current.wsConnected ? null : OFFLINE_STATUS),
       },
+      // 写序 base（M3a 准入 7.1）：PUT 携带 baseUpdatedAt，服务端据此拒绝陈旧整快照
+      getBaseUpdatedAt: () => baseUpdatedAtRef.current,
     });
     // 协同接入（FR-EDT-034）：provider 挂到 useEditorDoc 装配的同一 doc 上，
     // GET 装配路径不变；状态事件 → 四值保存指示 + 真值表状态推进。
@@ -1013,6 +1015,11 @@ export function EditorPage() {
         cursorLayerRef.current?.setCursors(cursors, boxesRef.current);
       },
       onPresence: (next) => setMembers(next),
+      // persisted ack 携带的行 updated_at（M3a 准入 7.1）→ 刷新写序 base；此后断开
+      // 走 PUT 兜底时，携带的是最后一次服务端持久化确认的行值
+      onPersisted: (updatedAt) => {
+        baseUpdatedAtRef.current = updatedAt;
+      },
     });
     collabHandleRef.current = collab;
     const detachKeys = attachKeyboardMap({

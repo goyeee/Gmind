@@ -1,6 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import * as Y from 'yjs';
 import { MAX_DOC_NODES } from '@gmind/shared';
-import { nextQuotaBlock, shouldPut } from './saveLoop';
+import { STALE_DOC_STATUS, nextQuotaBlock, shouldPut, startSaveLoop } from './saveLoop';
 
 /**
  * 持久化通道真值表单测（M2 Task 3，binding）：
@@ -69,5 +70,89 @@ describe('nextQuotaBlock（WS 路径配额拦截标志机）', () => {
     expect(blocked).toBe(false);
     blocked = nextQuotaBlock(blocked, { type: 'quota' });
     expect(blocked).toBe(true); // 再次收到 quota 广播（服务端边缘触发回落限内复位后）→ 再拦截
+  });
+});
+
+// ---------------------------------------------------------------------------
+// startSaveLoop 的陈旧写序守卫客户端语义（M3a 准入 7.1，Task 2）：
+// - PUT body 携带 baseUpdatedAt（GET/persisted ack 记录的 base；缺省不携带）；
+// - 409 是确定性拒绝（快照已陈旧，重试同样陈旧）→ 终态文案、dirty=false、不重试
+//   （镜像 403 配额拒绝的非重试模式）。
+// 真实 PUT 的接线由 e2e 钉死；这里用 mock fetch 在单测内钉住请求体与收敛行为。
+// ---------------------------------------------------------------------------
+
+const DEBOUNCE_MS = 2000;
+
+function jsonResponse(status: number, body: unknown): Response {
+  return new Response(JSON.stringify(body), { status });
+}
+
+/** 装配 mock fetch 的保存循环（node 环境无 localStorage，api() 读 token 需打桩）。 */
+async function withMockedSave(
+  fetchImpl: (path: string, init?: { body?: string }) => Promise<Response>,
+  options?: Parameters<typeof startSaveLoop>[3],
+): Promise<{ doc: Y.Doc; statuses: string[]; stop: () => void }> {
+  vi.stubGlobal('fetch', vi.fn(fetchImpl));
+  vi.stubGlobal('localStorage', { getItem: () => 'token', setItem: () => undefined, removeItem: () => undefined });
+  const doc = new Y.Doc();
+  const statuses: string[] = [];
+  const stop = startSaveLoop(doc, 'file-1', (s) => statuses.push(s), options);
+  return { doc, statuses, stop };
+}
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.useRealTimers();
+});
+
+describe('startSaveLoop（陈旧写序守卫客户端语义）', () => {
+  it('PUT body 携带 getBaseUpdatedAt 提供的 baseUpdatedAt（准入 7.1）', async () => {
+    vi.useFakeTimers();
+    const bodies: Array<Record<string, unknown> | undefined> = [];
+    const { doc, stop } = await withMockedSave(async (_path, init) => {
+      bodies.push(init?.body ? (JSON.parse(init.body) as Record<string, unknown>) : undefined);
+      return jsonResponse(200, { nodeCount: 1 });
+    }, { getBaseUpdatedAt: () => '2026-09-22T01:02:03.456Z' });
+
+    doc.getMap('m').set('k', 'v'); // 任意事务 → 防抖后 PUT
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
+
+    expect(bodies[0]).toMatchObject({ baseUpdatedAt: '2026-09-22T01:02:03.456Z' });
+    stop();
+    doc.destroy();
+  });
+
+  it('未提供 getBaseUpdatedAt → PUT body 不带 baseUpdatedAt（旧调用方兼容）', async () => {
+    vi.useFakeTimers();
+    const bodies: Array<Record<string, unknown> | undefined> = [];
+    const { doc, stop } = await withMockedSave(async (_path, init) => {
+      bodies.push(init?.body ? (JSON.parse(init.body) as Record<string, unknown>) : undefined);
+      return jsonResponse(200, { nodeCount: 1 });
+    });
+
+    doc.getMap('m').set('k', 'v');
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
+
+    expect(bodies[0]).toHaveProperty('docState');
+    expect(bodies[0]).not.toHaveProperty('baseUpdatedAt');
+    stop();
+    doc.destroy();
+  });
+
+  it('409 → 终态文案、dirty=false、不再自动重试（镜像 403 非重试模式）', async () => {
+    vi.useFakeTimers();
+    const { doc, statuses, stop } = await withMockedSave(async () =>
+      jsonResponse(409, { message: STALE_DOC_STATUS }),
+    );
+
+    doc.getMap('m').set('k', 'v');
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS); // 第一次 PUT（409）
+    // 超过 1s/2s/4s 全部退避窗：不得有任何重试请求
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(statuses.at(-1)).toBe(STALE_DOC_STATUS);
+    expect(vi.mocked(fetch).mock.calls).toHaveLength(1);
+    stop();
+    doc.destroy();
   });
 });

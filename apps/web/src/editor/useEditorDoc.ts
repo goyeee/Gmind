@@ -1,16 +1,21 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type MutableRefObject } from 'react';
 import * as Y from 'yjs';
 import { createUndoManager, docFromState, ORIGIN_USER, setDocMeta } from '@gmind/core';
 import { api } from '../api/client';
 import { loadDocFromIndexedDB } from './collab';
 
 /**
- * 编辑器文档装载 hook — M1b Task 11；M2 Task 3 增加离线刷新兜底。
+ * 编辑器文档装载 hook — M1b Task 11；M2 Task 3 增加离线刷新兜底；M3a Task 2 起
+ * 记录写序 base（baseUpdatedAtRef）。
  *
  * GET /api/files/:id → docState(base64) → docFromState（导入即 normalize）
- * → createUndoManager；随后 POST /:id/open（fire-and-forget，FR-ACC-004 打开标记）。
+ * → createUndoManager；响应的 updatedAt（行值 ISO）写入 baseUpdatedAtRef——saveLoop
+ * PUT 携带为 baseUpdatedAt（陈旧写序守卫，准入 7.1），后续由 persisted ack 携带的
+ * updatedAt 经 startCollab 的 onPersisted 回调刷新；随后 POST /:id/open
+ * （fire-and-forget，FR-ACC-004 打开标记）。
  * GET 不可达（断网/后端失联）→ 从 IndexedDB 本地副本恢复（FR-EDT-035，collab.ts
- * 装配的本地副本在离线编辑期间持续可写）；副本为空才落入错误态。
+ * 装配的本地副本在离线编辑期间持续可写）；副本为空才落入错误态——恢复路径拿不到
+ * base，baseUpdatedAtRef 保持 null（PUT 不携带该字段 = 服务端兼容放行）。
  * 标题编辑 = setDocMeta({title}, ORIGIN_USER)（可撤销）+ 防抖 PATCH /:id。
  */
 
@@ -28,6 +33,7 @@ interface FileContentResponse {
   themeId: string;
   nodeCount: number;
   ownerUserId: string | null;
+  updatedAt: string;
   docState: string;
 }
 
@@ -45,14 +51,20 @@ export function useEditorDoc(fileId: string): {
   state: EditorDocState | null;
   error: string;
   setTitle: (title: string) => void;
+  /** 写序 base（准入 7.1）：GET 装载的行 updated_at，persisted ack 刷新；null = 无 base
+   *  （离线恢复路径/未装载）。ref 形态：saveLoop 决策与 collab 回调都要读/写最新值，
+   *  不需要触发渲染。 */
+  baseUpdatedAtRef: MutableRefObject<string | null>;
 } {
   const [state, setState] = useState<EditorDocState | null>(null);
   const [error, setError] = useState('');
   const patchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingTitle = useRef<string | null>(null);
+  const baseUpdatedAtRef = useRef<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
+    baseUpdatedAtRef.current = null; // 文件切换不继承上一文件的 base
     setState(null);
     setError('');
     (async () => {
@@ -61,6 +73,7 @@ export function useEditorDoc(fileId: string): {
         const doc = docFromState(base64ToBytes(meta.docState));
         const um = createUndoManager(doc);
         if (cancelled) return;
+        baseUpdatedAtRef.current = meta.updatedAt; // 写序 base 初始值（准入 7.1）
         setState({ doc, um, ownerUserId: meta.ownerUserId ?? null });
         void api(`/files/${fileId}/open`, { method: 'POST' }).catch(() => undefined);
       } catch (e) {
@@ -117,5 +130,5 @@ export function useEditorDoc(fileId: string): {
     }, TITLE_PATCH_DEBOUNCE_MS);
   };
 
-  return { state, error, setTitle };
+  return { state, error, setTitle, baseUpdatedAtRef };
 }

@@ -21,6 +21,10 @@ import { api, ApiError } from '../api/client';
  * 例外（M1 验收修复轮）：403 配额拒绝（FR-ACC-003，可达活跃节点 > MAX_DOC_NODES）
  * 是确定性拒绝——重试同样超限，走独立非重试分支给出可行动文案并停止自动重试；
  * 用户删除节点后的下一次事务照常触发补存（硬封锁会导致删除本身也无法落库）。
+ * 例外（M3a 准入 7.1）：409 陈旧快照拒绝（PUT body 携带 baseUpdatedAt，服务端判定
+ * 整快照严格落后且存在活跃 WS 内存 doc）同为确定性拒绝——重试同样陈旧，走非重试
+ * 终态文案并停止自动重试；base 由 useEditorDoc 记录（GET 装载）并随 persisted ack
+ * 刷新（collab onPersisted → EditorPage 桥接 getBaseUpdatedAt）。
  * WS 模式下配额拒绝经 quota-exceeded 广播同文案呈现（EditorPage 桥接）；M2 终审
  * 修复轮起广播另置客户端新增拦截标志（nextQuotaBlock），WS 主路径的 ≤500 节点
  * 控制（FR-ACC-003 P0）由客户端强制，不再只是指示文案。
@@ -36,6 +40,8 @@ export const QUOTA_STATUS = `文档节点数超过上限（${MAX_DOC_NODES}）�
  * **新增**节点，删除/既有节点文本编辑/样式修改不受限。
  */
 export const QUOTA_ADD_BLOCKED = '文档节点数已达上限，请删除部分节点后再添加';
+/** 409 陈旧快照终态文案（M3a 准入 7.1；与 server 的 STALE_SNAPSHOT_MESSAGE 同文）。 */
+export const STALE_DOC_STATUS = '文档已在别处更新，请刷新后重试';
 
 /**
  * 持久化通道真值表（binding，M2 Task 3）：
@@ -92,6 +98,10 @@ export interface CollabBridge {
 
 export interface SaveLoopOptions {
   collab?: CollabBridge;
+  /** 当前写序 base（M3a 准入 7.1）：useEditorDoc 记录的行 updated_at（GET 装载，
+   *  persisted ack 携带的最新行值刷新）。PUT body 以 baseUpdatedAt 携带，服务端据此
+   *  拒绝陈旧整快照（409）；缺省（离线恢复等拿不到 base 的路径）不携带 → 兼容放行。 */
+  getBaseUpdatedAt?: () => string | null;
 }
 
 function toBase64(state: Uint8Array): string {
@@ -106,6 +116,14 @@ function toBase64(state: Uint8Array): string {
 function clockNow(): string {
   const now = new Date();
   return `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+}
+
+/** PUT body 装配：docState 必带；baseUpdatedAt 仅有 base 时携带（缺省字段 = 旧客户端
+ *  兼容口径，服务端视为无 base 永远放行）。 */
+function putBody(doc: Y.Doc, baseUpdatedAt: string | null): { docState: string; baseUpdatedAt?: string } {
+  const body: { docState: string; baseUpdatedAt?: string } = { docState: toBase64(docToState(doc)) };
+  if (baseUpdatedAt) body.baseUpdatedAt = baseUpdatedAt;
+  return body;
 }
 
 export type SaveStatusSetter = (status: string) => void;
@@ -155,11 +173,20 @@ export function startSaveLoop(
     try {
       await api(`/files/${fileId}/doc-state`, {
         method: 'PUT',
-        body: { docState: toBase64(docToState(doc)) },
+        body: putBody(doc, options?.getBaseUpdatedAt?.() ?? null),
       });
       retries = 0;
       setStatus(`已保存 ${clockNow()}`);
     } catch (e) {
+      if (e instanceof ApiError && e.status === 409) {
+        // 陈旧快照守卫（准入 7.1）：服务端判定本端整快照落后于 WS 侧已持久化的
+        // 版本——确定性拒绝，重试同样陈旧，还会持续覆盖失败；放弃本次待存并停
+        // 在终态文案（镜像 403 配额拒绝的非重试模式），用户刷新/重开文件后以新
+        // base 继续
+        dirty = false;
+        setStatus(STALE_DOC_STATUS);
+        return;
+      }
       if (e instanceof ApiError && e.status === 403) {
         // 配额超限：确定性拒绝，重试无意义——不消耗 1s/2s/4s 退避路径，放弃本次
         // 待存（下一次事务重新进入防抖；删除节点后的下一次补存即可成功落库）
@@ -222,7 +249,7 @@ export function startSaveLoop(
       dirty = false;
       void api(`/files/${fileId}/doc-state`, {
         method: 'PUT',
-        body: { docState: toBase64(docToState(doc)) },
+        body: putBody(doc, options?.getBaseUpdatedAt?.() ?? null),
       }).catch(() => undefined);
     }
   };
