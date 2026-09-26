@@ -1,8 +1,14 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as Y from 'yjs';
 import { markLastEditor } from '@gmind/core';
 import { MAX_DOC_NODES } from '@gmind/shared';
+import { track } from '../api/events';
 import { STALE_DOC_STATUS, nextQuotaBlock, shouldPut, startSaveLoop } from './saveLoop';
+
+// error_occur 埋点直测（评审修复轮 Important #1）：track 走 api/events（真实实现
+// 在 node 单测环境因缺 sessionStorage 被 sync catch 静默吞掉），此处 mock 成 spy
+// 使 saveLoop 三处 save-fail 生产点可断言。
+vi.mock('../api/events', () => ({ track: vi.fn() }));
 
 /**
  * 持久化通道真值表单测（M2 Task 3，binding）：
@@ -106,6 +112,10 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+beforeEach(() => {
+  vi.mocked(track).mockClear();
+});
+
 describe('startSaveLoop（陈旧写序守卫客户端语义）', () => {
   it('PUT body 携带 getBaseUpdatedAt 提供的 baseUpdatedAt（准入 7.1）', async () => {
     vi.useFakeTimers();
@@ -140,7 +150,7 @@ describe('startSaveLoop（陈旧写序守卫客户端语义）', () => {
     doc.destroy();
   });
 
-  it('409 → 终态文案、dirty=false、不再自动重试（镜像 403 非重试模式）', async () => {
+  it('409 → 终态文案、dirty=false、不再自动重试（镜像 403 非重试模式）；error_occur save-fail recovered:false 恰一次', async () => {
     vi.useFakeTimers();
     const { doc, statuses, stop } = await withMockedSave(async () =>
       jsonResponse(409, { message: STALE_DOC_STATUS }),
@@ -153,11 +163,46 @@ describe('startSaveLoop（陈旧写序守卫客户端语义）', () => {
 
     expect(statuses.at(-1)).toBe(STALE_DOC_STATUS);
     // 仅一次 doc-state PUT（M5 Task 4 起 409 另发一条 error_occur 埋点 POST /api/events，
-    // 非浏览器单测环境该埋点静默失败不打 fetch——此处只钉住保存通道本身无重试）
+    // 已 mock track，不打 fetch——此处只钉住保存通道本身无重试）
     const docStatePuts = vi
       .mocked(fetch)
       .mock.calls.filter(([p]) => String(p).includes('/doc-state'));
     expect(docStatePuts).toHaveLength(1);
+
+    // 埋点（评审修复轮 Important #1）：409 终态失败上报恰一次，recovered:false
+    expect(track).toHaveBeenCalledTimes(1);
+    expect(track).toHaveBeenCalledWith('error_occur', { kind: 'save-fail', recovered: false }, 'file-1');
+    stop();
+    doc.destroy();
+  });
+
+  it('重试 1s/2s/4s 耗尽 → error_occur save-fail recovered:false；随后成功收尾 → recovered:true（成对上报）', async () => {
+    vi.useFakeTimers();
+    // 前 4 次 PUT（防抖首发 + 3 次退避）网络性失败；耗尽分支后的 0ms 立即补存成功收尾
+    // （也正是这个补存让本用例确定性终止：成功后不再有新计时，无热循环悬置）
+    let calls = 0;
+    const { doc, statuses, stop } = await withMockedSave(async () => {
+      calls += 1;
+      return calls <= 4 ? Promise.reject(new TypeError('网络失败')) : jsonResponse(200, { nodeCount: 1 });
+    });
+
+    doc.getMap('m').set('k', 'v');
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS + 1000 + 2000 + 4000);
+    // 耗尽分支的 finally 0ms 补存计时（恰在推进窗边缘）未被同次推进命中：再推 1ms
+    // 触发它——第 5 次 PUT 成功收尾，不再有新计时，用例确定性终止（无热循环悬置）
+    await vi.advanceTimersByTimeAsync(1);
+
+    // 耗尽分支的终态文案随后被成功收尾覆盖：先见「保存失败，正在重试」再回「已保存」
+    expect(statuses).toContain('保存失败，正在重试');
+    expect(statuses.at(-1)).toMatch(/^已保存 /);
+
+    // 埋点（评审修复轮 Important #1）：耗尽失败 recovered:false 与成功恢复 recovered:true
+    // 成对到达（离线窗口为 null 的纯重试失败路径）
+    expect(track).toHaveBeenCalledWith('error_occur', { kind: 'save-fail', recovered: false }, 'file-1');
+    expect(track).toHaveBeenCalledWith('error_occur', { kind: 'save-fail', recovered: true }, 'file-1');
+    // 成功收尾后复位：同一循环内不再有挂起的失败待报
+    const failCalls = vi.mocked(track).mock.calls.filter(([, p]) => (p as { recovered?: boolean }).recovered === false);
+    expect(failCalls).toHaveLength(1);
     stop();
     doc.destroy();
   });

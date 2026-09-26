@@ -104,6 +104,24 @@ test('键盘增删节点：node_add/node_delete 各上报一次，via=keyboard �
   expect(deleted[0].payload.sessionId).toBe(added[0].payload.sessionId);
 });
 
+test('剪切（Ctrl+X）删除节点同样上报 node_delete via=keyboard（cut 复合操作计入删除流）', async ({ page }) => {
+  const events = await collectEvents(page);
+  await registerAndLogin(page);
+  await openSeedDoc(page, '本周计划');
+
+  await addChildNode(page, '待剪切节点');
+  await page.keyboard.press('Control+X');
+  await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '待剪切节点' })).toHaveCount(0);
+
+  // 评审修复轮 Important #2：cut 的删除侧此前绕过 handleDelete 不上报——粘贴回来时
+  // +1 node_add(paste) 而删除流为 0，事件流不对称
+  const deleted = events.filter((e) => e.type === 'node_delete');
+  await expect.poll(() => deleted.length).toBe(1);
+  expect(deleted[0].payload.via).toBe('keyboard');
+  expect(typeof deleted[0].payload.nodeCount).toBe('number');
+  await expectCommonParams(page, deleted[0]);
+});
+
 test('右键菜单增删节点：node_add/node_delete 的 via=context', async ({ page }) => {
   const events = await collectEvents(page);
   await registerAndLogin(page);

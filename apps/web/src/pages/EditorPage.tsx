@@ -655,7 +655,10 @@ export function EditorPage() {
     }
   };
 
-  const handleCut = async (): Promise<void> => {
+  /** 剪切 = 复制 + 删除（cutNodes 复合）；删除侧此前绕过 handleDelete——评审修复轮
+   *  Important #2：补记 node_delete（via 区分键盘 Ctrl+X / 右键菜单），保证删除事件流
+   *  与粘贴回来时的 node_add(via=paste) 对称。 */
+  const handleCut = async (via: NodeVia = 'keyboard'): Promise<void> => {
     if (!doc) return;
     const selection = selectionRef.current;
     if (!selection) return;
@@ -664,7 +667,9 @@ export function EditorPage() {
     try {
       writeToSystemClipboard(
         cutNodes(handleOf(doc), ids, (deleteIds) => {
+          if (deleteIds.length === 0) return; // 空删集不上报（防御：上游已滤空）
           deleteNodes(doc, deleteIds, ORIGIN_USER);
+          track('node_delete', { via, nodeCount: countAliveReachable(doc) }, fileId);
           afterUserWrite();
         }),
       );
@@ -902,7 +907,7 @@ export function EditorPage() {
         void handleCopy();
         break;
       case 'cut':
-        void handleCut();
+        void handleCut('context');
         break;
       case 'paste':
         void handlePaste();
