@@ -37,7 +37,7 @@ const PREF_ITEMS: Array<{ key: EmailOptOutType; label: string; desc: string }> =
 ];
 
 function msgOf(e: unknown): string {
-  return e instanceof Error ? e.message : '操作失败，请稍后重试';
+  return e instanceof Error ? e.message : '操作未完成：网络异常或服务暂不可用，请稍后重试';
 }
 
 export function SettingsPage() {
