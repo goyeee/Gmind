@@ -1,0 +1,98 @@
+/* 快捷键帮助面板 — M5 Task 2（NFR-USE-002 / FR-EDT-007）。
+   抽屉模式沿用 MemberPanel（member-panel.css 同构：fixed 右上浮层）。 */
+
+.help-panel {
+  position: fixed;
+  top: 56px;
+  right: 16px;
+  width: 300px;
+  max-height: 70vh;
+  overflow: auto;
+  background: #fff;
+  border: 1px solid #e5e6eb;
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  z-index: 1150;
+  padding: 8px 12px 12px;
+  font-size: 13px;
+}
+
+.help-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 0 6px;
+  border-bottom: 1px solid #f2f3f5;
+}
+.help-panel-title {
+  font-weight: 600;
+}
+.help-panel-close {
+  border: none;
+  background: none;
+  font-size: 16px;
+  line-height: 1;
+  color: #86909c;
+  cursor: pointer;
+  padding: 2px 6px;
+}
+
+.help-search {
+  box-sizing: border-box;
+  width: 100%;
+  margin-top: 8px;
+  padding: 5px 8px;
+  border: 1px solid #e5e6eb;
+  border-radius: 6px;
+  font-family: inherit;
+  font-size: 12px;
+}
+.help-search:focus {
+  border-color: #94bfff;
+  outline: none;
+}
+
+.help-group {
+  margin-top: 10px;
+}
+.help-group-title {
+  margin: 0 0 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #4e5969;
+}
+.help-empty {
+  margin: 12px 0 4px;
+  color: #c9cdd4;
+}
+
+.help-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.help-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 5px 0;
+}
+.help-item-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.help-keys {
+  flex: none;
+  padding: 1px 6px;
+  border: 1px solid #e5e6eb;
+  border-radius: 4px;
+  background: #f7f8fa;
+  color: #4e5969;
+  font-family: inherit;
+  font-size: 11px;
+  white-space: nowrap;
+}

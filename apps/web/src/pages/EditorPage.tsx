@@ -67,6 +67,7 @@ import {
   readImageSize,
   uploadImage,
 } from '../editor/imageUpload';
+import { HelpPanel } from '../editor/HelpPanel';
 import { MemberPanel } from '../editor/MemberPanel';
 import { RichPanel } from '../editor/RichPanel';
 import { CommentPanel, type CommentThreadView } from '../editor/CommentPanel';
@@ -209,6 +210,9 @@ export function EditorPage() {
   const [membersOpen, setMembersOpen] = useState(false);
   // 版本历史面板开合（M4 Task 8，FR-VER-004 UI）：装配模式同成员面板 open/onClose
   const [versionsOpen, setVersionsOpen] = useState(false);
+  // 快捷键帮助面板开合（M5 Task 2，FR-EDT-007）：Ctrl/Cmd+? 经 keyboardMap onHelp
+  // 与工具栏「快捷键」按钮双入口，均为 toggle 语义
+  const [helpOpen, setHelpOpen] = useState(false);
   // 当前用户身份（M4 Task 2 邀请区可见性）：与 awareness/last_editor 共用 users/me
   // 模块级缓存（不重发请求）；canInvite = 当前用户即创建者（WorkspacePage 行菜单
   // ownerUserId === me?.id 同口径），身份未装配（id 空串）一律不可见。
@@ -1231,6 +1235,9 @@ export function EditorPage() {
       onDelete: handleDelete,
       onSelectAll: handleSelectAll,
       onToggleCollapse: handleToggleCollapse,
+      // Ctrl/Cmd+? 打开快捷键帮助面板（M5 Task 2，FR-EDT-007）；绑定经 keyboardMap
+      // （与 SHORTCUT_LIST 同源：面板「文件」组列出的就是这条绑定）
+      onHelp: () => setHelpOpen((v) => !v),
       onNavigate: handleNavigate,
       onSiblingEnd: handleSiblingEnd,
       onCopy: () => void handleCopy(),
@@ -1455,6 +1462,14 @@ export function EditorPage() {
         <button data-testid="versions-toggle" title="版本历史" onClick={() => setVersionsOpen((v) => !v)}>
           版本历史
         </button>
+        {/* 快捷键帮助（M5 Task 2，FR-EDT-007）：工具栏入口，Ctrl/Cmd+? 同一开关 */}
+        <button
+          data-testid="help-toggle"
+          title="快捷键帮助 (Ctrl+?)"
+          onClick={() => setHelpOpen((v) => !v)}
+        >
+          快捷键
+        </button>
         <button
           data-testid="members-btn"
           title="在线成员"
@@ -1592,6 +1607,7 @@ export function EditorPage() {
         canInvite={meId !== '' && meId === ownerUserId}
         showToast={showToast}
       />
+      <HelpPanel open={helpOpen} onClose={() => setHelpOpen(false)} />
       <span hidden>{tick}</span>
     </div>
   );
