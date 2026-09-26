@@ -81,6 +81,7 @@ import {
   startSaveLoop,
 } from '../editor/saveLoop';
 import { useEditorDoc } from '../editor/useEditorDoc';
+import { useIsMobileViewport } from '../editor/useIsMobileViewport';
 import { exportXmind } from '../editor/xmind-export';
 import { exportImage } from '../editor/image-export';
 import { track } from '../api/events';
@@ -173,6 +174,13 @@ function clockNow(): string {
 export function EditorPage() {
   const { fileId = '' } = useParams();
   const navigate = useNavigate();
+  // 移动端只读（M5 Task 5，OPEN-T-005）：≤768px 视口 = 客户端能力降级为只读——
+  // 隐藏全部编辑控件、不装配写交互（键盘/拖拽/右键/双击/画布粘贴）；保留画布
+  // 渲染、平移/缩放手势（Viewport 自有监听不动）、折叠徽标点击、评论（面板
+  // 查看+发表+角标点击过滤）。**非安全边界**：服务端不区分移动端写请求（验收
+  // 文档登记）。matchMedia change 监听驱动：断点跨越即时升降级（装配 effect 以
+  // readOnly 为依赖，跨越即按文件切换同款路径重建场景/协同）。
+  const readOnly = useIsMobileViewport();
   const { state, error, setTitle, baseUpdatedAtRef } = useEditorDoc(fileId);
   const doc = state?.doc ?? null;
   const um = state?.um ?? null;
@@ -276,6 +284,9 @@ export function EditorPage() {
   const commentsRefreshRef = useRef<(() => void) | null>(null);
   // 单节点筛选视图（角标点击进入，「查看全部」退出）
   const [commentFilter, setCommentFilter] = useState<string | null>(null);
+  // 移动端评论抽屉开合（M5 Task 5）：桌面常驻右列；移动端由工具栏「评论」开关
+  // 控制底部抽屉（画布为主面，评论按需浮出）
+  const [commentsOpen, setCommentsOpen] = useState(false);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const showToast = (message: string): void => {
@@ -852,6 +863,7 @@ export function EditorPage() {
 
   const onSvgDoubleClick = (e: React.MouseEvent<SVGSVGElement>): void => {
     if (justDraggedRef.current) return;
+    if (readOnly) return; // 移动端只读：双击（双触）不进编辑（OPEN-T-005）
     const g = (e.target as Element).closest('[data-node-id]');
     const id = g?.getAttribute('data-node-id');
     if (id) openNodeEditor(id);
@@ -862,6 +874,7 @@ export function EditorPage() {
   const onSvgContextMenu = (e: React.MouseEvent<SVGSVGElement>): void => {
     e.preventDefault();
     if (justDraggedRef.current) return;
+    if (readOnly) return; // 移动端只读：不弹右键菜单（长按 contextmenu 同拦）
     const g = (e.target as Element).closest('[data-node-id]');
     const id = g?.getAttribute('data-node-id');
     if (!id || !doc) {
@@ -1040,6 +1053,12 @@ export function EditorPage() {
       vp.apply(); // fix round 1：构造只写恒等 transform，字段拷贝后必须显式回写
       vp.attach();
       viewportRef.current = vp;
+      // 拖拽移动为写交互：移动端只读不装配（OPEN-T-005）。空白拖拽平移归
+      // Viewport 自有 pointer 监听（上文 vp.attach()），不受影响。
+      if (readOnly) {
+        dragRef.current = null;
+        return;
+      }
       const drag = new DragController();
       drag.attach({
         svg: svgEl,
@@ -1245,7 +1264,10 @@ export function EditorPage() {
       },
     });
     collabHandleRef.current = collab;
-    const detachKeys = attachKeyboardMap({
+    // 键盘写路径：移动端只读不装配（OPEN-T-005 裁定「以不挂载实现」——Enter/
+    // Tab/Delete/粘贴等全部写键位随监听缺席一并失效；readOnly 入 effect 依赖，
+    // 断点跨越时按本 effect 重建路径重新装配/卸下）。
+    const detachKeys = readOnly ? null : attachKeyboardMap({
       // 覆盖层打开即让路（其 Enter/Esc 已 stopPropagation，此为其余按键的兜底）
       isEditorOpen: () => overlay.isOpen,
       undo: () => coreUndo(manager),
@@ -1273,6 +1295,7 @@ export function EditorPage() {
     // preventDefault 截停默认行为并走上传链路，否则不干预（文本粘贴走键盘映射
     // Ctrl+V 通道与原生 paste 共存，二者对图片文件互斥）。
     const onDocPaste = (ev: ClipboardEvent): void => {
+      if (readOnly) return; // 移动端只读：画布粘贴截图（写路径）一并禁用
       if (overlay.isOpen || isEditableTarget(ev.target)) return;
       const file = Array.from(ev.clipboardData?.files ?? []).find((f) =>
         f.type.startsWith('image/'),
@@ -1316,7 +1339,7 @@ export function EditorPage() {
       cursorLayerRef.current = null;
       remoteCursorsRef.current = [];
       setMembers([]);
-      detachKeys();
+      detachKeys?.();
       overlay.close(false);
       dragRef.current?.destroy();
       dragRef.current = null;
@@ -1329,7 +1352,7 @@ export function EditorPage() {
       themeRef.current = '';
       void manager.destroy();
     };
-  }, [state, fileId]);
+  }, [state, fileId, readOnly]);
 
   // —— 通知深链（M4 清偿包）——
   // 装载完成后读 ?node=<ulid>：有效则 locateNode 定位（同评论面板「选中 + 展开折叠祖先」
@@ -1363,6 +1386,27 @@ export function EditorPage() {
         <button data-testid="back-btn" title="返回工作台" onClick={() => navigate('/workspace')}>
           ←
         </button>
+        {readOnly ? (
+          /* 移动端工具栏精简版（OPEN-T-005）：仅返回 + 标题只读展示 + 保存状态 +
+             评论开关——其余编辑项（结构/主题/撤销/重做/全屏/导出/标题输入/星标/
+             版本/快捷键/成员）一概不装配。 */
+          <>
+            <span className="title-display" data-testid="title-display">
+              {meta?.title ?? ''}
+            </span>
+            <span className="save-status" data-testid="save-status">
+              {status}
+            </span>
+            <button
+              data-testid="comment-toggle"
+              title="评论"
+              onClick={() => setCommentsOpen((v) => !v)}
+            >
+              评论
+            </button>
+          </>
+        ) : (
+          <>
         <select
           data-testid="structure-select"
           value={meta?.structureType ?? 'mindmap'}
@@ -1508,6 +1552,8 @@ export function EditorPage() {
             {members.length}
           </span>
         </button>
+          </>
+        )}
       </header>
 
       <div className="editor-main">
@@ -1532,30 +1578,49 @@ export function EditorPage() {
         {/*
           右列（M3b Task 7 装配裁决）：RichPanel + CommentPanel 同列纵排——
           评论面板常驻下方（data-testid="comment-panel"），选中节点后富内容面板在上。
+          移动端只读（M5 Task 5）：右列整列不装配——RichPanel（样式/富内容编辑）
+          隐藏；CommentPanel 改由工具栏「评论」开关控制的底部抽屉承载（查看+发表），
+          面板组件与 testid 复用同一份。
         */}
-        <div className="editor-right">
-          {doc && um && selectedNodeId && (
-            <RichPanel
-              doc={doc}
-              fileId={fileId}
-              nodeId={selectedNodeId}
-              afterUserWrite={afterUserWrite}
-              showToast={showToast}
+        {readOnly ? (
+          commentsOpen && (
+            <div className="editor-mobile-comments">
+              <CommentPanel
+                threads={comments.threads}
+                filterNodeId={commentFilter}
+                selectedNodeId={selectedNodeId}
+                onClearFilter={() => setCommentFilter(null)}
+                onLocate={locateNode}
+                onAddComment={(content) => void submitComment(content)}
+                onReply={(threadId, content) => void submitReply(threadId, content)}
+              />
+            </div>
+          )
+        ) : (
+          <div className="editor-right">
+            {doc && um && selectedNodeId && (
+              <RichPanel
+                doc={doc}
+                fileId={fileId}
+                nodeId={selectedNodeId}
+                afterUserWrite={afterUserWrite}
+                showToast={showToast}
+              />
+            )}
+            <CommentPanel
+              threads={comments.threads}
+              filterNodeId={commentFilter}
+              selectedNodeId={selectedNodeId}
+              onClearFilter={() => setCommentFilter(null)}
+              onLocate={locateNode}
+              onAddComment={(content) => void submitComment(content)}
+              onReply={(threadId, content) => void submitReply(threadId, content)}
             />
-          )}
-          <CommentPanel
-            threads={comments.threads}
-            filterNodeId={commentFilter}
-            selectedNodeId={selectedNodeId}
-            onClearFilter={() => setCommentFilter(null)}
-            onLocate={locateNode}
-            onAddComment={(content) => void submitComment(content)}
-            onReply={(threadId, content) => void submitReply(threadId, content)}
-          />
-        </div>
+          </div>
+        )}
       </div>
 
-      {contextMenu && (
+      {!readOnly && contextMenu && (
         <div
           className="context-menu"
           data-testid="context-menu"

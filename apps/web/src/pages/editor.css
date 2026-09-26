@@ -384,3 +384,47 @@
 .export-menu .export-option input {
   cursor: pointer;
 }
+
+/* —— 移动端只读（M5 Task 5，OPEN-T-005；≤768px 断点） —— */
+
+/* 工具栏标题只读展示（移动端替代 title-input）：弹性占位 + 单行截断 */
+.title-display {
+  flex: 1;
+  min-width: 0;
+  font-size: 14px;
+  font-weight: 500;
+  color: #1f2329;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 移动端评论抽屉：底部浮层（画布为主面，工具栏「评论」开关控制），
+   CommentPanel 组件与 testid 复用桌面同一份，仅容器换承载体。 */
+.editor-mobile-comments {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 1050;
+  display: flex;
+  flex-direction: column;
+  max-height: 60vh;
+  background: #fff;
+  border-top: 1px solid #e5e6eb;
+  box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.08);
+}
+.editor-mobile-comments .comment-panel {
+  flex: 1;
+  min-height: 0;
+  max-height: none; /* 覆盖桌面常驻列的 46% 上限，滚动交给抽屉内面板自身 */
+}
+
+/* 断点兜底（belt-and-braces）：React 分支是主机制（testid 反映装配状态），
+   此媒体查询只防御性隐藏桌面专属区块——即使装配态异常也不在窄视口露出。 */
+@media (max-width: 768px) {
+  .editor-right,
+  .context-menu {
+    display: none;
+  }
+}
