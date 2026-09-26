@@ -432,6 +432,10 @@ export function WorkspacePage() {
             )}
           </div>
           <button onClick={() => navigate('/trash')}>回收站</button>
+          {/* 账号设置入口（M5 Task 1，FR-ACC-002 收口）：改密/换绑/通知偏好 */}
+          <button data-testid="settings-entry" onClick={() => navigate('/settings')}>
+            账号设置
+          </button>
           <button data-testid="import-button" onClick={() => importInputRef.current?.click()}>
             导入
           </button>

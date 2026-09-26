@@ -4,6 +4,7 @@ import { In, IsNull, LessThanOrEqual, Repository } from 'typeorm';
 import { env } from '../config/env';
 import { MailService } from '../mail/mail.service';
 import { NotificationEntity } from '../notifications/notification.entity';
+import { parseEmailOptOut } from '../users/users.service';
 import { UserEntity } from '../users/user.entity';
 
 /** 摘要延迟窗（FR-CMT-006）：站内通知满 15 分钟仍未读才入摘要——给 SSE 实时推送
@@ -36,6 +37,8 @@ interface DigestGroup {
  * - 用户无邮箱（微信注册）→ 不发邮件但同样回写 emailed_at 并 log「无邮箱跳过」：
  *   否则无邮箱用户的行永远滞留候选集、每分钟空扫不收敛。emailed_at 语义在此为
  *   「已进入摘要处理」，无邮箱用户站内通知（通知中心）仍完整可读。
+ * - 用户通知偏好退订（M5 Task 1，FR-CMT-006）→ 该类型行不进摘要但同样回写
+ *   emailed_at（收敛语义同无邮箱用户）；system（FR-FIL-010 回收站提醒）恒发不过滤。
  *
  * 候选集不用 INNER JOIN users 过滤无邮箱行：收敛裁定需要给无邮箱行回写 emailed_at，
  * 故先取全部候选行（user+read+emailed+created_at 四条件），再按 user_ids 二次查
@@ -63,6 +66,8 @@ export class DigestService {
 
     const users = await this.userRepo.find({ where: { id: In([...new Set(candidates.map((r) => r.userId))]) } });
     const emailOf = new Map(users.map((u) => [u.id, u.email] as const));
+    // 通知偏好（M5 Task 1，FR-CMT-006）：按用户解析邮件退订集合（坏列容错 → 空）
+    const optOutOf = new Map(users.map((u) => [u.id, new Set(parseEmailOptOut(u.notifyPrefs))] as const));
 
     const groups = new Map<string, DigestGroup>();
     for (const row of candidates) {
@@ -76,19 +81,36 @@ export class DigestService {
     let emailed = 0;
     const doneUsers = new Set<string>();
     for (const group of groups.values()) {
+      // 偏好过滤（FR-CMT-006「用户可在设置中按事件类型关闭邮件通知，站内通知不可关闭」）：
+      // 用户退订的类型行不进摘要，但同样回写 emailed_at 收敛（语义同无邮箱用户，
+      // 防永久滞留候选集）；system 行（FR-FIL-010 回收站提醒恒发）不受开关控制、永不过滤。
+      const optOut = optOutOf.get(group.userId);
+      let rows = group.rows;
+      if (optOut && optOut.size > 0) {
+        const blocked = rows.filter((r) => r.type !== 'system' && optOut.has(r.type));
+        if (blocked.length > 0) {
+          await this.markEmailed(blocked, now);
+          const blockedIds = new Set(blocked.map((r) => r.id));
+          rows = rows.filter((r) => !blockedIds.has(r.id));
+          if (rows.length === 0) {
+            doneUsers.add(group.userId); // 整组被退订：无邮件，行已收敛
+            continue;
+          }
+        }
+      }
       const email = emailOf.get(group.userId) ?? null;
       if (!email) {
-        console.log(`[digest] 无邮箱跳过（站内可达，回写 emailed_at 使扫描收敛）：userId=${group.userId} rows=${group.rows.length}`);
-        await this.markEmailed(group.rows, now);
+        console.log(`[digest] 无邮箱跳过（站内可达，回写 emailed_at 使扫描收敛）：userId=${group.userId} rows=${rows.length}`);
+        await this.markEmailed(rows, now);
         doneUsers.add(group.userId);
         continue;
       }
       // 文件标题取组内第一条非空 payload.title（mention/reply/system 均带），缺失兜底「文档」
-      const title = group.rows.map((r) => payloadString(r.payload, 'title')).find((t): t is string => !!t) ?? '文档';
-      const subject = `Gmind：${title} 有 ${group.rows.length} 条新通知`;
+      const title = rows.map((r) => payloadString(r.payload, 'title')).find((t): t is string => !!t) ?? '文档';
+      const subject = `Gmind：${title} 有 ${rows.length} 条新通知`;
       // 条目行附文档深链（M4 清偿包）：payload 带 fileId 才加链接（system 类无 fileId 不加），
       // 点击直达 ${WEB_ORIGIN}/edit/:fileId；正文尾部统一「打开 Gmind」入口行
-      const body = group.rows
+      const body = rows
         .map((r) => {
           const payload = parsePayload(r.payload);
           const label = TYPE_LABELS[r.type] ?? '通知';

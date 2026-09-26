@@ -37,6 +37,8 @@ export async function api<T>(path: string, init: { method?: string; body?: unkno
     if (res.status === 401 && getToken()) clearToken();
     throw new ApiError(data.message ?? `请求失败（${res.status}）`, res.status);
   }
+  // 204 无响应体（M5 Task 1：POST /users/me/password、/users/me/rebind 成功 204）
+  if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
 }
 

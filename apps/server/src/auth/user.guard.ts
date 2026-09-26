@@ -20,7 +20,16 @@ export class UserGuard implements CanActivate {
     if (!user) throw new UnauthorizedException('用户不存在');
     req.user = { id: user.id };
     req.sessionToken = token;
-    req.fullUser = { id: user.id, nickname: user.nickname, avatarUrl: user.avatarUrl };
+    // phone/email/hasPassword（M5 Task 1）：账号设置页按身份形态渲染改密区
+    // （有密码=旧密码验证 / 无密码=验证码核身）与换绑区（展示当前绑定）
+    req.fullUser = {
+      id: user.id,
+      nickname: user.nickname,
+      avatarUrl: user.avatarUrl,
+      phone: user.phone,
+      email: user.email,
+      hasPassword: user.passwordHash !== null,
+    };
     return true;
   }
 }

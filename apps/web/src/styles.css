@@ -110,3 +110,17 @@ button { cursor: pointer; }
 .share-landing p { color: #86909c; margin: 0; font-size: 14px; }
 .share-landing button { align-self: center; padding: 8px 20px; border: 1px solid #e5e6eb; background: #fff; border-radius: 6px; }
 .share-landing button:hover { background: #f2f3f5; }
+
+/* —— 账号设置（M5 Task 1，FR-ACC-002 收口 + FR-CMT-006 通知偏好）—— */
+.settings-page { max-width: 720px; margin: 0 auto; padding: 24px 16px; display: flex; flex-direction: column; gap: 16px; }
+.settings-page .workspace-header a { color: #3370ff; text-decoration: none; font-size: 14px; }
+.settings-card { background: #fff; border: 1px solid #e5e6eb; border-radius: 8px; padding: 16px; display: flex; flex-direction: column; gap: 10px; }
+.settings-card h3 { margin: 0; font-size: 15px; }
+.settings-card input, .settings-card select { padding: 8px 10px; border: 1px solid #e5e6eb; border-radius: 6px; font-size: 14px; max-width: 320px; }
+.settings-card button.primary { align-self: flex-start; padding: 8px 16px; border: none; background: #3370ff; color: #fff; border-radius: 6px; cursor: pointer; }
+.settings-hint { margin: 0; color: #86909c; font-size: 12px; }
+.pref-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 8px 0; border-bottom: 1px dashed #f0f1f2; cursor: pointer; }
+.pref-row:last-of-type { border-bottom: none; }
+.pref-text { display: flex; flex-direction: column; gap: 2px; }
+.pref-label { font-size: 14px; }
+.pref-desc { color: #86909c; font-size: 12px; }

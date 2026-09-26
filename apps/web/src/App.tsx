@@ -5,6 +5,7 @@ import { connectNotifications } from './notify';
 import { LoginPage } from './pages/LoginPage';
 import { WorkspacePage } from './pages/WorkspacePage';
 import { TrashPage } from './pages/TrashPage';
+import { SettingsPage } from './pages/SettingsPage';
 import { EditorPage } from './pages/EditorPage';
 import { ShareLandingPage } from './pages/ShareLandingPage';
 
@@ -39,6 +40,15 @@ export function App() {
         element={
           <RequireAuth>
             <TrashPage />
+          </RequireAuth>
+        }
+      />
+      {/* 账号设置（M5 Task 1，FR-ACC-002 收口 + FR-CMT-006 通知偏好收口） */}
+      <Route
+        path="/settings"
+        element={
+          <RequireAuth>
+            <SettingsPage />
           </RequireAuth>
         }
       />
