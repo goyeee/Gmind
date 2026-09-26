@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { api, apiPatch, apiPost } from '../api/client';
+import { api, apiPatch, apiPost, ApiError } from '../api/client';
 
 /**
  * 账号设置页（M5 Task 1，FR-ACC-002 收口 + FR-CMT-006 通知偏好收口）：三区卡片。
@@ -109,7 +109,13 @@ export function SettingsPage() {
       showToast(channel === 'phone' ? '换绑已完成，下次可使用新手机号登录' : '换绑已完成，下次可使用新邮箱登录');
       await reload();
     } catch (e) {
-      setRebindError(msgOf(e));
+      // NFR-USE-005：被占 409（服务端「该手机号/邮箱已绑定其他账号」只给原因）补
+      // 「换用其他手机号/邮箱」动作半；其余失败维持服务端 message 原样
+      setRebindError(
+        e instanceof ApiError && e.status === 409
+          ? `${msgOf(e)}，请换用其他${channel === 'phone' ? '手机号' : '邮箱'}`
+          : msgOf(e),
+      );
     }
   }
 

@@ -42,25 +42,25 @@ describe('importXmindFile（M4 Task 4，FR-IO-001）', () => {
     expect(result.title).toBe('我的脑图');
   });
 
-  it('超 20MB：拒绝且不解析（文案「文件大小超过 20MB 上限」）', async () => {
+  it('超 20MB：拒绝且不解析（NFR-USE-005 文案含原因+下一步「请压缩后重试」）', async () => {
     await expect(
       importXmindFile(xmindFile('大.xmind', new Uint8Array(21 * 1024 * 1024))),
-    ).rejects.toThrow('文件大小超过 20MB 上限');
+    ).rejects.toThrow('文件大小超过 20MB 上限，请压缩后重试');
   });
 
-  it('合法 zip 但无 content.*：UNSUPPORTED_FORMAT 归因「无法识别的文件格式（仅支持 .xmind）」', async () => {
+  it('合法 zip 但无 content.*：归因含原因+下一步「请更换文件后重试」', async () => {
     const bytes = zipWithoutContentEntry(buildXmind({ title: 'x', children: [] }));
     await expect(importXmindFile(xmindFile('空容器.xmind', bytes))).rejects.toThrow(
-      '无法识别的文件格式（仅支持 .xmind）',
+      '无法识别的文件格式（仅支持 .xmind），请更换文件后重试',
     );
   });
 
-  it('乱字节（非 zip）：归因「文件已损坏，无法解析」', async () => {
+  it('乱字节（非 zip）：归因含原因+下一步「请检查文件后重试」', async () => {
     const garbage = new Uint8Array(1024).fill(0x07);
-    await expect(importXmindFile(xmindFile('坏.xmind', garbage))).rejects.toThrow('文件已损坏，无法解析');
+    await expect(importXmindFile(xmindFile('坏.xmind', garbage))).rejects.toThrow('文件已损坏，无法解析，请检查文件后重试');
   });
 
-  it('core 组装失败（子节点文本 > MAX_TEXT_LENGTH）→ 归因「文件已损坏，无法解析」，不裸抛 core 错误', async () => {
+  it('core 组装失败（子节点文本超长）→ 与解析失败同文案（含下一步），不裸抛 core 错误', async () => {
     // 解析层不校验长度（xmind-io 只搬运 title）：501 字的子标题在解析后由 core 组装
     // walk 的 addChild 以 TEXT_TOO_LONG 拒绝——修复前 GmindCoreError（「节点文本长度已达
     // 上限」）裸抛给用户，修复后与解析失败同文案（M4 挂账清偿：core 组装 walk 移入
@@ -68,7 +68,7 @@ describe('importXmindFile（M4 Task 4，FR-IO-001）', () => {
     const overlong = '长'.repeat(501);
     const tree: XmindNode = { title: '根', children: [{ title: overlong, children: [] }] };
     await expect(importXmindFile(xmindFile('超长.xmind', buildXmind(tree)))).rejects.toThrow(
-      '文件已损坏，无法解析',
+      '文件已损坏，无法解析，请检查文件后重试',
     );
   });
 });

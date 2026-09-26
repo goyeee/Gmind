@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type MutableRefObject } from 'react';
 import * as Y from 'yjs';
 import { createUndoManager, docFromState, ORIGIN_USER, setDocMeta } from '@gmind/core';
-import { api } from '../api/client';
+import { api, ApiError } from '../api/client';
 import { track } from '../api/events';
 import { loadDocFromIndexedDB } from './collab';
 
@@ -97,7 +97,16 @@ export function useEditorDoc(fileId: string): {
           // error_occur 埋点（M5 Task 4）：GET 失败但本地副本接管 → 已自动恢复
           track('error_occur', { kind: 'load-fail', recovered: true }, fileId);
         } else {
-          setError(e instanceof Error ? e.message : '加载失败');
+          // 404（NFR-USE-005）：服务端「文件不存在」为不泄露存在性的统一口径，缺
+          // 用户侧归因与动作指向——错误态自带「返回工作台」按钮（EditorPage），此处
+          // 只补足原因半句；其余失败维持 e.message 原样
+          setError(
+            e instanceof ApiError && e.status === 404
+              ? '文件不存在，可能已被删除或无权限'
+              : e instanceof Error
+                ? e.message
+                : '加载失败',
+          );
           // error_occur 埋点（M5 Task 4）：GET 失败且无本地副本 → 错误态（未恢复）
           track('error_occur', { kind: 'load-fail', recovered: false }, fileId);
         }

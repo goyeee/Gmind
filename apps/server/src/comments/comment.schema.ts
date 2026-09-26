@@ -5,14 +5,15 @@ import { z } from 'zod';
  *
  * content：1~500 字符（按码点计数——与 node_text_snapshot varchar(500) 的字符口径一致，
  * z.string().max 的 UTF-16 code unit 计数会把 500 个 emoji 误拒为 1000，故用 refine）；
- * 内容原样存储（前端 React 转义，服务端只做长度边界，FR-CMT-001）。
+ * 内容原样存储（前端 React 转义，服务端只做长度边界，FR-CMT-001）。超限文案带
+ * 「原因+下一步」两半（NFR-USE-005），经 ZodExceptionFilter 原样透出到评论 toast。
  * mentions：可选的 userId 数组——格式在此层，语义（是否为本文件协作者/owner）在
  * service 层归一化过滤（非法 userId 静默剔除而非 400，见 CommentsService）。
  */
 const contentSchema = z
   .string({ required_error: '评论内容不能为空' })
   .min(1, '评论内容不能为空')
-  .refine((s) => Array.from(s).length <= 500, '评论内容最多 500 字');
+  .refine((s) => Array.from(s).length <= 500, '评论内容最多 500 字，请精简后重发');
 
 const mentionsSchema = z.array(z.string().min(1)).optional();
 

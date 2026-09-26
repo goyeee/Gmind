@@ -24,17 +24,27 @@ export class ApiError extends Error {
 }
 
 export async function api<T>(path: string, init: { method?: string; body?: unknown } = {}): Promise<T> {
+  // 请求时刻的 token 快照：同一效果里常有多路并发（users/me + files + folders），
+  // 首个 401 即清 token——若抛错时才读 localStorage，后续并发 401 会因 token 已清
+  // 走不进「登录过期」分支、透出裸服务端 message
+  const token = getToken();
   const res = await fetch(`/api${path}`, {
     method: init.method ?? 'GET',
     headers: {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${getToken() ?? ''}`,
+      Authorization: `Bearer ${token ?? ''}`,
     },
     body: init.body === undefined ? undefined : JSON.stringify(init.body),
   });
   if (!res.ok) {
     const data = (await res.json().catch(() => ({}))) as { message?: string };
-    if (res.status === 401 && getToken()) clearToken();
+    // 登录过期（NFR-USE-005）：带 token 的 401 是会话失效的确定性终态——清 token 并
+    // 以固定「原因+下一步」文案抛出（服务端「未登录或会话已过期」缺下一步动作）；
+    // 此后任意导航经 RequireAuth 落登录页。无 token 的 401（登录失败等）不受影响
+    if (res.status === 401 && token) {
+      clearToken();
+      throw new ApiError('登录已过期，请重新登录', res.status);
+    }
     throw new ApiError(data.message ?? `请求失败（${res.status}）`, res.status);
   }
   // 204 无响应体（M5 Task 1：POST /users/me/password、/users/me/rebind 成功 204）

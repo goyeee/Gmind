@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { apiPost } from '../api/client';
+import { apiPost, ApiError } from '../api/client';
 import type { PresenceMember } from './collab';
 import './member-panel.css';
 
@@ -69,7 +69,12 @@ function InviteSection({ fileId, showToast }: { fileId: string; showToast(messag
         setDraft('');
       })
       .catch((e: unknown) => {
-        showToast(e instanceof Error ? e.message : '邀请失败');
+        // NFR-USE-005：400 批量拒绝时服务端已把非法条目逐条回列（原因半），前端
+        // 统一补「修正后重发」动作半；其余错误维持服务端 message 原样
+        const base = e instanceof Error ? e.message : '邀请失败';
+        showToast(
+          e instanceof ApiError && e.status === 400 ? `${base}，请修正后重新发送` : base,
+        );
       })
       .finally(() => setSubmitting(false));
   };

@@ -60,7 +60,7 @@ test('工作台导入 .xmind：新文件出现且层级/备注正确渲染', asy
   await expect(page.locator('.editor-canvas svg .gm-note-badge')).toHaveCount(1);
 });
 
-test('导入 25MB 超限：提示大小上限；损坏文件：提示已损坏', async ({ page }) => {
+test('导入 25MB 超限：提示大小上限+压缩重试；损坏文件：提示已损坏+检查重试', async ({ page }) => {
   await registerAndLogin(page);
   // 超限 buffer 用恒定填充（大小检查先于解析，垃圾内容不会进入解析器）
   await page.getByTestId('import-button').click();
@@ -69,7 +69,7 @@ test('导入 25MB 超限：提示大小上限；损坏文件：提示已损坏',
     mimeType: 'application/octet-stream',
     buffer: Buffer.alloc(21 * 1024 * 1024, 0),
   });
-  await expect(page.getByTestId('toast')).toHaveText('文件大小超过 20MB 上限');
+  await expect(page.getByTestId('toast')).toHaveText('文件大小超过 20MB 上限，请压缩后重试');
 
   // 损坏文件（< 20MB 乱字节，非 zip）：归因「文件已损坏，无法解析」且不产生新文件
   await page.getByTestId('import-button').click();
@@ -78,7 +78,7 @@ test('导入 25MB 超限：提示大小上限；损坏文件：提示已损坏',
     mimeType: 'application/octet-stream',
     buffer: Buffer.alloc(1024, 0x07),
   });
-  await expect(page.getByTestId('toast')).toHaveText('文件已损坏，无法解析');
+  await expect(page.getByTestId('toast')).toHaveText('文件已损坏，无法解析，请检查文件后重试');
   await expect(page.locator('.file-list li')).toHaveCount(3);
 });
 

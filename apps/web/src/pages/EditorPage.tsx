@@ -728,7 +728,7 @@ export function EditorPage() {
   const insertPastedImage = async (file: File): Promise<void> => {
     if (!doc) return;
     if (file.size > MAX_IMAGE_BYTES) {
-      showToast('图片大小超出 10MB 限制');
+      showToast('图片大小超出 10MB 限制，请压缩后重试');
       return;
     }
     try {

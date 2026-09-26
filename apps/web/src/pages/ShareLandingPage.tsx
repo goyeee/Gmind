@@ -52,7 +52,7 @@ export function ShareLandingPage() {
     return (
       <div className="share-landing" data-testid="share-invalid">
         <h1>链接已失效</h1>
-        <p>该分享链接不存在，或已被文件所有者关闭。</p>
+        <p>该分享链接不存在，或已被文件所有者关闭。如需继续访问，请联系分享者重新获取。</p>
         <button onClick={() => navigate('/workspace')}>返回工作台</button>
       </div>
     );

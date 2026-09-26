@@ -2,10 +2,11 @@
 //
 // file → { title, state, degraded }：大小预检 → parseXmind（@gmind/xmind-io）→
 // 经 @gmind/core 操作层组装 Y.Doc（唯一写入口约束：addChild/setNote，绝不直改 Y.Map）→
-// docToState → base64。错误一律以 Error.message 归因（FR-IO-001）：
-// - file.size > 20MB → 「文件大小超过 20MB 上限」（解析前预检，超大文件不进解析）；
-// - XmindParseError UNSUPPORTED_FORMAT → 「无法识别的文件格式（仅支持 .xmind）」；
-// - 其余解析错误 → 「文件已损坏，无法解析」。
+// docToState → base64。错误一律以 Error.message 归因（FR-IO-001；NFR-USE-005 起三处
+// 归因文案均带「原因+下一步」两半）：
+// - file.size > 20MB → 「文件大小超过 20MB 上限，请压缩后重试」（解析前预检）；
+// - XmindParseError UNSUPPORTED_FORMAT → 「无法识别的文件格式（仅支持 .xmind），请更换文件后重试」；
+// - 其余解析错误 → 「文件已损坏，无法解析，请检查文件后重试」。
 // 降级提示文案（FR-IO-002）由 degradedSummary 统一构造。
 import {
   addChild,
@@ -56,16 +57,16 @@ function bytesToBase64(bytes: Uint8Array): string {
 export async function importXmindFile(
   file: File,
 ): Promise<{ title: string; state: string; degraded: DegradedItem[] }> {
-  if (file.size > MAX_IMPORT_BYTES) throw new Error('文件大小超过 20MB 上限');
+  if (file.size > MAX_IMPORT_BYTES) throw new Error('文件大小超过 20MB 上限，请压缩后重试');
   const bytes = new Uint8Array(await file.arrayBuffer());
   let parsed: ReturnType<typeof parseXmind>;
   try {
     parsed = parseXmind(bytes);
   } catch (e) {
     if (e instanceof XmindParseError && e.code === 'UNSUPPORTED_FORMAT') {
-      throw new Error('无法识别的文件格式（仅支持 .xmind）');
+      throw new Error('无法识别的文件格式（仅支持 .xmind），请更换文件后重试');
     }
-    throw new Error('文件已损坏，无法解析');
+    throw new Error('文件已损坏，无法解析，请检查文件后重试');
   }
 
   const title = parsed.root.title || file.name.replace(/\.xmind$/i, '');
@@ -84,7 +85,7 @@ export async function importXmindFile(
     // GmindCoreError（如 TEXT_TOO_LONG 超长文本被 addChild 拒绝）与深树递归的
     // 栈溢出（RangeError）都按解析失败同文案兜底，core 错误不裸抛给用户。
     if (e instanceof GmindCoreError || e instanceof RangeError) {
-      throw new Error('文件已损坏，无法解析');
+      throw new Error('文件已损坏，无法解析，请检查文件后重试');
     }
     throw e;
   }

@@ -105,7 +105,7 @@ export function RichPanel(props: RichPanelProps): ReactElement {
 
   const onPickImage = async (file: File): Promise<void> => {
     if (file.size > MAX_IMAGE_BYTES) {
-      showToast('图片大小超出 10MB 限制');
+      showToast('图片大小超出 10MB 限制，请压缩后重试');
       return;
     }
     setUploading(true);
