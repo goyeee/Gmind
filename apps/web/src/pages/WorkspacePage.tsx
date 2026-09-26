@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, typ
 import { useNavigate } from 'react-router-dom';
 import type { FileListItemDetailed, FolderItem } from '@gmind/shared';
 import { api, apiDel, apiPatch, apiPost, apiPut } from '../api/client';
+import { GUIDE_DONE_KEY, GuideOverlay, type GuideStep } from './GuideOverlay';
 import { degradedSummary, importXmindFile } from '../editor/xmind-import';
 import { onNotifyEvent, type NotifyItem } from '../notify';
 
@@ -24,6 +25,15 @@ type PromptState =
 function msgOf(e: unknown): string {
   return e instanceof Error ? e.message : '操作失败';
 }
+
+/** 三步引导内容与目标（M5 Task 3，NFR-USE-001，裁定=全部落工作台页内）：
+ *  ①高亮新建按钮；②高亮首个种子文件行（打开任意文档即可加节点）；③行菜单需点击才
+ *  弹出、高亮脆弱——裁定简化为同样高亮首行，文案指路「打开文档 → 分享/成员入口」。 */
+const GUIDE_STEPS: GuideStep[] = [
+  { selector: '[data-testid="new-file-btn"]', title: '创建你的第一份脑图', sub: '点击新建，空白文档即刻开始' },
+  { selector: '.file-list li.file-row', title: '添加节点组织思路', sub: '打开任意文档，Tab 建子级、Enter 建同级' },
+  { selector: '.file-list li.file-row', title: '邀请伙伴协作', sub: '打开文档，通过分享链接或成员面板邀请' },
+];
 
 function fmtTime(iso: string): string {
   return new Date(iso).toLocaleString();
@@ -74,6 +84,9 @@ export function WorkspacePage() {
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   // XMind 导入入口（M4 Task 4）：隐藏 file input，由「导入」按钮代点
   const importInputRef = useRef<HTMLInputElement | null>(null);
+  // 三步新手引导（M5 Task 3，NFR-USE-001）：完成/跳过后置 false（组件内同时写
+  // gmind.guide.done，此后刷新/重进均不再触发）
+  const [guideOpen, setGuideOpen] = useState(false);
 
   // Ctrl/Cmd+Shift+F 聚焦搜索框（M3b 清偿包，FR-FIL-008）：document 级监听，
   // Shift 使 key 为 'F'，统一按小写比较；Ctrl 与 Cmd（macOS）都算命中。
@@ -100,6 +113,15 @@ export function WorkspacePage() {
     void loadFiles('mine').catch((e) => setError(msgOf(e)));
     void loadFolders().catch((e) => setError(msgOf(e)));
   }, [loadFiles, loadFolders]);
+
+  // 引导触发（M5 Task 3）：localStorage 缺 gmind.guide.done 即触发（浏览器本地口径，
+  // M5 登记差异）；等首批文件就位再开——第 2/3 步高亮首个文件行。新注册用户必有
+  // 3 个种子文件；旧用户清空文件的极端态不开引导（可接受，验收口径=新用户首进）。
+  useEffect(() => {
+    if (!guideOpen && localStorage.getItem(GUIDE_DONE_KEY) === null && items.length > 0) {
+      setGuideOpen(true);
+    }
+  }, [items, guideOpen]);
 
   // ---- 通知中心（M3b Task 8，FR-CMT-005）----------------------------------
   const loadUnread = useCallback(async () => {
@@ -452,7 +474,8 @@ export function WorkspacePage() {
               if (file) void importXmind(file);
             }}
           />
-          <button className="primary" onClick={() => void createFile()}>
+          {/* data-testid 同时是引导第 1 步的高亮目标（见 GUIDE_STEPS） */}
+          <button className="primary" data-testid="new-file-btn" onClick={() => void createFile()}>
             新建脑图
           </button>
           <span className="user-nickname" data-testid="user-nickname">
@@ -591,6 +614,9 @@ export function WorkspacePage() {
           {toast}
         </div>
       )}
+
+      {/* 三步新手引导（M5 Task 3）：模态浮层，完成/跳过由组件内写标记+埋点后回调卸载 */}
+      {guideOpen && <GuideOverlay steps={GUIDE_STEPS} onClose={() => setGuideOpen(false)} />}
 
       {prompt && (
         <div className="modal-mask" data-testid="rename-modal">
