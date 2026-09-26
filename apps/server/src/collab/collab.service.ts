@@ -326,26 +326,43 @@ export class CollabService implements OnApplicationShutdown {
 
   /** auto 快照节流入口（M4 Task 6，FR-VER-001；public 供 e2e 注入时钟 / T7 复用）：
    *  脏文档且距上次 auto 快照 ≥3 分钟 → 写 auto 行。「有变更才写」由 dirty 保证。
-   *  文档不在内存或无元数据（未建立会话/已卸载）一律 false。 */
+   *  文档不在内存或无元数据（未建立会话/已卸载）一律 false。
+   *  TOCTOU 修复（M4 挂账清偿）：先清脏再 await 插入——清脏后至插入完成前到达的
+   *  onChange 由 handleChange 无条件重标记为脏（不被覆盖丢失）；插入失败在 catch
+   *  恢复 dirty=true（下个窗口/卸载兜底可重试），lastAutoAt 不回拨（失败也按「本窗
+   *  已试过」计，与 storeDocument 注释的「下个 3 分钟窗口」口径一致）。 */
   async snapshotIfDue(fileId: string, now: number): Promise<boolean> {
     const meta = this.snapMeta.get(fileId);
     const doc = this.hocuspocus.documents.get(fileId);
     if (!meta?.dirty || !doc || now - meta.lastAutoAt < CollabService.SNAPSHOT_INTERVAL_MS) return false;
-    await this.insertVersionSnapshot(fileId, doc, 'auto', now);
     meta.lastAutoAt = now;
     meta.dirty = false;
+    try {
+      await this.insertVersionSnapshot(fileId, doc, 'auto', now);
+    } catch (err) {
+      meta.dirty = true;
+      throw err;
+    }
     return true;
   }
 
   /** 卸载兜底（FR-VER-001；public 供 e2e / T7 复用）：会话结束时有未落快照的变更 →
    *  立即落行，不看节流间隔（补「编辑 1 分钟即关页」窗口——3 分钟节流只约束 auto
-   *  常规快照，不应吞掉会话末尾的最后一次变更）。 */
+   *  常规快照，不应吞掉会话末尾的最后一次变更）。脏标记时序同 snapshotIfDue（先清
+   *  后插、失败恢复）；lastAutoAt 一并推进（卸载路径随收尾删除元数据，dev 快照路由
+   *  复用时按「快照已发生」计窗）。 */
   async snapshotIfDirty(fileId: string, now: number): Promise<boolean> {
     const meta = this.snapMeta.get(fileId);
     const doc = this.hocuspocus.documents.get(fileId);
     if (!meta?.dirty || !doc) return false;
-    await this.insertVersionSnapshot(fileId, doc, 'auto', now);
+    meta.lastAutoAt = now;
     meta.dirty = false;
+    try {
+      await this.insertVersionSnapshot(fileId, doc, 'auto', now);
+    } catch (err) {
+      meta.dirty = true;
+      throw err;
+    }
     return true;
   }
 

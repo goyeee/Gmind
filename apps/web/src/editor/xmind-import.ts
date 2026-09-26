@@ -7,7 +7,15 @@
 // - XmindParseError UNSUPPORTED_FORMAT → 「无法识别的文件格式（仅支持 .xmind）」；
 // - 其余解析错误 → 「文件已损坏，无法解析」。
 // 降级提示文案（FR-IO-002）由 degradedSummary 统一构造。
-import { addChild, createTemplateDoc, docToState, getMeta, ROOT_NODE_ID, setNote } from '@gmind/core';
+import {
+  addChild,
+  createTemplateDoc,
+  docToState,
+  getMeta,
+  GmindCoreError,
+  ROOT_NODE_ID,
+  setNote,
+} from '@gmind/core';
 import { parseXmind, XmindParseError, type DegradedItem, type XmindNode } from '@gmind/xmind-io';
 
 /** .xmind 导入大小上限（FR-IO-001）：超限直接拒绝，不进入解析。 */
@@ -69,7 +77,17 @@ export async function importXmindFile(
       walk(child, id);
     }
   };
-  walk(parsed.root, ROOT_NODE_ID);
+  try {
+    walk(parsed.root, ROOT_NODE_ID);
+  } catch (e) {
+    // core 组装失败归因（M4 挂账清偿）：解析出的树超出文档模型可承载范围——
+    // GmindCoreError（如 TEXT_TOO_LONG 超长文本被 addChild 拒绝）与深树递归的
+    // 栈溢出（RangeError）都按解析失败同文案兜底，core 错误不裸抛给用户。
+    if (e instanceof GmindCoreError || e instanceof RangeError) {
+      throw new Error('文件已损坏，无法解析');
+    }
+    throw e;
+  }
 
   return { title: getMeta(doc).title, state: bytesToBase64(docToState(doc)), degraded: parsed.degraded };
 }

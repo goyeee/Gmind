@@ -34,7 +34,9 @@ export class AuthService {
     try {
       await this.invites.acceptPendingForNewUser(user);
     } catch (err) {
-      console.error('[invite-backfill] 登录回填失败（已隔离）', err);
+      // user 上下文（M5 清偿，恢复 T1 形态）：排查「哪个账号回填失败」必需——
+      // 回填按 user 的 email/phone 匹配，丢 user 即丢定位线索。log-only，无测试。
+      console.error(`[invite-backfill] 登录回填失败（已隔离）user=${user.id}`, err);
     }
     const { token, expiresAt } = await this.sessions.create(user.id, rememberMe);
     return { token, expiresAt, user: { id: user.id, nickname: user.nickname, avatarUrl: user.avatarUrl } };

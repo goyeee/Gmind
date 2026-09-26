@@ -88,3 +88,29 @@ test('成员面板邀请区仅 owner 可见：协作者不显示', async ({ brow
   await expect(page.getByTestId('invite-section')).toHaveCount(0);
   await context.close();
 });
+
+// 用例 3（M5 清偿）：混合批次 toast 分计数「已邀请 N 位，M 位已在邀请中」
+// （skipped 不再并入 N；M=0 保持旧文案形态）+ textarea 经 aria-label 可定位。
+test('成员面板邀请：混合批次 toast 分计数；M=0 保持旧文案；textarea aria-label', async ({ page }) => {
+  await openSeedDoc(page, '本周计划');
+  await page.getByTestId('members-btn').click();
+  await expect(page.getByTestId('invite-section')).toBeVisible();
+
+  // textarea aria-label（M5 清偿）：以 label 定位即断言其存在
+  const input = page.getByLabel('邀请联系人（邮箱或手机号，逗号/空格/换行分隔）');
+
+  // 首批 2 新邀：M=0 → 旧文案形态「已邀请 2 位」
+  await input.fill('mix-a@test.dev, mix-b@test.dev');
+  await page.getByTestId('invite-submit').click();
+  await expect(page.getByTestId('toast')).toContainText('已邀请 2 位');
+
+  // 混合批：1 新邀 + 1 pending 重邀（skipped 分开计）
+  await input.fill('mix-a@test.dev, mix-c@test.dev');
+  await page.getByTestId('invite-submit').click();
+  await expect(page.getByTestId('toast')).toContainText('已邀请 1 位，1 位已在邀请中');
+
+  // 全重邀批次：0 新邀 + 2 已在邀请中
+  await input.fill('mix-a@test.dev, mix-c@test.dev');
+  await page.getByTestId('invite-submit').click();
+  await expect(page.getByTestId('toast')).toContainText('已邀请 0 位，2 位已在邀请中');
+});

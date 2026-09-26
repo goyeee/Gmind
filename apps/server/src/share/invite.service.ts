@@ -165,11 +165,13 @@ export class InviteService {
 
   /** 回填加入通知（M4 清偿包）：逐文件通知 owner type='permission'、payload
    *  {fileId, title, memberName, action:'joined'}（binding 形状，与 joinByToken 一致；
-   *  同文件多联系号命中时去重为一条）。尽力而为旁路（口径同 comments.dispatchNotifications）：
-   *  内部捕获，失败静默——已提交的 accepted/协作者行不回滚，也不惊动 AuthService 的隔离 catch。 */
+   *  同文件多联系号命中时去重为一条）。软删文件不发通知（M5 清偿：deletedAt 过滤——
+   *  「成员加入了你的文件」对已入回收站的文件无提醒意义；回填授权本身照常）。
+   *  尽力而为旁路（口径同 comments.dispatchNotifications）：内部捕获，失败静默——
+   *  已提交的 accepted/协作者行不回滚，也不惊动 AuthService 的隔离 catch。 */
   private async notifyOwnersJoined(fileIds: string[], member: UserEntity): Promise<void> {
     try {
-      const files = await this.fileRepo.find({ where: { id: In(fileIds) } });
+      const files = await this.fileRepo.find({ where: { id: In(fileIds), deletedAt: IsNull() } });
       for (const file of files) {
         await this.notify.notify(file.ownerUserId, 'permission', {
           fileId: file.id,

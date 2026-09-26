@@ -153,3 +153,62 @@ describe('CollabService.storeDocument（auto 快照失败不耦合 persist，M4 
   });
 });
 
+describe('CollabService 快照脏标志 TOCTOU（M4 挂账清偿）', () => {
+  /** 预置快照状态机入口条件（同上：脏标记 + 越窗 + 文档在内存），返回 meta 引用供断言。 */
+  const armSnapshot = (service: CollabService, doc: Y.Doc): { lastAutoAt: number; dirty: boolean } => {
+    const inner = service as unknown as {
+      snapMeta: Map<string, { lastAutoAt: number; dirty: boolean }>;
+      hocuspocus: { documents: Map<string, Document> };
+    };
+    const meta = { lastAutoAt: Date.now() - 10 * 60 * 1000, dirty: true };
+    inner.snapMeta.set(FILE_ID, meta);
+    inner.hocuspocus.documents.set(FILE_ID, doc as Document);
+    return meta;
+  };
+
+  const makeSnapshotService = (save: Repository<VersionEntity>['save']): CollabService =>
+    makeService(
+      { update: vi.fn(async () => ({ generatedMaps: [], raw: 0 }) as UpdateResult) },
+      { create: (() => ({})) as unknown as Repository<VersionEntity>['create'], save },
+    );
+
+  it('插入在途时到达的 onChange → 完成后 dirty 仍为 true（并发编辑不丢脏标记）', async () => {
+    const NOW = Date.now();
+    // save 拦截为「在途注入 onChange」：insertVersionSnapshot 的 await 尚未 resolve 时
+    // handleChange 已到达（无条件置脏）。修复前（await 后才清脏）该置脏被覆盖丢失——
+    // 插入期间的编辑不再触发后续快照（TOCTOU 窗口 = 整个 insert 的 DB 往返）。
+    const metaRef: { current: { lastAutoAt: number; dirty: boolean } | null } = { current: null };
+    const service = makeSnapshotService(
+      vi.fn(async (row: VersionEntity) => {
+        metaRef.current!.dirty = true; // 模拟插入期间到达的 onChange（handleChange 无条件重标记）
+        return row;
+      }) as unknown as Repository<VersionEntity>['save'],
+    );
+    const meta = armSnapshot(service, new Y.Doc());
+    metaRef.current = meta;
+
+    await expect(service.snapshotIfDue(FILE_ID, NOW)).resolves.toBe(true);
+    expect(meta.dirty).toBe(true); // 并发 onChange 的脏标记必须幸存
+  });
+
+  it('snapshotIfDue 插入失败 → 恢复 dirty=true（下个窗口/卸载兜底可重试）', async () => {
+    const service = makeSnapshotService(vi.fn(async () => {
+      throw new Error('snapshot db down');
+    }));
+    const meta = armSnapshot(service, new Y.Doc());
+
+    await expect(service.snapshotIfDue(FILE_ID, Date.now())).rejects.toThrow('snapshot db down');
+    expect(meta.dirty).toBe(true); // 失败恢复脏标记
+  });
+
+  it('snapshotIfDirty 插入失败 → 同样恢复 dirty=true', async () => {
+    const service = makeSnapshotService(vi.fn(async () => {
+      throw new Error('snapshot db down');
+    }));
+    const meta = armSnapshot(service, new Y.Doc());
+
+    await expect(service.snapshotIfDirty(FILE_ID, Date.now())).rejects.toThrow('snapshot db down');
+    expect(meta.dirty).toBe(true);
+  });
+});
+

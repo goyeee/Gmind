@@ -156,3 +156,33 @@ test('版本面板：关闭面板重置预览态——重开不残留旧预览�
   await expect(preview.locator('.gm-text', { hasText: '本周计划' })).toBeVisible();
   await expect(preview.locator('.gm-text', { hasText: '计划B' })).toBeVisible();
 });
+
+// M5 清偿（遮罩层级）：预览遮罩（fixed inset:0 z-1300）打开时，面板头部/关闭钮
+// 层级提至遮罩之上——真实指针点击可关面板（上例的 DOM click() 直发是修复前的
+// 绕行手段，本例回归「指针可达」本身；遮罩仍盖画布防误触）。
+test('版本面板：预览打开时面板关闭钮指针可点（头部层级高于遮罩）', async ({ page }) => {
+  await registerAndLogin(page);
+  await page.locator('.file-list li', { hasText: '本周计划' }).click();
+  await expect(page).toHaveURL(/\/edit\//);
+  await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '本周计划' })).toBeVisible();
+  const fileId = page.url().split('/').pop() ?? '';
+  const token = await page.evaluate(() => localStorage.getItem('gmind.token') ?? '');
+
+  // 造一版并打开预览
+  await renameNode(page, '周一', '计划B');
+  await postSnapshot(page, fileId, token);
+  await page.getByTestId('versions-toggle').click();
+  const panel = page.getByTestId('version-panel');
+  await expect(panel).toBeVisible();
+  const items = panel.locator('[data-testid^="version-item-"]');
+  await expect(items).toHaveCount(1);
+  await items.nth(0).locator('.version-item-main').click();
+  const preview = page.getByTestId('version-preview');
+  await expect(preview).toBeVisible();
+
+  // 遮罩开着时面板关闭钮真实指针可点：Playwright click 含 hit-target 检查——
+  // 修复前按钮被遮罩盖住（点击落遮罩），此处会超时失败。
+  await page.getByTestId('version-panel-close').click();
+  await expect(panel).toHaveCount(0);
+  await expect(preview).toHaveCount(0); // 面板关闭重置预览态
+});

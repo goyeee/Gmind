@@ -59,8 +59,13 @@ function InviteSection({ fileId, showToast }: { fileId: string; showToast(messag
     setSubmitting(true);
     void apiPost<{ invited: number; skipped: number }>(`/files/${fileId}/invites`, { contacts })
       .then((res) => {
-        // skipped = 重邀 no-op（pending/accepted 计数）：对邀请人而言该批联系人均已覆盖
-        showToast(`已邀请 ${res.invited + res.skipped} 位`);
+        // skipped = 重邀 no-op（pending/accepted）分开计数（M5 清偿）：合并成一个总数会
+        // 把「已在邀请中」伪装成「本次新邀」；M=0 保持旧文案形态「已邀请 N 位」。
+        showToast(
+          res.skipped > 0
+            ? `已邀请 ${res.invited} 位，${res.skipped} 位已在邀请中`
+            : `已邀请 ${res.invited} 位`,
+        );
         setDraft('');
       })
       .catch((e: unknown) => {
@@ -76,6 +81,7 @@ function InviteSection({ fileId, showToast }: { fileId: string; showToast(messag
       <textarea
         className="member-invite-input"
         data-testid="invite-input"
+        aria-label="邀请联系人（邮箱或手机号，逗号/空格/换行分隔）"
         value={draft}
         placeholder="如 a@example.com, 13900000001"
         onChange={(e) => setDraft(e.target.value)}

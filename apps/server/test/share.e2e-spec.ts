@@ -440,6 +440,23 @@ describe('share 域', () => {
     }
   });
 
+  it('M5 清偿：回填时文件已软删 → 回填照常但 owner 不收「已加入」通知', async () => {
+    // 软删文件（回收站可恢复语义）不产 owner 通知：notifyOwnersJoined 的 fileRepo.find
+    // 过滤 deletedAt——通知是「成员加入了你的文件」的提醒，文件已删时提醒无意义；
+    // 回填主流程（accepted + 协作者行）不受影响（授权事实与文件存活是两件事）。
+    const owner = await newUser('13800130006');
+    const fileId = await makeFile(owner, '软删回填用例');
+    await invite(owner, fileId, ['invite-softdel@test.dev']);
+    await files.deleteOwned(owner.id, fileId); // owner 软删（trash 口径，行不消失）
+    await loginByCode({ email: 'invite-softdel@test.dev' });
+
+    // 回填本身照常：邀请 accepted（文件恢复后授权已在）
+    const row = await inviteRepo.findOneByOrFail({ fileId, contactType: 'email', contact: 'invite-softdel@test.dev' });
+    expect(row.status).toBe('accepted');
+    // owner 通知计数不变（软删文件零「已加入」通知）
+    expect(await notifRepo.countBy({ userId: owner.id })).toBe(0);
+  });
+
   it('revoked 邀请不因注册回填复活：行保持 revoked、accepted_user_id 空、无协作者行', async () => {
     const owner = await newUser('13800120011');
     const fileId = await makeFile(owner);

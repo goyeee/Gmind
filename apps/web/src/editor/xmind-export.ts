@@ -11,15 +11,21 @@ import { getNode, ROOT_NODE_ID } from '@gmind/core';
 import { buildXmind, type XmindNode } from '@gmind/xmind-io';
 
 /** 存活树 → XmindNode：title = node.text；note 非空才产出 note 键（'' 即无备注，
- *  buildXmind 以真值判定备注，与 T3 裁决一致）；children 按原顺序映射 childIds。 */
+ *  buildXmind 以真值判定备注，与 T3 裁决一致）；children 按原顺序映射 childIds。
+ *  visited 集合环防护（M4 挂账清偿，防御性）：childIds 环（core 写路径不可达——
+ *  换父/删除同步维护父 children，但 crafted doc_state / 裸 Y 写可造出）时跳过回边，
+ *  保证任意形状下终止（模式同 core subtreeIds 的环防御，环治理归 normalizeTree）。 */
 export function docToXmindTree(doc: Y.Doc): XmindNode {
+  const visited = new Set<string>([ROOT_NODE_ID]);
   const walk = (id: string): XmindNode => {
     const snap = getNode(doc, id);
     if (!snap) throw new Error('导出失败：文档树不完整');
     const children: XmindNode[] = [];
     for (const childId of snap.childIds) {
+      if (visited.has(childId)) continue; // 环防护：已访问 id 不再下降（含指回 root）
       const child = getNode(doc, childId);
       if (!child || child.deleted) continue; // 防御：悬空 id / 墓碑不入树
+      visited.add(childId);
       children.push(walk(childId));
     }
     return {

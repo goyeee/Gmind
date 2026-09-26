@@ -17,7 +17,14 @@
   font-size: 13px;
 }
 
+/* 头部层级高于预览遮罩（M5 清偿，z-1301 > mask 的 1300）：预览打开时面板关闭钮
+   仍指针可达（面板可关，遮罩继续盖住画布/列表防误触）。遮罩是 .version-panel
+   （fixed z-1150，自成 stacking context）的子元素，1301 在同一上下文内即可压过。
+   补白底：头部透明时透出遮罩的半透明暗色，视觉上像被盖住。 */
 .version-panel-header {
+  position: relative;
+  z-index: 1301;
+  background: #fff;
   display: flex;
   align-items: center;
   justify-content: space-between;

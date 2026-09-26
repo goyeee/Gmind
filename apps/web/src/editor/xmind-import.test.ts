@@ -59,6 +59,18 @@ describe('importXmindFile（M4 Task 4，FR-IO-001）', () => {
     const garbage = new Uint8Array(1024).fill(0x07);
     await expect(importXmindFile(xmindFile('坏.xmind', garbage))).rejects.toThrow('文件已损坏，无法解析');
   });
+
+  it('core 组装失败（子节点文本 > MAX_TEXT_LENGTH）→ 归因「文件已损坏，无法解析」，不裸抛 core 错误', async () => {
+    // 解析层不校验长度（xmind-io 只搬运 title）：501 字的子标题在解析后由 core 组装
+    // walk 的 addChild 以 TEXT_TOO_LONG 拒绝——修复前 GmindCoreError（「节点文本长度已达
+    // 上限」）裸抛给用户，修复后与解析失败同文案（M4 挂账清偿：core 组装 walk 移入
+    // try/catch，栈溢出 RangeError 同捕获）。
+    const overlong = '长'.repeat(501);
+    const tree: XmindNode = { title: '根', children: [{ title: overlong, children: [] }] };
+    await expect(importXmindFile(xmindFile('超长.xmind', buildXmind(tree)))).rejects.toThrow(
+      '文件已损坏，无法解析',
+    );
+  });
 });
 
 describe('degradedSummary（FR-IO-002 降级提示文案）', () => {
