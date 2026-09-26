@@ -2,6 +2,7 @@ import * as Y from 'yjs';
 import { docToState, getLastEditor } from '@gmind/core';
 import { MAX_DOC_NODES } from '@gmind/shared';
 import { api, ApiError } from '../api/client';
+import { track } from '../api/events';
 
 /**
  * 自动保存循环 — M1b Task 11；M2 Task 3 起持久化通道按真值表分流。
@@ -151,6 +152,9 @@ export function startSaveLoop(
   let dirty = false;
   let retries = 0;
   let stopped = false;
+  // error_occur 埋点（M5 Task 4，PRD 6.4「保存失败/是否已自动恢复」）：任一次保存尝试
+  // 失败置位，随后成功收尾时上报 recovered:true 并复位——「失败 + 自动恢复」成对可观测
+  let hadSaveFailure = false;
 
   const clearTimer = (): void => {
     if (timer !== null) {
@@ -185,6 +189,10 @@ export function startSaveLoop(
         body: putBody(doc, options?.getBaseUpdatedAt?.() ?? null),
       });
       retries = 0;
+      if (hadSaveFailure) {
+        hadSaveFailure = false;
+        track('error_occur', { kind: 'save-fail', recovered: true }, fileId);
+      }
       setStatus(`已保存 ${clockNow()}`);
     } catch (e) {
       if (e instanceof ApiError && e.status === 409) {
@@ -194,6 +202,8 @@ export function startSaveLoop(
         // base 继续
         dirty = false;
         setStatus(STALE_DOC_STATUS);
+        hadSaveFailure = false; // 终态失败：recovered 语义留给重试类失败的成功收尾
+        track('error_occur', { kind: 'save-fail', recovered: false }, fileId);
         return;
       }
       if (e instanceof ApiError && e.status === 403) {
@@ -204,6 +214,7 @@ export function startSaveLoop(
         return;
       }
       dirty = true; // 保留待存状态
+      hadSaveFailure = true; // 重试类失败：成功收尾时配对上报 recovered:true
       const offline = offlineHint();
       if (retries < RETRY_DELAYS_MS.length) {
         setStatus(offline ?? '保存失败，正在重试');
@@ -217,6 +228,9 @@ export function startSaveLoop(
       } else {
         // 3 次退避重试均失败：停在错误指示，等下一次事务重置重试
         setStatus('保存失败，正在重试');
+        // error_occur（M5 Task 4）：重试耗尽的终态保存失败（离线态除外——那是受支持
+        // 的降级而非异常，成功收尾的 recovered:true 已覆盖其恢复观测）
+        track('error_occur', { kind: 'save-fail', recovered: false }, fileId);
       }
     } finally {
       inFlight = false;

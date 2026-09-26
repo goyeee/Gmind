@@ -17,6 +17,7 @@ import {
 import { MAX_DOC_NODES } from '@gmind/shared';
 import type { FileListItem, FileListItemDetailed, FilePatchResult } from '@gmind/shared';
 import { CollabService } from '../collab/collab.service';
+import { EventsService } from '../events/events.service';
 import { StorageService } from '../storage/storage.service';
 import { UserEntity } from '../users/user.entity';
 import { isDuplicateKeyError } from '../utils/duplicate-key';
@@ -36,6 +37,10 @@ const RECENT_LIMIT = 50;
 const SEARCH_LIMIT = 20;
 
 export type FileView = 'mine' | 'shared' | 'starred' | 'recent';
+
+/** doc_create 埋点的创建入口（M5 Task 4，PRD 6.4「创建入口」）：空白新建 / 状态导入 /
+ *  注册种子 / 复制副本。 */
+export type DocCreateEntry = 'blank' | 'import' | 'seed' | 'copy';
 
 /** 原始行 → ISO 时刻（mysql2 对 datetime(3) 返回 Date；容错字符串形态）。 */
 function toIso(v: unknown): string | null {
@@ -66,6 +71,8 @@ export class FilesService {
     // 图片对象迁移（M3b Task 1，准入 7.8）：copyForUser 需 copyImage 把源命名空间对象
     // 复制进副本命名空间；经 StorageCoreModule（叶子）注入，与 StorageModule 无环
     @Inject(StorageService) private readonly storage: StorageService,
+    // EventsService（M5 Task 4）：doc_create 埋点（EventsModule 不依赖任何业务域，无环）
+    @Inject(EventsService) private readonly events: EventsService,
   ) {}
 
   private readonly logger = new Logger(FilesService.name);
@@ -74,13 +81,18 @@ export class FilesService {
    *  folderId/lastModifierUserId（M3a Task 6）：复制路径的显式落点（同文件夹）与
    *  修改人标记；缺省 null，普通新建（POST /api/files）行为不变。
    *  state（M4 Task 4）：XMind 导入端到端的初始状态——损坏 400、nodeCount 服务端
-   *  重算（不信任客户端传值）、超 MAX_DOC_NODES 400。 */
+   *  重算（不信任客户端传值）、超 MAX_DOC_NODES 400。
+   *  entry（M5 Task 4）：doc_create 埋点的创建入口，由调用方告知（controller 按
+   *  docState 是否在场分 blank/import；种子文件 seed；复制走 copyForUser 自记 copy）。 */
   async createForUser(
     userId: string,
     input: { title: string; state?: Uint8Array; folderId?: string | null; lastModifierUserId?: string },
+    entry: DocCreateEntry = 'blank',
   ): Promise<FileEntity> {
     const file = await this.buildForUser(userId, input);
-    return this.repo.save(file);
+    await this.repo.save(file);
+    await this.recordDocCreate(userId, file.id, entry);
+    return file;
   }
 
   /** 新建文件构建（不落库；M3b Task 1 从 createForUser 提取）：配额（FR-ACC-003）与
@@ -139,7 +151,17 @@ export class FilesService {
   async createSeedFiles(userId: string): Promise<void> {
     for (const tpl of SEED_TEMPLATES) {
       const state = docToState(createTemplateDoc(tpl));
-      await this.createForUser(userId, { title: tpl.title, state });
+      await this.createForUser(userId, { title: tpl.title, state }, 'seed');
+    }
+  }
+
+  /** doc_create 埋点（M5 Task 4，PRD 6.4）：尽力而为旁路（口径同 comments 域
+   *  dispatchNotifications）——文件行已落库，埋点失败不得影响创建主流程。 */
+  private async recordDocCreate(userId: string, fileId: string, entry: DocCreateEntry): Promise<void> {
+    try {
+      await this.events.record('doc_create', fileId, userId, { entry });
+    } catch {
+      // 遥测旁路：静默（不炸响应、不回滚已创建的文件行）
     }
   }
 
@@ -463,7 +485,9 @@ export class FilesService {
     await this.migrateImagesForCopy(doc, file.id);
     // buildForUser 落的是未迁移 round-trip 态，统一以迁移后的 doc 为最终落库态
     file.docState = Buffer.from(docToState(doc));
-    return this.repo.save(file);
+    await this.repo.save(file);
+    await this.recordDocCreate(userId, file.id, 'copy');
+    return file;
   }
 
   /** 复制图片对象迁移（M3b Task 1，准入 7.8）：先序遍历存活子树（subtreeIds 自 root，

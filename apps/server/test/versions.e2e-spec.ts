@@ -596,4 +596,23 @@ describe('版本恢复（REST FR-VER-004）+ events 埋点端点', () => {
     const resAnon = await request(app.getHttpServer()).post('/api/events').send({ type: 'e2e-probe' });
     expect(resAnon.status).toBe(401);
   });
+
+  it('events 端点：payload 序列化 >10KB → 400「事件数据过大」（M4 挂账清偿：防 TEXT 64KB 边界 500）', async () => {
+    // JSON.stringify 长度 10_013 > 10_000 上界 → 400，文案精确
+    const tooBig = await request(app.getHttpServer())
+      .post('/api/events')
+      .set('Authorization', `Bearer ${owner.token}`)
+      .send({ type: 'e2e-too-big', payload: { blob: 'x'.repeat(10_001) } });
+    expect(tooBig.status).toBe(400);
+    expect(tooBig.body.message).toBe('事件数据过大');
+    expect(await eventsRepo().countBy({ type: 'e2e-too-big' })).toBe(0);
+
+    // 界内（≤10_000）照常 204 落库
+    const within = await request(app.getHttpServer())
+      .post('/api/events')
+      .set('Authorization', `Bearer ${owner.token}`)
+      .send({ type: 'e2e-within', payload: { blob: 'y'.repeat(9_900) } });
+    expect(within.status).toBe(204);
+    expect(await eventsRepo().countBy({ type: 'e2e-within' })).toBe(1);
+  });
 });

@@ -55,11 +55,16 @@ export class FilesController {
   async create(@Req() req: { user: { id: string } }, @Body() body: unknown) {
     const { title, docState } = createBodySchema.parse(body ?? {});
     // 按 FileListItem 契约序列化，避免裸实体（含 docState Buffer）被 Nest 原样序列化
-    const created = await this.files.createForUser(req.user.id, {
-      title,
-      // docState 缺省 → 既有空白模板路径；存在 → 按导入初始状态落库（M4 Task 4）
-      state: docState === undefined ? undefined : new Uint8Array(Buffer.from(docState, 'base64')),
-    });
+    const created = await this.files.createForUser(
+      req.user.id,
+      {
+        title,
+        // docState 缺省 → 既有空白模板路径；存在 → 按导入初始状态落库（M4 Task 4）
+        state: docState === undefined ? undefined : new Uint8Array(Buffer.from(docState, 'base64')),
+      },
+      // doc_create 埋点入口（M5 Task 4）：docState 在场即导入，否则空白新建
+      docState === undefined ? 'blank' : 'import',
+    );
     return this.files.toListItem(created);
   }
 

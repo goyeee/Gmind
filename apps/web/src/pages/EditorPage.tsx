@@ -83,7 +83,8 @@ import {
 import { useEditorDoc } from '../editor/useEditorDoc';
 import { exportXmind } from '../editor/xmind-export';
 import { exportImage } from '../editor/image-export';
-import { api, apiPost, getToken } from '../api/client';
+import { track } from '../api/events';
+import { api, apiPost } from '../api/client';
 import './editor.css';
 
 /**
@@ -132,6 +133,12 @@ const THEME_OPTIONS: { value: string; label: string }[] = [
 
 /** 缩放快捷档位（Task 15 FR-EDT-027，PRD 50%~200%）。 */
 const ZOOM_PRESETS = [50, 75, 100, 150, 200];
+
+/** node_add/node_delete 埋点的操作方式（M5 Task 4，PRD 6.4「操作方式」）：键盘 /
+ *  右键菜单 / 拖拽 / 粘贴。drag 当前无生产点（画布拖拽是 moveNode 移动，非增删），
+ *  联合类型保留以对齐埋点契约；paste 一次粘贴动作记一行 node_add（多节点合并计数
+ *  不拆行）。 */
+type NodeVia = 'keyboard' | 'context' | 'drag' | 'paste';
 
 /** WS 断开（或全断网）时的保存指示（M2 Task 3，FR-EDT-034）。 */
 const OFFLINE_STATUS = '离线编辑中，恢复联网后自动同步';
@@ -198,6 +205,9 @@ export function EditorPage() {
   const justDraggedRef = useRef(false);
   const themeRef = useRef<string>('');
   const fitPendingRef = useRef(false);
+  // perf_metric 埋点的一次性闸（M5 Task 4）：装载完成恰一行——值 = 已上报的 fileId
+  // （StrictMode dev 双跑与依赖重触发以此去重；切换文件后重新计一次）
+  const perfTrackedRef = useRef<string | null>(null);
   // 远端光标层（M2 Task 5）与最新远端光标集：awareness 变化写 ref，rerender 时
   // （含主题切换重建场景后）随新布局盒子整集重画。
   const cursorLayerRef = useRef<CursorLayer | null>(null);
@@ -329,17 +339,11 @@ export function EditorPage() {
     );
   };
 
-  /** export_done 埋点（M4 Task 9；Task 7 端点 204 无返回体——api() 的 json 解析
-   *  不适用，fetch 直发）。fire-and-forget：失败静默忽略，遥测不干扰导出主流程。 */
+  /** export_done 埋点（M4 Task 9 交付，M5 Task 4 收口到公共 track()：公共参数
+   *  clientVersion/sessionId 随 payload 合并上报）。fire-and-forget：失败静默，
+   *  遥测不干扰导出主流程。 */
   const postExportDone = (format: string, scale: number): void => {
-    void fetch('/api/events', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${getToken() ?? ''}`,
-      },
-      body: JSON.stringify({ type: 'export_done', fileId, payload: { format, scale } }),
-    }).catch(() => undefined);
+    track('export_done', { format, scale }, fileId);
   };
 
   /** PNG/JPG 导出（M4 Task 9，FR-IO-003）：折叠处数 >0 先 confirm 提示自动展开
@@ -439,12 +443,15 @@ export function EditorPage() {
    * 新建节点进编辑态（Tab/Enter）：先开空编辑器，提交时在**单个 user 事务**内
    * addChild + setText——保证一次 Ctrl+Z 撤销整个新建（undo captureTimeout 之外
    * 的两次分立写会拆成两个撤销单元，用例 4 依赖单步撤销语义）。
+   * via（M5 Task 4）：node_add 埋点的操作方式——键盘（Tab/Enter）与右键菜单
+   * （插入子级/同级）共用本入口，由调用方告知。
    */
   const openNewNodeEditor = (
     parentId: string,
     index: number | undefined,
     anchorBox: NodeBox | null,
     relation: 'child' | 'sibling',
+    via: NodeVia = 'keyboard',
   ): void => {
     if (addBlockedByQuota()) return; // 配额拦截（Tab 插子级/Enter 插同级/右键菜单共用本入口）
     const vp = viewportRef.current;
@@ -480,6 +487,8 @@ export function EditorPage() {
             createdId = addChild(doc, parentId, index === undefined ? { text } : { index, text });
           });
           afterUserWrite();
+          // node_add 埋点（M5 Task 4）：写入成功才上报；nodeCount 为写后可达活跃数
+          track('node_add', { via, nodeCount: countAliveReachable(doc) }, fileId);
           if (createdId) selectionRef.current?.selectOnly(createdId);
           fitPendingRef.current = true; // 重渲染后适应画布，新节点必可见
         } catch (e) {
@@ -530,6 +539,7 @@ export function EditorPage() {
         moveNode(doc, currentId, newId); // 缺省 index：追加为新节点末子级
       });
       afterUserWrite();
+      track('node_add', { via: 'keyboard', nodeCount: countAliveReachable(doc) }, fileId);
       fitPendingRef.current = true;
     } catch (e) {
       showToast(e instanceof Error ? e.message : '操作失败');
@@ -561,7 +571,9 @@ export function EditorPage() {
     createOutdent(parent.id, parent.childIds.indexOf(current), current);
   };
 
-  const handleDelete = (): void => {
+  /** 删除选中（键盘 Delete/Backspace 与右键菜单共用；via 为 node_delete 埋点的
+   *  操作方式——M5 Task 4）。 */
+  const handleDelete = (via: NodeVia = 'keyboard'): void => {
     if (!doc) return;
     const selection = selectionRef.current;
     if (!selection) return;
@@ -570,6 +582,7 @@ export function EditorPage() {
     try {
       deleteNodes(doc, ids, ORIGIN_USER); // root 含其中时降级为清空子级
       afterUserWrite();
+      track('node_delete', { via, nodeCount: countAliveReachable(doc) }, fileId);
       // 配额拦截的解除通道（M1b 终审裁定）：删除节点即解除新增拦截。若删除后仍
       // 超限，服务端边缘触发器在回落限内前不会重复广播（advisory 残余窗口，登记
       // docs/m2-entry-checklist.md §7.6）。
@@ -687,6 +700,8 @@ export function EditorPage() {
         return; // 无可粘贴内容：无操作
       }
       afterUserWrite();
+      // node_add 埋点（M5 Task 4）：一次粘贴动作记一行（via=paste；多节点不逐个拆行）
+      track('node_add', { via: 'paste', nodeCount: countAliveReachable(doc) }, fileId);
     } catch (e) {
       showToast(clipboardErrorMessage(e));
     }
@@ -861,11 +876,11 @@ export function EditorPage() {
     const nodeBox = boxesRef.current.find((b) => b.id === menu.nodeId) ?? null;
     switch (action) {
       case 'insert-child':
-        openNewNodeEditor(menu.nodeId, undefined, nodeBox, 'child');
+        openNewNodeEditor(menu.nodeId, undefined, nodeBox, 'child', 'context');
         break;
       case 'insert-sibling': {
         if (menu.nodeId === ROOT_NODE_ID) {
-          openNewNodeEditor(ROOT_NODE_ID, undefined, nodeBox, 'child');
+          openNewNodeEditor(ROOT_NODE_ID, undefined, nodeBox, 'child', 'context');
           break;
         }
         const snap = getNode(doc, menu.nodeId);
@@ -876,11 +891,12 @@ export function EditorPage() {
           parent.childIds.indexOf(menu.nodeId) + 1,
           nodeBox,
           'sibling',
+          'context',
         );
         break;
       }
       case 'delete':
-        handleDelete();
+        handleDelete('context');
         break;
       case 'copy':
         void handleCopy();
@@ -1269,6 +1285,13 @@ export function EditorPage() {
     rerender();
     selection.selectOnly(ROOT_NODE_ID); // 默认选中中心主题（「选中 root 按 Tab」起点）
     requestAnimationFrame(() => fitCanvas());
+    // perf_metric 埋点（M5 Task 4，PRD 6.4 首屏时间）：装配完成（首帧渲染 + 默认选中 +
+    // 视口适应排队）即编辑器可交互；performance.now() 自导航起点计毫秒，无需另记起点。
+    // 一次装载恰一行（perfTrackedRef 按 fileId 去重，防 StrictMode dev 双跑重复上报）。
+    if (perfTrackedRef.current !== fileId) {
+      perfTrackedRef.current = fileId;
+      track('perf_metric', { firstInteractionMs: performance.now() }, fileId);
+    }
     void refreshComments(); // 进入文档全量拉取评论（此后靠 comment-updated 广播）
 
     return () => {

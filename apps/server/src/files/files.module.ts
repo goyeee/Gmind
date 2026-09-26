@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { CollabModule } from '../collab/collab.module';
+import { EventsModule } from '../events/events.module';
 import { StorageCoreModule } from '../storage/storage-core.module';
 import { UserEntity } from '../users/user.entity';
 import { UsersModule } from '../users/users.module';
@@ -20,11 +21,13 @@ import { FilesController, SearchController } from './files.controller';
   // StorageCoreModule（M3b Task 1，准入 7.8）：copyForUser 的图片对象迁移需
   // StorageService.copyImage——叶子模块（不含鉴权端点层），不与 StorageModule 成环
   // UserEntity（M3b Task 8，FR-CMT-005）：collaborators 候选列表的 nickname JOIN
+  // EventsModule（M5 Task 4）：doc_create 埋点（EventsModule 不依赖任何业务域，无环）
   imports: [
     TypeOrmModule.forFeature([FileEntity, FileCollaboratorEntity, FileStarEntity, FolderEntity, UserEntity]),
     UsersModule,
     CollabModule,
     StorageCoreModule,
+    EventsModule,
   ],
   providers: [FilesService],
   controllers: [FilesController, SearchController],

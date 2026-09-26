@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
 import type { INestApplication } from '@nestjs/common';
 import { createTestApp } from './support/app-test';
+import { EventEntity } from '../src/events/event.entity';
 import { FileCollaboratorEntity } from '../src/files/file-collaborator.entity';
 import { InviteEntity } from '../src/share/invite.entity';
 import { NotificationEntity } from '../src/notifications/notification.entity';
@@ -33,6 +34,7 @@ describe('share 域', () => {
   let shareRepo: import('typeorm').Repository<ShareLinkEntity>;
   let inviteRepo: import('typeorm').Repository<InviteEntity>;
   let notifRepo: import('typeorm').Repository<NotificationEntity>;
+  let eventRepo: import('typeorm').Repository<EventEntity>;
 
   const tokenFor = async (userId: string): Promise<string> => {
     const { SessionService } = await import('../src/session/session.service');
@@ -70,6 +72,7 @@ describe('share 域', () => {
     shareRepo = app.get((await import('@nestjs/typeorm')).getRepositoryToken(ShareLinkEntity));
     inviteRepo = app.get((await import('@nestjs/typeorm')).getRepositoryToken(InviteEntity));
     notifRepo = app.get((await import('@nestjs/typeorm')).getRepositoryToken(NotificationEntity));
+    eventRepo = app.get((await import('@nestjs/typeorm')).getRepositoryToken(EventEntity));
   });
 
   afterAll(async () => {
@@ -529,5 +532,86 @@ describe('share 域', () => {
       .set('Authorization', `Bearer ${again.token}`);
     expect(shared.status).toBe(200);
     expect(shared.body.map((f: { id: string }) => f.id)).toContain(fileId);
+  });
+
+  // ---------- 分享/邀请漏斗埋点（M5 Task 4，PRD 6.4：invite_send → collab_join） ----------
+
+  /** 该文件某事件类型的 payload 列表（JSON 反序列化，附带 __userId 便于断言归属）。 */
+  const eventPayloads = async (
+    type: string,
+    fileId: string,
+  ): Promise<Array<Record<string, unknown> & { __userId?: string }>> =>
+    (await eventRepo.find({ where: { type, fileId } })).map((r) => {
+      const p = JSON.parse(r.payload ?? '{}') as Record<string, unknown>;
+      return { ...p, __userId: r.userId ?? undefined };
+    });
+
+  it('埋点：创建分享链接落 invite_send {channel:"link"}；重复创建（幂等返回既有 token）不重复落', async () => {
+    const owner = await newUser('13800130001');
+    const { fileId } = await makeSharedFile(owner);
+
+    const rows = await eventPayloads('invite_send', fileId);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toEqual({ channel: 'link', __userId: owner.id });
+
+    // 幂等复创建（无新链接生成）不重复计
+    await request(app.getHttpServer())
+      .post(`/api/files/${fileId}/share`)
+      .set('Authorization', `Bearer ${owner.token}`);
+    expect(await eventRepo.countBy({ type: 'invite_send', fileId })).toBe(1);
+  });
+
+  it('埋点：join 成功落 collab_join {viaRegistration:false}；幂等/owner 自开不重复落', async () => {
+    const owner = await newUser('13800130002');
+    const bob = await newUser('13800130003');
+    const { fileId, shareToken } = await makeSharedFile(owner);
+
+    const join = await request(app.getHttpServer())
+      .post(`/api/share/${shareToken}/join`)
+      .set('Authorization', `Bearer ${bob.token}`);
+    expect(join.status).toBe(201);
+
+    const rows = await eventPayloads('collab_join', fileId);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toEqual({ viaRegistration: false, __userId: bob.id });
+
+    // 二次 join 幂等 no-op：不重复落
+    await request(app.getHttpServer())
+      .post(`/api/share/${shareToken}/join`)
+      .set('Authorization', `Bearer ${bob.token}`);
+    // owner 自开链接 no-op：不落
+    await request(app.getHttpServer())
+      .post(`/api/share/${shareToken}/join`)
+      .set('Authorization', `Bearer ${owner.token}`);
+    expect(await eventRepo.countBy({ type: 'collab_join', fileId })).toBe(1);
+  });
+
+  it('埋点：批量邀请按批落一条 invite_send {channel:"member",count}（非逐联系人）；全跳过批次不落', async () => {
+    const owner = await newUser('13800130004');
+    const fileId = await makeFile(owner, '成员邀请埋点用例');
+
+    const res = await invite(owner, fileId, ['invite-m1@test.dev', 'invite-m2@test.dev', '13700030001']);
+    expect(res.status).toBe(201);
+    expect(res.body).toEqual({ invited: 3, skipped: 0 });
+
+    const rows = await eventPayloads('invite_send', fileId);
+    expect(rows).toHaveLength(1); // 每次调用一行，非每联系人一行
+    expect(rows[0]).toEqual({ channel: 'member', count: 3, __userId: owner.id });
+
+    // 全 no-op 重邀批次（invited=0）：不产生新 invite_send 行
+    await invite(owner, fileId, ['invite-m1@test.dev']);
+    expect(await eventRepo.countBy({ type: 'invite_send', fileId })).toBe(1);
+  });
+
+  it('埋点：注册回填落 collab_join {viaRegistration:true}（逐文件一行）', async () => {
+    const owner = await newUser('13800130005');
+    const fileId = await makeFile(owner, '回填埋点用例');
+    await invite(owner, fileId, ['invite-bt@test.dev']);
+
+    const invitee = await loginByCode({ email: 'invite-bt@test.dev' });
+
+    const rows = await eventPayloads('collab_join', fileId);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toEqual({ viaRegistration: true, __userId: invitee.id });
   });
 });

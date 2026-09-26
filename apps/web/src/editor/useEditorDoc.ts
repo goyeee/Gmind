@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type MutableRefObject } from 'react';
 import * as Y from 'yjs';
 import { createUndoManager, docFromState, ORIGIN_USER, setDocMeta } from '@gmind/core';
 import { api } from '../api/client';
+import { track } from '../api/events';
 import { loadDocFromIndexedDB } from './collab';
 
 /**
@@ -93,8 +94,12 @@ export function useEditorDoc(fileId: string): {
           const um = createUndoManager(restored);
           setState({ doc: restored, um, ownerUserId: null, starred: false }); // 离线恢复拿不到星标态
           void api(`/files/${fileId}/open`, { method: 'POST' }).catch(() => undefined);
+          // error_occur 埋点（M5 Task 4）：GET 失败但本地副本接管 → 已自动恢复
+          track('error_occur', { kind: 'load-fail', recovered: true }, fileId);
         } else {
           setError(e instanceof Error ? e.message : '加载失败');
+          // error_occur 埋点（M5 Task 4）：GET 失败且无本地副本 → 错误态（未恢复）
+          track('error_occur', { kind: 'load-fail', recovered: false }, fileId);
         }
       }
     })();

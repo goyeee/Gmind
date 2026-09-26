@@ -16,6 +16,7 @@ import {
 } from '@gmind/core';
 import { createTestApp } from './support/app-test';
 import { CommentEntity } from '../src/comments/comment.entity';
+import { EventEntity } from '../src/events/event.entity';
 import { FileCollaboratorEntity } from '../src/files/file-collaborator.entity';
 
 /**
@@ -360,5 +361,45 @@ describe('评论域（FR-CMT-001/003）', () => {
       content: '无人在线',
     });
     expect(quiet.status).toBe(201);
+  });
+
+  // ---------- comment_create 埋点（M5 Task 4，PRD 6.4：是否 @提及） ----------
+
+  it('埋点：创建评论/回复落 comment_create 行，hasMention 按归一化后 mentions 判定', async () => {
+    const eventsRepo = dataSource.getRepository(EventEntity);
+    // 该文件的 comment_create 行，按 id（ULID 单调）新→旧；本用例以「前后行数差 + 最新行
+    // payload」断言——此前用例已在同一文件落过多条评论，不能假设节点维度为空。
+    const latestPayload = async (offset = 0): Promise<{ hasMention: boolean; nodeId: string }> => {
+      const rows = await eventsRepo.find({ where: { type: 'comment_create', fileId }, order: { id: 'DESC' } });
+      const p = JSON.parse(rows[offset].payload ?? '{}') as { hasMention?: boolean; nodeId?: string };
+      return { hasMention: p.hasMention === true, nodeId: p.nodeId as string };
+    };
+    const rowCount = async (): Promise<number> =>
+      eventsRepo.countBy({ type: 'comment_create', fileId });
+    const before = await rowCount();
+
+    // 无 mentions → hasMention:false（nodeIdA/B 全程存活；nodeIdC 已被前序用例墓碑删除）
+    const plain = await authed(collaboratorToken, 'post', `/api/files/${fileId}/comments`).send({
+      nodeId: nodeIdB,
+      content: '无提及评论',
+    });
+    expect(plain.status).toBe(201);
+    expect(await rowCount()).toBe(before + 1);
+    expect(await latestPayload()).toEqual({ hasMention: false, nodeId: nodeIdB });
+
+    // @owner → hasMention:true（归一化后非空）
+    const withMention = await authed(collaboratorToken, 'post', `/api/files/${fileId}/comments`).send({
+      nodeId: nodeIdA,
+      content: '提及评论',
+      mentions: [owner.id],
+    });
+    expect(withMention.status).toBe(201);
+    expect(await latestPayload()).toEqual({ hasMention: true, nodeId: nodeIdA });
+
+    // 回复同样是发布评论：落行（楼中楼挂 nodeIdA 线程，无提及 → hasMention:false）
+    const reply = await authed(ownerToken, 'post', `/api/files/${fileId}/comments/${withMention.body.id}/replies`).send({ content: '回复一条' });
+    expect(reply.status).toBe(201);
+    expect(await rowCount()).toBe(before + 3);
+    expect(await latestPayload()).toEqual({ hasMention: false, nodeId: nodeIdA });
   });
 });

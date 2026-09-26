@@ -2,6 +2,7 @@ import { Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { IsNull, Repository } from 'typeorm';
 import { randomBytes } from 'node:crypto';
+import { EventsService } from '../events/events.service';
 import { FileCollaboratorEntity } from '../files/file-collaborator.entity';
 import { FileEntity } from '../files/file.entity';
 import { NotifyService } from '../notify/notify.service';
@@ -34,6 +35,8 @@ export class ShareService {
     @InjectRepository(UserEntity) private readonly userRepo: Repository<UserEntity>,
     // tsx 不发射装饰器元数据，类 token 注入必须显式 @Inject（约定同 comments.service.ts）
     @Inject(NotifyService) private readonly notify: NotifyService,
+    // EventsService（M5 Task 4）：invite_send/collab_join 埋点（EventsModule 不依赖任何业务域）
+    @Inject(EventsService) private readonly events: EventsService,
   ) {}
 
   /** owner 创建分享链接：文件须存活且归本人（404 同口径）；已有 active 链接直接返回
@@ -49,6 +52,13 @@ export class ShareService {
     row.token = randomBytes(16).toString('hex');
     row.createdBy = userId;
     const saved = await this.shareRepo.save(row);
+    // invite_send 埋点（M5 Task 4，PRD 6.4 邀请类型=链接）：仅真实生成新链接时落行
+    // ——幂等复创建（上方 short-circuit）不重复计；尽力而为旁路，失败静默。
+    try {
+      await this.events.record('invite_send', file.id, userId, { channel: 'link' });
+    } catch {
+      // 遥测旁路：静默（不炸响应、不回滚已生成的链接）
+    }
     return { shareToken: saved.token };
   }
 
@@ -107,6 +117,16 @@ export class ShareService {
         if (!isDuplicateKeyError(err)) throw err; // 并发双插的败者：幂等 no-op（胜者请求已通知）
       }
       if (joined) await this.notifyOwnerJoined(file, userId);
+      // collab_join 埋点（M5 Task 4，PRD 6.4 是否注册转化）：join 端点走 UserGuard，
+      // 加入者必然已是登录用户 → viaRegistration:false；仅真实新增协作者行时落行
+      // （幂等重开/owner 自开不重复计）。尽力而为旁路，失败静默。
+      if (joined) {
+        try {
+          await this.events.record('collab_join', file.id, userId, { viaRegistration: false });
+        } catch {
+          // 遥测旁路：静默
+        }
+      }
     }
     return { fileId: file.id };
   }

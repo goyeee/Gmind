@@ -2,6 +2,7 @@ import { BadRequestException, Inject, Injectable, NotFoundException } from '@nes
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, IsNull, Repository } from 'typeorm';
 import { env } from '../config/env';
+import { EventsService } from '../events/events.service';
 import { FileCollaboratorEntity } from '../files/file-collaborator.entity';
 import { FileEntity } from '../files/file.entity';
 import { NotifyService } from '../notify/notify.service';
@@ -48,6 +49,8 @@ export class InviteService {
     // tsx 不发射装饰器元数据，类 token 注入必须显式 @Inject（约定见任务说明）
     @Inject(MailService) private readonly mail: MailService,
     @Inject(NotifyService) private readonly notify: NotifyService,
+    // EventsService（M5 Task 4）：invite_send/collab_join 埋点（EventsModule 不依赖任何业务域）
+    @Inject(EventsService) private readonly events: EventsService,
   ) {}
 
   /** owner 批量邀请：返回 { invited, skipped }（skipped = pending/accepted 重邀 no-op 数）。 */
@@ -88,6 +91,16 @@ export class InviteService {
       if (type === 'email') {
         owner ??= await this.fileRepo.manager.findOneByOrFail(UserEntity, { id: userId });
         await this.sendInviteMail(owner, file.title, contact);
+      }
+    }
+    // invite_send 埋点（M5 Task 4，PRD 6.4 邀请类型=成员）：按批一行（非逐联系人），
+    // count = 本批实际写入的邀请数——全 no-op 重邀批次（invited=0）无「发起邀请」事实，
+    // 不落行。尽力而为旁路，失败静默（不影响邀请主流程与响应）。
+    if (invited > 0) {
+      try {
+        await this.events.record('invite_send', fileId, userId, { channel: 'member', count: invited });
+      } catch {
+        // 遥测旁路：静默
       }
     }
     return { invited, skipped };
@@ -136,6 +149,18 @@ export class InviteService {
     // 通知在事务提交之后（口径同 comments 域「事务提交后触发」）：回滚路径（含事务中途
     // 失败）不会产生任何通知，绝不出现「owner 被通知但回填实际失败」
     if (acceptedFileIds.length > 0) await this.notifyOwnersJoined(acceptedFileIds, user);
+    // collab_join 埋点（M5 Task 4，PRD 6.4 是否注册转化）：同样在事务提交后逐文件落行
+    // ——回填路径即「受邀注册/登录并自动加入协作」的转化形态（binding：viaRegistration
+    // 恒 true；区分「打开链接后登录加入」的 joinByToken false 形态）。尽力而为旁路。
+    if (acceptedFileIds.length > 0) {
+      for (const acceptedFileId of acceptedFileIds) {
+        try {
+          await this.events.record('collab_join', acceptedFileId, user.id, { viaRegistration: true });
+        } catch {
+          // 遥测旁路：静默
+        }
+      }
+    }
   }
 
   /** 回填加入通知（M4 清偿包）：逐文件通知 owner type='permission'、payload

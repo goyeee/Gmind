@@ -222,8 +222,9 @@ describe('回收站域（FR-FIL-005~007/010）', () => {
     expect(await countRows('invites', file.id)).toBe(0);
     const filesRows = await ds.query('SELECT id FROM files WHERE id = ?', [file.id]);
     expect(filesRows).toHaveLength(0);
-    // events 保留（审计 180 天裁定，不随 purge 清理）
-    expect(await countRows('events', file.id)).toBe(1);
+    // events 保留（审计 180 天裁定，不随 purge 清理）：2 = 手插 file.deleted +
+    // createForUser 产生的 doc_create 埋点（M5 Task 4 起新建文件即落事件行）
+    expect(await countRows('events', file.id)).toBe(2);
 
     // 对象存储前缀已清理：图片 404
     expect((await request(app.getHttpServer()).get(`/api/images/${key}`)).status).toBe(404);

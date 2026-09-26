@@ -4,6 +4,7 @@ import { In, Repository } from 'typeorm';
 import * as Y from 'yjs';
 import { createTemplateDoc, docFromState, getNode } from '@gmind/core';
 import { CollabService } from '../collab/collab.service';
+import { EventsService } from '../events/events.service';
 import { FileCollaboratorEntity } from '../files/file-collaborator.entity';
 import { FilesService } from '../files/files.service';
 import { NotifyService } from '../notify/notify.service';
@@ -67,6 +68,8 @@ export class CommentsService {
     @Inject(FilesService) private readonly files: FilesService,
     @Inject(CollabService) private readonly collab: CollabService,
     @Inject(NotifyService) private readonly notify: NotifyService,
+    // EventsService（M5 Task 4）：comment_create 埋点（EventsModule 不依赖任何业务域）
+    @Inject(EventsService) private readonly events: EventsService,
   ) {}
 
   /** GET /api/files/:id/comments：{threads, counts}。 */
@@ -123,6 +126,7 @@ export class CommentsService {
       mentions,
       rootAuthorId: null,
     });
+    await this.recordCommentCreate(fileId, userId, input.nodeId, mentions);
     return { ...this.toView(row, this.aliveNodeIds(doc), await this.nicknamesOf([row.authorId])), replies: [] };
   }
 
@@ -160,10 +164,31 @@ export class CommentsService {
       mentions,
       rootAuthorId: root.authorId,
     });
+    await this.recordCommentCreate(fileId, userId, root.nodeId, mentions);
     return this.toView(row, alive, await this.nicknamesOf([row.authorId]));
   }
 
   // ---- 内部 ---------------------------------------------------------------
+
+  /** comment_create 埋点（M5 Task 4，PRD 6.4「是否 @提及」）：楼主/回复同为发布评论，
+   *  各落一行；hasMention 按**归一化后** mentions（本文件可见者集合内）判定——混入
+   *  非协作者的脏 mention 不计为提及。nodeId 随行便于按节点聚合。尽力而为旁路
+   *  （口径同 dispatchNotifications）：失败静默，不回滚已提交评论。 */
+  private async recordCommentCreate(
+    fileId: string,
+    userId: string,
+    nodeId: string,
+    mentions: string[],
+  ): Promise<void> {
+    try {
+      await this.events.record('comment_create', fileId, userId, {
+        hasMention: mentions.length > 0,
+        nodeId,
+      });
+    } catch {
+      // 遥测旁路：静默（不炸响应、不回滚已提交评论）
+    }
+  }
 
   /** 站内通知触发（M3b Task 8，FR-CMT-005，binding）：
    * - mention：每个归一化后的被提及者（owner/协作者集合）收到 type='mention'——

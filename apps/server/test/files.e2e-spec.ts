@@ -1,7 +1,10 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import request from 'supertest';
 import type { INestApplication } from '@nestjs/common';
+import { DataSource } from 'typeorm';
+import { createTemplateDoc, docToState } from '@gmind/core';
 import { createTestApp } from './support/app-test';
+import { EventEntity } from '../src/events/event.entity';
 
 describe('files 域', () => {
   let app: INestApplication;
@@ -82,5 +85,56 @@ describe('files 域', () => {
       .send({ title: '' });
     expect(res.status).toBe(400);
     expect(res.body.message).toBeTypeOf('string');
+  });
+
+  // ---------- doc_create 埋点（M5 Task 4，PRD 6.4：创建入口 blank/import/seed/copy） ----------
+
+  it('埋点：新建文件落 doc_create 行，entry 按入口区分（blank/import/copy/seed）', async () => {
+    const eventsRepo = app.get(DataSource).getRepository(EventEntity);
+    const users = app.get((await import('../src/users/users.service')).UsersService);
+    const files = app.get((await import('../src/files/files.service')).FilesService);
+    const user = await users.create({ method: 'phone', phone: '13800005555' });
+    const token = await tokenFor(user.id);
+
+    /** 该文件是否恰好有一条 doc_create 行且 payload.entry 匹配。 */
+    const docCreateEntry = async (fileId: string, entry: string): Promise<void> => {
+      const rows = await eventsRepo.find({ where: { type: 'doc_create', fileId } });
+      expect(rows).toHaveLength(1);
+      expect(rows[0].userId).toBe(user.id);
+      expect(JSON.parse(rows[0].payload ?? '{}')).toEqual({ entry });
+    };
+
+    // 空白新建（无 docState）→ blank
+    const blank = await request(app.getHttpServer())
+      .post('/api/files')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ title: '空白新建' });
+    expect(blank.status).toBe(201);
+    await docCreateEntry(blank.body.id as string, 'blank');
+
+    // 携带 docState（XMind 导入端到端同路径）→ import
+    const imported = await request(app.getHttpServer())
+      .post('/api/files')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        title: '导入新建',
+        docState: Buffer.from(docToState(createTemplateDoc({ title: '导入新建', children: [{ text: '节点' }] }))).toString('base64'),
+      });
+    expect(imported.status).toBe(201);
+    await docCreateEntry(imported.body.id as string, 'import');
+
+    // 复制 → copy（新文件行，非 createForUser 直调）
+    const copied = await request(app.getHttpServer())
+      .post(`/api/files/${imported.body.id}/copy`)
+      .set('Authorization', `Bearer ${token}`);
+    expect(copied.status).toBe(201);
+    await docCreateEntry(copied.body.id as string, 'copy');
+
+    // 注册种子文件（createSeedFiles 直调路径）→ 每个种子一行 seed
+    const seeded = await users.create({ method: 'phone', phone: '13800005556' });
+    await files.createSeedFiles(seeded.id);
+    const seedRows = await eventsRepo.find({ where: { type: 'doc_create', userId: seeded.id } });
+    expect(seedRows).toHaveLength(3);
+    expect(seedRows.every((r) => JSON.parse(r.payload ?? '{}').entry === 'seed')).toBe(true);
   });
 });

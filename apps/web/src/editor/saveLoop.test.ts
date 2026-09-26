@@ -152,7 +152,12 @@ describe('startSaveLoop（陈旧写序守卫客户端语义）', () => {
     await vi.advanceTimersByTimeAsync(10_000);
 
     expect(statuses.at(-1)).toBe(STALE_DOC_STATUS);
-    expect(vi.mocked(fetch).mock.calls).toHaveLength(1);
+    // 仅一次 doc-state PUT（M5 Task 4 起 409 另发一条 error_occur 埋点 POST /api/events，
+    // 非浏览器单测环境该埋点静默失败不打 fetch——此处只钉住保存通道本身无重试）
+    const docStatePuts = vi
+      .mocked(fetch)
+      .mock.calls.filter(([p]) => String(p).includes('/doc-state'));
+    expect(docStatePuts).toHaveLength(1);
     stop();
     doc.destroy();
   });

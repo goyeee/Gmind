@@ -1,5 +1,5 @@
 import { useCallback, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
-import { apiPost } from '../api/client';
+import { track } from '../api/events';
 
 /**
  * 三步新手引导浮层（M5 Task 3，NFR-USE-001）。
@@ -19,11 +19,11 @@ export const GUIDE_DONE_KEY = 'gmind.guide.done';
 /** 目标矩形快照（getBoundingClientRect 是静态值，存纯对象避免持有 DOMRect）。 */
 type Rect = { top: number; left: number; bottom: number; width: number; height: number };
 
-/** guide_finish 埋点（M5 Task 3；M5 Task 4 将抽公共 track()——届时单点替换此函数）。
- *  POST /api/events 走 api()（204 由其短路，token 由其附加）；fire-and-forget：
- *  失败静默（void + catch），遥测不干扰引导收尾。 */
+/** guide_finish 埋点（M5 Task 3；Task 4 收口到公共 track()：公共参数
+ *  clientVersion/sessionId 随 payload 合并上报）。fire-and-forget：失败静默，
+ *  遥测不干扰引导收尾。 */
 function trackGuideFinish(payload: { stepsDone: number; skipped: boolean; elapsedMs: number }): void {
-  void apiPost('/events', { type: 'guide_finish', payload }).catch(() => undefined);
+  track('guide_finish', payload);
 }
 
 export function GuideOverlay({ steps, onClose }: { steps: GuideStep[]; onClose: () => void }) {
