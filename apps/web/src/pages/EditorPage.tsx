@@ -451,11 +451,13 @@ export function EditorPage() {
   };
 
   /**
-   * 新建节点进编辑态（Tab/Enter）：先开空编辑器，提交时在**单个 user 事务**内
-   * addChild + setText——保证一次 Ctrl+Z 撤销整个新建（undo captureTimeout 之外
-   * 的两次分立写会拆成两个撤销单元，用例 4 依赖单步撤销语义）。
-   * via（M5 Task 4）：node_add 埋点的操作方式——键盘（Tab/Enter）与右键菜单
-   * （插入子级/同级）共用本入口，由调用方告知。
+   * 新建节点进编辑态（Tab/Enter/右键插入）：**先建空节点落位**（布局即时重排、
+   * 画布可见），输入框锚定该节点真实盒子；提交写文本，取消/空提交删除节点。
+   * （2026-09-27 GUI 走查修复：旧实现提交前不建节点，输入框悬浮在启发式偏移处，
+   * 用户看不出节点会加到哪里。）撤销语义随事务拆分：一次 Ctrl+Z 清文本、两次
+   * 删节点（编辑器惯例；用例 4 断言「新节点文本消失」仍成立）。
+   * via（M5 Task 4）：node_add 埋点的操作方式——创建即上报（节点确实加进了
+   * 文档；取消路径回收节点但不回滚事件，注释口径）。
    */
   const openNewNodeEditor = (
     parentId: string,
@@ -467,48 +469,92 @@ export function EditorPage() {
     if (addBlockedByQuota()) return; // 配额拦截（Tab 插子级/Enter 插同级/右键菜单共用本入口）
     const vp = viewportRef.current;
     const svgEl = svgRef.current;
-    if (!vp || !svgEl) return;
-    const rect = svgEl.getBoundingClientRect();
-    const base = anchorBox ?? {
-      id: '',
-      x: 0,
-      y: 0,
-      w: 120,
-      h: 36,
-      side: 'right' as const,
-      depth: 1,
+    if (!vp || !svgEl || !doc) return;
+    // ① 立即建空节点（ORIGIN_USER 可撤销；measure 的 minNodeWidth 下限保证空盒可见）
+    let createdId = '';
+    try {
+      withTransaction(doc, ORIGIN_USER, () => {
+        createdId = addChild(doc, parentId, index === undefined ? {} : { index });
+      });
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : '新建失败');
+      return;
+    }
+    afterUserWrite();
+    track('node_add', { via, nodeCount: countAliveReachable(doc) }, fileId);
+    selectionRef.current?.selectOnly(createdId);
+    // ② 输入框锚定新节点真实盒子；布局流水若未同步到（首帧前）下一帧重试
+    const fallbackBox = (): NodeBox => {
+      const base = anchorBox ?? {
+        id: '',
+        x: 0,
+        y: 0,
+        w: 120,
+        h: 36,
+        side: 'right' as const,
+        depth: 1,
+      };
+      return {
+        ...base,
+        x: base.x + (relation === 'child' ? base.w * 0.4 + 24 : 0),
+        y: base.y + base.h + 8,
+        w: 140,
+        h: 36,
+      };
     };
-    const dy = base.h + 8;
-    const dx = relation === 'child' ? base.w * 0.4 + 24 : 0;
-    const p = vp.toScreen(base.x + dx, base.y + dy);
-    overlay.open({
-      anchorRect: {
-        x: rect.left + window.scrollX + p.x,
-        y: rect.top + window.scrollY + p.y,
-        w: 140 * vp.scale,
-        h: 36 * vp.scale,
-      },
-      scale: vp.scale,
-      value: '',
-      onCommit: (text) => {
-        if (!doc) return;
-        try {
-          let createdId = '';
-          withTransaction(doc, ORIGIN_USER, () => {
-            createdId = addChild(doc, parentId, index === undefined ? { text } : { index, text });
-          });
-          afterUserWrite();
-          // node_add 埋点（M5 Task 4）：写入成功才上报；nodeCount 为写后可达活跃数
-          track('node_add', { via, nodeCount: countAliveReachable(doc) }, fileId);
-          if (createdId) selectionRef.current?.selectOnly(createdId);
-          fitPendingRef.current = true; // 重渲染后适应画布，新节点必可见
-        } catch (e) {
-          showToast(e instanceof Error ? e.message : '新建失败');
+    const openOnNode = (): void => {
+      const liveVp = viewportRef.current;
+      const liveSvg = svgRef.current;
+      if (!liveVp || !liveSvg) return;
+      const box = boxesRef.current.find((b) => b.id === createdId) ?? fallbackBox();
+      const rect = liveSvg.getBoundingClientRect();
+      const p = liveVp.toScreen(box.x, box.y);
+      const removeIfAlive = (): void => {
+        const snap = getNode(doc, createdId);
+        if (snap && !snap.deleted) {
+          try {
+            withTransaction(doc, ORIGIN_USER, () => deleteNodes(doc, [createdId]));
+            afterUserWrite();
+          } catch {
+            // 尽力而为：删除失败仅残留一个空节点，可手动删除
+          }
         }
-      },
-      onCancel: () => undefined,
-      onTruncated: () => showToast('节点文本长度已达上限'),
-    });
+        // 取消后选中态若仍停在已删节点，后续 Tab/Enter 会静默 no-op——恢复到父节点
+        selectionRef.current?.selectOnly(parentId);
+      };
+      overlay.open({
+        anchorRect: {
+          x: rect.left + window.scrollX + p.x,
+          y: rect.top + window.scrollY + p.y,
+          w: Math.max(box.w, 140) * liveVp.scale,
+          h: box.h * liveVp.scale,
+        },
+        scale: liveVp.scale,
+        value: '',
+        onCommit: (text) => {
+          if (!doc) return;
+          if (text.trim() === '') {
+            removeIfAlive(); // 空提交 = 取消（旧实现会落一个空文本节点，顺带修正）
+            return;
+          }
+          try {
+            setText(doc, createdId, text, ORIGIN_USER);
+            afterUserWrite();
+            selectionRef.current?.selectOnly(createdId);
+            fitPendingRef.current = true; // 提交后重排可能扩边界，适应画布兜底可见
+          } catch (e) {
+            showToast(e instanceof Error ? e.message : '新建失败');
+          }
+        },
+        onCancel: () => removeIfAlive(),
+        onTruncated: () => showToast('节点文本长度已达上限'),
+      });
+    };
+    if (boxesRef.current.some((b) => b.id === createdId)) {
+      openOnNode();
+    } else {
+      requestAnimationFrame(openOnNode);
+    }
   };
 
   const handleEnter = (): void => {

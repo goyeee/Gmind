@@ -18,8 +18,8 @@
  *   否则 RIGHT（两等高分支得 1 右 1 左，符合惯例）；首个子树恒 RIGHT（断行语义
  *   不留空行，单分支布局在右）；两侧各自自上而下、保文档序；更深后代恒与其一级
  *   祖先同侧。
- * - 边锚点：mindmap/logic 取父/子相向侧中点，bezier 控制点水平外伸
- *   max(60, dx×0.5)；org 取父下中点/子上中点，elbow。折叠节点无子边。
+ * - 边锚点：mindmap/logic 父侧沿父边向子偏移（钳制父盒内）、子侧取相向边中点，
+ *   bezier 控制点水平外伸 max(60, dx×0.5)；org 取父下中点/子上中点，elbow。折叠节点无子边。
  * - 根盒中心恒为 (0,0)；输出 bbox 宽高为全部节点盒的极差。
  */
 import { measureNodeBox } from './measure';
@@ -226,7 +226,7 @@ function placeOrg(node: LayoutNode, theme: ThemeTokens): void {
   }
 }
 
-/** 亲子边：mindmap/logic 相向侧中点 + bezier 控制点；org 下/上中点 + elbow。 */
+/** 亲子边：mindmap/logic 父侧锚点沿父边向子偏移 + bezier；org 下/上中点 + elbow。 */
 function makeEdge(parent: LayoutNode, child: LayoutNode, structure: StructureType): EdgeRoute {
   const id = `${parent.id}->${child.id}`;
   if (structure === 'org') {
@@ -238,8 +238,17 @@ function makeEdge(parent: LayoutNode, child: LayoutNode, structure: StructureTyp
     };
   }
   const right = child.side !== 'left';
-  const from: Point = { x: right ? parent.x + parent.w : parent.x, y: parent.y + parent.h / 2 };
-  const to: Point = { x: right ? child.x : child.x + child.w, y: child.y + child.h / 2 };
+  const parentMidY = parent.y + parent.h / 2;
+  const childMidY = child.y + child.h / 2;
+  // 父侧锚点向子方向偏移（钳制在父盒侧边内，留 2px 不贴角）：同一父的多条边
+  // 从侧边不同点扇出——修复全部边共用父中心横线导致的重叠/视觉穿插
+  // （2026-09-27 GUI 走查问瓆 2：连线乱、交叉）。
+  const bias = Math.max(
+    -parent.h / 2 + 2,
+    Math.min(parent.h / 2 - 2, (childMidY - parentMidY) * 0.5),
+  );
+  const from: Point = { x: right ? parent.x + parent.w : parent.x, y: parentMidY + bias };
+  const to: Point = { x: right ? child.x : child.x + child.w, y: childMidY };
   const extend = Math.max(BEZIER_MIN_EXTEND, Math.abs(to.x - from.x) * 0.5);
   return {
     id,

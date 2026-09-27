@@ -327,6 +327,43 @@ describe('layout 不变量（5 树 × 3 结构）', () => {
     }
   });
 
+  it('mindmap：父侧边锚点沿父边向子扇出（2026-09-27 连线修复钉定）', () => {
+    const reader = makeReader({
+      root: { text: '根', children: ['p'] },
+      p: { text: '父节点', children: ['c1', 'c2', 'c3', 'c4'] },
+      c1: { text: '子上' },
+      c2: { text: '子中上' },
+      c3: { text: '子中下' },
+      c4: { text: '子下' },
+    });
+    const result = layout(reader, { structure: 'mindmap', theme, measure: stubAdapter, styleOf });
+    const p = boxOf(result, 'p');
+    const pMid = p.y + p.h / 2;
+    const anchors = new Map<string, number>();
+    for (const edge of result.edges) {
+      const [pid, cid] = splitEdge(edge.id);
+      if (pid !== 'p') continue;
+      // 锚点恒在父盒侧边内（clamp ±(h/2 - 2)）
+      expect(edge.from.y).toBeGreaterThanOrEqual(p.y + 2);
+      expect(edge.from.y).toBeLessThanOrEqual(p.y + p.h - 2);
+      // 锚点向子方向偏移：与子中线同侧（子距父中线超 epsilon 时）
+      const cMid = boxOf(result, cid).y + boxOf(result, cid).h / 2;
+      if (Math.abs(cMid - pMid) > 1) {
+        expect(Math.sign(edge.from.y - pMid)).toBe(Math.sign(cMid - pMid));
+      }
+      anchors.set(cid, edge.from.y);
+    }
+    // 锚点随子中线单调（clamp 饱和可共享角点，但绝不回折）——兄弟曲线无交叉的
+    // 充分条件；扇出取代旧的「共用父中心横线」（重叠/穿插的根源）
+    expect(anchors.size).toBe(4);
+    const ordered = [...anchors.entries()].sort(
+      (a, b) => boxOf(result, a[0]).y - boxOf(result, b[0]).y,
+    );
+    for (let i = 1; i < ordered.length; i++) {
+      expect(ordered[i][1]).toBeGreaterThanOrEqual(ordered[i - 1][1]);
+    }
+  });
+
   it('collapsed：折叠节点按叶子渲染，隐藏后代无盒，collapsedCounts 记 "+3"', () => {
     for (const structure of STRUCTURES) {
       const result = layout(TREE_BUILDERS.collapsed(), { structure, theme, measure: stubAdapter, styleOf });

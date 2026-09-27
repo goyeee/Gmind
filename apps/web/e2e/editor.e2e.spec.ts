@@ -64,6 +64,28 @@ test('编辑器：Tab 新建节点提交后画布出现且自动保存', async (
   await expect(status).toHaveText(/已保存/);
 });
 
+// 用例 2b（2026-09-27 GUI 走查修复）：Tab 按下即出现空节点盒（输入框锚定其上），
+// 输入前节点已在树中落位；Esc 取消回收空节点不留壳
+test('编辑器：新建先落位空节点再输入，Esc 取消不留空壳', async ({ page }) => {
+  await openSeedDoc(page, '本周计划');
+  const groups = page.locator('.editor-canvas svg g[data-node-id]');
+  const before = await groups.count();
+  await page.keyboard.press('Tab');
+  // 空节点盒立即出现（minNodeWidth 下限保证可见），编辑器锚定其上
+  await expect(groups).toHaveCount(before + 1);
+  await expect(page.locator('.gm-text-editor')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.gm-text-editor')).toHaveCount(0);
+  await expect(groups).toHaveCount(before); // 取消回收，不留空壳
+  // 再次新建：完整输入路径仍工作
+  await page.keyboard.press('Tab');
+  await expect(groups).toHaveCount(before + 1);
+  await page.keyboard.type('落位节点');
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '落位节点' })).toBeVisible();
+  await expect(groups).toHaveCount(before + 1);
+});
+
 // 用例 3：保存后刷新页面，「新节点」仍在（持久化闭环）
 test('编辑器：保存后刷新页面新建节点仍在', async ({ page }) => {
   await openSeedDoc(page, '本周计划');
