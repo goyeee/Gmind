@@ -264,6 +264,10 @@ export function EditorPage() {
   // 在线成员（FR-COL-005）：collab onPresence 推进；成员面板开合。
   const [members, setMembers] = useState<PresenceMember[]>([]);
   const [membersOpen, setMembersOpen] = useState(false);
+  // 头像点击定位目标（M6 Task 9 评审修复轮）：随面板打开传给 MemberPanel——滚动
+  // 目标成员行进视口并短时高亮。members-btn/溢出位打开置 null（无定位目标）；
+  // 面板关闭时清空（下次普通打开不复用旧目标）。
+  const [membersFocus, setMembersFocus] = useState<string | null>(null);
   // 顶栏头像栏的会话内已见成员（M6 Task 9，企微对标）：presence 只含在线者，
   // 「离线=灰」要求记住本会话曾出现过的成员——同一 onPresence 通道的派生缓存
   // （非第二获取通道），Map 按 userId 去重、插入序=首见序（稳定展示顺序，
@@ -2063,7 +2067,10 @@ export function EditorPage() {
             className="toolbar-btn"
             title="在线成员"
             aria-label="在线成员"
-            onClick={() => setMembersOpen((v) => !v)}
+            onClick={() => {
+              setMembersFocus(null); // 常规开关：无定位目标（M6 T9 评审修复轮）
+              setMembersOpen((v) => !v);
+            }}
           >
             <MembersIcon />
             <span className="members-badge" data-testid="members-count">
@@ -2142,7 +2149,12 @@ export function EditorPage() {
                 }
                 title={`${m.nickname}（${online ? '在线' : '离线'}）`}
                 aria-label={`${m.nickname}（${online ? '在线' : '离线'}）`}
-                onClick={() => setMembersOpen(true)}
+                onClick={() => {
+                  // 点击头像 = 打开成员面板并定位该成员行（M6 T9 评审修复轮：
+                  // 携带目标 userId；离线成员不在 presence 时定位 no-op）
+                  setMembersFocus(m.userId);
+                  setMembersOpen(true);
+                }}
               >
                 {m.nickname.charAt(0) || '？'}
               </button>
@@ -2154,7 +2166,10 @@ export function EditorPage() {
               data-testid="avatar-overflow"
               className="avatar-overflow"
               title={`还有 ${avatarOverflow} 位协作者`}
-              onClick={() => setMembersOpen(true)}
+              onClick={() => {
+                setMembersFocus(null); // 溢出位无特定目标：仅打开面板不定位（裁定）
+                setMembersOpen(true);
+              }}
             >
               +{avatarOverflow}
             </button>
@@ -2355,10 +2370,14 @@ export function EditorPage() {
         members={members}
         ownerUserId={ownerUserId}
         open={membersOpen}
-        onClose={() => setMembersOpen(false)}
+        onClose={() => {
+          setMembersOpen(false);
+          setMembersFocus(null); // 关闭清空定位目标（下次打开不复用，M6 T9 修复轮）
+        }}
         fileId={fileId}
         canInvite={meId !== '' && meId === ownerUserId}
         showToast={showToast}
+        focusUserId={membersFocus}
       />
       <HelpPanel open={helpOpen} onClose={() => setHelpOpen(false)} />
       {/* 主题缩略图选择面板（M6 Task 4）：套用 = setDocMeta themeId（与 select 同一

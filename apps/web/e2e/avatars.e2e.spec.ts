@@ -9,10 +9,12 @@ import { expect, test, type APIRequestContext, type Page } from '@playwright/tes
  * removeAwarenessStates 即时移除路径同 collab.e2e 用例 5/6，断言给 10s 容忍）。
  *
  * 覆盖面：
- * - 单上下文：自身 1 枚在线头像（首字符回退 + 在线类名）；点击头像打开成员面板；
- *   移动端只读分支不装配头像栏（桌面工具栏专属），回桌面视口自身头像回归；
+ * - 单上下文：自身 1 枚在线头像（首字符回退 + 在线类名）；点击头像打开成员面板
+ *   并定位自身行（member-row-located 短时高亮）；移动端只读分支不装配头像栏
+ *   （桌面工具栏专属），回桌面视口自身头像回归；
  * - 双上下文（share.e2e 分享链接 API 编排）：B 经 /s/:token 登录回跳自动加入 →
- *   A 头像栏出现 B 在线头像；B 关闭 context → A 侧 B 头像转离线灰（仍展示）；
+ *   A 头像栏出现 B 在线头像；点击 B 头像定位 B 行（A 行不高亮）；B 关闭 context
+ *   → A 侧 B 头像转离线灰（仍展示）；
  * - 溢出：6 人在线 → ≤5 枚头像 + 「+1」溢出位（第 6 位折叠），点击溢出位同样
  *   打开成员面板（B~F 经 dev-e2e grant-collaborator 授权 + token 直开 /edit）。
  */
@@ -71,9 +73,12 @@ test('单上下文：自身 1 枚在线头像，点击打开成员面板；移�
   await expect(own).toBeVisible({ timeout: 15_000 });
   await expect(own).toHaveClass(/online/);
   await expect(page.getByTestId('avatar-bar').locator('.avatar-chip')).toHaveCount(1);
-  // 点击头像 = 打开成员面板（既有 members-btn 面板）
+  // 点击头像 = 打开成员面板（既有 members-btn 面板）并定位自身行（短时高亮）
   await own.click();
   await expect(page.getByTestId('member-panel')).toBeVisible();
+  await expect(page.getByTestId('member-panel').locator(`[data-member-user="${myId}"]`)).toHaveClass(
+    /member-row-located/,
+  );
   await page.getByTestId('member-panel-close').click();
   // 移动端只读分支（≤768px）：头像栏随桌面工具栏整体不装配（React 分支断言）
   await page.setViewportSize({ width: 375, height: 667 });
@@ -115,6 +120,18 @@ test('双上下文：B 经分享链接加入 → A 头像栏见 B 在线；B 关
   await expect(bAvatar).toBeVisible({ timeout: 15_000 });
   await expect(bAvatar).toHaveClass(/online/, { timeout: 10_000 });
   await expect(pageA.getByTestId('avatar-bar').locator('.avatar-chip')).toHaveCount(2);
+
+  // —— 点击 B 头像 = 打开成员面板并定位 B 行（滚动+短时高亮，M6 T9 评审修复轮；
+  //    A 行不高亮）——
+  await bAvatar.click();
+  const panel = pageA.getByTestId('member-panel');
+  await expect(panel).toBeVisible();
+  await expect(panel.locator(`[data-member-user="${bId}"]`)).toHaveClass(/member-row-located/);
+  await expect(panel.locator(`[data-member-user="${aId}"]`)).not.toHaveClass(
+    /member-row-located/,
+  );
+  await pageA.getByTestId('member-panel-close').click();
+  await expect(panel).toHaveCount(0);
 
   // —— B 关闭 → A 侧 B 头像转离线灰（会话内记住成员，不移除；awareness 即时移除
   //    路径同 collab.e2e 用例 5/6，10s 容忍）——
@@ -163,8 +180,9 @@ test('溢出：6 人在线 → ≤5 枚头像 +「+1」溢出位，点击溢出�
   await expect(pageA.getByTestId('avatar-overflow')).toHaveText('+1', { timeout: 15_000 });
   await expect(pageA.getByTestId(`avatar-${aId}`)).toBeVisible();
   await expect(pageA.getByTestId(`avatar-${lastId}`)).toHaveCount(0);
-  // 点击溢出位 = 打开成员面板（全部 6 人在线）
+  // 点击溢出位 = 打开成员面板（全部 6 人在线）；无特定目标 → 不定位任何行
   await pageA.getByTestId('avatar-overflow').click();
   await expect(pageA.getByTestId('member-panel')).toBeVisible();
   await expect(pageA.getByTestId('members-count')).toHaveText('6');
+  await expect(pageA.locator('.member-row-located')).toHaveCount(0);
 });

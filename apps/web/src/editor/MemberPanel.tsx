@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { apiPost, ApiError } from '../api/client';
 import type { PresenceMember } from './collab';
 import './member-panel.css';
@@ -31,6 +31,10 @@ export interface MemberPanelProps {
   canInvite?: boolean;
   /** toast 通道：复用 EditorPage 既有 toast（testid toast，role alert）。 */
   showToast(message: string): void;
+  /** 定位目标 userId（M6 T9 评审修复轮）：顶栏头像点击随面板打开传入——滚动该
+   *  成员行进视口并短时高亮；null = 无定位目标（members-btn/溢出位/面板关闭）。
+   *  离线成员不在 presence（面板无该行）时定位 no-op。 */
+  focusUserId?: string | null;
 }
 
 /** 联系人拆分（brief 口径）：逗号/分号/顿号/任意空白（含换行）皆作分隔。 */
@@ -154,7 +158,24 @@ function MemberGroup({
   );
 }
 
-export function MemberPanel({ members, ownerUserId, open, onClose, fileId, canInvite, showToast }: MemberPanelProps) {
+export function MemberPanel({ members, ownerUserId, open, onClose, fileId, canInvite, showToast, focusUserId }: MemberPanelProps) {
+  // 定位目标行（M6 T9 评审修复轮）：面板打开且带目标时，行 scrollIntoView 进视口
+  // + 短时高亮（2s 后移除）。行元素按 data-member-user 直查（effect 在渲染后运行，
+  // 面板 open 才有行）；目标行不存在（离线成员不在 presence）或目标为空时 no-op。
+  useEffect(() => {
+    if (!open || !focusUserId) return;
+    const row = document.querySelector<HTMLElement>(
+      `[data-testid="member-row"][data-member-user="${CSS.escape(focusUserId)}"]`,
+    );
+    if (!row) return;
+    row.scrollIntoView({ block: 'nearest' });
+    row.classList.add('member-row-located');
+    const timer = setTimeout(() => row.classList.remove('member-row-located'), 2_000);
+    return () => {
+      clearTimeout(timer);
+      row.classList.remove('member-row-located');
+    };
+  }, [open, focusUserId]);
   if (!open) return null;
   const editing = members.filter((m) => m.editing);
   const viewing = members.filter((m) => !m.editing);

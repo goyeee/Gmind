@@ -67,6 +67,12 @@
   gap: 8px;
   padding: 5px 0;
 }
+/* 头像点击定位（M6 T9 评审修复轮）：目标行短时高亮（2s 后由 MemberPanel 移除） */
+.member-row.member-row-located {
+  background: #e8f3ff;
+  border-radius: 6px;
+  transition: background-color 0.2s;
+}
 .member-avatar {
   flex: none;
   width: 22px;
