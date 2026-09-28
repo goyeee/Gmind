@@ -80,16 +80,6 @@ export function ThemeIcon({ className }: IconProps) {
   );
 }
 
-/** 格式（字母 A + 底部色彩条）：样式面板锚点占位（T1 不入栏，供后续任务） */
-export function FormatIcon({ className }: IconProps) {
-  return (
-    <svg {...svgProps(className)}>
-      <path d="M4 12 7.2 4h1.6L12 12M5.4 9.4h5.2" />
-      <path d="M2.5 14.2h11" />
-    </svg>
-  );
-}
-
 /** 导出（托盘向上箭头） */
 export function ExportIcon({ className }: IconProps) {
   return (
@@ -162,15 +152,6 @@ export function PainterIcon({ className }: IconProps) {
       <path d="M7.2 8.1 7.9 8.8" />
       {/* 刷头（蘸色楔形） */}
       <path d="M2.6 9.9 6.3 13.6C5 14.5 3.4 14.7 1.8 14.1 1.2 12.5 1.5 10.9 2.6 9.9Z" />
-    </svg>
-  );
-}
-
-/** 星标（五角轮廓）：T1 星标按钮保留既有字形（★/☆ 文案断言依赖），供后续任务换装 */
-export function StarIcon({ className }: IconProps) {
-  return (
-    <svg {...svgProps(className)}>
-      <path d="m8 2 1.9 3.9 4.1.6-3 2.9.7 4.1L8 11.6l-3.7 1.9.7-4.1-3-2.9 4.1-.6L8 2Z" />
     </svg>
   );
 }

@@ -20,7 +20,7 @@ const state = core.docToState(doc); // 序列化；docFromState(state) 还原（
 
 - `MAX_TEXT_LENGTH = 500` — 节点文本上限
 - `MAX_NOTE_LENGTH = 5000` — 节点备注上限
-- `ICON_GROUPS = ['priority', 'progress', 'flag', 'star']` — 图标组
+- `ICON_GROUPS = ['priority', 'progress', 'flag', 'star', 'emoji']` — 图标组（emoji 组值本身即字形，M6 T5）
 - `type IconGroup = (typeof ICON_GROUPS)[number]`
 
 ### errors

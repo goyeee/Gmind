@@ -160,7 +160,8 @@ export interface EdgeRoute {
   from: Point;
   to: Point;
   kind: 'bezier' | 'elbow';
-  /** bezier 控制点（恒 2 个，kind='bezier' 时提供；水平外伸 max(60, dx×0.5)）。elbow 无。 */
+  /** bezier 控制点（恒 2 个，kind='bezier' 时提供；水平外伸恒 dx×0.5——a602824 后
+   *  语义，废除旧 max(60, dx×0.5) 下限）。elbow 无。 */
   controls?: Point[];
 }
 

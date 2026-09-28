@@ -60,6 +60,15 @@ export interface RestoreResult {
  *   内容回滚，若回写快照 title 会把用户在快照之后的改名一并吃掉，且 files.title 行值
  *   不随之变更（画布与列表名号劈叉）——恢复不改名，title 恒保留 target 现值。
  *
+ * ── 概要（summaries）×恢复口径（M6 终审登记，未实现 diff）── 恢复 diff 范围＝
+ *   nodes + meta（title 排除先例见⑤）；doc 级 summaries Y.Map **不在恢复范围**——
+ *   恢复不回滚概要集、快照概要也不随版本重生。恢复后经 withTransaction 事务后
+ *   normalize 的 summary repair（repair.ts 规则⑦ planSummaryRepair）按**存活片段**
+ *   收敛：成员被①删除/换父断裂即收敛存活子段，全失效即删概要（summary.ts 三态）；
+ *   ②重建节点为新 ULID，不在任何既有概要的 nodeIds 内，不复活旧概要。口径待需求方
+ *   裁定（纳入恢复 or 维持现状），裁定前不实现 summaries diff——登记于
+ *   docs/m6-acceptance.md 待裁定清单。
+ *
  * ── 零操作短路 ── diff 为空（无删/无建/无字段差/meta 差/无落位需求）直接返回全零，
  * 不开事务。落位需求按事务前状态判定——其余四类全空时事务前后状态一致，判定精确；
  * 任一非空则必然开事务，该判定仅作短路门，不影响执行路径（③执行期以现场状态复核）。
