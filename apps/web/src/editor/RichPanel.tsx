@@ -10,13 +10,15 @@ import {
   setIcon,
   setNote,
   type IconGroup,
+  type NodeSnapshot,
   type StyleScope,
 } from '@gmind/core';
 import { clampImageSize, MAX_IMAGE_BYTES, readImageSize, uploadImage } from './imageUpload';
 import './rich-panel.css';
 
 /**
- * 富内容面板（M1b Task 12，FR-EDT-018~021）+ 样式区（Task 15，FR-EDT-015）：
+ * 富内容面板（M1b Task 12，FR-EDT-018~021）+ 样式区（Task 15，FR-EDT-015；
+ * M6 Task 2 企微对标：样式区随选中节点联动回显）：
  * 选中节点的样式/备注/链接/图片/图标编辑。写入一律经 @gmind/core 操作 API
  * （applyStyle 作用域 subtree/single；调用方统一 origin 与 capUndoStack），画布刷新
  * 走既有 doc update → renderScene 管线。
@@ -50,21 +52,25 @@ const FONT_SIZES = [12, 14, 16, 18, 20, 24, 36];
 export interface RichPanelProps {
   doc: Y.Doc;
   fileId: string;
+  /** 选中节点 id；无选中（空选区/多选）为空串——此时样式区置灰，节点区隐藏。 */
   nodeId: string;
+  /** 选中节点快照（M6 Task 2 企微对标）：样式区回显数据源；无选中为 null。 */
+  selected: NodeSnapshot | null;
   afterUserWrite: () => void;
   showToast: (message: string) => void;
 }
 
 export function RichPanel(props: RichPanelProps): ReactElement {
-  const { doc, fileId, nodeId, afterUserWrite, showToast } = props;
+  const { doc, fileId, nodeId, selected, afterUserWrite, showToast } = props;
   const [note, setNoteValue] = useState('');
   const [href, setHrefValue] = useState('');
   const [uploading, setUploading] = useState(false);
   // 样式作用域（FR-EDT-015）：默认含子树，可切仅当前节点
   const [styleScope, setStyleScope] = useState<StyleScope>('subtree');
 
-  // 渲染期直读快照（tick 变更驱动重渲染；getNode 为纯读，无副作用）。
-  const snap = getNode(doc, nodeId);
+  // 渲染期快照改为 props 注入（M6 Task 2）：EditorPage 每 tick 用 getNode 计算
+  // selected 传入——面板与画布同帧同源；无选中/已删时为 null（样式区置灰）。
+  const snap = selected;
 
   // 输入框只在切换选中节点时从文档回灌（面板自身是这些字段的编辑源；
   // tick 驱动的快照刷新不得覆盖正在编辑的输入——M2 多端再按需细化）。
@@ -103,6 +109,77 @@ export function RichPanel(props: RichPanelProps): ReactElement {
     write(() => applyStyle(doc, [nodeId], patch, styleScope));
   };
 
+  /**
+   * 样式区（FR-EDT-015 + M6 Task 2 随选中联动回显）：填充/文字色色钮按
+   * node.style.fill/color 回显 aria-pressed；字号 select 回显 style.fontSize；
+   * 作用域 select 为面板级偏好（不随节点）。无选中（node=null）→ fieldset
+   * disabled 整区置灰 + 提示「选中节点后设置样式」。
+   */
+  const styleSection = (node: NodeSnapshot | null): ReactElement => {
+    const style = node?.style ?? {};
+    const swatch = (kind: 'fill' | 'color', c: { name: string; value: string }): ReactElement => {
+      const active = style[kind] === c.value;
+      return (
+        <button
+          key={`${kind}-${c.value}`}
+          type="button"
+          title={`${kind === 'fill' ? '填充' : '文字'}-${c.name}`}
+          aria-label={`${kind === 'fill' ? '填充' : '文字'}-${c.name}`}
+          aria-pressed={active}
+          className={active ? 'swatch active' : 'swatch'}
+          style={{ background: c.value }}
+          onClick={() => applyStylePatch({ [kind]: c.value })}
+        />
+      );
+    };
+    return (
+      <fieldset className="field" data-testid="style-section" disabled={!node}>
+        {!node && (
+          <p className="style-hint" data-testid="style-hint">
+            选中节点后设置样式
+          </p>
+        )}
+        <em className="style-label">填充</em>
+        <div className="swatch-row">{STYLE_PALETTE.map((c) => swatch('fill', c))}</div>
+        <button type="button" title="默认填充" onClick={() => applyStylePatch({ fill: null })}>
+          默认
+        </button>
+        <em className="style-label">文字色</em>
+        <div className="swatch-row">{STYLE_PALETTE.map((c) => swatch('color', c))}</div>
+        <button type="button" title="默认文字色" onClick={() => applyStylePatch({ color: null })}>
+          默认
+        </button>
+        <em className="style-label">字号</em>
+        <select
+          data-testid="font-size-select"
+          aria-label="字号"
+          value={style.fontSize ?? ''}
+          onChange={(e) => {
+            const v = e.target.value;
+            applyStylePatch({ fontSize: v === '' ? null : Number(v) });
+          }}
+        >
+          <option value="">默认</option>
+          {FONT_SIZES.map((s) => (
+            <option key={s} value={String(s)}>
+              {s}
+            </option>
+          ))}
+        </select>
+        <em className="style-label">作用域</em>
+        <select
+          data-testid="style-scope-select"
+          aria-label="样式作用域"
+          value={styleScope}
+          onChange={(e) => setStyleScope(e.target.value === 'single' ? 'single' : 'subtree')}
+        >
+          <option value="subtree">含子树</option>
+          <option value="single">仅当前节点</option>
+        </select>
+      </fieldset>
+    );
+  };
+
   const onPickImage = async (file: File): Promise<void> => {
     if (file.size > MAX_IMAGE_BYTES) {
       showToast('图片大小超出 10MB 限制，请压缩后重试');
@@ -129,6 +206,9 @@ export function RichPanel(props: RichPanelProps): ReactElement {
   if (!snap || snap.deleted) {
     return (
       <aside className="rich-panel" data-testid="rich-panel">
+        <h3>样式</h3>
+        {styleSection(null)}
+        <h3>节点</h3>
         <p className="rich-empty">选中节点后编辑富内容</p>
       </aside>
     );
@@ -153,69 +233,7 @@ export function RichPanel(props: RichPanelProps): ReactElement {
   return (
     <aside className="rich-panel" data-testid="rich-panel">
       <h3>样式</h3>
-      <div className="field" data-testid="style-section">
-        <em className="style-label">填充</em>
-        <div className="swatch-row">
-          {STYLE_PALETTE.map((c) => (
-            <button
-              key={c.value}
-              type="button"
-              title={`填充-${c.name}`}
-              aria-label={`填充-${c.name}`}
-              className="swatch"
-              style={{ background: c.value }}
-              onClick={() => applyStylePatch({ fill: c.value })}
-            />
-          ))}
-          <button type="button" title="默认填充" onClick={() => applyStylePatch({ fill: null })}>
-            默认
-          </button>
-        </div>
-        <em className="style-label">文字色</em>
-        <div className="swatch-row">
-          {STYLE_PALETTE.map((c) => (
-            <button
-              key={c.value}
-              type="button"
-              title={`文字-${c.name}`}
-              aria-label={`文字-${c.name}`}
-              className="swatch"
-              style={{ background: c.value }}
-              onClick={() => applyStylePatch({ color: c.value })}
-            />
-          ))}
-          <button type="button" title="默认文字色" onClick={() => applyStylePatch({ color: null })}>
-            默认
-          </button>
-        </div>
-        <em className="style-label">字号</em>
-        <select
-          data-testid="font-size-select"
-          aria-label="字号"
-          value={snap.style?.fontSize ?? ''}
-          onChange={(e) => {
-            const v = e.target.value;
-            applyStylePatch({ fontSize: v === '' ? null : Number(v) });
-          }}
-        >
-          <option value="">默认</option>
-          {FONT_SIZES.map((s) => (
-            <option key={s} value={String(s)}>
-              {s}
-            </option>
-          ))}
-        </select>
-        <em className="style-label">作用域</em>
-        <select
-          data-testid="style-scope-select"
-          aria-label="样式作用域"
-          value={styleScope}
-          onChange={(e) => setStyleScope(e.target.value === 'single' ? 'single' : 'subtree')}
-        >
-          <option value="subtree">含子树</option>
-          <option value="single">仅当前节点</option>
-        </select>
-      </div>
+      {styleSection(snap)}
 
       <h3>节点</h3>
 

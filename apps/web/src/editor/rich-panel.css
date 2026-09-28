@@ -107,7 +107,19 @@
   font-size: 12px;
 }
 
-/* 样式区（Task 15 FR-EDT-015）：色板 / 字号 / 作用域 */
+/* 样式区（Task 15 FR-EDT-015）：色板 / 字号 / 作用域。
+   M6 Task 2 企微对标：改 fieldset 承载（无选中 disabled 置灰）+ 选中色钮 active 态。 */
+.rich-panel fieldset.field {
+  border: none;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+.style-hint {
+  color: #86909c;
+  font-size: 12px;
+  margin: 0;
+}
 .style-label {
   font-style: normal;
   color: #86909c;
@@ -129,6 +141,10 @@
 }
 .swatch:hover {
   outline: 2px solid #3370ff;
+}
+.swatch.active {
+  outline: 2px solid #3370ff;
+  outline-offset: 1px;
 }
 .rich-panel select {
   padding: 5px 6px;

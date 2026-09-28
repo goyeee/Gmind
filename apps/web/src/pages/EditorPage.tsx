@@ -262,6 +262,9 @@ export function EditorPage() {
   // screen 坐标供 move 阶段重绘。
   const marqueeRectRef = useRef<SVGRectElement | null>(null);
   const marqueeAnchorScreenRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+  // 空白点击清空选择的位移判定（M6 Task 2）：pointerdown 记录按点坐标，click 期位移
+  // >4px 即视为平移/框选拖拽的合成 click，不清空选择。
+  const pointerPressRef = useRef<{ x: number; y: number } | null>(null);
 
   const [tick, setTick] = useState(0);
   const [status, setStatus] = useState('尚未编辑');
@@ -845,7 +848,15 @@ export function EditorPage() {
     }
     const g = target.closest('[data-node-id]');
     const id = g?.getAttribute('data-node-id');
-    if (!id) return;
+    if (!id) {
+      // 空白点击清空选择（M6 Task 2 企微对标，格式面板随选中联动配套）：Shift+空白
+      // 点击是框选起点占位（维持原样不清空）；平移/框选拖拽释放后的合成 click 以
+      // 位移 >4px 排除（与节点拖拽 justDraggedRef 同一「拖拽不算点击」纪律）。
+      const press = pointerPressRef.current;
+      const moved = press ? Math.hypot(e.clientX - press.x, e.clientY - press.y) > 4 : false;
+      if (!e.shiftKey && !moved) selection.clear();
+      return;
+    }
     // FR-EDT-008：Ctrl/Cmd+点击 = 加/减选；Shift+点击让位给框选起点（无操作，
     // 裁决：右键已被 contextmenu 占用，框选 = Shift+左键拖拽）
     if (e.shiftKey) return;
@@ -858,7 +869,9 @@ export function EditorPage() {
 
   /** Shift+左键在空白处按下 → 引擎 beginMarquee（scene 坐标）+ 起画橡皮筋。 */
   const onSvgPointerDown = (e: React.PointerEvent<SVGSVGElement>): void => {
-    if (e.button !== 0 || !e.shiftKey || e.ctrlKey || e.metaKey) return;
+    if (e.button !== 0) return;
+    pointerPressRef.current = { x: e.clientX, y: e.clientY }; // 空白点击位移判定（M6 Task 2）
+    if (!e.shiftKey || e.ctrlKey || e.metaKey) return;
     const selection = selectionRef.current;
     const vp = viewportRef.current;
     const svgEl = svgRef.current;
@@ -1003,6 +1016,9 @@ export function EditorPage() {
     selectionNow && selectionNow.selected.size === 1
       ? ([...selectionNow.selected][0] ?? null)
       : null;
+  // 选中节点快照（M6 Task 2 企微对标）：RichPanel 样式区回显数据源；无选中（空选
+  // 区/多选/已删）为 null → 样式区置灰 + 提示。tick 驱动重渲染，切换节点即时刷新。
+  const selectedSnapshot = doc && selectedNodeId ? getNode(doc, selectedNodeId) : null;
 
   // —— 评论动作（M3b Task 7，FR-CMT-002）——
 
@@ -1737,11 +1753,14 @@ export function EditorPage() {
           )
         ) : (
           <div className="editor-right">
-            {doc && um && selectedNodeId && (
+            {/* M6 Task 2：面板常驻（不再随 selectedNodeId 卸载）——无选中时样式区
+                置灰 + 提示，选中节点后回显该节点样式。 */}
+            {doc && um && (
               <RichPanel
                 doc={doc}
                 fileId={fileId}
-                nodeId={selectedNodeId}
+                nodeId={selectedNodeId ?? ''}
+                selected={selectedSnapshot}
                 afterUserWrite={afterUserWrite}
                 showToast={showToast}
               />
