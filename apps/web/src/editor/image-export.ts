@@ -9,7 +9,14 @@
 // 图片鉴权事实（storage.controller.ts）：/api/images/* 读取端点公开（浏览器 <img>
 // 无法带 Authorization，仅上传鉴权），同源 fetch 即可，无需附加头。
 import type * as Y from 'yjs';
-import { childrenIds, cloneExpanded, countAliveReachable, getMeta, getNode } from '@gmind/core';
+import {
+  childrenIds,
+  cloneExpanded,
+  countAliveReachable,
+  getMeta,
+  getNode,
+  listSummaries,
+} from '@gmind/core';
 import { exportSceneSvg, type DocReader } from '@gmind/engine';
 import { MAX_DOC_NODES } from '@gmind/shared';
 
@@ -20,13 +27,15 @@ export interface ImageExportOptions {
   transparent: boolean;
 }
 
-/** @gmind/core 读 API → engine DocReader（与 EditorPage.tsx 底部装配适配器同形；
- *  此处模块级纯函数，避免页面组件与导出胶水互相 import 成环）。 */
+/** @gmind/core 读 API → engine DocReader（与 EditorPage.tsx 底部装配适配器同形——
+ *  含 summaries，M6 T6；终审 Important 修复：此处缺省时导出静默丢概要 bracket）；
+ *  此处模块级纯函数，避免页面组件与导出胶水互相 import 成环。 */
 function readerOf(d: Y.Doc): DocReader {
   return {
     getMeta: () => getMeta(d),
     getNode: (id) => getNode(d, id),
     childrenIds: (id) => childrenIds(d, id),
+    summaries: () => listSummaries(d),
   };
 }
 

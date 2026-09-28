@@ -57,7 +57,9 @@ const BADGE_FONT_SIZE = 12;
 /** 概要 bracket 几何（M6 Task 6，确定性常量）：端子上挑 6px、label 12px 居中行下。 */
 const SUMMARY_TICK = 6;
 const SUMMARY_FONT_SIZE = 12;
-const SUMMARY_LABEL_BASELINE = 14;
+/** label 基线相对 bracket 横线的行下偏移（= bracket 视觉下缘）。导出边界外扩消费
+ *  （export.ts，M6 终审修复）——引擎内单源，不再手抄。 */
+export const SUMMARY_LABEL_BASELINE = 14;
 
 /** 角标（note/link）基线与右内边距。 */
 const CORNER_BADGE_BASELINE = 12;

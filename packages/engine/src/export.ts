@@ -14,7 +14,12 @@
  * - 布局坐标可为负（根盒中心 (0,0)）：viewBox 平移到包围盒原点，内容不被裁剪。
  */
 import { layout } from './layout';
-import { createScene, renderScene, type NodeVisual } from './render';
+import {
+  createScene,
+  renderScene,
+  SUMMARY_LABEL_BASELINE,
+  type NodeVisual,
+} from './render';
 import { resolveNodeStyle, resolveThemeId, THEMES } from './themes';
 import type { DocReader, MeasureAdapter, StructureType } from './types';
 import { contentBounds } from './viewport';
@@ -83,14 +88,29 @@ export function exportSceneSvg(
     nodeData,
   });
 
-  // 布局包围盒：minX/minY 可为负，viewBox 平移到原点；宽高向上取整为正整数
-  // （空文档退化为 1×1，不产生 0 尺寸 svg）。
+  // 导出边界：minX/minY 可为负，viewBox 平移到原点；宽高向上取整为正整数
+  // （空文档退化为 1×1，不产生 0 尺寸 svg）。基准 = contentBounds（只按节点盒，
+  // M6 T6 裁决「bracket 不扩画布边界」——画布 fit-to-view 口径不变）；但导出是
+  // 静态整图截图，概要 bracket（y=片段底+12、label 基线再 +14、每侧外扩 8）是
+  // 画面内容，被裁即丢——按布局结果的 summaries 自行外扩（镜像 renderScene 消费
+  // layout.summaries 的口径，不重读 reader）。无概要时外扩恒零，产物逐字节不变。
   const bounds = contentBounds(result);
-  const width = Math.max(1, Math.ceil(bounds.width));
-  const height = Math.max(1, Math.ceil(bounds.height));
+  let minX = bounds.minX;
+  const minY = bounds.minY;
+  let maxX = bounds.minX + bounds.width;
+  let maxY = bounds.minY + bounds.height;
+  for (const s of result.summaries) {
+    minX = Math.min(minX, s.x);
+    maxX = Math.max(maxX, s.x + s.w);
+    // 视觉下缘 = bracket 横线 y + label 基线（render 的 SUMMARY_LABEL_BASELINE）；
+    // 端子上挑（-6）恒在成员盒内（y=片段底+12 ≥ 片段底），无需上扩。
+    maxY = Math.max(maxY, s.y + SUMMARY_LABEL_BASELINE);
+  }
+  const width = Math.max(1, Math.ceil(maxX - minX));
+  const height = Math.max(1, Math.ceil(maxY - minY));
   svgEl.setAttribute('width', String(width));
   svgEl.setAttribute('height', String(height));
-  svgEl.setAttribute('viewBox', `${bounds.minX} ${bounds.minY} ${width} ${height}`);
+  svgEl.setAttribute('viewBox', `${minX} ${minY} ${width} ${height}`);
 
   const svg = new XMLSerializer().serializeToString(svgEl);
   return { svg, width, height };

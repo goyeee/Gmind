@@ -59,4 +59,40 @@ describe('exportSceneSvg（M4 Task 9，FR-IO-003）', () => {
     expect(width).toBeGreaterThan(0);
     expect(height).toBeGreaterThan(0);
   });
+
+  // M6 终审 Important 修复钉定：PNG/JPG 导出丢概要 bracket。reader 带 summaries 时
+  // bracket 必须入产物（web 侧 readerOf 缺 summaries 时 layout 拿不到概要、静默丢
+  // bracket）；且导出边界必须容纳 bracket 下探——画布 fit-to-view 的 contentBounds
+  // 只按节点盒（M6 T6 裁决「bracket 不扩画布边界」），导出是静态整图截图，需按
+  // 布局结果的 summaries 自行外扩（bracket 横线 y=片段底+12、label 基线再 +14）。
+  it('exportSceneSvg：概要 bracket 入产物（data-summary-id），导出边界容纳其下探（bbox 底 ≥ 片段底+26）', () => {
+    const reader: DocReader = {
+      ...stubReader(),
+      summaries: () => [{ id: 'sum-1', nodeIds: ['a', 'b'], label: '归纳' }],
+    };
+    const { svg, height } = exportSceneSvg(reader, {
+      structure: 'mindmap',
+      themeId: 'gmind-light',
+    });
+    // ① bracket 元素与 label 文本在序列化产物中（同时钉住 DocReader.summaries 契约）
+    expect(svg).toContain('data-summary-id="sum-1"');
+    expect(svg).toContain('归纳');
+    // ② 尺寸口径：片段底 = 概要成员（a/b）盒底最大值，导出包围盒底（viewBox minY +
+    //    height）必须 ≥ 片段底+26（12 gap + 14 label 基线），否则 bracket 被裁。
+    const parsed = new DOMParser().parseFromString(svg, 'image/svg+xml');
+    const bottomOf = (id: string): number => {
+      const g = parsed.querySelector(`[data-node-id="${id}"]`);
+      expect(g).not.toBeNull();
+      const m = /translate\((-?[\d.]+),\s*(-?[\d.]+)\)/.exec(g?.getAttribute('transform') ?? '');
+      const rect = g?.querySelector('rect');
+      expect(m).not.toBeNull();
+      expect(rect).not.toBeNull();
+      return Number(m?.[2]) + Number(rect?.getAttribute('height'));
+    };
+    const fragmentBottom = Math.max(bottomOf('a'), bottomOf('b'));
+    const viewBox = parsed.documentElement.getAttribute('viewBox');
+    expect(viewBox).toBeTruthy();
+    const minY = Number(viewBox?.split(/\s+/)[1]);
+    expect(minY + height).toBeGreaterThanOrEqual(fragmentBottom + 26);
+  });
 });
