@@ -84,6 +84,7 @@ import { HelpPanel } from '../editor/HelpPanel';
 import { MemberPanel } from '../editor/MemberPanel';
 import { RichPanel } from '../editor/RichPanel';
 import { CommentPanel, type CommentThreadView } from '../editor/CommentPanel';
+import { FindReplace } from '../editor/FindReplace';
 import { VersionPanel } from '../editor/VersionPanel';
 import { startCollab, getCurrentUser, type CollabHandle, type CollabStatus, type PresenceMember } from '../editor/collab';
 import {
@@ -244,6 +245,9 @@ export function EditorPage() {
   // 快捷键帮助面板开合（M5 Task 2，FR-EDT-007）：Ctrl/Cmd+? 经 keyboardMap onHelp
   // 与工具栏「快捷键」按钮双入口，均为 toggle 语义
   const [helpOpen, setHelpOpen] = useState(false);
+  // 查找替换条开合（M6 Task 3，企微对标）：Ctrl/Cmd+F / find-toggle 双入口打开，
+  // Esc / find-close 关闭（组件内部不持开合态）
+  const [findOpen, setFindOpen] = useState(false);
   // 当前用户身份（M4 Task 2 邀请区可见性）：与 awareness/last_editor 共用 users/me
   // 模块级缓存（不重发请求）；canInvite = 当前用户即创建者（WorkspacePage 行菜单
   // ownerUserId === me?.id 同口径），身份未装配（id 空串）一律不可见。
@@ -322,6 +326,36 @@ export function EditorPage() {
     document.addEventListener('mousedown', onDocMouseDown);
     return () => document.removeEventListener('mousedown', onDocMouseDown);
   }, [exportOpen]);
+
+  // —— 查找替换键位（M6 Task 3，企微对标）——
+  // Ctrl/Cmd+F 打开：非输入控件时 preventDefault 接管浏览器原生查找；焦点在
+  // input/textarea/select（标题输入、查找输入自身等）时让路原生行为，不重复触发
+  // 打开（isEditableTarget 与键盘映射/画布粘贴同一判定）。移动端只读不装配。
+  useEffect(() => {
+    if (readOnly) return;
+    const onKeyDown = (e: KeyboardEvent): void => {
+      if (e.key !== 'f' && e.key !== 'F') return;
+      if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey) return;
+      if (isEditableTarget(e.target)) return;
+      e.preventDefault();
+      setFindOpen(true);
+    };
+    document.addEventListener('keydown', onKeyDown, false);
+    return () => document.removeEventListener('keydown', onKeyDown, false);
+  }, [readOnly]);
+
+  // Esc 关闭查找条（清空定位）：打开期间挂 document 冒泡监听——查找输入内的 Esc
+  // 冒泡至此同样命中；节点编辑覆盖层的 Esc 先行 stopPropagation（不冲突）。
+  useEffect(() => {
+    if (!findOpen) return;
+    const onKeyDown = (e: KeyboardEvent): void => {
+      if (e.key !== 'Escape') return;
+      e.preventDefault();
+      setFindOpen(false);
+    };
+    document.addEventListener('keydown', onKeyDown, false);
+    return () => document.removeEventListener('keydown', onKeyDown, false);
+  }, [findOpen]);
 
   /**
    * 配额拦截闸（M2 终审修复轮）：置位期间阻止**新增**节点（PRD FR-ACC-003 语义），
@@ -1654,7 +1688,7 @@ export function EditorPage() {
           </div>
         </div>
         <span className="toolbar-sep" />
-        {/* 协作/视图组：成员 / 版本历史 / 快捷键 / 查找（T3 查找替换接线前禁用占位） */}
+        {/* 协作/视图组：成员 / 版本历史 / 快捷键 / 查找（T3 查找替换已接线） */}
         <div className="toolbar-group">
           <button
             data-testid="members-btn"
@@ -1689,8 +1723,9 @@ export function EditorPage() {
           <button
             data-testid="find-toggle"
             className="toolbar-btn"
-            title="查找（即将开放）"
-            disabled
+            title="查找 (Ctrl+F)"
+            aria-label="查找"
+            onClick={() => setFindOpen(true)}
           >
             <SearchIcon />
           </button>
@@ -1859,6 +1894,18 @@ export function EditorPage() {
         showToast={showToast}
       />
       <HelpPanel open={helpOpen} onClose={() => setHelpOpen(false)} />
+      {/* 查找替换条（M6 Task 3）：画布顶部浮层，开关/键位在页面侧；定位复用 locateNode
+          （selectOnly + 展开折叠祖先，与评论面板同一语义）；移动端只读不装配 */}
+      {!readOnly && (
+        <FindReplace
+          doc={doc}
+          open={findOpen}
+          onClose={() => setFindOpen(false)}
+          onLocate={locateNode}
+          afterUserWrite={afterUserWrite}
+          showToast={showToast}
+        />
+      )}
       <span hidden>{tick}</span>
     </div>
   );

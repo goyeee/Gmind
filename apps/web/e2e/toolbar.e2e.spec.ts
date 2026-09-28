@@ -8,7 +8,7 @@ import { expect, test, type Page } from '@playwright/test';
  *    组间竖线分隔符 .toolbar-sep ≥5；
  * 2. 图标按钮：全部 .toolbar-btn 均含内联 svg 子元素 + 非空 title 提示；
  * 3. 既有 testid 全保留（循环逐个断言可见）；
- * 4. 新增 find-toggle：禁用态 + title「查找（即将开放）」（T3 查找替换接线前占位）；
+ * 4. find-toggle：T3 起已接线为查找入口（启用 + title「查找 (Ctrl+F)」+ 点击打开查找条）；
  * 5. 组序与目标布局一致（按 x 坐标：返回 → 标题 → 撤销重做 → 结构主题 → 导出 → 协作 → 全屏）。
  *
  * 登录 helper 内联自 editor.e2e.spec.ts（新手机号注册即赠 3 个种子文件）。
@@ -85,13 +85,16 @@ test('工具栏：既有 testid 全保留且可见', async ({ page }) => {
   }
 });
 
-test('工具栏：find-toggle 为禁用占位（查找即将开放）', async ({ page }) => {
+test('工具栏：find-toggle 已接线为查找入口（T3 启用，替换 T1 占位断言）', async ({ page }) => {
   await openSeedDoc(page);
   const find = page.getByTestId('find-toggle');
   await expect(find).toBeVisible();
-  await expect(find).toBeDisabled();
-  await expect(find).toHaveAttribute('title', '查找（即将开放）');
+  await expect(find).toBeEnabled();
+  await expect(find).toHaveAttribute('title', '查找 (Ctrl+F)');
   await expect(find.locator('> svg')).toHaveCount(1);
+  // 点击打开查找条（详细查找替换链路见 find-replace.e2e.spec.ts）
+  await find.click();
+  await expect(page.getByTestId('find-bar')).toBeVisible();
 });
 
 test('工具栏：members-btn 与结构/主题下拉可访问名语义正确', async ({ page }) => {

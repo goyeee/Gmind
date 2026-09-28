@@ -1,0 +1,64 @@
+/* 查找替换条（M6 Task 3，企微对标）：画布顶部居中浮层。
+   页面固定视口无滚动（editor.css 绑定裁决），fixed 定位锚视口即可；
+   z-index 低于 context-menu（1200）/export（1050 同层不重叠）。 */
+.find-bar {
+  position: fixed;
+  top: 52px; /* 工具栏（单行）下缘外贴 */
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1040;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  background: #fff;
+  border: 1px solid #e5e6eb;
+  border-radius: 8px;
+  box-shadow: 0 4px 14px rgba(31, 35, 41, 0.1);
+}
+
+.find-bar .find-input {
+  width: 170px;
+  padding: 4px 8px;
+  font-size: 13px;
+  border: 1px solid #e5e6eb;
+  border-radius: 4px;
+  outline: none;
+}
+.find-bar .find-input:focus {
+  border-color: #3370ff;
+}
+
+.find-bar .find-count {
+  min-width: 34px;
+  text-align: center;
+  font-size: 12px;
+  color: #646a73;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.find-bar .find-btn {
+  padding: 3px 8px;
+  font-size: 13px;
+  border: 1px solid #e5e6eb;
+  border-radius: 4px;
+  background: #fff;
+  color: #1f2329;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.find-bar .find-btn:hover:not(:disabled) {
+  border-color: #3370ff;
+  color: #3370ff;
+}
+.find-bar .find-btn:disabled {
+  color: #a9aeb8;
+  cursor: not-allowed;
+}
+.find-bar .find-close-btn {
+  border: none;
+  font-size: 16px;
+  line-height: 1;
+  padding: 3px 6px;
+}
