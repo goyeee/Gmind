@@ -1,13 +1,14 @@
 /*
- * 节点标记面板（2026-09-28，企微标记面板对标）：插入菜单「标记」项右侧展开的
- * 宽面板。面板本体在 EditorPage 的 .insert-layer（菜单左 / 面板右 flex 弹层，
- * 定位模式对齐 .export-menu 下拉）内渲染，本文件只承担面板内部样式：
- * 分组行（组名左列窄栏 + 图标横排网格）、28×28 按钮（hover 底色 / 选中描边环）、
- * 优先级圆徽、表情区（tab + 网格，样式自 rich-panel.css 迁移）。
+ * 节点标记面板（2026-09-28 二次改版，需求方裁定）：右侧固定抽屉（对齐
+ * ThemePanel 形态：fixed 右上、宽 320、纵向滚动），顶部「图标/表情」页签。
+ * 首轮「菜单右侧子级弹层」形态被否（横向滚动 + 层级过深），已废弃。
  */
 
 .marker-panel {
-  width: 340px;
+  position: fixed;
+  top: 56px;
+  right: 16px;
+  width: 320px;
   max-height: calc(100vh - 80px);
   overflow-y: auto;
   display: flex;
@@ -18,6 +19,52 @@
   border: 1px solid #e5e6eb;
   border-radius: 8px;
   box-shadow: 0 4px 16px rgba(31, 35, 41, 0.14);
+  z-index: 1150;
+  font-size: 13px;
+}
+/* 头部：图标/表情页签 + 关闭钮 */
+.marker-panel-header {
+  display: flex;
+  align-items: center;
+}
+.marker-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+}
+.marker-tab {
+  padding: 4px 14px;
+  border: none;
+  background: transparent;
+  border-radius: 14px;
+  font-size: 13px;
+  color: #4e5969;
+  cursor: pointer;
+}
+.marker-tab.active {
+  background: #f0f5ff;
+  color: #3370ff;
+  font-weight: 600;
+}
+.marker-panel-close {
+  margin-left: auto;
+  width: 24px;
+  height: 24px;
+  border: none;
+  background: transparent;
+  border-radius: 6px;
+  font-size: 16px;
+  color: #86909c;
+  cursor: pointer;
+}
+.marker-panel-close:hover {
+  background: #f2f3f5;
+}
+.marker-panel-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 /* 无选中节点提示（与 T2 样式区 style-hint 同口径） */
 .marker-hint {

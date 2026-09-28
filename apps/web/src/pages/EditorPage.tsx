@@ -333,11 +333,13 @@ export function EditorPage() {
   // PNG 透明背景勾选（M4 Task 9，FR-IO-003）：默认勾选；JPG 无 alpha 恒白底。
   const [exportTransparent, setExportTransparent] = useState(true);
   const exportWrapRef = useRef<HTMLDivElement | null>(null);
-  // 插入菜单（2026-09-28，企微标记面板对标）：工具栏「插入」按钮的下拉开合；
-  // markersOpen = 右侧层标记面板展开态（菜单保持开，面板自菜单右侧展开——
-  // 同 .insert-layer 弹层容器内 menu 左 / panel 右）。菜单与面板同开同关。
+  // 插入菜单（2026-09-28 二次改版）：下拉开合 + 右侧抽屉标记面板
+  // {open, tab}（tab 由「图标/表情」菜单项决定，抽屉内可切换；对齐主题面板形态）。
   const [insertOpen, setInsertOpen] = useState(false);
-  const [markersOpen, setMarkersOpen] = useState(false);
+  const [markerPanel, setMarkerPanel] = useState<{ open: boolean; tab: 'icon' | 'emoji' }>({
+    open: false,
+    tab: 'icon',
+  });
   const insertWrapRef = useRef<HTMLDivElement | null>(null);
   // 右键菜单（Task 12）：nodeId 为节点菜单锚点；summaryId 为概要菜单锚点（M6 T6，
   // 二者互斥——右键命中 bracket 时弹概要菜单，命中节点时弹节点菜单）
@@ -394,12 +396,11 @@ export function EditorPage() {
     return () => document.removeEventListener('mousedown', onDocMouseDown);
   }, [exportOpen]);
 
-  // —— 插入菜单（企微标记面板对标）——
-  // 整层（菜单 + 右侧标记面板）关闭：外点 / Esc；移动端只读降级即收（按钮随
-  // 桌面工具栏分支卸载，展开态不留存——T5 口径）。
+  // —— 插入菜单 + 标记抽屉（2026-09-28 二次改版）——
+  // 菜单：外点 / Esc 关闭；只读降级即收。标记抽屉独立于菜单（Esc 关抽屉、
+  // 点画布节点不关——支持连续设置），× 按钮与 Esc 关闭。
   const closeInsertLayer = (): void => {
     setInsertOpen(false);
-    setMarkersOpen(false);
   };
   useEffect(() => {
     if (!insertOpen) return;
@@ -419,8 +420,20 @@ export function EditorPage() {
     };
   }, [insertOpen]);
   useEffect(() => {
-    if (readOnly && insertOpen) closeInsertLayer();
-  }, [readOnly, insertOpen]);
+    if (readOnly && (insertOpen || markerPanel.open)) {
+      closeInsertLayer();
+      setMarkerPanel((p) => ({ ...p, open: false }));
+    }
+  }, [readOnly, insertOpen, markerPanel.open]);
+  // 抽屉 Esc 关闭（独立监听，与菜单 Esc 同按键但互不依赖）
+  useEffect(() => {
+    if (!markerPanel.open) return;
+    const onKeyDown = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') setMarkerPanel((p) => ({ ...p, open: false }));
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [markerPanel.open]);
 
   /**
    * 标记写入（数据模型零改动）：setIcon 组内单选（null=取消）/ 组间并存，
@@ -2073,9 +2086,10 @@ export function EditorPage() {
           </button>
         </div>
         <span className="toolbar-sep" />
-        {/* 插入组（企微标记面板对标）：「插入」下拉——标记（右侧层标记面板）/
-            备注 / 链接 / 图片（聚焦 RichPanel 对应控件）。弹层为 menu 左 + 面板右
-            的 flex 布局（.insert-layer），定位模式对齐 export-wrap 下拉。 */}
+        {/* 插入组（2026-09-28 二次改版，需求方裁定）：下拉两并列项「图标」「表情」
+            打开右侧固定抽屉 MarkerPanel（对齐格式/主题面板形态，抽屉内可切换图标/
+            表情页签）；备注/链接/图片聚焦 RichPanel 对应控件。不再使用菜单右侧
+            子级弹层（首轮实现被否——横向滚动且层级过深）。 */}
         <div className="toolbar-group">
           <div className="insert-wrap" ref={insertWrapRef}>
             <button
@@ -2090,51 +2104,57 @@ export function EditorPage() {
               <InsertIcon />
             </button>
             {insertOpen && (
-              <div className="insert-layer">
-                <div className="insert-dropdown" role="menu" aria-label="插入">
-                  <button
-                    data-testid="insert-markers"
-                    role="menuitem"
-                    aria-haspopup="dialog"
-                    aria-expanded={markersOpen}
-                    onClick={() => setMarkersOpen((v) => !v)}
-                  >
-                    标记<span className="insert-sub-arrow">›</span>
-                  </button>
-                  <button
-                    data-testid="insert-note"
-                    role="menuitem"
-                    onClick={() => {
-                      closeInsertLayer();
-                      focusRichControl('textarea[aria-label="节点备注"]', '选中节点后编辑备注');
-                    }}
-                  >
-                    备注
-                  </button>
-                  <button
-                    data-testid="insert-link"
-                    role="menuitem"
-                    onClick={() => {
-                      closeInsertLayer();
-                      focusRichControl('input[aria-label="节点链接"]', '选中节点后编辑链接');
-                    }}
-                  >
-                    链接
-                  </button>
-                  <button
-                    data-testid="insert-image"
-                    role="menuitem"
-                    onClick={() => {
-                      closeInsertLayer();
-                      triggerImageInput();
-                    }}
-                  >
-                    图片
-                  </button>
-                </div>
-                {markersOpen && (
-                  <MarkerPanel selected={selectedSnapshot} onSetIcon={applyMarker} />
-                )}
+              <div className="insert-dropdown" role="menu" aria-label="插入">
+                <button
+                  data-testid="insert-icons"
+                  role="menuitem"
+                  onClick={() => {
+                    closeInsertLayer();
+                    setMarkerPanel({ open: true, tab: 'icon' });
+                  }}
+                >
+                  图标
+                </button>
+                <button
+                  data-testid="insert-emoji"
+                  role="menuitem"
+                  onClick={() => {
+                    closeInsertLayer();
+                    setMarkerPanel({ open: true, tab: 'emoji' });
+                  }}
+                >
+                  表情
+                </button>
+                <button
+                  data-testid="insert-note"
+                  role="menuitem"
+                  onClick={() => {
+                    closeInsertLayer();
+                    focusRichControl('textarea[aria-label="节点备注"]', '选中节点后编辑备注');
+                  }}
+                >
+                  备注
+                </button>
+                <button
+                  data-testid="insert-link"
+                  role="menuitem"
+                  onClick={() => {
+                    closeInsertLayer();
+                    focusRichControl('input[aria-label="节点链接"]', '选中节点后编辑链接');
+                  }}
+                >
+                  链接
+                </button>
+                <button
+                  data-testid="insert-image"
+                  role="menuitem"
+                  onClick={() => {
+                    closeInsertLayer();
+                    triggerImageInput();
+                  }}
+                >
+                  图片
+                </button>
               </div>
             )}
           </div>
@@ -2527,6 +2547,15 @@ export function EditorPage() {
       <HelpPanel open={helpOpen} onClose={() => setHelpOpen(false)} />
       {/* 主题缩略图选择面板（M6 Task 4）：套用 = setDocMeta themeId（与 select 同一
           写链路，可撤销）+ afterUserWrite，套用后关闭抽屉 */}
+      {markerPanel.open && (
+        <MarkerPanel
+          selected={selectedSnapshot}
+          onSetIcon={applyMarker}
+          tab={markerPanel.tab}
+          onTabChange={(tab) => setMarkerPanel((p) => ({ ...p, tab }))}
+          onClose={() => setMarkerPanel((p) => ({ ...p, open: false }))}
+        />
+      )}
       <ThemePanel
         open={themePanelOpen}
         currentId={themeId}

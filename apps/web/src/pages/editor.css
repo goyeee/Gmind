@@ -537,22 +537,17 @@ body.painter-active .editor-canvas svg {
   cursor: pointer;
 }
 
-/* 插入菜单（企微标记面板对标）：工具栏「插入」按钮的下拉 + 标记右侧层。
-   .insert-layer 为同一弹层容器（menu 左 / marker 面板右的 flex 布局），定位模式
-   对齐 .export-menu（absolute 于 relative 的 .insert-wrap，顶距 4px）。 */
+/* 插入菜单（2026-09-28 二次改版）：仅下拉（图标/表情/备注/链接/图片）——
+   标记面板已迁为右侧固定抽屉（marker-panel.css），不再有子级弹层。
+   定位对齐 .export-menu（absolute 于 relative 的 .insert-wrap，顶距 4px）。 */
 .insert-wrap {
   position: relative;
 }
-.insert-layer {
+.insert-dropdown {
   position: absolute;
   top: calc(100% + 4px);
   left: 0;
   z-index: 1200;
-  display: flex;
-  align-items: flex-start;
-  gap: 6px;
-}
-.insert-dropdown {
   background: #fff;
   border: 1px solid #e5e6eb;
   border-radius: 8px;
@@ -578,17 +573,6 @@ body.painter-active .editor-canvas svg {
 }
 .insert-dropdown button:hover {
   background: #f2f3f5;
-}
-/* 「标记」项右侧展开指示箭头（面板展开时指向面板） */
-.insert-sub-arrow {
-  color: #86909c;
-  font-size: 14px;
-  line-height: 1;
-  transform: rotate(0deg);
-  transition: transform 0.12s ease;
-}
-.insert-dropdown button[aria-expanded='true'] .insert-sub-arrow {
-  transform: rotate(90deg);
 }
 
 /* —— 移动端只读（M5 Task 5，OPEN-T-005；≤768px 断点） —— */
