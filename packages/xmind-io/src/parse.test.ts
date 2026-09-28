@@ -86,7 +86,7 @@ describe('parseXmind：2020+ content.json', () => {
     expect(kinds.structure).toBeGreaterThanOrEqual(1); // detached
   });
 
-  it('M7a-T1 标记映射：priority 1-7 原值、8/9 收敛 7；flag-*/star-* → icon；同组首个胜；无对应丢弃并计降级', () => {
+  it('M7a-T1 标记映射：priority 1-7 原值、8/9 收敛 7；flag-*/star-* → icon；star 恒胜；同组后续与无对应均计降级', () => {
     const topicOf = (markers: unknown[]) => ({
       class: 'topic',
       title: '中心',
@@ -100,23 +100,43 @@ describe('parseXmind：2020+ content.json', () => {
     );
     expect(parseXmind(bytes).root.icons).toEqual({ priority: '3' });
 
-    const hi = jsonZip(
-      JSON.stringify([
-        { class: 'sheet', title: 'S', rootTopic: topicOf([{ markerId: 'priority-9' }, { markerId: 'priority-2' }]) },
-      ]),
+    const hi = parseXmind(
+      jsonZip(
+        JSON.stringify([
+          { class: 'sheet', title: 'S', rootTopic: topicOf([{ markerId: 'priority-9' }, { markerId: 'priority-2' }]) },
+        ]),
+      ),
     );
-    expect(parseXmind(hi).root.icons).toEqual({ priority: '7' }); // 9→7；同组首个胜（priority-9 先出现）
+    expect(hi.root.icons).toEqual({ priority: '7' }); // 9→7；同组首个胜（priority-9 先出现）
+    expect(hi.degraded).toEqual([{ kind: 'style', count: 1 }]); // 被单选吞掉的 priority-2 计入 dropped（R1 2.4）
 
-    const fs = jsonZip(
-      JSON.stringify([
-        {
-          class: 'sheet',
-          title: 'S',
-          rootTopic: topicOf([{ markerId: 'flag-dark-green' }, { markerId: 'star-blue' }]),
-        },
-      ]),
+    const fs = parseXmind(
+      jsonZip(
+        JSON.stringify([
+          {
+            class: 'sheet',
+            title: 'S',
+            rootTopic: topicOf([{ markerId: 'flag-dark-green' }, { markerId: 'star-blue' }]),
+          },
+        ]),
+      ),
     );
-    expect(parseXmind(fs).root.icons).toEqual({ icon: 'flag' }); // flag-* 先出现胜出
+    expect(fs.root.icons).toEqual({ icon: 'important' }); // star 恒胜：无条件覆盖 flag 映射（对齐 repair）
+    expect(fs.degraded).toEqual([{ kind: 'style', count: 1 }]); // 被 star 吞掉的 flag 计入 dropped
+
+    const sf = parseXmind(
+      jsonZip(
+        JSON.stringify([
+          {
+            class: 'sheet',
+            title: 'S',
+            rootTopic: topicOf([{ markerId: 'star-blue' }, { markerId: 'flag-dark-green' }]),
+          },
+        ]),
+      ),
+    );
+    expect(sf.root.icons).toEqual({ icon: 'important' }); // star 恒胜与出现顺序无关
+    expect(sf.degraded).toEqual([{ kind: 'style', count: 1 }]); // 两种顺序下 flag 同样被吞掉计入 dropped
 
     const st = jsonZip(
       JSON.stringify([{ class: 'sheet', title: 'S', rootTopic: topicOf([{ markerId: 'star-red' }]) }],

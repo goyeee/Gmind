@@ -1,5 +1,5 @@
 import * as Y from 'yjs';
-import { ICON_GROUPS, type IconGroup } from './constants';
+import { ICON_GROUPS, iconValuesOf, type IconGroup } from './constants';
 import { ROOT_NODE_ID } from './doc';
 import {
   addChild,
@@ -53,8 +53,12 @@ export interface RestoreResult {
  *   重建节点纳入落位核对（②已按快照下标插入，正常零操作）——防御 ②③ 交错移位的
  *   边角，保证收敛是构造性的而非论证性的。
  * ④ 内容字段逐项对比（getNode 的 NodeSnapshot 全字段）：text/note/href/collapsed 直接
- *   比；icons 按 ICON_GROUPS 全组对比（组值不同 setIcon(value|null)）；task（M7a-T1）
- *   六字段逐项对比（全字段显式 patch 写回，联动规则对显式全量 patch 恒惰性）；
+ *   比；icons 按 ICON_GROUPS 全组对比（组值不同 setIcon(value|null)；**快照组值为值域外
+ *   旧标记——M6 旧 emoji 等 repair 有意保留、setIcon 目录校验拒绝——时计划期（事务外）
+ *   按 iconValuesOf 目录过滤，跳过恢复该标记：不回写快照值、也不清除 target 现状，
+ *   与 engine 剪贴板 isWritableIcon 同策略**）；task（M7a-T1）
+ *   六字段逐项对比（全字段显式 patch 写回，doneDate 恒显式给值含 null →
+ *   applyStatusRules 联动分支不触发，恢复结果即快照原值）；
  *   image 按 key 对比（key 变更时 w/h 随快照值一并写回）；style 按键集对比
  *   （补/改/删键，value null 删）。重建节点的字段回填 = addChild 后立即走同一 diff
  *   例程（新节点必全量不同）。
@@ -219,8 +223,9 @@ function snapIndexInSnapshot(snapById: Map<string, NodeSnapshot>, id: string): n
 }
 
 /** ④ 内容字段是否存在差异（计划期判定 + 执行期复用同一判定写入）。
- *  task（M7a-T1）按归一化快照逐字段对比；恢复走全字段 patch（显式值优先，
- *  applyStatusRules 的联动注入对全量 patch 恒惰性——见 applyFieldDiff 注）。 */
+ *  icons：快照组值为值域外旧标记时该组整体跳过（不写不清，恒视为无差异——见头注④）；
+ *  task（M7a-T1）按归一化快照逐字段对比；恢复走全字段 patch（doneDate 恒显式给值含
+ *  null，applyStatusRules 联动分支不触发——见 applyFieldDiff 注）。 */
 function hasFieldDiff(t: NodeSnapshot, s: NodeSnapshot): boolean {
   return (
     t.text !== s.text ||
@@ -229,9 +234,21 @@ function hasFieldDiff(t: NodeSnapshot, s: NodeSnapshot): boolean {
     t.collapsed !== s.collapsed ||
     diffImage(t.image, s.image) ||
     Object.keys(stylePatchOf(t.style, s.style)).length > 0 ||
-    ICON_GROUPS.some((group) => t.icons[group] !== s.icons[group]) ||
+    ICON_GROUPS.some((group) => iconGroupDiffers(group, t.icons[group], s.icons[group])) ||
     hasTaskDiff(t.task, s.task)
   );
+}
+
+/** 组图标差异（B1）：快照组值为值域外旧标记（repair 有意保留、setIcon 目录校验拒绝）
+ *  时返回 false（跳过该组）；快照组值缺失仍正常比对——target 多出的目录内值要清掉
+ *  （恢复 = 回滚到快照态，setIcon(null) 合法）。 */
+function iconGroupDiffers(
+  group: IconGroup,
+  tValue: string | undefined,
+  sValue: string | undefined,
+): boolean {
+  if (sValue !== undefined && !iconValuesOf(group).includes(sValue)) return false;
+  return tValue !== sValue;
 }
 
 /** task 差异判定（快照 task 恒为归一化对象，逐字段比即可）。 */
@@ -269,13 +286,18 @@ function applyFieldDiff(target: Y.Doc, id: string, s: NodeSnapshot): boolean {
     changed = true;
   }
   for (const group of ICON_GROUPS as readonly IconGroup[]) {
-    if (t.icons[group] !== s.icons[group]) {
-      setIcon(target, id, group, s.icons[group] ?? null, ORIGIN_RESTORE);
+    const snapValue = s.icons[group];
+    // B1：快照组值为值域外旧标记 → 跳过恢复该标记（计划期已按同规则过滤出计划，
+    // 此处执行期同判保证 setIcon 只收到目录内值或 null，事务内不再抛 INVALID_ICON_VALUE）。
+    if (snapValue !== undefined && !iconValuesOf(group).includes(snapValue)) continue;
+    if (t.icons[group] !== snapValue) {
+      setIcon(target, id, group, snapValue ?? null, ORIGIN_RESTORE);
       changed = true;
     }
   }
-  // task（M7a-T1）：全字段显式 patch——applyStatusRules 对「六键齐全」的 patch 不做
-  // 任何联动注入（doneDate/progress 显式给值则显式值胜），恢复结果即快照原值。
+  // task（M7a-T1）：全字段显式 patch——doneDate 恒显式给值（快照原值，含 null），
+  // applyStatusRules 联动分支（status→done 自动 doneDate/progress=100）以
+  // patch.doneDate === undefined 为触发前提，故联动不触发，恢复结果即快照原值。
   if (hasTaskDiff(t.task, s.task)) {
     setNodeTask(
       target,

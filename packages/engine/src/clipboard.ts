@@ -23,12 +23,11 @@
  */
 
 import {
-  EMOJI_VALUES,
   ICON_GROUPS,
-  ICON_VALUES,
   MAX_TEXT_LENGTH,
-  PRIORITY_VALUES,
+  iconValuesOf,
   outlineToSpec,
+  type IconGroup,
   type SpecNode,
 } from '@gmind/core';
 import type { DocReader, NodeSnapshotLike } from './types';
@@ -214,14 +213,15 @@ function assertPayloadNodeValid(node: PayloadNode): void {
   for (const child of node.children) assertPayloadNodeValid(child);
 }
 
-/** 内部（M7a-T1）：icon 写入口目录校验（core setIcon 同口径的镜像判定）——payload
+/** 内部（M7a-T1）：icon 写入口目录校验——值目录单源自 @gmind/core 的 iconValuesOf
+ *  （M7a-R1 2.5：与 core setIcon 同一目录来源，不再本地三元链镜像分发）。payload
  *  里的旧五组值（跨版本部署的系统剪贴板遗留）不写、静默降级，避免 paste 半途抛错
  *  造成部分粘贴（pasteNodes 无法回滚已建节点）。合法值正常写入。 */
 function isWritableIcon(group: string, value: string): boolean {
-  if (!(ICON_GROUPS as readonly string[]).includes(group)) return false;
-  const dir: readonly string[] =
-    group === 'priority' ? PRIORITY_VALUES : group === 'icon' ? ICON_VALUES : EMOJI_VALUES;
-  return dir.includes(value);
+  return (
+    (ICON_GROUPS as readonly string[]).includes(group) &&
+    iconValuesOf(group as IconGroup).includes(value)
+  );
 }
 
 /** 内部：递归重建一个 payload 子树，ids 按先序收集。 */

@@ -365,9 +365,11 @@ function writeIcon(node: Y.Map<unknown>, group: IconGroup, value: string | null)
  * - 三个日期为 null 或日历合法的 'YYYY-MM-DD'（2026-02-30 这类拒绝），否则 TASK_INVALID_DATE。
  *
  * 状态联动（规则唯一实现在 @gmind/shared applyStatusRules，core 与 web 共用、禁止双写）：
- * status→done 且未显式给 doneDate/已有完成日期时自动 doneDate=今天（本地日期字符串）
- * + progress=100（patch 显式给值则以 patch 为准）；status 离开 done 且未显式给
- * doneDate 时清空 doneDate；手改 doneDate 不反写 status。
+ * status→done 联动（patch.status='done' 且此前非 done、此前无完成日期、patch 未显式给
+ * doneDate）时自动 doneDate=今天（本地日期字符串）+ progress=100——mindgrid 语义：
+ * 联动分支 progress 恒置 100，patch 显式给的 progress 也被覆盖；patch 显式给 doneDate
+ * 时联动分支不触发（progress 保留 patch 值）。status 离开 done 且 patch 未显式给
+ * doneDate 时清空既有 doneDate；手改 doneDate 不反写 status。
  */
 export function setNodeTask(
   doc: Y.Doc,

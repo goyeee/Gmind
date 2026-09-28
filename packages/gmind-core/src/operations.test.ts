@@ -645,7 +645,14 @@ describe('setNodeTask（M7a-T1）', () => {
     expect(getNode(doc, id)!.task).toMatchObject({ status: 'done', progress: 100, doneDate: todayLocal() });
   });
 
-  it('status→done 时 patch 显式给值则显式值胜（progress/doneDate 不被覆盖）', () => {
+  it('status→done 联动 progress 恒置 100：patch 显式 progress 也被覆盖（mindgrid 语义）', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
+    const id = childrenIds(doc, ROOT_NODE_ID)[0]!;
+    setNodeTask(doc, id, { status: 'done', progress: 60 }); // 不传 doneDate → 联动触发
+    expect(getNode(doc, id)!.task).toMatchObject({ status: 'done', progress: 100, doneDate: todayLocal() });
+  });
+
+  it('status→done 时 patch 显式给 doneDate 则联动分支不触发（progress/doneDate 保留 patch 值）', () => {
     const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
     const id = childrenIds(doc, ROOT_NODE_ID)[0]!;
     setNodeTask(doc, id, { status: 'done', progress: 60, doneDate: '2026-01-15' });

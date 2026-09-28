@@ -149,6 +149,45 @@ describe('restoreFromSnapshot', () => {
     expectConverged(base, snap);
   });
 
+  it('恢复：快照含值域外旧 emoji（M6 遗留）计划期跳过——不抛错、该标记不回写、其余字段正常恢复', () => {
+    // B1（M7a-R1）：M6 存过 72 emoji、新目录仅 10；repair 有意保留值域外旧 emoji，
+    // setIcon 目录校验拒绝它们——修复前 restore 在事务内把快照值直交 setIcon，
+    // 部分恢复落库（500 + 半恢复）。修复后计划期（事务外）按 iconValuesOf 目录过滤。
+    const base = makeDoc(); // root → [A[A1], B]
+    const aId = idOf(base, 'A');
+    // M6 遗留注入：值域外旧 emoji 经「外部状态直入」落库（绕过 setIcon 目录校验，
+    // 与 repair 保留口径同形）；快照装载 docFromState 的 normalize 不收敛它。
+    const legacyIcons = new Y.Map<string>();
+    legacyIcons.set('emoji', '🚀');
+    (base.getMap('nodes').get(aId) as Y.Map<unknown>).set('icons', legacyIcons);
+    const snap = docFromState(docToState(base));
+    expect(getNode(snap, aId)!.icons).toEqual({ emoji: '🚀' }); // 前置：值域外值确在快照中
+
+    // 漂移：文本改写 + 旧 emoji 换成目录内新值（日常触发场景），随后恢复旧版本
+    setText(base, aId, '改了');
+    setIcon(base, aId, 'emoji', '😄');
+
+    const r = restoreFromSnapshot(base, snap); // 修复前：setIcon 拒绝 🚀 → 事务内抛错半恢复
+    expect(r.updated).toBe(1); // 仅文本差异入计划；🚀 组计划期跳过
+    expect(getNode(base, aId)!.text).toBe('A'); // 其余字段正常恢复
+    expect(getNode(base, aId)!.icons).toEqual({ emoji: '😄' }); // 不可回写标记跳过：现状 😄 保留
+    expect(normalizeTree(base, ORIGIN_SYSTEM)).toBe(0);
+
+    // 变体：target 现状无 emoji——同样跳过，不回写快照值也不写 null 清除（现状保留）
+    const base2 = makeDoc();
+    const a2 = idOf(base2, 'A');
+    const legacyIcons2 = new Y.Map<string>();
+    legacyIcons2.set('emoji', '🚀');
+    (base2.getMap('nodes').get(a2) as Y.Map<unknown>).set('icons', legacyIcons2);
+    const snap2 = docFromState(docToState(base2));
+    (base2.getMap('nodes').get(a2) as Y.Map<unknown>).delete('icons'); // 现状无 emoji
+    setText(base2, a2, '改了');
+    const r2 = restoreFromSnapshot(base2, snap2);
+    expect(r2.updated).toBe(1);
+    expect(getNode(base2, a2)!.text).toBe('A');
+    expect(getNode(base2, a2)!.icons).toEqual({}); // 不回写 🚀、也不清（无 emoji 可清）
+  });
+
   it('恢复：乱序重排收敛到快照同层顺序；meta 恢复 structureType/themeId 不动 title', () => {
     const base = makeDoc();
     const aId = idOf(base, 'A');
