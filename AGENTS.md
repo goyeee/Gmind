@@ -25,7 +25,10 @@
 | M5 | 打磨验收（设置页/快捷键面板/引导/埋点/移动端只读/NFR-P0） | ✅ 完成（一期收官） | docs/m5-acceptance.md |
 | M6 | 企微对标包（工具栏图标化/格式联动/查找替换/12 主题/emoji/概要/格式刷/动态/头像栏） | ✅ 完成（3 项待需求方裁定） | docs/m6-acceptance.md |
 | — | 连线两次修复（锚点偏移 c61df7e + 控制点恒 dx/2 a602824）+ 新建节点先落位 | ✅ 完成 | 金样/防回归断言在 packages/engine |
-| — | 节点标记面板企微化（6bc0d4b）：图标/进度/旗帜/星标/表情迁出 RichPanel → 工具栏「插入」菜单右侧层 MarkerPanel（数据模型零改动）；参照图 gui-test-screenshots/wecom_markers_ref*.png | ✅ 完成 | e2e marker-panel + 既有 spec 迁移 |
+| — | 节点标记面板企微化（6bc0d4b→2483652 二次改版为右侧抽屉+图标/表情页签）：标记体系迁出 RichPanel → 工具栏「插入」菜单；**形态待需求方确认后补测试**（内容将被 M7a 三组制切换重排） | ✅ 交付 / 测试挂账 | — |
+| M7a | mindgrid 合并轨第一弹（裁定 2026-09-28：任务常驻/冲突以 mindgrid 为准/深色后置 M7c）：core 任务字段+标记三组制切换、shared 派生规则、engine 新目录渲染、表格视图 | 🚧 进行中 | docs/superpowers/specs/2026-09-28-mindgrid-merge-m7.md |
+
+> **M7 合并轨与并行企微对标轨的关系**：`docs/superpowers/specs/2026-09-28-wecom-interaction-parity-design.md`（待评审）与本轨在标记分组/暗色上已被 2026-09-28 裁定更新，其余项（框选/拖动排序/⊕/格式抽屉/外框）不冲突、待并轨排期，见合并轨 spec §二。
 
 **当前门禁基线**（M6 收口时）：lint/typecheck 0；全仓单测 541；server e2e 182/182；web e2e 126 passed + 1 skipped（PERF 门）。
 
