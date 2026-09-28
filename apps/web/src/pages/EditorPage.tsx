@@ -179,6 +179,9 @@ type PainterMode = {
 /** WS 断开（或全断网）时的保存指示（M2 Task 3，FR-EDT-034）。 */
 const OFFLINE_STATUS = '离线编辑中，恢复联网后自动同步';
 
+/** 顶栏头像栏展示上限（M6 Task 9，企微对标）：超出折叠为「+N」溢出位。 */
+const MAX_AVATARS = 5;
+
 /** CollabStatus → 保存指示文案（四值：已保存 HH:MM / 保存中 / 离线编辑中 / 配额非重试）。 */
 function statusText(status: CollabStatus, detail?: string): string | null {
   switch (status) {
@@ -261,6 +264,11 @@ export function EditorPage() {
   // 在线成员（FR-COL-005）：collab onPresence 推进；成员面板开合。
   const [members, setMembers] = useState<PresenceMember[]>([]);
   const [membersOpen, setMembersOpen] = useState(false);
+  // 顶栏头像栏的会话内已见成员（M6 Task 9，企微对标）：presence 只含在线者，
+  // 「离线=灰」要求记住本会话曾出现过的成员——同一 onPresence 通道的派生缓存
+  // （非第二获取通道），Map 按 userId 去重、插入序=首见序（稳定展示顺序，
+  // 重复加入不换位）。文件切换随装配 effect cleanup 整体重置。
+  const [avatarSeen, setAvatarSeen] = useState<Map<string, PresenceMember>>(() => new Map());
   // 版本历史面板开合（M4 Task 8，FR-VER-004 UI）：装配模式同成员面板 open/onClose
   const [versionsOpen, setVersionsOpen] = useState(false);
   // 文档动态面板开合（M6 Task 8，企微对标）：版本历史旁入口，open/onClose 同款装配
@@ -1359,6 +1367,13 @@ export function EditorPage() {
   // 区/多选/已删）为 null → 样式区置灰 + 提示。tick 驱动重渲染，切换节点即时刷新。
   const selectedSnapshot = doc && selectedNodeId ? getNode(doc, selectedNodeId) : null;
 
+  // —— 顶栏头像栏派生（M6 Task 9，企微对标）——
+  // 在线判定 = 当前 presence 集；展示集 = 会话内已见成员首见序前 MAX_AVATARS 枚，
+  // 其余折叠为「+N」溢出位。离线成员（已见不在 presence）仍展示、灰态。
+  const avatarOnlineIds = new Set(members.map((m) => m.userId));
+  const avatarShown = [...avatarSeen.values()].slice(0, MAX_AVATARS);
+  const avatarOverflow = avatarSeen.size - avatarShown.length;
+
   // —— 评论动作（M3b Task 7，FR-CMT-002）——
 
   /**
@@ -1411,6 +1426,24 @@ export function EditorPage() {
   useEffect(() => {
     if (state) setStarred(state.starred);
   }, [state]);
+
+  /** presence → 会话内已见成员合并（M6 Task 9）：新成员或快照变更才产出新 Map，
+   *  无变化返回原引用（React bail out，不为 editing 抖动等高频回调付重渲染）。 */
+  const mergeAvatarSeen = (next: PresenceMember[]): void => {
+    setAvatarSeen((prev) => {
+      let merged: Map<string, PresenceMember> | null = null;
+      for (const m of next) {
+        const old = prev.get(m.userId);
+        if (old === m) continue;
+        if (old !== undefined && old.joinedAt === m.joinedAt && old.nickname === m.nickname) {
+          continue; // 同一会话快照未变（editing 翻转不重排头像栏）
+        }
+        merged ??= new Map(prev);
+        merged.set(m.userId, m);
+      }
+      return merged ?? prev;
+    });
+  };
 
   // —— 引擎装配主 effect ——
   useEffect(() => {
@@ -1667,7 +1700,10 @@ export function EditorPage() {
         remoteCursorsRef.current = cursors;
         cursorLayerRef.current?.setCursors(cursors, boxesRef.current);
       },
-      onPresence: (next) => setMembers(next),
+      onPresence: (next) => {
+        setMembers(next);
+        mergeAvatarSeen(next); // 头像栏会话缓存（M6 Task 9）：同一通道派生，见 state 声明处注释
+      },
       // persisted ack 携带的行 updated_at（M3a 准入 7.1）→ 刷新写序 base；此后断开
       // 走 PUT 兜底时，携带的是最后一次服务端持久化确认的行值
       onPersisted: (updatedAt) => {
@@ -1754,6 +1790,7 @@ export function EditorPage() {
       cursorLayerRef.current = null;
       remoteCursorsRef.current = [];
       setMembers([]);
+      setAvatarSeen(new Map()); // 头像栏会话缓存随文件切换重置（M6 Task 9）
       detachKeys?.();
       overlay.close(false);
       dragRef.current?.destroy();
@@ -2083,7 +2120,47 @@ export function EditorPage() {
             <FullscreenIcon />
           </button>
         </div>
-          </>
+        {/* 顶栏协作者头像栏（M6 Task 9，企微对标）：工具栏最右 ≤5 枚 24px 圆头像
+            （昵称首字符回退，底色=成员色），在线=全彩+成员色描边、离线=灰；溢出
+            「+N」；点击任意头像/溢出位 = 打开既有成员面板（members-btn 同一面板）。
+            数据源与 MemberPanel 同一 presence 通道（members/会话缓存 avatarSeen）；
+            移动端只读分支不装配（随桌面工具栏整体隐藏）。样式独立于 .toolbar-group
+            （无竖线分隔、右缘贴合，T1「7 组」布局契约不动——零回归裁决）。 */}
+        <div className="avatar-bar" data-testid="avatar-bar" aria-label="协作者">
+          {avatarShown.map((m) => {
+            const online = avatarOnlineIds.has(m.userId);
+            return (
+              <button
+                key={m.userId}
+                type="button"
+                data-testid={`avatar-${m.userId}`}
+                className={`avatar-chip${online ? ' online' : ' offline'}`}
+                style={
+                  online
+                    ? { background: m.color, boxShadow: `0 0 0 2px #fff, 0 0 0 3px ${m.color}` }
+                    : undefined
+                }
+                title={`${m.nickname}（${online ? '在线' : '离线'}）`}
+                aria-label={`${m.nickname}（${online ? '在线' : '离线'}）`}
+                onClick={() => setMembersOpen(true)}
+              >
+                {m.nickname.charAt(0) || '？'}
+              </button>
+            );
+          })}
+          {avatarOverflow > 0 && (
+            <button
+              type="button"
+              data-testid="avatar-overflow"
+              className="avatar-overflow"
+              title={`还有 ${avatarOverflow} 位协作者`}
+              onClick={() => setMembersOpen(true)}
+            >
+              +{avatarOverflow}
+            </button>
+          )}
+        </div>
+      </>
         )}
       </header>
 

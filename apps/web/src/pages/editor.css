@@ -151,6 +151,54 @@ body.painter-active .editor-canvas svg {
   text-align: center;
 }
 
+/* 顶栏协作者头像栏（M6 Task 9，企微对标）：工具栏最右 24px 圆头像（昵称首字符，
+   底色=成员色，在线描边=白边+成员色环由内联样式随成员色写入），离线灰底无描边。
+   独立于 .toolbar-group（无竖线分隔、右缘贴合，T1「7 组」布局契约不动）。 */
+.avatar-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 8px;
+}
+.editor-toolbar .avatar-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: #fff;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+}
+.editor-toolbar .avatar-chip.offline {
+  background: #a9aeb8;
+  box-shadow: none;
+  opacity: 0.75;
+}
+/* 溢出位「+N」：灰色小丸，点击同样打开成员面板 */
+.editor-toolbar .avatar-overflow {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 24px;
+  padding: 0 7px;
+  border: none;
+  border-radius: 12px;
+  background: #e5e6eb;
+  color: #4e5969;
+  font-size: 12px;
+  cursor: pointer;
+}
+.editor-toolbar .avatar-overflow:hover {
+  background: #d5d7de;
+}
+
 .editor-canvas {
   flex: 1;
   position: relative;
