@@ -44,6 +44,7 @@ const EXISTING_TESTIDS = [
   'export-menu',
   'members-btn',
   'versions-toggle',
+  'activity-toggle',
   'help-toggle',
   'fullscreen-btn',
 ] as const;
@@ -66,9 +67,9 @@ test('工具栏：单行分组 + 竖线分隔符（7 组 / ≥5 分隔线）', a
 test('工具栏：图标按钮均带内联 svg 与 title 提示', async ({ page }) => {
   await openSeedDoc(page);
   const iconButtons = page.locator('.editor-toolbar button.toolbar-btn');
-  // 返回/撤销/重做/格式刷/导出/成员/版本历史/快捷键/查找/全屏/主题面板 = 11 个
-  // 图标按钮（T7 新增 format-painter，T4 新增 theme-panel-toggle；既有零回归）
-  await expect(iconButtons).toHaveCount(11);
+  // 返回/撤销/重做/格式刷/导出/成员/版本历史/动态/快捷键/查找/全屏/主题面板 = 12 个
+  // 图标按钮（T8 新增 activity-toggle，T7 format-painter，T4 theme-panel-toggle）
+  await expect(iconButtons).toHaveCount(12);
   const count = await iconButtons.count();
   for (let i = 0; i < count; i++) {
     const btn = iconButtons.nth(i);
@@ -128,7 +129,7 @@ test('工具栏：组序符合企微对标布局（返回|标题|撤销重做|�
   for (let i = 1; i < xs.length; i++) {
     expect(xs[i], `第 ${i + 1} 组必须在第 ${i} 组右侧（x 单调递增）`).toBeGreaterThan(xs[i - 1]);
   }
-  // 同组相邻：撤销 < 重做、结构 < 主题、成员 < 版本历史 < 快捷键 < 查找
+  // 同组相邻：撤销 < 重做、结构 < 主题、成员 < 版本历史 < 动态 < 快捷键 < 查找
   const undoX = (await page.getByTestId('undo-btn').boundingBox())!.x;
   const redoX = (await page.getByTestId('redo-btn').boundingBox())!.x;
   expect(redoX).toBeGreaterThan(undoX);
@@ -137,9 +138,11 @@ test('工具栏：组序符合企微对标布局（返回|标题|撤销重做|�
   expect(themeX).toBeGreaterThan(structX);
   const membersX = (await page.getByTestId('members-btn').boundingBox())!.x;
   const versionsX = (await page.getByTestId('versions-toggle').boundingBox())!.x;
+  const activityX = (await page.getByTestId('activity-toggle').boundingBox())!.x;
   const helpX = (await page.getByTestId('help-toggle').boundingBox())!.x;
   const findX = (await page.getByTestId('find-toggle').boundingBox())!.x;
   expect(versionsX).toBeGreaterThan(membersX);
-  expect(helpX).toBeGreaterThan(versionsX);
+  expect(activityX).toBeGreaterThan(versionsX); // T8 动态入口在版本历史右侧
+  expect(helpX).toBeGreaterThan(activityX);
   expect(findX).toBeGreaterThan(helpX);
 });

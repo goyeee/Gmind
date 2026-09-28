@@ -1,0 +1,90 @@
+/* 文档动态面板 — M6 Task 8（企微对标）。定位/骨架复用 ThemePanel 抽屉模式：
+   编辑器右上角工具栏下方浮层，open=false 整棵不渲染（组件侧裁剪）。 */
+
+.activity-panel {
+  position: fixed;
+  top: 56px;
+  right: 16px;
+  width: 320px;
+  max-height: 60vh;
+  overflow: auto;
+  background: #fff;
+  border: 1px solid #e5e6eb;
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  z-index: 1150;
+  padding: 8px 12px 12px;
+  font-size: 13px;
+}
+
+.activity-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 0 6px;
+  border-bottom: 1px solid #f2f3f5;
+}
+.activity-panel-title {
+  font-weight: 600;
+}
+.activity-panel-close {
+  border: none;
+  background: none;
+  font-size: 16px;
+  line-height: 1;
+  color: #86909c;
+  cursor: pointer;
+  padding: 2px 6px;
+}
+.activity-panel-empty {
+  margin: 16px 0;
+  color: #86909c;
+  text-align: center;
+}
+
+/* 动态时间线：左缘圆点 + 事件行（企微动态流形态） */
+.activity-items {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+}
+.activity-item {
+  position: relative;
+  padding: 8px 0 8px 16px;
+  border-bottom: 1px solid #f7f8fa;
+}
+.activity-item:last-child {
+  border-bottom: none;
+}
+.activity-item::before {
+  content: '';
+  position: absolute;
+  left: 2px;
+  top: 14px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #3370ff;
+}
+.activity-item-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+.activity-item-user {
+  font-weight: 500;
+  color: #1d2129;
+}
+.activity-item-action {
+  color: #4e5969;
+}
+.activity-item-desc {
+  margin: 2px 0 0;
+  color: #4e5969;
+}
+.activity-item-time {
+  display: block;
+  margin-top: 2px;
+  font-size: 12px;
+  color: #86909c;
+}

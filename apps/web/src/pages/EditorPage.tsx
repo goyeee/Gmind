@@ -67,8 +67,10 @@ import {
   Viewport,
 } from '@gmind/engine';
 import { attachKeyboardMap, isEditableTarget } from '../editor/keyboardMap';
+import { ActivityPanel } from '../editor/ActivityPanel';
 import { ThemePanel, THEME_LABELS, THEME_ORDER } from '../editor/ThemePanel';
 import {
+  ActivityIcon,
   BackIcon,
   ExportIcon,
   FullscreenIcon,
@@ -261,6 +263,8 @@ export function EditorPage() {
   const [membersOpen, setMembersOpen] = useState(false);
   // 版本历史面板开合（M4 Task 8，FR-VER-004 UI）：装配模式同成员面板 open/onClose
   const [versionsOpen, setVersionsOpen] = useState(false);
+  // 文档动态面板开合（M6 Task 8，企微对标）：版本历史旁入口，open/onClose 同款装配
+  const [activityOpen, setActivityOpen] = useState(false);
   // 快捷键帮助面板开合（M5 Task 2，FR-EDT-007）：Ctrl/Cmd+? 经 keyboardMap onHelp
   // 与工具栏「快捷键」按钮双入口，均为 toggle 语义
   const [helpOpen, setHelpOpen] = useState(false);
@@ -2038,6 +2042,16 @@ export function EditorPage() {
           >
             <HistoryIcon />
           </button>
+          {/* 文档动态（M6 Task 8，企微对标）：events 只读流（评论/导出/版本恢复等） */}
+          <button
+            data-testid="activity-toggle"
+            className="toolbar-btn"
+            title="动态"
+            aria-label="文档动态"
+            onClick={() => setActivityOpen((v) => !v)}
+          >
+            <ActivityIcon />
+          </button>
           {/* 快捷键帮助（M5 Task 2，FR-EDT-007）：工具栏入口，Ctrl/Cmd+? 同一开关 */}
           <button
             data-testid="help-toggle"
@@ -2253,6 +2267,12 @@ export function EditorPage() {
         open={versionsOpen}
         onClose={() => setVersionsOpen(false)}
         showToast={showToast}
+      />
+      {/* 文档动态面板（M6 Task 8）：events 只读流抽屉，开面板时拉取（ThemePanel 模式） */}
+      <ActivityPanel
+        fileId={fileId}
+        open={activityOpen}
+        onClose={() => setActivityOpen(false)}
       />
       <MemberPanel
         members={members}

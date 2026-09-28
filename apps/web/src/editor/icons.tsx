@@ -174,3 +174,15 @@ export function StarIcon({ className }: IconProps) {
     </svg>
   );
 }
+
+/** 动态（信息流：左列时间圆点 + 事件行）：T8 文档动态面板入口 */
+export function ActivityIcon({ className }: IconProps) {
+  return (
+    <svg {...svgProps(className)}>
+      <circle cx="2.8" cy="3.5" r="0.9" />
+      <circle cx="2.8" cy="8" r="0.9" />
+      <circle cx="2.8" cy="12.5" r="0.9" />
+      <path d="M5.5 3.5h8M5.5 8h8M5.5 12.5h5.5" />
+    </svg>
+  );
+}

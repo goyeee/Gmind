@@ -5,6 +5,7 @@ import { CommentsModule } from './comments/comments.module';
 import { DatabaseModule } from './database/database.module';
 import { DevE2eModule } from './dev/dev-e2e.module';
 import { EventsModule } from './events/events.module';
+import { EventsQueryModule } from './events/events-query.module';
 import { FilesModule } from './files/files.module';
 import { FoldersModule } from './folders/folders.module';
 import { HealthController } from './health/health.controller';
@@ -18,7 +19,7 @@ import { UsersModule } from './users/users.module';
 import { VersionsModule } from './versions/versions.module';
 
 @Module({
-  imports: [DatabaseModule, SessionModule, UsersModule, FilesModule, FoldersModule, AuthModule, StorageModule, CollabModule, CommentsModule, NotifyModule, TrashModule, JobsModule, ShareModule, VersionsModule, EventsModule, DevE2eModule],
+  imports: [DatabaseModule, SessionModule, UsersModule, FilesModule, FoldersModule, AuthModule, StorageModule, CollabModule, CommentsModule, NotifyModule, TrashModule, JobsModule, ShareModule, VersionsModule, EventsModule, EventsQueryModule, DevE2eModule],
   controllers: [HealthController],
 })
 export class AppModule {}
