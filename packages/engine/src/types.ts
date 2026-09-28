@@ -98,8 +98,23 @@ export interface ThemeTokens {
   collapseBadgeFg: string;
 }
 
-/** 主题标识：core meta `themeId` 的合法值域（'gmind-light' 为解析期别名，见 resolveThemeId）。 */
-export type ThemeId = 'gmind-blue' | 'gmind-warm' | 'gmind-accessible';
+/** 主题标识：core meta `themeId` 的合法值域（'gmind-light' 为解析期别名，见 resolveThemeId）。
+ *  M6 Task 4 扩容：M1b 三套 + 企微对标九套（deep-blue 深蓝商务 / forest 森绿 /
+ *  sakura 樱粉 / graphite 石墨 / violet 紫罗兰 / amber 琥珀 / celadon 青瓷 /
+ *  ink-wash 水墨 / peach 蜜桃）。 */
+export type ThemeId =
+  | 'gmind-blue'
+  | 'gmind-warm'
+  | 'gmind-accessible'
+  | 'deep-blue'
+  | 'forest'
+  | 'sakura'
+  | 'graphite'
+  | 'violet'
+  | 'amber'
+  | 'celadon'
+  | 'ink-wash'
+  | 'peach';
 
 /**
  * 节点最终解析样式：主题分级派生 + 节点级 nodeStyle 覆盖后的渲染输入

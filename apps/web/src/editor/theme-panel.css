@@ -1,0 +1,81 @@
+/* 主题选择面板 — M6 Task 4（企微对标）。定位/骨架复用 MemberPanel 抽屉模式：
+   编辑器右上角工具栏下方浮层，open=false 整棵不渲染（组件侧裁剪）。 */
+
+.theme-panel {
+  position: fixed;
+  top: 56px;
+  right: 16px;
+  width: 320px;
+  max-height: 60vh;
+  overflow: auto;
+  background: #fff;
+  border: 1px solid #e5e6eb;
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  z-index: 1150;
+  padding: 8px 12px 12px;
+  font-size: 13px;
+}
+
+.theme-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 0 6px;
+  border-bottom: 1px solid #f2f3f5;
+}
+.theme-panel-title {
+  font-weight: 600;
+}
+.theme-panel-close {
+  border: none;
+  background: none;
+  font-size: 16px;
+  line-height: 1;
+  color: #86909c;
+  cursor: pointer;
+  padding: 2px 6px;
+}
+
+/* 缩略图网格：3 列自适应，企微对标的选择面板形态 */
+.theme-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin-top: 8px;
+}
+.theme-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid #e5e6eb;
+  border-radius: 6px;
+  background: #fff;
+  cursor: pointer;
+}
+.theme-item:hover {
+  border-color: #94bfff;
+  background: #f7faff;
+}
+.theme-item.current {
+  border-color: #3370ff;
+  box-shadow: 0 0 0 1px #3370ff inset;
+}
+.theme-thumb {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 4px;
+}
+.theme-item-label {
+  font-size: 12px;
+  color: #4e5969;
+  line-height: 1.4;
+  text-align: center;
+}
+.theme-item.current .theme-item-label {
+  color: #3370ff;
+  font-weight: 500;
+}

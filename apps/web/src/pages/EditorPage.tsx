@@ -53,6 +53,7 @@ import {
   resolveThemeId,
   type SceneRoot,
   type TextStyle,
+  type ThemeId,
   siblingEnd,
   SelectionModel,
   THEMES,
@@ -61,6 +62,7 @@ import {
   Viewport,
 } from '@gmind/engine';
 import { attachKeyboardMap, isEditableTarget } from '../editor/keyboardMap';
+import { ThemePanel, THEME_LABELS, THEME_ORDER } from '../editor/ThemePanel';
 import {
   BackIcon,
   ExportIcon,
@@ -140,11 +142,12 @@ const STRUCTURE_OPTIONS: { value: string; label: string }[] = [
   { value: 'org', label: '组织架构图' },
 ];
 
-const THEME_OPTIONS: { value: string; label: string }[] = [
-  { value: 'gmind-blue', label: '经典蓝' },
-  { value: 'gmind-warm', label: '暖橙' },
-  { value: 'gmind-accessible', label: '无障碍' },
-];
+/** 主题下拉选项（M6 Task 4 扩容 12 套）：与 ThemePanel 缩略图网格同源同序，
+ *  select 路径保留（零回归裁决——既有 toolbar/mobile-readonly 用例仍走 selectOption）。 */
+const THEME_OPTIONS: { value: ThemeId; label: string }[] = THEME_ORDER.map((id) => ({
+  value: id,
+  label: THEME_LABELS[id],
+}));
 
 /** 缩放快捷档位（Task 15 FR-EDT-027，PRD 50%~200%）。 */
 const ZOOM_PRESETS = [50, 75, 100, 150, 200];
@@ -248,6 +251,9 @@ export function EditorPage() {
   // 查找替换条开合（M6 Task 3，企微对标）：Ctrl/Cmd+F / find-toggle 双入口打开，
   // Esc / find-close 关闭（组件内部不持开合态）
   const [findOpen, setFindOpen] = useState(false);
+  // 主题缩略图选择面板开合（M6 Task 4，企微对标）：theme-panel-toggle 打开，
+  // theme-panel-close / 套用任一主题后关闭；与 theme-select 并存（零回归裁决）
+  const [themePanelOpen, setThemePanelOpen] = useState(false);
   // 当前用户身份（M4 Task 2 邀请区可见性）：与 awareness/last_editor 共用 users/me
   // 模块级缓存（不重发请求）；canInvite = 当前用户即创建者（WorkspacePage 行菜单
   // ownerUserId === me?.id 同口径），身份未装配（id 空串）一律不可见。
@@ -1621,6 +1627,18 @@ export function EditorPage() {
               ))}
             </select>
           </div>
+          {/* 主题缩略图选择面板入口（M6 Task 4）：select 旁新增图标按钮打开抽屉；
+              select 本体保留走既有 selectOption 路径（零回归） */}
+          <button
+            data-testid="theme-panel-toggle"
+            className="toolbar-btn"
+            title="主题面板"
+            aria-label="主题面板"
+            aria-expanded={themePanelOpen}
+            onClick={() => setThemePanelOpen((v) => !v)}
+          >
+            <ThemeIcon />
+          </button>
         </div>
         <span className="toolbar-sep" />
         {/* 导出组（M4 Task 5，FR-IO-004）：XMind + PNG/JPG（Task 9 就地追加，
@@ -1894,6 +1912,19 @@ export function EditorPage() {
         showToast={showToast}
       />
       <HelpPanel open={helpOpen} onClose={() => setHelpOpen(false)} />
+      {/* 主题缩略图选择面板（M6 Task 4）：套用 = setDocMeta themeId（与 select 同一
+          写链路，可撤销）+ afterUserWrite，套用后关闭抽屉 */}
+      <ThemePanel
+        open={themePanelOpen}
+        currentId={themeId}
+        onClose={() => setThemePanelOpen(false)}
+        onApply={(id) => {
+          setThemePanelOpen(false);
+          if (!doc || id === themeId) return;
+          setDocMeta(doc, { themeId: id }, ORIGIN_USER);
+          afterUserWrite();
+        }}
+      />
       {/* 查找替换条（M6 Task 3）：画布顶部浮层，开关/键位在页面侧；定位复用 locateNode
           （selectOnly + 展开折叠祖先，与评论面板同一语义）；移动端只读不装配 */}
       {!readOnly && (

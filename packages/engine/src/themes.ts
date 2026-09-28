@@ -1,12 +1,18 @@
 /**
- * 主题系统：三套预置主题 + 节点样式解析 — M1b Task 5（FR-EDT-014）。
+ * 三套预置主题 + 九套扩容主题 — M6 Task 4（企微对标）。
  *
- * 绑定裁决（M1b 计划）：
- * - THEMES 恰三套：'gmind-blue'（默认经典蓝 #3370ff）、'gmind-warm'（暖橙 #ff8800 系）、
+ * M1b 原始裁决（保留）：
+ * - THEMES 原三套：'gmind-blue'（默认经典蓝 #3370ff）、'gmind-warm'（暖橙 #ff8800 系）、
  *   'gmind-accessible'（WCAG AA 正文对比度 ≥4.5:1；色盲友好：蓝 #1a5fb4 / 橙 #e66100
  *   双色系，避开红绿对比）。
  * - core meta `themeId` 的历史默认 'gmind-light' 不改库：resolveThemeId 解析时视作
  *   'gmind-blue' 别名；其余未知值一律兜底 'gmind-blue'。
+ *
+ * M6 Task 4 扩容裁决：新增九套（每套三级 text-vs-fill 对比度 ≥4.5:1，a11y 用例守卫
+ * 全 12 套跑 contrastRatio）：deep-blue 深蓝商务 / forest 森绿 / sakura 樱粉 /
+ * graphite 石墨（三级浅色文字但非暗色模式）/ violet 紫罗兰 / amber 琥珀 /
+ * celadon 青瓷 / ink-wash 水墨 / peach 蜜桃。布局度量与字体栈沿用共享常量
+ * （跨主题布局一致），主题只分化颜色/圆角/线宽。
  * - resolveNodeStyle：depth 0=root / 1=level1 / ≥2=level2 级联取主题默认，再按
  *   nodeStyle 的 fill/border/color(→textColor)/fontSize/fontFamily 逐 key 覆盖；
  *   fontSize 经 Number() 归一，NaN（或空串/非正数）回退主题值。颜色值的合法性
@@ -45,7 +51,7 @@ export function contrastRatio(hex1: string, hex2: string): number {
 }
 
 // ---------------------------------------------------------------------------
-// 三套预置主题
+// 预置主题（M1b 三套 + M6 Task 4 扩容九套）
 // ---------------------------------------------------------------------------
 
 /** 三主题共享的布局度量（与 T4 金样桩同值：布局行为跨主题一致，主题只分化颜色/字体）。 */
@@ -160,11 +166,314 @@ const GMIND_ACCESSIBLE: ThemeTokens = {
   collapseBadgeFg: '#ffffff',
 };
 
-/** 三套预置主题（键域即 ThemeId）。 */
+// ---------------------------------------------------------------------------
+// M6 Task 4 扩容九套（企微对标）
+// ---------------------------------------------------------------------------
+
+/**
+ * 深蓝商务：深海军蓝根 #1f3a5f 白字，一级浅蓝灰底、二级白底，冷峻正式。
+ */
+const DEEP_BLUE: ThemeTokens = {
+  ...SHARED_METRICS,
+  rootFill: '#1f3a5f',
+  rootBorderColor: '#152a47',
+  rootTextColor: '#ffffff',
+  rootFontSize: 20,
+  rootFontWeight: 600,
+  rootFontFamily: SYSTEM_FONT_STACK,
+  level1Fill: '#d8e4f2',
+  level1BorderColor: '#5a7ea6',
+  level1TextColor: '#1a2733',
+  level1FontSize: 16,
+  level1FontWeight: 500,
+  level1FontFamily: SYSTEM_FONT_STACK,
+  level2Fill: '#ffffff',
+  level2BorderColor: '#b9c8dc',
+  level2TextColor: '#33404f',
+  level2FontSize: 14,
+  level2FontWeight: 400,
+  level2FontFamily: SYSTEM_FONT_STACK,
+  canvasBackground: '#eef2f7',
+  edgeColor: '#5a7ea6',
+  edgeWidth: 2,
+  nodeBorderRadius: 6,
+  nodeBorderWidth: 1,
+  collapseBadgeBg: '#1f3a5f',
+  collapseBadgeFg: '#ffffff',
+};
+
+/**
+ * 森绿：森林绿根 #2d6a4f 白字，一级淡绿底深绿字、二级白底，自然沉稳。
+ */
+const FOREST: ThemeTokens = {
+  ...SHARED_METRICS,
+  rootFill: '#2d6a4f',
+  rootBorderColor: '#1f4a37',
+  rootTextColor: '#ffffff',
+  rootFontSize: 20,
+  rootFontWeight: 600,
+  rootFontFamily: SYSTEM_FONT_STACK,
+  level1Fill: '#d7eadd',
+  level1BorderColor: '#6b9b7f',
+  level1TextColor: '#1b3a2a',
+  level1FontSize: 16,
+  level1FontWeight: 500,
+  level1FontFamily: SYSTEM_FONT_STACK,
+  level2Fill: '#ffffff',
+  level2BorderColor: '#bcd8c6',
+  level2TextColor: '#2f4638',
+  level2FontSize: 14,
+  level2FontWeight: 400,
+  level2FontFamily: SYSTEM_FONT_STACK,
+  canvasBackground: '#f2f7f3',
+  edgeColor: '#6b9b7f',
+  edgeWidth: 2,
+  nodeBorderRadius: 8,
+  nodeBorderWidth: 1,
+  collapseBadgeBg: '#2d6a4f',
+  collapseBadgeFg: '#ffffff',
+};
+
+/**
+ * 樱粉：玫瑰粉根 #b83b5e 白字（≥4.5:1），一级淡粉底酒红字、二级白底，柔和明快。
+ */
+const SAKURA: ThemeTokens = {
+  ...SHARED_METRICS,
+  rootFill: '#b83b5e',
+  rootBorderColor: '#932a49',
+  rootTextColor: '#ffffff',
+  rootFontSize: 20,
+  rootFontWeight: 600,
+  rootFontFamily: SYSTEM_FONT_STACK,
+  level1Fill: '#fde4ec',
+  level1BorderColor: '#e08aa5',
+  level1TextColor: '#5c1a31',
+  level1FontSize: 16,
+  level1FontWeight: 500,
+  level1FontFamily: SYSTEM_FONT_STACK,
+  level2Fill: '#ffffff',
+  level2BorderColor: '#eec3d1',
+  level2TextColor: '#4a3540',
+  level2FontSize: 14,
+  level2FontWeight: 400,
+  level2FontFamily: SYSTEM_FONT_STACK,
+  canvasBackground: '#fdf4f7',
+  edgeColor: '#e08aa5',
+  edgeWidth: 2,
+  nodeBorderRadius: 12,
+  nodeBorderWidth: 1,
+  collapseBadgeBg: '#b83b5e',
+  collapseBadgeFg: '#ffffff',
+};
+
+/**
+ * 石墨：石墨灰根 #3d434c 白字、一级中灰底 #67707c 白字（浅色文字但非暗色模式：
+ * 画布仍浅色 #f4f5f7，仅节点盒走灰阶）、二级白底深灰字。
+ */
+const GRAPHITE: ThemeTokens = {
+  ...SHARED_METRICS,
+  rootFill: '#3d434c',
+  rootBorderColor: '#2a2f36',
+  rootTextColor: '#ffffff',
+  rootFontSize: 20,
+  rootFontWeight: 600,
+  rootFontFamily: SYSTEM_FONT_STACK,
+  level1Fill: '#67707c',
+  level1BorderColor: '#4d545e',
+  level1TextColor: '#ffffff',
+  level1FontSize: 16,
+  level1FontWeight: 500,
+  level1FontFamily: SYSTEM_FONT_STACK,
+  level2Fill: '#ffffff',
+  level2BorderColor: '#c3c8cf',
+  level2TextColor: '#3b4048',
+  level2FontSize: 14,
+  level2FontWeight: 400,
+  level2FontFamily: SYSTEM_FONT_STACK,
+  canvasBackground: '#f4f5f7',
+  edgeColor: '#9aa1ab',
+  edgeWidth: 2,
+  nodeBorderRadius: 4,
+  nodeBorderWidth: 1,
+  collapseBadgeBg: '#3d434c',
+  collapseBadgeFg: '#ffffff',
+};
+
+/**
+ * 紫罗兰：深紫根 #5e3a99 白字，一级淡紫底深紫字、二级白底，优雅内敛。
+ */
+const VIOLET: ThemeTokens = {
+  ...SHARED_METRICS,
+  rootFill: '#5e3a99',
+  rootBorderColor: '#472b75',
+  rootTextColor: '#ffffff',
+  rootFontSize: 20,
+  rootFontWeight: 600,
+  rootFontFamily: SYSTEM_FONT_STACK,
+  level1Fill: '#e8e1f4',
+  level1BorderColor: '#9a86c9',
+  level1TextColor: '#322153',
+  level1FontSize: 16,
+  level1FontWeight: 500,
+  level1FontFamily: SYSTEM_FONT_STACK,
+  level2Fill: '#ffffff',
+  level2BorderColor: '#cfc4e6',
+  level2TextColor: '#443a5c',
+  level2FontSize: 14,
+  level2FontWeight: 400,
+  level2FontFamily: SYSTEM_FONT_STACK,
+  canvasBackground: '#f6f3fa',
+  edgeColor: '#9a86c9',
+  edgeWidth: 2,
+  nodeBorderRadius: 10,
+  nodeBorderWidth: 1,
+  collapseBadgeBg: '#5e3a99',
+  collapseBadgeFg: '#ffffff',
+};
+
+/**
+ * 琥珀：深琥珀根 #8a4b00 白字（亮黄底白字不达 AA，故取深琥珀）、一级米黄底
+ * 深棕字、二级白底。
+ */
+const AMBER: ThemeTokens = {
+  ...SHARED_METRICS,
+  rootFill: '#8a4b00',
+  rootBorderColor: '#6d3b00',
+  rootTextColor: '#ffffff',
+  rootFontSize: 20,
+  rootFontWeight: 600,
+  rootFontFamily: SYSTEM_FONT_STACK,
+  level1Fill: '#ffe9c7',
+  level1BorderColor: '#d9a441',
+  level1TextColor: '#4a2e00',
+  level1FontSize: 16,
+  level1FontWeight: 500,
+  level1FontFamily: SYSTEM_FONT_STACK,
+  level2Fill: '#ffffff',
+  level2BorderColor: '#ecd9ae',
+  level2TextColor: '#4d4335',
+  level2FontSize: 14,
+  level2FontWeight: 400,
+  level2FontFamily: SYSTEM_FONT_STACK,
+  canvasBackground: '#fdf8ee',
+  edgeColor: '#d9a441',
+  edgeWidth: 2,
+  nodeBorderRadius: 10,
+  nodeBorderWidth: 1,
+  collapseBadgeBg: '#8a4b00',
+  collapseBadgeFg: '#ffffff',
+};
+
+/**
+ * 青瓷：青瓷绿根 #3d6b6d 白字，一级淡青底深青字、二级白底，温润素雅。
+ */
+const CELADON: ThemeTokens = {
+  ...SHARED_METRICS,
+  rootFill: '#3d6b6d',
+  rootBorderColor: '#2c5052',
+  rootTextColor: '#ffffff',
+  rootFontSize: 20,
+  rootFontWeight: 600,
+  rootFontFamily: SYSTEM_FONT_STACK,
+  level1Fill: '#dcebe9',
+  level1BorderColor: '#7fabab',
+  level1TextColor: '#1f3b3c',
+  level1FontSize: 16,
+  level1FontWeight: 500,
+  level1FontFamily: SYSTEM_FONT_STACK,
+  level2Fill: '#ffffff',
+  level2BorderColor: '#c2d9d8',
+  level2TextColor: '#35494a',
+  level2FontSize: 14,
+  level2FontWeight: 400,
+  level2FontFamily: SYSTEM_FONT_STACK,
+  canvasBackground: '#f1f6f5',
+  edgeColor: '#7fabab',
+  edgeWidth: 2,
+  nodeBorderRadius: 14,
+  nodeBorderWidth: 1,
+  collapseBadgeBg: '#3d6b6d',
+  collapseBadgeFg: '#ffffff',
+};
+
+/**
+ * 水墨：墨黑根 #2f2f2c 米白字（宣纸感）、一级宣纸灰底墨字、二级白底，东方素净。
+ */
+const INK_WASH: ThemeTokens = {
+  ...SHARED_METRICS,
+  rootFill: '#2f2f2c',
+  rootBorderColor: '#1d1d1b',
+  rootTextColor: '#f5f4f0',
+  rootFontSize: 20,
+  rootFontWeight: 600,
+  rootFontFamily: SYSTEM_FONT_STACK,
+  level1Fill: '#e6e5df',
+  level1BorderColor: '#83837c',
+  level1TextColor: '#33322d',
+  level1FontSize: 16,
+  level1FontWeight: 500,
+  level1FontFamily: SYSTEM_FONT_STACK,
+  level2Fill: '#ffffff',
+  level2BorderColor: '#c9c8c1',
+  level2TextColor: '#3a3936',
+  level2FontSize: 14,
+  level2FontWeight: 400,
+  level2FontFamily: SYSTEM_FONT_STACK,
+  canvasBackground: '#f7f6f2',
+  edgeColor: '#83837c',
+  edgeWidth: 2,
+  nodeBorderRadius: 2,
+  nodeBorderWidth: 1,
+  collapseBadgeBg: '#2f2f2c',
+  collapseBadgeFg: '#f5f4f0',
+};
+
+/**
+ * 蜜桃：蜜桃红根 #b14859 白字（≥4.5:1）、一级淡桃底深桃字、二级白底，甜暖亲和。
+ */
+const PEACH: ThemeTokens = {
+  ...SHARED_METRICS,
+  rootFill: '#b14859',
+  rootBorderColor: '#8e3745',
+  rootTextColor: '#ffffff',
+  rootFontSize: 20,
+  rootFontWeight: 600,
+  rootFontFamily: SYSTEM_FONT_STACK,
+  level1Fill: '#fce7e4',
+  level1BorderColor: '#dfa096',
+  level1TextColor: '#5c2b2e',
+  level1FontSize: 16,
+  level1FontWeight: 500,
+  level1FontFamily: SYSTEM_FONT_STACK,
+  level2Fill: '#ffffff',
+  level2BorderColor: '#eccfc7',
+  level2TextColor: '#5a4245',
+  level2FontSize: 14,
+  level2FontWeight: 400,
+  level2FontFamily: SYSTEM_FONT_STACK,
+  canvasBackground: '#fdf5f2',
+  edgeColor: '#dfa096',
+  edgeWidth: 2,
+  nodeBorderRadius: 12,
+  nodeBorderWidth: 1,
+  collapseBadgeBg: '#b14859',
+  collapseBadgeFg: '#ffffff',
+};
+
+/** 十二套预置主题（键域即 ThemeId；M1b 三套 + M6 Task 4 九套）。 */
 export const THEMES: Record<ThemeId, ThemeTokens> = {
   'gmind-blue': GMIND_BLUE,
   'gmind-warm': GMIND_WARM,
   'gmind-accessible': GMIND_ACCESSIBLE,
+  'deep-blue': DEEP_BLUE,
+  forest: FOREST,
+  sakura: SAKURA,
+  graphite: GRAPHITE,
+  violet: VIOLET,
+  amber: AMBER,
+  celadon: CELADON,
+  'ink-wash': INK_WASH,
+  peach: PEACH,
 };
 
 // ---------------------------------------------------------------------------
@@ -174,10 +483,12 @@ export const THEMES: Record<ThemeId, ThemeTokens> = {
 /**
  * meta.themeId（任意历史字符串）→ 合法 ThemeId：
  * 'gmind-light'（M0 迁移历史默认）视作 'gmind-blue' 别名；未知值兜底 'gmind-blue'。
+ * 合法值域 = THEMES 键（M1b 三套 + M6 扩容九套，共十二套）。
  */
+const THEME_ID_SET: ReadonlySet<string> = new Set(Object.keys(THEMES));
+
 export function resolveThemeId(id: string): ThemeId {
-  if (id === 'gmind-blue' || id === 'gmind-warm' || id === 'gmind-accessible') return id;
-  return 'gmind-blue';
+  return THEME_ID_SET.has(id) ? (id as ThemeId) : 'gmind-blue';
 }
 
 /** depth → 分级 token 视图：0=root、1=level1、≥2=level2。 */

@@ -98,11 +98,28 @@ const TOKEN_SPEC: Record<keyof ThemeTokens, 'string' | 'number'> = {
   collapseBadgeFg: 'string',
 };
 
-const THEME_IDS: ThemeId[] = ['gmind-blue', 'gmind-warm', 'gmind-accessible'];
+/** M1b 三套 + M6 Task 4 扩容九套（企微对标）＝ 12 套全量。 */
+const NEW_THEME_IDS: ThemeId[] = [
+  'deep-blue',
+  'forest',
+  'sakura',
+  'graphite',
+  'violet',
+  'amber',
+  'celadon',
+  'ink-wash',
+  'peach',
+];
+
+const THEME_IDS: ThemeId[] = ['gmind-blue', 'gmind-warm', 'gmind-accessible', ...NEW_THEME_IDS];
 
 describe('THEMES token 完整性', () => {
-  it("THEMES 恰有三个键：'gmind-blue' / 'gmind-warm' / 'gmind-accessible'", () => {
+  it('THEMES 恰有十二个键：M1b 三套 + M6 扩容九套', () => {
     expect(Object.keys(THEMES).sort()).toEqual([...THEME_IDS].sort());
+  });
+
+  it('主题 id 唯一（12 套无重复键）', () => {
+    expect(new Set(Object.keys(THEMES)).size).toBe(12);
   });
 
   for (const id of THEME_IDS) {
@@ -152,7 +169,7 @@ describe('THEMES token 完整性', () => {
 // 2. 三套色板真的不同（绑定主色钉定）
 // ---------------------------------------------------------------------------
 
-describe('三主题色板', () => {
+describe('主题色板', () => {
   it('主色钉定：blue #3370ff / warm #ff8800 / accessible #1a5fb4（+ #e66100 橙）', () => {
     expect(THEMES['gmind-blue'].rootFill).toBe('#3370ff');
     expect(THEMES['gmind-warm'].rootFill).toBe('#ff8800');
@@ -160,11 +177,11 @@ describe('三主题色板', () => {
     expect(THEMES['gmind-accessible'].level1Fill).toBe('#e66100');
   });
 
-  it('三主题的标识性 token（主色/一级底/画布/连线）两两不同', () => {
+  it('十二主题的标识性 token（主色/一级底/画布/连线）两两不同', () => {
     // level2Fill 等共用中性值（三级白底）不算色板趋同；主题身份由下列 token 区分。
     for (const key of ['rootFill', 'level1Fill', 'canvasBackground', 'edgeColor'] as const) {
       const values = THEME_IDS.map((id) => THEMES[id][key]);
-      expect(new Set(values).size, `${key} 三主题应互不相同`).toBe(3);
+      expect(new Set(values).size, `${key} 十二主题应互不相同`).toBe(12);
     }
   });
 });
@@ -188,7 +205,34 @@ describe('contrastRatio', () => {
 });
 
 // ---------------------------------------------------------------------------
-// 4. accessible 主题 WCAG AA：三级正文 text vs fill ≥ 4.5:1
+// 4. 全主题 WCAG AA（M6 Task 4）：正文对比度守卫
+//    裁定：正文（level1 / level2）对全部 12 套跑 ≥4.5:1；root（标题级、20px 半粗
+//    大字号）对 M6 扩容九套跑 ≥4.5:1。M1b 既有两套 blue/warm 的 root 主色
+//    （#3370ff / #ff8800）是 M1b 绑定钉定值（见下方「主色钉定」用例），当时仅
+//    a11y 主题承诺 AA（blue root 4.28、warm root 2.39 均不达 4.5）；T4 扩容不
+//    改 M1b 钉定（零回归），遗留差距由本注释与任务报告显式记录。
+// ---------------------------------------------------------------------------
+
+describe('全主题 WCAG AA（12 套扩容守卫）', () => {
+  it.each(THEME_IDS)('%s：level1 / level2 正文 text vs fill 均 ≥ 4.5:1', (id) => {
+    const theme = THEMES[id];
+    expect(contrastRatio(theme.level1TextColor, theme.level1Fill), `${id} level1`).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio(theme.level2TextColor, theme.level2Fill), `${id} level2`).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it.each(NEW_THEME_IDS)('%s：root 标题 text vs fill ≥ 4.5:1（扩容新主题全级达标）', (id) => {
+    const theme = THEMES[id];
+    expect(contrastRatio(theme.rootTextColor, theme.rootFill), `${id} root`).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it.each(NEW_THEME_IDS)('%s：折叠徽标 fg vs bg ≥ 4.5:1', (id) => {
+    const theme = THEMES[id];
+    expect(contrastRatio(theme.collapseBadgeFg, theme.collapseBadgeBg)).toBeGreaterThanOrEqual(4.5);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 4b. accessible 主题 WCAG AA：三级正文 text vs fill ≥ 4.5:1
 // ---------------------------------------------------------------------------
 
 describe('accessible 主题 WCAG AA', () => {
@@ -268,6 +312,21 @@ describe('resolveNodeStyle', () => {
     expect(a).toEqual(b);
     expect(a.textStyle).not.toBe(b.textStyle);
   });
+
+  it('M1b 既有三套主题解析结果钉定（扩容零回归）', () => {
+    // 三套 × 三级：fill / textColor / fontSize 全取主题 token 本值（M1b 裁定的
+    // 既有输出），任何扩容引起的级联/兜底改动都会在此暴露。
+    for (const id of ['gmind-blue', 'gmind-warm', 'gmind-accessible'] as ThemeId[]) {
+      const theme = THEMES[id];
+      for (const [depth, tier] of [[0, 'root'], [1, 'level1'], [2, 'level2']] as const) {
+        const s = resolveNodeStyle(theme, depth, {});
+        expect(s.fill, `${id} depth=${depth} fill`).toBe(theme[`${tier}Fill`]);
+        expect(s.textColor, `${id} depth=${depth} textColor`).toBe(theme[`${tier}TextColor`]);
+        expect(s.fontSize, `${id} depth=${depth} fontSize`).toBe(theme[`${tier}FontSize`]);
+        expect(s.textStyle.fontWeight, `${id} depth=${depth} fontWeight`).toBe(theme[`${tier}FontWeight`]);
+      }
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -279,10 +338,10 @@ describe('resolveThemeId', () => {
     expect(resolveThemeId('gmind-light')).toBe('gmind-blue');
   });
 
-  it('三枚合法键原样透传', () => {
-    expect(resolveThemeId('gmind-blue')).toBe('gmind-blue');
-    expect(resolveThemeId('gmind-warm')).toBe('gmind-warm');
-    expect(resolveThemeId('gmind-accessible')).toBe('gmind-accessible');
+  it('十二枚合法键原样透传（M1b 三套 + M6 扩容九套）', () => {
+    for (const id of THEME_IDS) {
+      expect(resolveThemeId(id)).toBe(id);
+    }
   });
 
   it('未知值（含空串、大小写不符）兜底 gmind-blue', () => {
