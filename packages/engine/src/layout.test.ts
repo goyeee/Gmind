@@ -364,6 +364,23 @@ describe('layout 不变量（5 树 × 3 结构）', () => {
     }
   });
 
+  it('bezier 控制点不越过对端（连线交叉修复钉定）', () => {
+    // 旧实现 max(60, dx×0.5) 在列距 <120 时控制点互相越过对端端点，曲线 x 折返
+    // 成涡流交叉；现恒取 dx×0.5，控制点 x 必落在 [from.x, to.x] 闭区间内。
+    for (const structure of ['mindmap', 'logic'] as const) {
+      const result = layout(TREE_BUILDERS.wide(), { structure, theme, measure: stubAdapter, styleOf });
+      for (const edge of result.edges) {
+        if (edge.kind !== 'bezier') continue;
+        const lo = Math.min(edge.from.x, edge.to.x);
+        const hi = Math.max(edge.from.x, edge.to.x);
+        for (const c of edge.controls ?? []) {
+          expect(c.x).toBeGreaterThanOrEqual(lo - 1e-9);
+          expect(c.x).toBeLessThanOrEqual(hi + 1e-9);
+        }
+      }
+    }
+  });
+
   it('collapsed：折叠节点按叶子渲染，隐藏后代无盒，collapsedCounts 记 "+3"', () => {
     for (const structure of STRUCTURES) {
       const result = layout(TREE_BUILDERS.collapsed(), { structure, theme, measure: stubAdapter, styleOf });

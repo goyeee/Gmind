@@ -36,9 +36,6 @@ import type {
   TextStyle,
 } from './types';
 
-/** bezier 控制点水平外伸下限；超出时取 dx×0.5（Task 4 绑定解释）。 */
-const BEZIER_MIN_EXTEND = 60;
-
 /** 布局内部树节点：盒子尺寸收集期确定，坐标放置期回填。 */
 interface LayoutNode {
   id: string;
@@ -249,7 +246,11 @@ function makeEdge(parent: LayoutNode, child: LayoutNode, structure: StructureTyp
   );
   const from: Point = { x: right ? parent.x + parent.w : parent.x, y: parentMidY + bias };
   const to: Point = { x: right ? child.x : child.x + child.w, y: childMidY };
-  const extend = Math.max(BEZIER_MIN_EXTEND, Math.abs(to.x - from.x) * 0.5);
+  // 控制点外伸恒取 dx×0.5（c1.x 落 to.x、c2.x 落 from_x）：x(t) 保持在
+  // [from.x, to.x] 凸包内单调行进、绝不折返。旧实现 max(60, dx×0.5) 在列距
+  // 小于 120（如 H_GAP=40）时控制点互相越过对端端点，曲线先冲过头再折回，
+  // 多边叠加成涡流状交叉（2026-09-27 用户截图实锤，第二次连线修复）。
+  const extend = Math.abs(to.x - from.x) * 0.5;
   return {
     id,
     from,
