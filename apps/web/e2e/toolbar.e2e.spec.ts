@@ -94,6 +94,16 @@ test('工具栏：find-toggle 为禁用占位（查找即将开放）', async ({
   await expect(find.locator('> svg')).toHaveCount(1);
 });
 
+test('工具栏：members-btn 与结构/主题下拉可访问名语义正确', async ({ page }) => {
+  await openSeedDoc(page);
+  // 评审 Important（round 1）：members-btn 内容为 aria-hidden SVG + 角标数字，
+  // accname 计算内容先于 title → 名字会退化为「1」；须 aria-label 补语义名。
+  await expect(page.getByTestId('members-btn')).toHaveAccessibleName('在线成员');
+  // 外包 div 的 title 不下传给 <select>，读屏得到空名 → 各补 aria-label。
+  await expect(page.getByTestId('structure-select')).toHaveAccessibleName('结构');
+  await expect(page.getByTestId('theme-select')).toHaveAccessibleName('主题');
+});
+
 test('工具栏：组序符合企微对标布局（返回|标题|撤销重做|结构主题|导出|协作|全屏）', async ({ page }) => {
   await openSeedDoc(page);
   const anchors = [

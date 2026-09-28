@@ -1537,6 +1537,7 @@ export function EditorPage() {
             <StructureIcon />
             <select
               data-testid="structure-select"
+              aria-label="结构"
               value={meta?.structureType ?? 'mindmap'}
               onChange={(e) => {
                 if (!doc) return;
@@ -1555,6 +1556,7 @@ export function EditorPage() {
             <ThemeIcon />
             <select
               data-testid="theme-select"
+              aria-label="主题"
               value={themeId}
               onChange={(e) => {
                 if (!doc) return;
@@ -1642,6 +1644,7 @@ export function EditorPage() {
             data-testid="members-btn"
             className="toolbar-btn"
             title="在线成员"
+            aria-label="在线成员"
             onClick={() => setMembersOpen((v) => !v)}
           >
             <MembersIcon />
