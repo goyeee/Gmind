@@ -37,6 +37,16 @@ async function selectNodeByText(page: Page, text: string): Promise<void> {
   await page.locator('.editor-canvas svg .gm-text', { hasText: text }).click();
 }
 
+/** 打开工具栏「插入」→「标记」右侧层面板（2026-09-28 图标区迁出 RichPanel 后的
+ *  标记写入路径），返回标记面板定位器。 */
+async function openMarkerPanel(page: Page) {
+  await page.getByTestId('insert-menu').click();
+  await page.getByTestId('insert-markers').click();
+  const panel = page.getByTestId('marker-panel');
+  await expect(panel).toBeVisible();
+  return panel;
+}
+
 function nodeGroup(page: Page, text: string) {
   return page.locator('.editor-canvas svg g[data-node-id]').filter({ hasText: text });
 }
@@ -128,11 +138,12 @@ test('富内容：上传图片渲染且盒高计入图片，移除后消失', as
   await expect(g.locator('image.gm-image')).toHaveCount(0);
 });
 
-// 用例 4：加旗帜 → ⚑；再加优先级 → 并存；换旗帜色 → 仍一个 ⚑（组内替换）
+// 用例 4：加旗帜 → ⚑；再加优先级 → 并存；换旗帜色 → 仍一个 ⚑（组内替换）。
+// 标记写入路径自 RichPanel 图标区迁至插入菜单右侧层标记面板（断言语义不变）。
 test('富内容：图标组并存与组内替换', async ({ page }) => {
   await openSeedDoc(page, '本周计划');
   await selectNodeByText(page, '周一');
-  const panel = page.getByTestId('rich-panel');
+  const panel = await openMarkerPanel(page);
   const icons = nodeGroup(page, '周一').locator('.gm-icons');
   await panel.getByTitle('旗帜-红').click();
   await expect(icons).toHaveText('⚑');
@@ -193,7 +204,8 @@ test('富内容：链接/图片/图标齐设后刷新全部仍在', async ({ pag
   await expect(g.locator('.gm-link-badge')).toBeVisible();
   await panel.getByTestId('image-input').setInputFiles(FIXTURE_PNG);
   await expect(g.locator('image.gm-image')).toBeVisible();
-  await panel.getByTitle('旗帜-红').click();
+  const markers = await openMarkerPanel(page);
+  await markers.getByTitle('旗帜-红').click();
   await expect(g.locator('.gm-icons')).toHaveText('⚑');
   await expect(page.getByTestId('save-status')).toHaveText(/已保存/);
   // 刷新（重连协同 + 从 doc_state 恢复）：三个角标全部仍在

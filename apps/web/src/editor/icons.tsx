@@ -156,6 +156,16 @@ export function PainterIcon({ className }: IconProps) {
   );
 }
 
+/** 插入（方框内加号：插入标记/备注/链接/图片的菜单入口）：标记面板任务 */
+export function InsertIcon({ className }: IconProps) {
+  return (
+    <svg {...svgProps(className)}>
+      <rect x="1.5" y="1.5" width="13" height="13" rx="2.5" />
+      <path d="M8 4.8v6.4M4.8 8h6.4" />
+    </svg>
+  );
+}
+
 /** 动态（信息流：左列时间圆点 + 事件行）：T8 文档动态面板入口 */
 export function ActivityIcon({ className }: IconProps) {
   return (

@@ -47,13 +47,16 @@ async function useMobileViewport(page: Page): Promise<void> {
   await page.setViewportSize({ width: 375, height: 667 });
 }
 
-/** 移动端只读分支应不装配的工具栏编辑控件（桌面回归用例反向断言可见）。 */
+/** 移动端只读分支应不装配的工具栏编辑控件（桌面回归用例反向断言可见）。
+ *  insert-menu（标记面板任务的插入菜单）随桌面工具栏分支装配——T5 口径：
+ *  标记写入是编辑动作，移动端只读不提供入口。 */
 const EDITING_TESTIDS = [
   'structure-select',
   'theme-select',
   'undo-btn',
   'redo-btn',
   'fullscreen-btn',
+  'insert-menu',
   'export-menu',
   'title-input',
   'star-toggle',

@@ -44,13 +44,18 @@ function nodeGroup(page: Page, text: string) {
   return page.locator('.editor-canvas svg g[data-node-id]').filter({ hasText: text });
 }
 
-/** 选中节点并设填充红 + 旗帜红（源格式），返回格式面板。 */
+/** 选中节点并设填充红 + 旗帜红（源格式）。填充红在 RichPanel 样式区，旗帜红经
+ *  插入→标记面板路径（2026-09-28 图标区迁出 RichPanel）。 */
 async function styleSourceRedFlag(page: Page, text: string) {
   await selectNodeByText(page, text);
   const panel = page.getByTestId('rich-panel');
   await panel.getByTitle('填充-红').click();
   await expect(nodeGroup(page, text).locator('rect')).toHaveAttribute('fill', RED);
-  await panel.getByTitle('旗帜-红').click();
+  await page.getByTestId('insert-menu').click();
+  await page.getByTestId('insert-markers').click();
+  const markers = page.getByTestId('marker-panel');
+  await expect(markers).toBeVisible();
+  await markers.getByTitle('旗帜-红').click();
   await expect(nodeGroup(page, text).locator('.gm-icons')).toHaveText('⚑');
   return panel;
 }
@@ -134,7 +139,9 @@ test('格式刷：自刷（源=目标）零写入', async ({ page }) => {
   await panel.getByTitle('填充-红').click();
   await expect(nodeGroup(page, '周三').locator('rect')).toHaveAttribute('fill', RED);
   await page.waitForTimeout(UNDO_GAP);
-  await panel.getByTitle('旗帜-红').click();
+  await page.getByTestId('insert-menu').click();
+  await page.getByTestId('insert-markers').click();
+  await page.getByTestId('marker-panel').getByTitle('旗帜-红').click();
   await expect(nodeGroup(page, '周三').locator('.gm-icons')).toHaveText('⚑');
   await page.waitForTimeout(UNDO_GAP);
 
@@ -160,7 +167,9 @@ test('格式刷：单次应用可被一次 Ctrl+Z 整体回滚', async ({ page }
   const panel = page.getByTestId('rich-panel');
   await panel.getByTitle('填充-红').click();
   await page.waitForTimeout(UNDO_GAP);
-  await panel.getByTitle('旗帜-红').click();
+  await page.getByTestId('insert-menu').click();
+  await page.getByTestId('insert-markers').click();
+  await page.getByTestId('marker-panel').getByTitle('旗帜-红').click();
   // 与应用隔开 >500ms：格式刷事务独立成撤销单元
   await page.waitForTimeout(UNDO_GAP);
 

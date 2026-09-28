@@ -74,97 +74,12 @@
   border-radius: 6px;
   cursor: pointer;
 }
-.icon-group {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-.icon-group em {
-  font-style: normal;
-  color: #86909c;
-  font-size: 12px;
-}
-.icon-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-}
-.icon-btn {
-  padding: 3px 7px;
-  border: 1px solid #e5e6eb;
-  background: #fff;
-  border-radius: 5px;
-  font-size: 12px;
-  cursor: pointer;
-}
-.icon-btn.active {
-  border-color: #3370ff;
-  color: #3370ff;
-  background: #f0f5ff;
-}
 .uploading {
   color: #86909c;
   font-size: 12px;
 }
-
-/* 表情面板（M6 Task 5 企微对标）：弹层用 fixed 定位——rich-panel 是
-   overflow-y:auto 滚动容器，absolute 弹层会被裁剪；坐标由 EmojiPicker
-   按锚点 rect 计算回填（滚动/缩放随锚点重算）。 */
-.emoji-entry {
-  display: flex;
-}
-.emoji-picker-pop {
-  position: fixed;
-  z-index: 40;
-  width: 248px;
-  padding: 8px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  background: #fff;
-  border: 1px solid #e5e6eb;
-  border-radius: 8px;
-  box-shadow: 0 4px 16px rgba(31, 35, 41, 0.14);
-}
-.emoji-tabs {
-  display: flex;
-  gap: 4px;
-}
-.emoji-tab {
-  padding: 3px 10px;
-  border: 1px solid #e5e6eb;
-  background: #fff;
-  border-radius: 12px;
-  font-size: 12px;
-  color: #4e5969;
-  cursor: pointer;
-}
-.emoji-tab.active {
-  border-color: #3370ff;
-  color: #3370ff;
-  background: #f0f5ff;
-}
-.emoji-grid {
-  display: grid;
-  grid-template-columns: repeat(8, 1fr);
-  gap: 2px;
-}
-.emoji-cell {
-  padding: 2px 0;
-  border: none;
-  background: none;
-  border-radius: 5px;
-  font-size: 18px;
-  line-height: 1.4;
-  cursor: pointer;
-}
-.emoji-cell:hover {
-  background: #f2f3f5;
-}
-.emoji-cell.active {
-  background: #f0f5ff;
-  outline: 1px solid #3370ff;
-}
+/* 图标区样式（.icon-group/.icon-row/.icon-btn）与表情弹层样式（.emoji-*）已随
+   2026-09-28 标记面板迁移移至 marker-panel.css（工具栏「插入」菜单右侧层）。 */
 
 /* 样式区（Task 15 FR-EDT-015）：色板 / 字号 / 作用域。
    M6 Task 2 企微对标：改 fieldset 承载（无选中 disabled 置灰）+ 选中色钮 active 态。 */

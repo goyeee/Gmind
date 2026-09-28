@@ -1,0 +1,135 @@
+/*
+ * 节点标记面板（2026-09-28，企微标记面板对标）：插入菜单「标记」项右侧展开的
+ * 宽面板。面板本体在 EditorPage 的 .insert-layer（菜单左 / 面板右 flex 弹层，
+ * 定位模式对齐 .export-menu 下拉）内渲染，本文件只承担面板内部样式：
+ * 分组行（组名左列窄栏 + 图标横排网格）、28×28 按钮（hover 底色 / 选中描边环）、
+ * 优先级圆徽、表情区（tab + 网格，样式自 rich-panel.css 迁移）。
+ */
+
+.marker-panel {
+  width: 340px;
+  max-height: calc(100vh - 80px);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  background: #fff;
+  border: 1px solid #e5e6eb;
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(31, 35, 41, 0.14);
+}
+/* 无选中节点提示（与 T2 样式区 style-hint 同口径） */
+.marker-hint {
+  margin: 0;
+  color: #86909c;
+  font-size: 12px;
+}
+/* 分组行：组名左列窄栏 + 图标区右扩 */
+.marker-group {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.marker-group-label {
+  flex: 0 0 36px;
+  font-style: normal;
+  color: #86909c;
+  font-size: 12px;
+  line-height: 28px;
+}
+.marker-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+}
+/* 标记按钮：28×28、hover 浅灰底、选中蓝描边环 */
+.marker-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+.marker-btn:hover:not(:disabled) {
+  background: #f2f3f5;
+}
+.marker-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.marker-btn.active {
+  background: #f0f5ff;
+  outline: 2px solid #3370ff;
+  outline-offset: -1px;
+}
+/* 优先级圆徽：16px 圆底 + 白字数字（低中高三档配色由组件内联） */
+.marker-priority-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+}
+/* 表情区：tab 行 + 网格（自 rich-panel.css 迁移，testid 契约不变） */
+.marker-emoji-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.emoji-tabs {
+  display: flex;
+  gap: 4px;
+}
+.emoji-tab {
+  padding: 3px 10px;
+  border: 1px solid #e5e6eb;
+  background: #fff;
+  border-radius: 12px;
+  font-size: 12px;
+  color: #4e5969;
+  cursor: pointer;
+}
+.emoji-tab.active {
+  border-color: #3370ff;
+  color: #3370ff;
+  background: #f0f5ff;
+}
+.emoji-grid {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 2px;
+}
+.emoji-cell {
+  padding: 2px 0;
+  border: none;
+  background: none;
+  border-radius: 5px;
+  font-size: 18px;
+  line-height: 1.4;
+  cursor: pointer;
+}
+.emoji-cell:hover:not(:disabled) {
+  background: #f2f3f5;
+}
+.emoji-cell:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.emoji-cell.active {
+  background: #f0f5ff;
+  outline: 1px solid #3370ff;
+}

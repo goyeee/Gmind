@@ -1,40 +1,29 @@
-import { useEffect, useRef, useState, type ReactElement } from 'react';
+import { useEffect, useState, type ReactElement } from 'react';
 import type * as Y from 'yjs';
 import {
   applyStyle,
   getNode,
-  ICON_GROUPS,
   MAX_NOTE_LENGTH,
   setHref,
   setImage,
-  setIcon,
   setNote,
-  type IconGroup,
   type NodeSnapshot,
   type StyleScope,
 } from '@gmind/core';
-import { EmojiPicker } from './EmojiPicker';
 import { clampImageSize, MAX_IMAGE_BYTES, readImageSize, uploadImage } from './imageUpload';
 import './rich-panel.css';
 
 /**
  * 富内容面板（M1b Task 12，FR-EDT-018~021）+ 样式区（Task 15，FR-EDT-015；
  * M6 Task 2 企微对标：样式区随选中节点联动回显）：
- * 选中节点的样式/备注/链接/图片/图标编辑。写入一律经 @gmind/core 操作 API
+ * 选中节点的样式/备注/链接/图片编辑。写入一律经 @gmind/core 操作 API
  * （applyStyle 作用域 subtree/single；调用方统一 origin 与 capUndoStack），画布刷新
  * 走既有 doc update → renderScene 管线。
+ *
+ * 2026-09-28 标记面板迁移：原「图标」区（优先级/进度/旗帜/星标/表情）整体搬至
+ * 工具栏「插入」菜单的右侧层标记面板（MarkerPanel，企微对标）；本面板只保留
+ * 样式区 + 备注/链接/图片区，数据模型与写链路零改动。
  */
-
-const FLAG_COLORS = ['红', '蓝', '绿', '黄', '紫', '橙'];
-const STAR_COLORS = ['红', '蓝', '绿', '黄', '紫'];
-const PROGRESS_STEPS = ['0%', '10%', '25%', '40%', '50%', '60%', '75%', '100%'];
-const GROUP_LABELS: Record<(typeof ICON_GROUPS)[number], string> = {
-  priority: '优先级',
-  progress: '进度',
-  flag: '旗帜',
-  star: '星标',
-  emoji: '表情',
-};
 
 /** 样式色板（Task 15，8 色）：填充与文字色共用。 */
 const STYLE_PALETTE: { name: string; value: string }[] = [
@@ -69,10 +58,6 @@ export function RichPanel(props: RichPanelProps): ReactElement {
   const [uploading, setUploading] = useState(false);
   // 样式作用域（FR-EDT-015）：默认含子树，可切仅当前节点
   const [styleScope, setStyleScope] = useState<StyleScope>('subtree');
-  // 表情弹层开关（M6 T5）：切节点不自动关（下述 effect 只回灌 note/href，
-  // 弹层属瞬时交互态；Esc/外点/再点触发钮关闭）。
-  const [emojiOpen, setEmojiOpen] = useState(false);
-  const emojiTriggerRef = useRef<HTMLButtonElement>(null);
 
   // 渲染期快照改为 props 注入（M6 Task 2）：EditorPage 每 tick 用 getNode 计算
   // selected 传入——面板与画布同帧同源；无选中/已删时为 null（样式区置灰）。
@@ -220,22 +205,6 @@ export function RichPanel(props: RichPanelProps): ReactElement {
     );
   }
 
-  const iconButton = (group: IconGroup, value: string, label: string): ReactElement => {
-    const active = snap.icons[group] === value;
-    return (
-      <button
-        key={label}
-        type="button"
-        title={label}
-        aria-pressed={active}
-        className={active ? 'icon-btn active' : 'icon-btn'}
-        onClick={() => write(() => setIcon(doc, nodeId, group, active ? null : value))}
-      >
-        {label}
-      </button>
-    );
-  };
-
   return (
     <aside className="rich-panel" data-testid="rich-panel">
       <h3>样式</h3>
@@ -291,49 +260,6 @@ export function RichPanel(props: RichPanelProps): ReactElement {
           />
         )}
         {uploading && <span className="uploading">上传中…</span>}
-      </div>
-
-      <div className="field">
-        <span>图标</span>
-        {ICON_GROUPS.map((group) => (
-          <div className="icon-group" key={group}>
-            <em>{GROUP_LABELS[group]}</em>
-            <div className="icon-row">
-              {group === 'priority' &&
-                Array.from({ length: 9 }, (_, i) => iconButton(group, `p${i + 1}`, `优先级 ${i + 1}`))}
-              {group === 'progress' && PROGRESS_STEPS.map((s) => iconButton(group, s, `进度 ${s}`))}
-              {group === 'flag' && FLAG_COLORS.map((c) => iconButton(group, c, `旗帜-${c}`))}
-              {group === 'star' && STAR_COLORS.map((c) => iconButton(group, c, `星标-${c}`))}
-              {group === 'emoji' && (
-                <div className="emoji-entry">
-                  <button
-                    ref={emojiTriggerRef}
-                    type="button"
-                    data-testid="emoji-trigger"
-                    title="选择表情"
-                    aria-haspopup="dialog"
-                    aria-expanded={emojiOpen}
-                    className={snap.icons.emoji ? 'icon-btn active' : 'icon-btn'}
-                    onClick={() => setEmojiOpen((v) => !v)}
-                  >
-                    {snap.icons.emoji ?? '😀'}
-                  </button>
-                  {emojiOpen && emojiTriggerRef.current && (
-                    <EmojiPicker
-                      anchor={emojiTriggerRef.current}
-                      selected={snap.icons.emoji}
-                      onPick={(char) => {
-                        write(() => setIcon(doc, nodeId, 'emoji', char));
-                        setEmojiOpen(false); // 选中即收起（下拉语义；再点触发钮重开）
-                      }}
-                      onClose={() => setEmojiOpen(false)}
-                    />
-                  )}
-                </div>
-              )}
-            </div>
-          </div>
-        ))}
       </div>
     </aside>
   );
