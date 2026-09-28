@@ -19,8 +19,9 @@ import './marker-panel.css';
  * 值域与 core 常量一致（setIcon 目录校验的后端）。
  */
 
-/** 优先级 1-7 方块配色（mindgrid --c-priority-1..7 原值，与 engine 渲染层同源取值）。 */
-const PRIORITY_COLORS = ['#d9534f', '#d98841', '#d9a441', '#4d9960', '#7aa2f7', '#bb9af7', '#8a8a8a'];
+/** 优先级 1-7 方块配色（mindgrid --c-priority-1..7 原值，与 engine 渲染层同源取值）。
+ *  导出供 TaskTable 标题列标记展示复用（M7a-T4，单一来源防漂移）。 */
+export const PRIORITY_COLORS = ['#d9534f', '#d98841', '#d9a441', '#4d9960', '#7aa2f7', '#bb9af7', '#8a8a8a'];
 
 /** 优先级 1-7（值 = core PRIORITY_VALUES；slug 即数字本身）。 */
 const PRIORITY_MARKERS = PRIORITY_COLORS.map((color, i) => ({
@@ -30,8 +31,9 @@ const PRIORITY_MARKERS = PRIORITY_COLORS.map((color, i) => ({
   color,
 }));
 
-/** 图标组 10 个（值 = core ICON_VALUES；字形与 engine ICON_GLYPHS 一致）。 */
-const ICON_MARKERS = [
+/** 图标组 10 个（值 = core ICON_VALUES；字形与 engine ICON_GLYPHS 一致）。
+ *  导出供 TaskTable 标题列标记展示复用（M7a-T4）。 */
+export const ICON_MARKERS = [
   { value: 'done', glyph: '✓', label: '完成' },
   { value: 'cancel', glyph: '✗', label: '取消' },
   { value: 'important', glyph: '★', label: '重要' },

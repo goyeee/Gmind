@@ -95,6 +95,7 @@ import { HelpPanel } from '../editor/HelpPanel';
 import { MarkerPanel } from '../editor/MarkerPanel';
 import { MemberPanel } from '../editor/MemberPanel';
 import { RichPanel } from '../editor/RichPanel';
+import { TaskTable } from '../editor/TaskTable';
 import { CommentPanel, type CommentThreadView } from '../editor/CommentPanel';
 import { FindReplace } from '../editor/FindReplace';
 import { VersionPanel } from '../editor/VersionPanel';
@@ -314,6 +315,17 @@ export function EditorPage() {
   // 空白点击清空选择的位移判定（M6 Task 2）：pointerdown 记录按点坐标，click 期位移
   // >4px 即视为平移/框选拖拽的合成 click，不清空选择。
   const pointerPressRef = useRef<{ x: number; y: number } | null>(null);
+  // 视图切换（M7a-T4，spec 2026-09-28 §四 T4）：脑图 | 表格。切换互斥、各自状态保留
+  // ——画布引擎（场景/视口/选中）不动、仅 CSS 隐藏；表格组件常驻挂载、隐藏时保住
+  // 筛选/排序态。viewRef 供事件处理器（键盘闸/Ctrl+F）同步读最新视图，不等 React 提交。
+  const [view, setView] = useState<'mind' | 'table'>('mind');
+  const viewRef = useRef<'mind' | 'table'>('mind');
+  viewRef.current = view;
+  // 移动端只读降级（M7a 范围注记）：只读工具栏不装配视图 Tab（维持现状），停留表格
+  // 视图会失去切回入口——降级即回落画布视图。
+  useEffect(() => {
+    if (readOnly) setView('mind');
+  }, [readOnly]);
 
   const [tick, setTick] = useState(0);
   const [status, setStatus] = useState('尚未编辑');
@@ -486,6 +498,7 @@ export function EditorPage() {
       if (e.key !== 'f' && e.key !== 'F') return;
       if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey) return;
       if (isEditableTarget(e.target)) return;
+      if (viewRef.current === 'table') return; // 表格视图：查找需求由表格筛选条承接，不开画布查找条
       e.preventDefault();
       setFindOpen(true);
     };
@@ -1815,6 +1828,8 @@ export function EditorPage() {
     const detachKeys = readOnly ? null : attachKeyboardMap({
       // 覆盖层打开即让路（其 Enter/Esc 已 stopPropagation，此为其余按键的兜底）
       isEditorOpen: () => overlay.isOpen,
+      // 表格视图：画布写/导航键位让路（M7a-T4；撤销/重做不受此闸，见 keyboardMap 注释）
+      isInactive: () => viewRef.current === 'table',
       undo: () => coreUndo(manager),
       redo: () => coreRedo(manager),
       onEnter: handleEnter,
@@ -1996,6 +2011,33 @@ export function EditorPage() {
           <span className="save-status" data-testid="save-status">
             {status}
           </span>
+        </div>
+        <span className="toolbar-sep" />
+        {/* 视图切换（M7a-T4）：脑图 | 表格 分段控件。切换互斥、各自状态保留
+            （画布引擎不卸载仅隐藏；表格常驻挂载保筛选态）。移动端只读分支不装配。 */}
+        <div className="toolbar-group">
+          <div className="view-tabs" role="tablist" aria-label="视图切换">
+            <button
+              type="button"
+              role="tab"
+              data-testid="view-tab-mind"
+              aria-selected={view === 'mind'}
+              className={view === 'mind' ? 'active' : ''}
+              onClick={() => setView('mind')}
+            >
+              脑图
+            </button>
+            <button
+              type="button"
+              role="tab"
+              data-testid="view-tab-table"
+              aria-selected={view === 'table'}
+              className={view === 'table' ? 'active' : ''}
+              onClick={() => setView('table')}
+            >
+              表格
+            </button>
+          </div>
         </div>
         <span className="toolbar-sep" />
         {/* 历史组：撤销 / 重做 */}
@@ -2345,7 +2387,9 @@ export function EditorPage() {
       </header>
 
       <div className="editor-main">
-        <div className="editor-canvas">
+        {/* 表格视图（M7a-T4）：画布仅 CSS 隐藏（引擎场景/视口/选中不卸载，切回即恢复），
+            概要行内编辑随画布容器一并隐藏。 */}
+        <div className={view === 'table' ? 'editor-canvas canvas-hidden' : 'editor-canvas'}>
           <svg
             ref={svgRef}
             onClick={(e) => {
@@ -2396,6 +2440,25 @@ export function EditorPage() {
           )}
         </div>
 
+        {/* 任务表格视图（M7a-T4）：常驻挂载（切回脑图仅隐藏，筛选/排序态保留）。
+            docVersion = tick：本地/远端任何 doc 更新都驱动表格快照重建。
+            点击标题联动画布选中（SelectionModel → 选区广播 + RichPanel 联动）。 */}
+        {doc && (
+          <div className={view === 'table' ? 'task-table-wrap' : 'task-table-wrap hidden'}>
+            <TaskTable
+              doc={doc}
+              fileId={fileId}
+              docVersion={tick}
+              readOnly={readOnly}
+              presence={members}
+              afterUserWrite={afterUserWrite}
+              showToast={showToast}
+              checkQuota={addBlockedByQuota}
+              onSelectNode={(id) => selectionRef.current?.selectOnly(id)}
+            />
+          </div>
+        )}
+
         {/*
           右列（M3b Task 7 装配裁决）：RichPanel + CommentPanel 同列纵排——
           评论面板常驻下方（data-testid="comment-panel"），选中节点后富内容面板在上。
@@ -2444,7 +2507,8 @@ export function EditorPage() {
         )}
       </div>
 
-      {!readOnly && contextMenu && (
+      {/* 画布右键菜单：表格视图不渲染（M7a-T4，画布专属浮层随视图隐藏） */}
+      {!readOnly && contextMenu && view === 'mind' && (
         <div
           className="context-menu"
           data-testid="context-menu"
@@ -2479,7 +2543,9 @@ export function EditorPage() {
         </div>
       )}
 
-      <footer className="editor-bottombar">
+      {/* 底栏（画布专属：适应画布/缩放）：表格视图隐藏（M7a-T4） */}
+      {view === 'mind' && (
+        <footer className="editor-bottombar">
         <button data-testid="fit-btn" onClick={fitCanvas}>
           适应画布
         </button>
@@ -2512,6 +2578,7 @@ export function EditorPage() {
           {nodeCount} 节点
         </span>
       </footer>
+      )}
 
       {toast && (
         <div className="editor-toast" data-testid="toast" role="alert">
@@ -2568,8 +2635,9 @@ export function EditorPage() {
         }}
       />
       {/* 查找替换条（M6 Task 3）：画布顶部浮层，开关/键位在页面侧；定位复用 locateNode
-          （selectOnly + 展开折叠祖先，与评论面板同一语义）；移动端只读不装配 */}
-      {!readOnly && (
+          （selectOnly + 展开折叠祖先，与评论面板同一语义）；移动端只读不装配；
+          表格视图隐藏（查找需求由表格筛选条承接，M7a-T4） */}
+      {!readOnly && view === 'mind' && (
         <FindReplace
           doc={doc}
           open={findOpen}

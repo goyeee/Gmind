@@ -10,6 +10,39 @@
   overscroll-behavior: none;
 }
 
+/* 视图切换 Tab（M7a-T4）：脑图 | 表格 分段控件（企微范式：白底胶囊 + 选中浅蓝） */
+.view-tabs {
+  display: flex;
+  border: 1px solid #e5e6eb;
+  border-radius: 6px;
+  overflow: hidden;
+}
+.view-tabs button {
+  border: none;
+  background: #fff;
+  padding: 5px 14px;
+  font-size: 12px;
+  color: #4e5969;
+  cursor: pointer;
+}
+.view-tabs button + button {
+  border-left: 1px solid #e5e6eb;
+}
+.view-tabs button:hover {
+  background: #f2f3f5;
+}
+.view-tabs button.active {
+  background: #e8f3ff;
+  color: #3370ff;
+  font-weight: 500;
+}
+
+/* 表格视图（M7a-T4）：画布仅视觉隐藏——引擎场景/视口/选中保留（切回不丢），
+   概要行内编辑等画布内浮层随容器一并隐藏 */
+.editor-canvas.canvas-hidden {
+  display: none;
+}
+
 /* 工具栏（M6 Task 1 企微对标：单行分组 + 图标按钮）：
    [返回] | [标题·星标·保存状态] | [撤销·重做] | [结构·主题] | [导出] |
    [成员·版本·快捷键·查找] | [全屏]，组间 1px 竖线分隔。 */

@@ -88,6 +88,10 @@ export function handledActionIds(): Set<string> {
 export interface KeyboardMapDeps {
   /** 文本编辑覆盖层是否打开（打开则本层全部让路）。 */
   isEditorOpen(): boolean;
+  /** 画布视图未激活（M7a-T4 表格视图）：Enter/Tab/Delete 等画布写键位让路——
+   *  画布隐藏期间焦点在表体上时误触会不可见地增删画布选中节点；撤销/重做不受此闸。
+   *  可选：缺省恒激活。 */
+  isInactive?(): boolean;
   undo(): void;
   redo(): void;
   /** Enter（未编辑态）：新建同级节点（root 上新建子级）并进入编辑。 */
@@ -252,6 +256,11 @@ export function attachKeyboardMap(deps: KeyboardMapDeps): () => void {
 
     const action = resolveShortcutAction(e);
     if (action === null) return;
+    if (deps.isInactive?.() && action !== 'undo' && action !== 'redo') {
+      // 画布视图未激活（M7a-T4 表格视图）：画布写/导航键位让路——画布隐藏期焦点在
+      // 表体上误触会不可见地增删画布选中节点；撤销/重做保留（表格写同入撤销栈）。
+      return;
+    }
     // 命中即抑制默认行为（原 if 链各分支逐个 preventDefault 的口径不变）；
     // Space 抑制滚动/按钮激活、Tab 抑制焦点移动等均沿袭。
     e.preventDefault();

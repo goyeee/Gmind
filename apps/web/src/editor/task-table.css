@@ -1,0 +1,424 @@
+/* 任务表格视图（M7a-T4，移植自 mindgrid TreeTable；配色为 Gmind 企微浅色系，
+   不搬 mindgrid 深色 IDE 值——todo 灰 / doing 蓝 / done 绿 / blocked 橙）。 */
+
+/* 挂载容器（EditorPage）：脑图视图时隐藏（display:none，组件保持挂载保住筛选态） */
+.task-table-wrap {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+}
+.task-table-wrap.hidden {
+  display: none;
+}
+
+.task-table-root {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+  overflow: hidden;
+}
+
+/* —— 筛选条 —— */
+.tt-filterbar {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border-bottom: 1px solid #e5e6eb;
+}
+.tt-keyword {
+  width: 176px;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid #e5e6eb;
+  border-radius: 6px;
+  font-size: 12px;
+  color: #1f2329;
+  outline: none;
+}
+.tt-keyword:focus {
+  border-color: #3370ff;
+}
+.tt-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 10px;
+  border: 1px solid #e5e6eb;
+  border-radius: 12px;
+  background: #fff;
+  color: #4e5969;
+  font-size: 12px;
+  cursor: pointer;
+}
+.tt-chip:hover {
+  background: #f2f3f5;
+}
+.tt-clear {
+  border: none;
+  background: none;
+  color: #3370ff;
+  font-size: 12px;
+  cursor: pointer;
+}
+.tt-clear:hover {
+  text-decoration: underline;
+}
+.tt-spacer {
+  flex: 1;
+}
+.tt-count {
+  color: #86909c;
+  font-size: 12px;
+}
+
+/* —— 表体 —— */
+.tt-scroll {
+  flex: 1;
+  overflow: auto;
+}
+table.tt-table {
+  width: 100%;
+  min-width: 1120px;
+  border-collapse: collapse;
+  font-size: 12px;
+  color: #1f2329;
+}
+.tt-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: #f7f8fa;
+  font-weight: 500;
+  color: #4e5969;
+  text-align: left;
+  padding: 7px 10px;
+  border-bottom: 1px solid #e5e6eb;
+  white-space: nowrap;
+}
+.tt-table thead th.tt-sortable {
+  cursor: pointer;
+  user-select: none;
+}
+.tt-table thead th.tt-sortable:hover {
+  color: #3370ff;
+}
+.tt-table tbody td {
+  padding: 5px 10px;
+  border-bottom: 1px solid #f2f3f5;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+.tt-table tbody tr:hover {
+  background: #f7f8fa;
+}
+/* 未命中筛选的祖先行：保留层级上下文、35% 淡化（hover 恢复便于查看） */
+.tt-table tbody tr.tt-dimmed {
+  opacity: 0.35;
+}
+.tt-table tbody tr.tt-dimmed:hover {
+  opacity: 1;
+}
+.tt-rownum {
+  width: 44px;
+  text-align: right;
+  color: #86909c;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+}
+
+/* —— 任务列（折叠钮 + 状态点 + 标记 + 标题） —— */
+.tt-title-line {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+.tt-caret {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  border: none;
+  background: none;
+  color: #86909c;
+  font-size: 11px;
+  cursor: pointer;
+  border-radius: 4px;
+  padding: 0;
+}
+.tt-caret:hover {
+  color: #3370ff;
+  background: #f2f3f5;
+}
+.tt-caret-space {
+  flex: none;
+  width: 18px;
+}
+.tt-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+.tt-markers {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex: none;
+}
+.tt-pri {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  color: #fff;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+}
+.tt-icon-mark {
+  font-size: 11px;
+  line-height: 1;
+}
+.tt-title-text {
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 460px;
+}
+.tt-title-text:hover {
+  color: #3370ff;
+}
+.tt-table tbody tr[data-depth='0'] .tt-title-text {
+  font-weight: 600;
+}
+.tt-overdue-badge {
+  flex: none;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: #ffece8;
+  color: #f53f3f;
+  font-size: 10px;
+  line-height: 14px;
+}
+.tt-add-child {
+  flex: none;
+  border: none;
+  background: none;
+  color: #86909c;
+  font-size: 14px;
+  cursor: pointer;
+  padding: 0 3px;
+  opacity: 0;
+  line-height: 1;
+}
+.tt-table tbody tr:hover .tt-add-child {
+  opacity: 1;
+}
+.tt-add-child:hover {
+  color: #3370ff;
+}
+/* 标题行内编辑（QuickEditor 风格） */
+.tt-title-input {
+  width: 100%;
+  min-width: 200px;
+  height: 24px;
+  padding: 0 6px;
+  border: 1px solid #3370ff;
+  border-radius: 4px;
+  font-size: 12px;
+  color: #1f2329;
+  outline: none;
+}
+
+/* —— 负责人列 —— */
+.tt-owners-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: none;
+  background: none;
+  padding: 2px 4px;
+  border-radius: 4px;
+  cursor: pointer;
+  max-width: 100%;
+}
+.tt-owners-btn:hover {
+  background: #f2f3f5;
+}
+.tt-avatars {
+  display: inline-flex;
+  flex: none;
+}
+.tt-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  font-size: 10px;
+  font-weight: 600;
+  border: 1px solid #fff;
+  margin-left: -4px;
+  flex: none;
+}
+.tt-avatar:first-child {
+  margin-left: 0;
+}
+.tt-owner-names {
+  color: #4e5969;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tt-owners-empty {
+  color: #ff8800;
+  font-size: 11px;
+}
+
+/* —— 状态列 —— */
+.tt-status {
+  border: 1px solid transparent;
+  background: transparent;
+  border-radius: 6px;
+  padding: 2px 4px;
+  font-size: 12px;
+  cursor: pointer;
+  outline: none;
+}
+.tt-status:hover {
+  border-color: #e5e6eb;
+  background: #fff;
+}
+.tt-status-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+}
+
+/* —— 进度列 —— */
+.tt-bar-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.tt-bar {
+  display: inline-block;
+  width: 56px;
+  height: 4px;
+  border-radius: 2px;
+  background: #e5e6eb;
+  overflow: hidden;
+  flex: none;
+}
+.tt-bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+}
+.tt-bar-num {
+  font-size: 11px;
+  color: #4e5969;
+  font-variant-numeric: tabular-nums;
+}
+.tt-bar-sigma {
+  color: #86909c;
+  font-size: 10px;
+}
+.tt-progress-input {
+  width: 52px;
+  height: 22px;
+  padding: 0 4px;
+  border: 1px solid #3370ff;
+  border-radius: 4px;
+  font-size: 12px;
+  outline: none;
+}
+
+/* —— 日期列 —— */
+.tt-date {
+  width: 110px;
+  height: 22px;
+  padding: 0 4px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  font-size: 12px;
+  color: #4e5969;
+  font-variant-numeric: tabular-nums;
+  font-family: inherit;
+}
+.tt-date:hover {
+  border-color: #e5e6eb;
+}
+.tt-date:focus {
+  border-color: #3370ff;
+  outline: none;
+  background: #fff;
+}
+.tt-date-text {
+  color: #4e5969;
+  font-variant-numeric: tabular-nums;
+}
+
+/* —— 更新时间列 —— */
+.tt-updated {
+  color: #86909c;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* —— 弹层（负责人选择 / 负责人筛选 / 状态筛选） —— */
+.tt-pop-anchor {
+  position: relative;
+}
+.tt-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+}
+.tt-popover {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 1100;
+  min-width: 200px;
+  max-width: 300px;
+  background: #fff;
+  border: 1px solid #e5e6eb;
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  padding: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.tt-pop-empty {
+  color: #86909c;
+  font-size: 12px;
+}
+
+/* —— 空态 —— */
+.tt-empty {
+  text-align: center;
+  color: #86909c;
+  padding: 48px 0 !important;
+}
+
+/* 右键行菜单（复用全局 .context-menu 容器）内的分隔线 */
+.tt-menu-sep {
+  height: 1px;
+  background: #e5e6eb;
+  margin: 4px 8px;
+}
