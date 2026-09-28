@@ -48,6 +48,7 @@ function baseLayout(): LayoutResult {
     nodes,
     edges,
     collapsedCounts: new Map(),
+    summaries: [], // M6 T6 起布局结果含概要（本桩无概要）
     width: 360,
     height: 320,
   };

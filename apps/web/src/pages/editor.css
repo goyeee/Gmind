@@ -166,6 +166,26 @@
   stroke-width: 1;
 }
 
+/* 概要 bracket（M6 Task 6，企微对标）：括弧/标签由引擎渲染（.gm-summary /
+   .gm-summary-bracket / .gm-summary-label）；标签可点击再编辑 */
+.editor-canvas svg .gm-summary-label {
+  cursor: pointer;
+}
+/* 概要标签行内编辑器：锚定 bracket 标签位置（left/top 为 svg 相对坐标） */
+.summary-label-editor {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  width: 150px;
+  padding: 3px 8px;
+  font-size: 12px;
+  border: 1px solid #3370ff;
+  border-radius: 4px;
+  outline: none;
+  background: #fff;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  z-index: 1100;
+}
+
 .editor-bottombar {
   flex: none;
   display: flex;

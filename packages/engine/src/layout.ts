@@ -32,6 +32,7 @@ import type {
   NodeBox,
   Point,
   StructureType,
+  SummaryBox,
   ThemeTokens,
   TextStyle,
 } from './types';
@@ -270,6 +271,36 @@ function buildEdges(node: LayoutNode, structure: StructureType, out: EdgeRoute[]
   }
 }
 
+/** 概要 bracket 几何常量（M6 Task 6，企微对标）：片段盒下方 12px、每侧外扩 8px。 */
+const SUMMARY_GAP_Y = 12;
+const SUMMARY_OUT_X = 8;
+
+/**
+ * 概要 bracket 盒（M6 Task 6，只增不改）：成员盒（缺失/折叠隐藏的成员跳过）的
+ * 包围盒外扩——x=左-8、w=宽+16、y=底+12；成员盒全缺 → 不输出。输出按 id 升序
+ * （确定性；输入顺序不影响结果）。
+ */
+function buildSummaries(reader: DocReader, boxes: NodeBox[]): SummaryBox[] {
+  const entries = reader.summaries?.() ?? [];
+  if (entries.length === 0) return [];
+  const boxById = new Map(boxes.map((b) => [b.id, b]));
+  const out: SummaryBox[] = [];
+  for (const s of entries) {
+    const members: NodeBox[] = [];
+    for (const nodeId of s.nodeIds) {
+      const b = boxById.get(nodeId);
+      if (b) members.push(b);
+    }
+    if (members.length === 0) continue;
+    const minX = Math.min(...members.map((b) => b.x));
+    const maxR = Math.max(...members.map((b) => b.x + b.w));
+    const maxB = Math.max(...members.map((b) => b.y + b.h));
+    out.push({ id: s.id, x: minX - SUMMARY_OUT_X, y: maxB + SUMMARY_GAP_Y, w: maxR - minX + SUMMARY_OUT_X * 2, label: s.label });
+  }
+  out.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  return out;
+}
+
 /** 先序展平（根先、文档序），回填折叠计数与 parentId（根无 parentId；Task 8 只增不改）。 */
 function flatten(
   node: LayoutNode,
@@ -293,7 +324,7 @@ export function layout(reader: DocReader, opts: LayoutOptions): LayoutResult {
   const styleOf = opts.styleOf ?? ((_id: string, depth: number) => themeTextStyleOf(theme, depth));
 
   const root = collectTree(reader, theme, measure, styleOf);
-  if (!root) return { nodes: [], edges: [], collapsedCounts: new Map(), width: 0, height: 0 };
+  if (!root) return { nodes: [], edges: [], collapsedCounts: new Map(), summaries: [], width: 0, height: 0 };
   computeMetrics(root, theme);
 
   if (structure === 'org') {
@@ -316,6 +347,9 @@ export function layout(reader: DocReader, opts: LayoutOptions): LayoutResult {
   const edges: EdgeRoute[] = [];
   buildEdges(root, structure, edges);
 
+  // 概要 bracket（M6 T6，只增不改）：bbox 仍只按节点盒计算（bracket 不扩画布边界）。
+  const summaries = buildSummaries(reader, nodes);
+
   let minX = Infinity;
   let maxX = -Infinity;
   let minY = Infinity;
@@ -331,6 +365,7 @@ export function layout(reader: DocReader, opts: LayoutOptions): LayoutResult {
     nodes,
     edges,
     collapsedCounts,
+    summaries,
     width: nodes.length > 0 ? maxX - minX : 0,
     height: nodes.length > 0 ? maxY - minY : 0,
   };

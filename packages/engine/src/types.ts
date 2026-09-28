@@ -164,11 +164,36 @@ export interface EdgeRoute {
   controls?: Point[];
 }
 
-/** 布局结果：collapsedCounts 记录各折叠节点被隐藏的后代数。 */
+/**
+ * 概要条目（M6 Task 6，企微对标）：core 的 summaries 存储结构兼容子集
+ * （nodeIds = 同父连续兄弟片段，core 层已保证收敛）。engine 只读。
+ */
+export interface SummaryLike {
+  id: string;
+  nodeIds: string[];
+  label: string;
+}
+
+/**
+ * 概要 bracket 盒（M6 Task 6）：片段盒下方 12px 的下括弧锚定盒——
+ * x=片段左-8、w=片段宽+16（每侧外扩 8）、y=片段底+12（括弧横线高度）。
+ * 括弧形状与 label 由渲染层按固定常量派生（只增不改：不影响节点/边）。
+ */
+export interface SummaryBox {
+  id: string;
+  x: number;
+  y: number;
+  w: number;
+  label: string;
+}
+
+/** 布局结果：collapsedCounts 记录各折叠节点被隐藏的后代数；
+ *  summaries 为概要 bracket 盒（M6 T6 起输出，按 id 升序）。 */
 export interface LayoutResult {
   nodes: NodeBox[];
   edges: EdgeRoute[];
   collapsedCounts: Map<string, number>;
+  summaries: SummaryBox[];
   width: number;
   height: number;
 }
@@ -210,4 +235,6 @@ export interface DocReader {
   getMeta(): DocMetaLike;
   getNode(id: string): NodeSnapshotLike | null;
   childrenIds(id: string): string[];
+  /** 概要列表（M6 Task 6 只增不改；缺省无概要）。宿主侧适配 core listSummaries。 */
+  summaries?(): SummaryLike[];
 }

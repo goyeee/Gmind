@@ -15,6 +15,7 @@ import {
   ORIGIN_USER,
   pathToRoot,
   redo as coreRedo,
+  removeSummary,
   ROOT_NODE_ID,
   setDocMeta,
   setHref,
@@ -22,8 +23,11 @@ import {
   setIcon,
   setNote,
   setStyle,
+  setSummary,
   setText,
   subtreeIds,
+  listSummaries,
+  validSummarySegment,
   toggleCollapse,
   undo as coreUndo,
   withTransaction,
@@ -294,9 +298,25 @@ export function EditorPage() {
   // PNG 透明背景勾选（M4 Task 9，FR-IO-003）：默认勾选；JPG 无 alpha 恒白底。
   const [exportTransparent, setExportTransparent] = useState(true);
   const exportWrapRef = useRef<HTMLDivElement | null>(null);
-  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; nodeId: string } | null>(
-    null,
-  );
+  // 右键菜单（Task 12）：nodeId 为节点菜单锚点；summaryId 为概要菜单锚点（M6 T6，
+  // 二者互斥——右键命中 bracket 时弹概要菜单，命中节点时弹节点菜单）
+  const [contextMenu, setContextMenu] = useState<
+    | { x: number; y: number; nodeId: string; summaryId?: undefined }
+    | { x: number; y: number; nodeId?: undefined; summaryId: string }
+    | null
+  >(null);
+  // 概要标签行内编辑（M6 Task 6，企微对标）：输入框锚定 bracket 标签位置（svg 相对
+  // 坐标，绝对定位在 .editor-canvas 内）。summaryId null = 新建前预填段（创建流：
+  // 先 setSummary 默认标签再打开，故实际总携带 id——预留字段供 Esc 回滚语义扩展）。
+  const [summaryEdit, setSummaryEdit] = useState<{
+    summaryId: string | null;
+    nodeIds: string[];
+    label: string;
+    left: number;
+    top: number;
+  } | null>(null);
+  // Esc 已取消的编辑不再被 onBlur 提交（Blur 提交与 Esc 取消互斥的一次性闸）
+  const summaryEditCancelled = useRef(false);
   // 评论域（M3b Task 7，FR-CMT-002）：进入文档 GET /comments 全量拉取，之后仅由
   // comment-updated 无状态广播（含自身 POST 触发的广播）驱动再拉取——评论不进
   // Y.Doc，独立于协同文档通道。
@@ -739,6 +759,92 @@ export function EditorPage() {
     if (next) selection.selectOnly(next);
   };
 
+  // —— 概要（M6 Task 6，企微对标）：同父连续兄弟片段的 bracket 归纳 ——
+
+  /** 选区可概要化判定（≥2 选中、同父、按父 childIds 连续，core 同一套校验）。 */
+  const summarySegmentFromSelection = (d: Y.Doc): string[] | null => {
+    const selection = selectionRef.current;
+    if (!selection || selection.selected.size < 2) return null;
+    const ids = [...selection.selected].filter((id) => id !== ROOT_NODE_ID);
+    return validSummarySegment(d, ids);
+  };
+
+  /**
+   * 打开概要标签行内编辑器：输入框锚定 bracket 标签位置（svg 相对坐标 → .editor-canvas
+   * 内绝对定位）。锚点优先取布局产出的 bracket 盒（既有概要）；创建流尚无盒时按
+   * engine 同式几何（片段盒下方 12px + label 基线 14px、每侧外扩 8px）预置。
+   */
+  const openSummaryEditor = (
+    summaryId: string | null,
+    nodeIds: string[],
+    label: string,
+    anchor?: { x: number; y: number; w: number },
+  ): void => {
+    const vp = viewportRef.current;
+    if (!vp) return;
+    const box =
+      anchor ?? (layoutRef.current?.summaries ?? []).find((s) => s.id === summaryId);
+    let sceneX: number;
+    let sceneY: number;
+    if (box) {
+      sceneX = box.x + box.w / 2;
+      sceneY = box.y + 14;
+    } else {
+      const members = nodeIds
+        .map((id) => boxesRef.current.find((b) => b.id === id))
+        .filter((b): b is NodeBox => b !== undefined);
+      if (members.length === 0) return;
+      const minX = Math.min(...members.map((b) => b.x));
+      const maxR = Math.max(...members.map((b) => b.x + b.w));
+      const maxB = Math.max(...members.map((b) => b.y + b.h));
+      sceneX = minX - 8 + (maxR - minX + 16) / 2; // 与 engine SUMMARY_OUT_X=8 同式
+      sceneY = maxB + 12 + 14; // 与 engine SUMMARY_GAP_Y=12 + label 基线 14 同式
+    }
+    const p = vp.toScreen(sceneX, sceneY);
+    summaryEditCancelled.current = false;
+    setSummaryEdit({ summaryId, nodeIds, label, left: p.x, top: p.y });
+  };
+
+  /** 提交（commit=true）/取消概要标签编辑：未变更零写入（不给撤销栈留空项）。 */
+  const commitSummaryEdit = (commit: boolean): void => {
+    if (summaryEditCancelled.current && !commit) {
+      summaryEditCancelled.current = false;
+      return; // Esc 已取消：随后的 blur 不再提交
+    }
+    const ed = summaryEdit;
+    if (!ed) return;
+    setSummaryEdit(null);
+    if (!commit || !doc) return;
+    if (ed.summaryId) {
+      const cur = listSummaries(doc).find((s) => s.id === ed.summaryId);
+      if (cur && cur.label === ed.label && cur.nodeIds.length === ed.nodeIds.length) return;
+    }
+    try {
+      setSummary(doc, ed.nodeIds, ed.label, ORIGIN_USER);
+      afterUserWrite();
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : '概要保存失败');
+    }
+  };
+
+  /** 右键菜单「添加概要」：选区校验失败给原因+下一步（NFR-USE-005）；成功建默认
+   *  标签「概要」并立即进入行内编辑（企微同款创建流）。 */
+  const addSummaryFromSelection = (): void => {
+    if (!doc) return;
+    const seg = summarySegmentFromSelection(doc);
+    if (seg === null || seg.length < 2) {
+      showToast('概要需选择同一父节点下的连续节点，请调整选区后重试');
+      return;
+    }
+    try {
+      const sid = setSummary(doc, seg, '概要', ORIGIN_USER);
+      afterUserWrite();
+      openSummaryEditor(sid, seg, '概要');
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : '概要创建失败');
+    }
+  };
+
   // —— 剪贴板（T10 交付面装配；Task 15 起图片随粘贴 remap，FR-EDT-010 收尾） ——
 
   /**
@@ -886,6 +992,15 @@ export function EditorPage() {
       }
       return;
     }
+    // 概要 bracket（M6 Task 6）：点标签/括弧 → 行内编辑该概要标签（先于节点选择与
+    // 空白清空——bracket 命中不改变既有选区）
+    const sumG = target.closest('[data-summary-id]');
+    if (sumG) {
+      const sid = sumG.getAttribute('data-summary-id');
+      const s = sid ? listSummaries(doc).find((v) => v.id === sid) : undefined;
+      if (s) openSummaryEditor(s.id, s.nodeIds, s.label);
+      return;
+    }
     const g = target.closest('[data-node-id]');
     const id = g?.getAttribute('data-node-id');
     if (!id) {
@@ -917,7 +1032,13 @@ export function EditorPage() {
     const svgEl = svgRef.current;
     if (!selection || !vp || !svgEl) return;
     const target = e.target as Element;
-    if (target.closest('[data-node-id]') || target.closest('[data-for-id]')) return;
+    if (
+      target.closest('[data-node-id]') ||
+      target.closest('[data-for-id]') ||
+      target.closest('[data-summary-id]')
+    ) {
+      return; // 概要 bracket 上起拖不进框选（M6 T6）
+    }
     e.preventDefault(); // 抑制拖拽选中文本等浏览器默认行为
     const scene = vp.toSceneFromEvent(e.nativeEvent);
     selection.beginMarquee(scene.x, scene.y);
@@ -987,7 +1108,15 @@ export function EditorPage() {
     e.preventDefault();
     if (justDraggedRef.current) return;
     if (readOnly) return; // 移动端只读：不弹右键菜单（长按 contextmenu 同拦）
-    const g = (e.target as Element).closest('[data-node-id]');
+    const target = e.target as Element;
+    // 概要 bracket（M6 Task 6）：右键 → 概要菜单（删除概要），与节点菜单互斥
+    const sumG = target.closest('[data-summary-id]');
+    if (sumG) {
+      const sid = sumG.getAttribute('data-summary-id');
+      if (sid) setContextMenu({ x: e.clientX, y: e.clientY, summaryId: sid });
+      return;
+    }
+    const g = target.closest('[data-node-id]');
     const id = g?.getAttribute('data-node-id');
     if (!id || !doc) {
       setContextMenu(null);
@@ -995,7 +1124,11 @@ export function EditorPage() {
     }
     const snap = getNode(doc, id);
     if (!snap || snap.deleted) return;
-    selectionRef.current?.selectOnly(id);
+    // 多选保持（M6 T6）：右键命中成员之一时不折叠选区——「添加概要」依赖多选片段
+    const sel = selectionRef.current;
+    if (!(sel && sel.selected.size > 1 && sel.selected.has(id))) {
+      selectionRef.current?.selectOnly(id);
+    }
     setContextMenu({ x: e.clientX, y: e.clientY, nodeId: id });
   };
 
@@ -1003,22 +1136,35 @@ export function EditorPage() {
     const menu = contextMenu;
     setContextMenu(null);
     if (!menu || !doc) return;
-    const nodeBox = boxesRef.current.find((b) => b.id === menu.nodeId) ?? null;
+    if (menu.summaryId !== undefined) {
+      // 概要菜单（M6 T6）：唯一动作「删除概要」
+      if (action === 'remove-summary') {
+        try {
+          removeSummary(doc, menu.summaryId, ORIGIN_USER);
+          afterUserWrite();
+        } catch (e) {
+          showToast(e instanceof Error ? e.message : '概要删除失败');
+        }
+      }
+      return;
+    }
+    const nodeId = menu.nodeId as string;
+    const nodeBox = boxesRef.current.find((b) => b.id === nodeId) ?? null;
     switch (action) {
       case 'insert-child':
-        openNewNodeEditor(menu.nodeId, undefined, nodeBox, 'child', 'context');
+        openNewNodeEditor(nodeId, undefined, nodeBox, 'child', 'context');
         break;
       case 'insert-sibling': {
-        if (menu.nodeId === ROOT_NODE_ID) {
+        if (nodeId === ROOT_NODE_ID) {
           openNewNodeEditor(ROOT_NODE_ID, undefined, nodeBox, 'child', 'context');
           break;
         }
-        const snap = getNode(doc, menu.nodeId);
+        const snap = getNode(doc, nodeId);
         const parent = snap ? getNode(doc, snap.parentId) : null;
         if (!snap || !parent || parent.deleted) break;
         openNewNodeEditor(
           parent.id,
-          parent.childIds.indexOf(menu.nodeId) + 1,
+          parent.childIds.indexOf(nodeId) + 1,
           nodeBox,
           'sibling',
           'context',
@@ -1036,6 +1182,9 @@ export function EditorPage() {
         break;
       case 'paste':
         void handlePaste();
+        break;
+      case 'add-summary':
+        addSummaryFromSelection();
         break;
       case 'toggle-collapse':
         handleToggleCollapse();
@@ -1152,11 +1301,12 @@ export function EditorPage() {
       // 远端光标层（M2 Task 5）：挂 nodesLayer 末尾最上层；主题切换重建场景时随
       // 场景整体重建（createCursorLayer 幂等移除旧层），ref 换新句柄。
       cursorLayerRef.current = createCursorLayer(scene);
-      // 视口包装层（fix round 1）：createScene 的边/节点两层是 svg 直接子元素，
-      // Viewport 只transform单个 g——必须包一层同时携带两层，否则平移/缩放时边脱节点。
+      // 视口包装层（fix round 1）：createScene 的边/概要/节点三层是 svg 直接子元素，
+      // Viewport 只 transform 单个 g——必须包一层同时携带三层，否则平移/缩放时边脱节点。
       const wrapper = document.createElementNS('http://www.w3.org/2000/svg', 'g');
       wrapper.setAttribute('class', 'gm-viewport');
       wrapper.appendChild(scene.edgesLayer);
+      wrapper.appendChild(scene.summariesLayer); // 概要层随视口（M6 T6，边与节点之间）
       wrapper.appendChild(scene.nodesLayer);
       svgEl.appendChild(wrapper);
       const vp = new Viewport(svgEl, wrapper);
@@ -1781,6 +1931,39 @@ export function EditorPage() {
             role="application"
             aria-label="脑图画布"
           />
+          {/* 概要标签行内编辑（M6 Task 6）：锚定 bracket 标签位置（svg 相对坐标）；
+              Enter/失焦提交（未变更零写入），Esc 取消。键盘映射经 isEditableTarget 让路。 */}
+          {summaryEdit && !readOnly && (
+            <input
+              data-testid="summary-label-input"
+              className="summary-label-editor"
+              style={{ left: summaryEdit.left, top: summaryEdit.top }}
+              value={summaryEdit.label}
+              autoFocus
+              aria-label="概要标签"
+              placeholder="概要标签"
+              ref={(el) => {
+                if (el) {
+                  el.focus();
+                  el.select();
+                }
+              }}
+              onChange={(e) =>
+                setSummaryEdit((prev) => (prev ? { ...prev, label: e.target.value } : prev))
+              }
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  commitSummaryEdit(true);
+                } else if (e.key === 'Escape') {
+                  e.preventDefault();
+                  summaryEditCancelled.current = true;
+                  setSummaryEdit(null);
+                }
+              }}
+              onBlur={() => commitSummaryEdit(false)}
+            />
+          )}
         </div>
 
         {/*
@@ -1838,21 +2021,31 @@ export function EditorPage() {
           style={{ left: contextMenu.x, top: contextMenu.y }}
           role="menu"
         >
-          {(
-            [
+          {contextMenu.summaryId ? (
+            /* 概要菜单（M6 T6）：右键 bracket 弹出，与节点菜单互斥 */
+            <button data-testid="menu-remove-summary" onClick={() => runMenuAction('remove-summary')}>
+              删除概要
+            </button>
+          ) : (
+            ([
               ['insert-child', '插入子级'],
               ['insert-sibling', '插入同级'],
+              ['add-summary', '添加概要'],
               ['toggle-collapse', '折叠/展开'],
               ['copy', '复制'],
               ['cut', '剪切'],
               ['paste', '粘贴'],
               ['delete', '删除'],
-            ] as const
-          ).map(([action, label]) => (
-            <button key={action} onClick={() => runMenuAction(action)}>
-              {label}
-            </button>
-          ))}
+            ] as const).map(([action, label]) => (
+              <button
+                key={action}
+                data-testid={`menu-${action}`}
+                onClick={() => runMenuAction(action)}
+              >
+                {label}
+              </button>
+            ))
+          )}
         </div>
       )}
 
@@ -1957,12 +2150,13 @@ function clipboardErrorMessage(e: unknown): string {
   return e instanceof Error ? e.message : '操作失败';
 }
 
-/** @gmind/core 读 API → engine DocReader。 */
+/** @gmind/core 读 API → engine DocReader（summaries 供概要 bracket 布局，M6 T6）。 */
 function readerOf(d: Y.Doc): DocReader {
   return {
     getMeta: () => getMeta(d),
     getNode: (id) => getNode(d, id),
     childrenIds: (id) => childrenIds(d, id),
+    summaries: () => listSummaries(d),
   };
 }
 

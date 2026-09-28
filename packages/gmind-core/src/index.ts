@@ -22,6 +22,9 @@ export * from './read';
 // operations（写操作与事务）
 export * from './operations';
 
+// summary（概要：同父连续兄弟片段归纳，M6 Task 6 企微对标）
+export * from './summary';
+
 // repair（自愈/规范化）
 export * from './repair';
 

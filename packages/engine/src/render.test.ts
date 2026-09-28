@@ -39,6 +39,7 @@ function baseLayout(collapsed?: Record<string, number>): LayoutResult {
     nodes: [box('a', -60, -10, 120, 20, 'right', 0), box('b', 60, -20, 100, 40), box('c', 60, 20, 80, 20)],
     edges: [edge('a->b', 'bezier'), edge('a->c', 'bezier')],
     collapsedCounts: new Map(Object.entries(collapsed ?? {}).map(([k, v]) => [k, v])),
+    summaries: [],
     width: 220,
     height: 60,
   };
@@ -74,17 +75,19 @@ function edgePath(id: string): SVGPathElement | null {
 }
 
 describe('createScene', () => {
-  it('创建边/节点两层（边在下、节点在上），并清空旧内容', () => {
+  it('创建边/概要/节点三层（边在下、节点在上），并清空旧内容', () => {
     const junk = document.createElement('div');
     svg.appendChild(junk);
     const scene = createScene(svg);
     const layers = svg.querySelectorAll('g');
-    expect(layers).toHaveLength(2);
+    expect(layers).toHaveLength(3);
     expect(layers[0]?.getAttribute('class')).toBe('gm-edges');
-    expect(layers[1]?.getAttribute('class')).toBe('gm-nodes');
+    expect(layers[1]?.getAttribute('class')).toBe('gm-summaries');
+    expect(layers[2]?.getAttribute('class')).toBe('gm-nodes');
     expect(svg.contains(junk)).toBe(false);
-    expect(scene.nodesLayer).toBe(layers[1]);
+    expect(scene.nodesLayer).toBe(layers[2]);
     expect(scene.edgesLayer).toBe(layers[0]);
+    expect(scene.summariesLayer).toBe(layers[1]);
   });
 });
 
@@ -411,13 +414,14 @@ describe('renderScene：评论角标（FR-CMT-002）', () => {
 });
 
 describe('renderScene：清理与幂等', () => {
-  it('更新为空布局后无孤儿元素：两层清空，svg 只剩两层', () => {
+  it('更新为空布局后无孤儿元素：三层清空，svg 只剩三层', () => {
     const scene = createScene(svg);
     renderScene(scene, makeInput(baseLayout(), baseData()));
-    renderScene(scene, makeInput({ nodes: [], edges: [], collapsedCounts: new Map(), width: 0, height: 0 }, baseData()));
+    renderScene(scene, makeInput({ nodes: [], edges: [], collapsedCounts: new Map(), summaries: [], width: 0, height: 0 }, baseData()));
     expect(scene.nodesLayer.children).toHaveLength(0);
     expect(scene.edgesLayer.children).toHaveLength(0);
-    expect(svg.children).toHaveLength(2);
+    expect(scene.summariesLayer.children).toHaveLength(0);
+    expect(svg.children).toHaveLength(3);
   });
 
   it('重复渲染同一输入：DOM 结构与元素引用稳定（幂等）', () => {
@@ -430,5 +434,67 @@ describe('renderScene：清理与幂等', () => {
     expect(refs2).toHaveLength(refs.length);
     refs.forEach((r, i) => expect(refs2[i]).toBe(r));
     expect(scene.nodesLayer.children).toHaveLength(3);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 概要 bracket 渲染（M6 Task 6，企微对标）：只增不改——g[data-summary-id] +
+// 下括弧 path（片段盒下方 12px，两侧端子上挑 6px）+ 居中 label。
+// ---------------------------------------------------------------------------
+
+describe('renderScene：概要 bracket（M6 Task 6）', () => {
+  function summaryLayout(summaries: Array<{ id: string; x: number; y: number; w: number; label: string }>): LayoutResult {
+    return { ...baseLayout(), summaries };
+  }
+
+  it('渲染 g[data-summary-id]：transform=(x,y)、下括弧 path（M 0 -6 L 0 0 L w 0 L w -6）、label 居中在行下方', () => {
+    renderScene(createScene(svg), makeInput(summaryLayout([{ id: 'sm1', x: 40, y: 80, w: 100, label: '上半周' }]), baseData()));
+    const g = svg.querySelector('[data-summary-id="sm1"]') as SVGGElement;
+    expect(g).not.toBeNull();
+    expect(g.getAttribute('class')).toBe('gm-summary');
+    expect(g.parentNode).toBe(svg.querySelector('.gm-summaries'));
+    expect(g.getAttribute('transform')).toBe('translate(40, 80)');
+    const path = g.querySelector('path.gm-summary-bracket') as SVGPathElement;
+    expect(path.getAttribute('d')).toBe('M 0 -6 L 0 0 L 100 0 L 100 -6');
+    expect(path.getAttribute('fill')).toBe('none');
+    expect(path.getAttribute('stroke')).toBe(theme.edgeColor);
+    expect(path.getAttribute('stroke-width')).toBe(String(theme.edgeWidth));
+    const label = g.querySelector('text.gm-summary-label') as SVGTextElement;
+    expect(label.textContent).toBe('上半周');
+    expect(label.getAttribute('x')).toBe('50'); // w/2 居中
+    expect(label.getAttribute('text-anchor')).toBe('middle');
+    expect(Number(label.getAttribute('y'))).toBeGreaterThan(0); // 行下方基线
+  });
+
+  it('协调更新：label 变化就地更新；几何变化重算 transform/d；概要消失元素移除', () => {
+    const scene = createScene(svg);
+    renderScene(scene, makeInput(summaryLayout([{ id: 'sm1', x: 40, y: 80, w: 100, label: 'A' }]), baseData()));
+    const g = svg.querySelector('[data-summary-id="sm1"]') as SVGGElement;
+    const label = g.querySelector('text.gm-summary-label') as SVGTextElement;
+    // label 变化 + 几何变化：元素引用恒定，属性重算
+    renderScene(scene, makeInput(summaryLayout([{ id: 'sm1', x: 60, y: 120, w: 140, label: 'B' }]), baseData()));
+    expect(svg.querySelector('[data-summary-id="sm1"]')).toBe(g);
+    expect(g.getAttribute('transform')).toBe('translate(60, 120)');
+    expect(g.querySelector('path.gm-summary-bracket')?.getAttribute('d')).toBe('M 0 -6 L 0 0 L 140 0 L 140 -6');
+    expect(g.querySelector('text.gm-summary-label')).toBe(label);
+    expect(label.textContent).toBe('B');
+    expect(label.getAttribute('x')).toBe('70');
+    // 概要消失 → 元素移除
+    renderScene(scene, makeInput(summaryLayout([]), baseData()));
+    expect(svg.querySelector('[data-summary-id="sm1"]')).toBeNull();
+    expect(g.isConnected).toBe(false);
+  });
+
+  it('既有节点/边元素不受概要增删影响（只增不改：引用恒定）', () => {
+    const scene = createScene(svg);
+    renderScene(scene, makeInput(summaryLayout([]), baseData()));
+    const gB = svg.querySelector('[data-node-id="b"]') as SVGGElement;
+    const edgePath = svg.querySelector('[data-edge-id="a->b"]') as SVGPathElement;
+    renderScene(scene, makeInput(summaryLayout([{ id: 'sm1', x: 0, y: 0, w: 50, label: 'x' }]), baseData()));
+    expect(svg.querySelector('[data-node-id="b"]')).toBe(gB);
+    expect(svg.querySelector('[data-edge-id="a->b"]')).toBe(edgePath);
+    renderScene(scene, makeInput(summaryLayout([]), baseData()));
+    expect(svg.querySelector('[data-node-id="b"]')).toBe(gB);
+    expect(svg.querySelector('[data-edge-id="a->b"]')).toBe(edgePath);
   });
 });

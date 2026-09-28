@@ -11,6 +11,7 @@ import type {
   NodeBox,
   NodeSnapshotLike,
   StructureType,
+  SummaryLike,
   ThemeTokens,
   TextStyle,
 } from './types';
@@ -28,7 +29,7 @@ interface PlainNode {
   image?: { key: string; w: number; h: number } | null;
 }
 
-function makeReader(defs: Record<string, PlainNode>): DocReader {
+function makeReader(defs: Record<string, PlainNode>, summaries?: SummaryLike[]): DocReader {
   const snap = (id: string): NodeSnapshotLike | null => {
     const def = defs[id];
     if (!def) return null;
@@ -43,11 +44,13 @@ function makeReader(defs: Record<string, PlainNode>): DocReader {
       image: def.image,
     };
   };
-  return {
+  const reader: DocReader = {
     getMeta: () => ({ title: '测试文档', structureType: 'mindmap', themeId: 'stub' }),
     getNode: snap,
     childrenIds: (id) => snap(id)?.childIds ?? [],
   };
+  if (summaries !== undefined) reader.summaries = () => summaries;
+  return reader;
 }
 
 const stubAdapter: MeasureAdapter = { measureTextLine: (text) => text.length * 10 };
@@ -424,6 +427,102 @@ describe('layout 不变量（5 树 × 3 结构）', () => {
 });
 
 // ---------------------------------------------------------------------------
+// 概要 bracket 几何（M6 Task 6，企微对标）：只增不改——无概要时 summaries=[]
+// ---------------------------------------------------------------------------
+
+describe('layout 概要 bracket（M6 Task 6）', () => {
+  /** 固定片段树：root → [s1, s2, s3, s4]（叶）。 */
+  const SEG_DEFS: Record<string, PlainNode> = {
+    root: { text: '根', children: ['s1', 's2', 's3', 's4'] },
+    s1: { text: '周一' },
+    s2: { text: '周三' },
+    s3: { text: '周五' },
+    s4: { text: '周日' },
+  };
+
+  it('三节点片段：y=片段底+12、x=片段左-8、w=片段宽+16、label 原样透传', () => {
+    for (const structure of STRUCTURES) {
+      const reader = makeReader(SEG_DEFS, [
+        { id: 'sm1', nodeIds: ['s1', 's2', 's3'], label: '上半周' },
+      ]);
+      const result = layout(reader, { structure, theme, measure: stubAdapter, styleOf });
+      expect(result.summaries).toHaveLength(1);
+      const sum = result.summaries[0] as { id: string; x: number; y: number; w: number; label: string };
+      expect(sum.id).toBe('sm1');
+      expect(sum.label).toBe('上半周');
+      const boxes = ['s1', 's2', 's3'].map((id) => boxOf(result, id));
+      const minX = Math.min(...boxes.map((b) => b.x));
+      const maxR = Math.max(...boxes.map((b) => b.x + b.w));
+      const maxB = Math.max(...boxes.map((b) => b.y + b.h));
+      expect(sum.x).toBe(minX - 8); // 每侧外扩 8
+      expect(sum.w).toBe(maxR - minX + 16); // 片段宽 + 16
+      expect(sum.y).toBe(maxB + 12); // 片段底 + 12
+    }
+  });
+
+  it('成员盒缺失（墓碑/折叠隐藏）→ 以现存盒收敛；全缺 → 概要不出盒', () => {
+    // s2 删除（core repair 后 nodeIds 已收敛，此处钉引擎对缺盒成员的确定性处理）
+    const defs = { ...SEG_DEFS, s2: { text: '周三', deleted: true } };
+    const partial = layout(makeReader(defs, [{ id: 'sm1', nodeIds: ['s1', 's3'], label: 'L' }]), {
+      structure: 'logic',
+      theme,
+      measure: stubAdapter,
+      styleOf,
+    });
+    expect(partial.summaries).toHaveLength(1);
+    const b1 = boxOf(partial, 's1');
+    const b3 = boxOf(partial, 's3');
+    expect(partial.summaries[0]?.x).toBe(Math.min(b1.x, b3.x) - 8);
+    // 全部成员无盒 → 不输出该概要
+    const gone = layout(
+      makeReader(
+        { root: { text: '根', children: ['s1'] } },
+        [{ id: 'sm2', nodeIds: ['s9', 's10'], label: 'L' }],
+      ),
+      { structure: 'logic', theme, measure: stubAdapter, styleOf },
+    );
+    expect(gone.summaries).toHaveLength(0);
+  });
+
+  it('无概要（reader 不带 summaries 方法或空数组）→ summaries=[]；多概要按 id 升序输出', () => {
+    const noMethod = layout(makeReader(SEG_DEFS), {
+      structure: 'mindmap',
+      theme,
+      measure: stubAdapter,
+      styleOf,
+    });
+    expect(noMethod.summaries).toEqual([]);
+    const empty = layout(makeReader(SEG_DEFS, []), { structure: 'mindmap', theme, measure: stubAdapter, styleOf });
+    expect(empty.summaries).toEqual([]);
+    const multi = layout(
+      makeReader(SEG_DEFS, [
+        { id: 'smB', nodeIds: ['s3'], label: 'b' },
+        { id: 'smA', nodeIds: ['s1'], label: 'a' },
+      ]),
+      { structure: 'mindmap', theme, measure: stubAdapter, styleOf },
+    );
+    expect(multi.summaries.map((s) => s.id)).toEqual(['smA', 'smB']);
+  });
+
+  it('概要不改既有输出：nodes/edges/collapsedCounts/bbox 与无概要时逐项一致（只增不改）', () => {
+    for (const structure of STRUCTURES) {
+      const plain = layout(makeReader(SEG_DEFS), { structure, theme, measure: stubAdapter, styleOf });
+      const withSum = layout(makeReader(SEG_DEFS, [{ id: 'sm1', nodeIds: ['s1', 's2'], label: 'L' }]), {
+        structure,
+        theme,
+        measure: stubAdapter,
+        styleOf,
+      });
+      expect(withSum.nodes).toEqual(plain.nodes);
+      expect(withSum.edges).toEqual(plain.edges);
+      expect(withSum.collapsedCounts).toEqual(plain.collapsedCounts);
+      expect(withSum.width).toBe(plain.width);
+      expect(withSum.height).toBe(plain.height);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // 确定性与金样
 // ---------------------------------------------------------------------------
 
@@ -443,6 +542,7 @@ function serialize(result: LayoutResult): string {
       })),
       edges: result.edges.map((e) => ({ id: e.id, from: e.from, to: e.to, kind: e.kind, controls: e.controls ?? null })),
       collapsedCounts: Object.fromEntries(counts),
+      summaries: result.summaries.map((s) => ({ id: s.id, x: s.x, y: s.y, w: s.w, label: s.label })), // M6 T6 起金样含概要
       width: result.width,
       height: result.height,
     },

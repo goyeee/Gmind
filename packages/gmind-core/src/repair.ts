@@ -2,6 +2,7 @@ import * as Y from 'yjs';
 import type { AbstractType, YEvent } from 'yjs';
 import { ROOT_NODE_ID } from './doc';
 import { ORIGIN_SYSTEM } from './undo';
+import { applySummaryRepair, planSummaryRepair } from './summary';
 
 /**
  * normalizeTree —— 树结构 repair 收敛（spec §4.2，全项目唯一自研共识点）。
@@ -17,6 +18,9 @@ import { ORIGIN_SYSTEM } from './undo';
  *  ④ 移除「目标节点 parentId !== 本节点 id」的项（并发换父的败者侧清理）；
  *  ⑤ 存活非 root 节点若不在其 parentId 的 children 中 → 追加到末尾；
  *  ⑥ root 缺失 → 防御重建（text ''、parentId ''、空 children），存活孤儿随后按 ⑤ 挂回。
+ *  ⑦ 概要收敛（M6 Task 6）：`summaries` Y.Map 各条目的 nodeIds 片段断裂（成员删除/
+ *    换父/移出父序）→ 全部消失删条目、部分收敛存活子段（最长连续段，label 不动）；
+ *    由 summary.ts 的 planSummaryRepair/applySummaryRepair 提供，与①-⑥同一事务应用。
  *
  * 冻结不变量：墓碑节点的 children 数组是撤销/快照还原依据（deleteNodes 保留不动），
  * 本函数绝不写墓碑节点的 children，也不向墓碑父级追加子节点。
@@ -217,6 +221,13 @@ export function normalizeTree(doc: Y.Doc, origin: string = ORIGIN_SYSTEM): numbe
   const cycleBreaks = findParentCycleBreaks(nodes);
   repairs += cycleBreaks.length;
 
+  // ── 概要收敛（M6 Task 6，Global Constraints 口径）：片段断裂（成员删除/换父）
+  //    → 全部消失删概要 / 部分消失收敛存活段；label 不动。与树修复同一事务应用。
+  const summaryPlan = planSummaryRepair(doc);
+  if (summaryPlan !== null) {
+    repairs += summaryPlan.removeIds.length + summaryPlan.updates.length;
+  }
+
   // ── 事务纪律：无修复不开事务、零写入；有修复则在单个 origin 事务内统一应用。
   if (repairs === 0) return 0;
   doc.transact(() => {
@@ -265,6 +276,7 @@ export function normalizeTree(doc: Y.Doc, origin: string = ORIGIN_SYSTEM): numbe
         rootChildren.push([b.id]);
       }
     }
+    applySummaryRepair(doc, summaryPlan); // 概要收敛（M6 T6）：同事务统一应用
   }, origin);
   return repairs;
 }
@@ -469,6 +481,14 @@ export function normalizeTreeFor(doc: Y.Doc, origin: string, dirtyNodeIds: Set<s
   }
   appends.sort((a, b) => (a.childId < b.childId ? -1 : a.childId > b.childId ? 1 : 0));
 
+  // ── 概要收敛（M6 T6）：概要条目量级小（用户手建），增量路径直接全表规划——
+  //    与全量同一结果（纯函数），且不依赖脏区推导覆盖「片段成员墓碑」这一形状
+  //    （成员自身的 deleted 键变更在 deriveNormalizeDirty 中只把父级入脏区）。
+  const summaryPlan = planSummaryRepair(doc);
+  if (summaryPlan !== null) {
+    repairs += summaryPlan.removeIds.length + summaryPlan.updates.length;
+  }
+
   if (repairs === 0) return 0;
   doc.transact(() => {
     for (const c of cleanups) {
@@ -486,6 +506,7 @@ export function normalizeTreeFor(doc: Y.Doc, origin: string, dirtyNodeIds: Set<s
       }
       arr.push([a.childId]);
     }
+    applySummaryRepair(doc, summaryPlan); // 概要收敛（M6 T6）：同事务统一应用
   }, origin);
   return repairs;
 }

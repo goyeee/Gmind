@@ -29,6 +29,7 @@ import type {
   LayoutResult,
   NodeBox,
   ResolvedNodeStyle,
+  SummaryBox,
   ThemeTokens,
 } from './types';
 
@@ -52,6 +53,11 @@ const BADGE_W = 28;
 const BADGE_H = 18;
 const BADGE_RX = 9;
 const BADGE_FONT_SIZE = 12;
+
+/** 概要 bracket 几何（M6 Task 6，确定性常量）：端子上挑 6px、label 12px 居中行下。 */
+const SUMMARY_TICK = 6;
+const SUMMARY_FONT_SIZE = 12;
+const SUMMARY_LABEL_BASELINE = 14;
 
 /** 角标（note/link）基线与右内边距。 */
 const CORNER_BADGE_BASELINE = 12;
@@ -99,16 +105,27 @@ export interface EdgeEntry {
   path: SVGPathElement;
 }
 
+/** 概要协调条目（M6 Task 6）：g + 下括弧 path + 居中 label。 */
+export interface SummaryEntry {
+  g: SVGGElement;
+  path: SVGPathElement;
+  label: SVGTextElement;
+  /** 上次渲染的 label（textContent 仅在变化时回写）。 */
+  lastLabel: string;
+}
+
 /**
- * 场景根：两层 <g> + 按 id 的协调注册表（plain Map，非 WeakMap——
+ * 场景根：三层 <g>（边/概要/节点）+ 按 id 的协调注册表（plain Map，非 WeakMap——
  * 供宿主/测试直接检视；renderScene 全权维护其内容）。
  */
 export interface SceneRoot {
   readonly svg: SVGSVGElement;
   readonly edgesLayer: SVGGElement;
+  readonly summariesLayer: SVGGElement;
   readonly nodesLayer: SVGGElement;
   readonly nodeEntries: Map<string, NodeEntry>;
   readonly edgeEntries: Map<string, EdgeEntry>;
+  readonly summaryEntries: Map<string, SummaryEntry>;
 }
 
 /** 节点视觉数据（布局盒子之外的渲染输入；collapsed 计数走 layout.collapsedCounts）。 */
@@ -132,21 +149,26 @@ export interface SceneInput {
 }
 
 /**
- * 创建场景：清空 svg 既有内容，建立 <g class="gm-edges">（下）与
- * <g class="gm-nodes">（上）两层，返回带空注册表的场景根。
+ * 创建场景：清空 svg 既有内容，建立 <g class="gm-edges">（下）、
+ * <g class="gm-summaries">（中，M6 Task 6）与 <g class="gm-nodes">（上）三层，
+ * 返回带空注册表的场景根。
  */
 export function createScene(svg: SVGSVGElement): SceneRoot {
   while (svg.firstChild) svg.firstChild.remove();
   const edgesLayer = el('g', { class: 'gm-edges' });
+  const summariesLayer = el('g', { class: 'gm-summaries' });
   const nodesLayer = el('g', { class: 'gm-nodes' });
   svg.appendChild(edgesLayer);
+  svg.appendChild(summariesLayer);
   svg.appendChild(nodesLayer);
   return {
     svg,
     edgesLayer,
+    summariesLayer,
     nodesLayer,
     nodeEntries: new Map(),
     edgeEntries: new Map(),
+    summaryEntries: new Map(),
   };
 }
 
@@ -454,6 +476,41 @@ function applyEdge(scene: SceneRoot, route: EdgeRoute, theme: ThemeTokens): void
 }
 
 /**
+ * 单概要协调（M6 Task 6）：不存在则创建 <g data-summary-id class="gm-summary">，
+ * 存在则就地改属性（引用恒定）。下括弧 path（局部坐标）：端子上挑 SUMMARY_TICK、
+ * 横线贴 y=0；label 居中于 w/2、基线行下 SUMMARY_LABEL_BASELINE。
+ */
+function applySummary(scene: SceneRoot, s: SummaryBox, theme: ThemeTokens): void {
+  let entry = scene.summaryEntries.get(s.id);
+  if (!entry) {
+    const g = el('g', { 'data-summary-id': s.id, class: 'gm-summary' });
+    const path = el('path', { class: 'gm-summary-bracket', fill: 'none' });
+    const label = el('text', {
+      class: 'gm-summary-label',
+      'text-anchor': 'middle',
+      'font-size': fmt(SUMMARY_FONT_SIZE),
+    });
+    g.appendChild(path);
+    g.appendChild(label);
+    scene.summariesLayer.appendChild(g);
+    entry = { g, path, label, lastLabel: '' };
+    scene.summaryEntries.set(s.id, entry);
+  }
+  const { g, path, label } = entry;
+  g.setAttribute('transform', `translate(${fmt(s.x)}, ${fmt(s.y)})`);
+  path.setAttribute('d', `M 0 ${fmt(-SUMMARY_TICK)} L 0 0 L ${fmt(s.w)} 0 L ${fmt(s.w)} ${fmt(-SUMMARY_TICK)}`);
+  path.setAttribute('stroke', theme.edgeColor);
+  path.setAttribute('stroke-width', fmt(theme.edgeWidth));
+  label.setAttribute('x', fmt(s.w / 2));
+  label.setAttribute('y', fmt(SUMMARY_LABEL_BASELINE));
+  label.setAttribute('fill', theme.edgeColor);
+  if (entry.lastLabel !== s.label) {
+    label.textContent = s.label;
+    entry.lastLabel = s.label;
+  }
+}
+
+/**
  * 按布局结果协调场景：节点/边按 id 集合差分——新增创建、消失移除、保持就地更新。
  * 既有元素引用恒定（文本 tspan 仅在文本变化时重建）。
  */
@@ -488,6 +545,19 @@ export function renderScene(scene: SceneRoot, input: SceneInput): void {
     if (!seenEdges.has(id)) {
       entry.path.remove();
       scene.edgeEntries.delete(id);
+    }
+  }
+
+  // 概要 bracket（M6 Task 6，只增不改）：同款按 id 集合差分协调。
+  const seenSummaries = new Set<string>();
+  for (const s of layout.summaries) {
+    seenSummaries.add(s.id);
+    applySummary(scene, s, theme);
+  }
+  for (const [id, entry] of scene.summaryEntries) {
+    if (!seenSummaries.has(id)) {
+      entry.g.remove();
+      scene.summaryEntries.delete(id);
     }
   }
 }

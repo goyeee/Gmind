@@ -230,7 +230,15 @@ export class Viewport {
     if (e.button !== 0) return;
     if (e.shiftKey) return; // Shift+左键空白 = 框选起点（页面层），不平移
     const target = e.target as Element | null;
-    if (target?.closest('[data-node-id]') || target?.closest('[data-for-id]')) return;
+    // 概要 bracket（M6 T6）非空白：其命中既不平移也不捕获指针——捕获会把随后的
+    // click 重定向到 svg，页面层「点标签编辑概要」将收不到命中元素。
+    if (
+      target?.closest('[data-node-id]') ||
+      target?.closest('[data-for-id]') ||
+      target?.closest('[data-summary-id]')
+    ) {
+      return;
+    }
     this.panning = true;
     this.lastPan = { x: e.clientX, y: e.clientY };
     // 指针捕获保证移出 svg 仍收到 move/up；jsdom 无该 API，特性探测降级。
