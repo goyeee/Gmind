@@ -1,9 +1,22 @@
 // types.ts：对外的统一树节点 / 降级条目 / 错误契约，以及 content.json（2020+）的宽松原始形状。
 
-/** 解析后的统一树节点：只保留层级/文本/备注。title 允许空串（xmind 源文件可缺 title）。 */
+/**
+ * 节点标记（M7a-T1 三组制子集，与 @gmind/core 值目录一致；本包零依赖 gmind/*，
+ * 故本地定义同形结构）：priority '1'-'7' / icon 10 slug（done/cancel/important/flag/
+ * question/alert/idea/like/link/clock）/ emoji 10 字符。
+ */
+export interface XmindIcons {
+  priority?: string;
+  icon?: string;
+  emoji?: string;
+}
+
+/** 解析后的统一树节点：只保留层级/文本/备注/标记。title 允许空串（xmind 源文件可缺 title）。 */
 export interface XmindNode {
   title: string;
   note?: string;
+  /** XMind 标记（导入映射产物 / 导出输入），见 markers.ts 的双向映射口径。 */
+  icons?: XmindIcons;
   children: XmindNode[];
 }
 

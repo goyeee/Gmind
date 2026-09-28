@@ -262,7 +262,7 @@ describe('pasteNodes（内部 payload 粘贴）', () => {
         note: 'n1',
         href: 'https://h.example',
         image: { key: 'old-key', w: 12, h: 34 },
-        icons: { priority: 'high', star: '5' },
+        icons: { priority: '3', icon: 'flag' },
         style: { color: 'red' },
         children: [emptyNode('srcC', 'C1')],
       },
@@ -298,7 +298,7 @@ describe('pasteNodes（内部 payload 粘贴）', () => {
       'setHref',
       'setImage',
       'setIcon', // priority
-      'setIcon', // star
+      'setIcon', // icon
       'setStyle',
       'addChild', // C1（空字段不产生额外写调用）
       'addChild', // R2
@@ -310,7 +310,7 @@ describe('pasteNodes（内部 payload 粘贴）', () => {
     expect(r1.note).toBe('n1');
     expect(r1.href).toBe('https://h.example');
     expect(r1.image).toEqual({ key: 'new-old-key', w: 12, h: 34 });
-    expect(r1.icons).toEqual({ priority: 'high', star: '5' });
+    expect(r1.icons).toEqual({ priority: '3', icon: 'flag' });
     expect(r1.style).toEqual({ color: 'red' });
 
     // 结构：p.children = [E, R1, R2]（首根插在 index=1，R2 追加末尾）
@@ -354,6 +354,31 @@ describe('pasteNodes（内部 payload 粘贴）', () => {
     await expect(pasteNodes(doc, 'dead', 0, twoRootPayload)).rejects.toThrow('PARENT_INVALID');
     expect(() => pasteText(doc, 'nope', 0, '文本')).toThrow('PARENT_INVALID'); // pasteText 同步路径
     expect(doc.calls).toHaveLength(0);
+  });
+
+  it('M7a-T1：payload 携带旧五组/越界图标值 → 目录外静默跳过（不抛错、不半途失败）', async () => {
+    const doc = new StubDoc();
+    doc.addNode({ id: 'root' });
+    doc.addNode({ id: 'p', parentId: 'root', text: 'P' });
+    const payload: ClipboardPayload = {
+      v: 1,
+      roots: [
+        {
+          id: 'legacy',
+          text: 'L',
+          note: '',
+          href: '',
+          image: null,
+          // 旧五组值（跨版本部署的系统剪贴板遗留）+ 越界 priority + 目录外 emoji
+          icons: { priority: '8', progress: '50%', flag: '红', star: '蓝', emoji: '🚀', icon: 'done' },
+          style: {},
+          children: [],
+        },
+      ],
+    };
+    const ids = await pasteNodes(doc, 'p', 0, payload);
+    expect(doc.nodes.get(ids[0])!.icons).toEqual({ icon: 'done' }); // 只有目录内 (icon,'done') 落写
+    expect(doc.ops()).toEqual(['addChild', 'setIcon']);
   });
 });
 

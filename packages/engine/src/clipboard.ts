@@ -22,7 +22,15 @@
  *   为一个撤销单元，一次 Ctrl+Z 撤销剪切）；本层 copy 先读后调页面传入的 deleteFn。
  */
 
-import { outlineToSpec, MAX_TEXT_LENGTH, type SpecNode } from '@gmind/core';
+import {
+  EMOJI_VALUES,
+  ICON_GROUPS,
+  ICON_VALUES,
+  MAX_TEXT_LENGTH,
+  PRIORITY_VALUES,
+  outlineToSpec,
+  type SpecNode,
+} from '@gmind/core';
 import type { DocReader, NodeSnapshotLike } from './types';
 
 /** 内部格式：payload 森林（v:1）。 */
@@ -206,6 +214,16 @@ function assertPayloadNodeValid(node: PayloadNode): void {
   for (const child of node.children) assertPayloadNodeValid(child);
 }
 
+/** 内部（M7a-T1）：icon 写入口目录校验（core setIcon 同口径的镜像判定）——payload
+ *  里的旧五组值（跨版本部署的系统剪贴板遗留）不写、静默降级，避免 paste 半途抛错
+ *  造成部分粘贴（pasteNodes 无法回滚已建节点）。合法值正常写入。 */
+function isWritableIcon(group: string, value: string): boolean {
+  if (!(ICON_GROUPS as readonly string[]).includes(group)) return false;
+  const dir: readonly string[] =
+    group === 'priority' ? PRIORITY_VALUES : group === 'icon' ? ICON_VALUES : EMOJI_VALUES;
+  return dir.includes(value);
+}
+
 /** 内部：递归重建一个 payload 子树，ids 按先序收集。 */
 async function pastePayloadNode(
   doc: IDocHandle,
@@ -237,7 +255,7 @@ async function pastePayloadNode(
     doc.setImage(id, { key, w: node.image.w, h: node.image.h }, origin);
   }
   for (const [group, value] of Object.entries(node.icons)) {
-    doc.setIcon(id, group, value, origin);
+    if (isWritableIcon(group, value)) doc.setIcon(id, group, value, origin);
   }
   if (Object.keys(node.style).length > 0) doc.setStyle(id, node.style, origin);
   for (const child of node.children) {

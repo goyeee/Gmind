@@ -125,37 +125,82 @@ describe('renderScene：初次渲染', () => {
     expect(tspans?.[1]?.textContent).toBe('第二行');
   });
 
-  it('图标按固定组序（priority→progress→flag→star）拼进一个 gm-icons 文本，未知组忽略', () => {
-    expect(ICON_GLYPHS['priority']).toBeDefined();
+  it('标记三组制（M7a-T1）：icon/emoji 拼进 gm-icons（固定组序 icon→emoji），未知组/旧组忽略', () => {
+    expect(ICON_GLYPHS['done']).toBe('✓');
     const data = baseData();
-    data.set('b', { text: 'x', icons: { star: '1', flag: '1', priority: 'p1', progress: '50' } });
+    // 旧五组键（progress/flag/star）与未知组（mystery）在渲染层忽略（存量经 core repair 收敛）
+    data.set('b', { text: 'x', icons: { icon: 'flag', emoji: '😄', progress: '50', flag: '红', star: '蓝' } });
     data.set('c', { text: 'y', icons: { mystery: 'zzz' } });
     renderScene(createScene(svg), makeInput(baseLayout(), data));
-    expect(svg.querySelector('.gm-icons')?.textContent).toBe('①◐⚑★');
+    expect(svg.querySelector('.gm-icons')?.textContent).toBe('⚑😄');
     expect(nodeG('c')?.querySelector('.gm-icons')).toBeNull();
   });
 
-  it('emoji 组渲染存储值本身（M6 T5）：与其他组按固定组序并存，排组序末位', () => {
-    expect(ICON_GLYPHS['emoji']).toBeDefined();
+  it('优先级 1-7 渲染彩色数字方块（gm-priority-badge：rect 配色 + 数字白字），值不在目录不渲染', () => {
     const data = baseData();
-    data.set('b', { text: 'x', icons: { emoji: '😊', flag: 'red', priority: 'p1' } });
+    data.set('b', { text: 'x', icons: { priority: '1' } });
+    data.set('c', { text: 'y', icons: { priority: '9' } }); // 越界值（未收敛窗口期）：防御忽略
     renderScene(createScene(svg), makeInput(baseLayout(), data));
-    // 组序 priority→flag→…→emoji：emoji 值本身即字形（文本渲染，emoji 字体自然支持）
-    expect(svg.querySelector('.gm-icons')?.textContent).toBe('①⚑😊');
+    const badge = nodeG('b')?.querySelector('.gm-priority-badge');
+    expect(badge).not.toBeNull();
+    const r = badge?.querySelector('rect');
+    // mindgrid 配色：1=#d9534f（红）…7=#8a8a8a（灰）；方块 14×14，槽内居中（iconSlotWidth 20）
+    expect(r?.getAttribute('fill')).toBe('#d9534f');
+    expect(r?.getAttribute('width')).toBe('14');
+    expect(Number(r?.getAttribute('x'))).toBe(12 + (20 - 14) / 2); // nodePaddingX 12 + 居中偏移 3
+    expect(badge?.querySelector('text')?.textContent).toBe('1');
+    expect(badge?.querySelector('text')?.getAttribute('fill')).toBe('#ffffff');
+    expect(nodeG('c')?.querySelector('.gm-priority-badge')).toBeNull();
+  });
+
+  it('优先级与 icon/emoji 并存：方块占第 1 槽，gm-icons 右移一个 iconSlotWidth；文字起点仍按图标总数', () => {
+    const data = baseData();
+    data.set('b', { text: 'x', icons: { priority: '4', icon: 'done', emoji: '🤔' } });
+    renderScene(createScene(svg), makeInput(baseLayout(), data));
+    const g = nodeG('b')!;
+    const badge = g.querySelector('.gm-priority-badge') as SVGGElement;
+    const icons = g.querySelector('.gm-icons') as SVGTextElement;
+    expect(icons.textContent).toBe('✓🤔');
+    expect(Number(icons.getAttribute('x'))).toBe(12 + 20); // priority 方块占第 1 槽
+    expect(Number(badge.querySelector('rect')?.getAttribute('x'))).toBe(12 + 3);
+    expect(g.querySelector('.gm-text')?.getAttribute('x')).toBe(String(12 + 3 * 20)); // 3 组图标槽
+  });
+
+  it('优先级方块协调更新：换值就地改配色/数字（引用恒定），清除移除', () => {
+    const scene = createScene(svg);
+    const data = baseData();
+    data.set('b', { text: 'x', icons: { priority: '2' } });
+    renderScene(scene, makeInput(baseLayout(), data));
+    const badge = nodeG('b')?.querySelector('.gm-priority-badge') as SVGGElement;
+    expect(badge.querySelector('rect')?.getAttribute('fill')).toBe('#d98841');
+    expect(badge.querySelector('text')?.textContent).toBe('2');
+    const data2 = baseData();
+    data2.set('b', { text: 'x', icons: { priority: '7' } });
+    renderScene(scene, makeInput(baseLayout(), data2));
+    const badge2 = nodeG('b')?.querySelector('.gm-priority-badge') as SVGGElement;
+    expect(badge2).toBe(badge); // 引用恒定
+    expect(badge.querySelector('rect')?.getAttribute('fill')).toBe('#8a8a8a');
+    expect(badge.querySelector('text')?.textContent).toBe('7');
+    const data3 = baseData();
+    data3.set('b', { text: 'x', icons: { icon: 'clock' } });
+    renderScene(scene, makeInput(baseLayout(), data3));
+    expect(nodeG('b')?.querySelector('.gm-priority-badge')).toBeNull();
+    expect(nodeG('b')?.querySelector('.gm-icons')?.textContent).toBe('⏰');
+    expect(badge.isConnected).toBe(false);
   });
 
   it('emoji 换值/清除即时反映到 gm-icons（协调更新同槽位）', () => {
     const scene = createScene(svg);
     const data = baseData();
-    data.set('b', { text: 'x', icons: { emoji: '😊' } });
+    data.set('b', { text: 'x', icons: { emoji: '😄' } });
     renderScene(scene, makeInput(baseLayout(), data));
     const icons = nodeG('b')?.querySelector('.gm-icons') as SVGTextElement;
-    expect(icons.textContent).toBe('😊');
+    expect(icons.textContent).toBe('😄');
     // 换值（组内单选）
     const data2 = baseData();
-    data2.set('b', { text: 'x', icons: { emoji: '🚀' } });
+    data2.set('b', { text: 'x', icons: { emoji: '🤔' } });
     renderScene(scene, makeInput(baseLayout(), data2));
-    expect(nodeG('b')?.querySelector('.gm-icons')?.textContent).toBe('🚀');
+    expect(nodeG('b')?.querySelector('.gm-icons')?.textContent).toBe('🤔');
     // 清除 → 元素移除
     const data3 = baseData();
     data3.set('b', { text: 'x' });
@@ -338,7 +383,7 @@ describe('renderScene：协调更新（保元素引用）', () => {
   it('保留节点跨深度复用：icons font-size/fill 随 styleOf 更新，元素引用不变', () => {
     const scene = createScene(svg);
     const data1 = baseData();
-    data1.set('b', { text: 'x', icons: { star: '1' } });
+    data1.set('b', { text: 'x', icons: { icon: 'done' } });
     renderScene(scene, makeInput(baseLayout(), data1));
     const icons = nodeG('b')?.querySelector('.gm-icons') as SVGTextElement;
     expect(icons.getAttribute('font-size')).toBe('14'); // depth 2 → level2

@@ -1,6 +1,8 @@
-// parse-json.ts：XMind 2020+ content.json 解析——只取层级/文本/备注，其余字段计降级。
-import type { DegradedItem, DegradedKind, JsonSheet, JsonTopic, XmindNode } from './types';
+// parse-json.ts：XMind 2020+ content.json 解析——取层级/文本/备注/标记（M7a-T1 三组映射），
+// 其余字段计降级（markers 中无对应者计入 style）。
+import type { DegradedItem, DegradedKind, JsonSheet, JsonTopic, XmindIcons, XmindNode } from './types';
 import { XmindParseError } from './types';
+import { markersToIcons } from './markers';
 
 /** 降级聚合器：按 kind 求和，count=0 的 kind 不输出。 */
 export class DegradedCollector {
@@ -52,8 +54,18 @@ function countTopicTree(t: JsonTopic): number {
 }
 
 function walkTopic(t: JsonTopic, d: DegradedCollector): XmindNode {
-  // style：markers / labels / 主题与样式属性
-  if (Array.isArray(t.markers)) d.add('style', t.markers.length);
+  // style：markers（M7a-T1：无对应的才计降级）/ labels / 主题与样式属性
+  let icons: XmindIcons | undefined;
+  if (Array.isArray(t.markers)) {
+    const ids = t.markers.map((m) => (isTopicLike(m) && typeof (m as { markerId?: unknown }).markerId === 'string'
+      ? ((m as { markerId: string }).markerId)
+      : ''));
+    const mapped = markersToIcons(ids);
+    d.add('style', mapped.dropped);
+    if (mapped.icons.priority !== undefined || mapped.icons.icon !== undefined || mapped.icons.emoji !== undefined) {
+      icons = mapped.icons;
+    }
+  }
   if (Array.isArray(t.labels)) d.add('style', t.labels.length);
   if (t.style != null) d.add('style', 1);
   // media：图片 / 附件 / 备注内图片
@@ -77,6 +89,7 @@ function walkTopic(t: JsonTopic, d: DegradedCollector): XmindNode {
   return {
     title: typeof t.title === 'string' ? t.title : '',
     ...(note !== undefined ? { note } : {}),
+    ...(icons !== undefined ? { icons } : {}),
     children: (Array.isArray(attached) ? attached : []).filter(isTopicLike).map((c) => walkTopic(c, d)),
   };
 }

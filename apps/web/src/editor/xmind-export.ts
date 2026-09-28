@@ -6,12 +6,15 @@
 // removeFromParentChildren），childIds 即存活可达树，墓碑不会出现；折叠只是视图态
 // （collapsed 标记不影响数据层子树完整性）——FR-IO-004 的「层级类导出先自动展开折叠」
 // 在本架构下自动满足，无需展开步骤，导出恒为完整层级。
+// 标记（M7a-T1）：仅出三组（priority/icon/emoji，值目录内；marker-id 映射口径在
+// @gmind/xmind-io markers.ts）。
 import type * as Y from 'yjs';
 import { getNode, ROOT_NODE_ID } from '@gmind/core';
-import { buildXmind, type XmindNode } from '@gmind/xmind-io';
+import { buildXmind, type XmindIcons, type XmindNode } from '@gmind/xmind-io';
 
 /** 存活树 → XmindNode：title = node.text；note 非空才产出 note 键（'' 即无备注，
- *  buildXmind 以真值判定备注，与 T3 裁决一致）；children 按原顺序映射 childIds。
+ *  buildXmind 以真值判定备注，与 T3 裁决一致）；children 按原顺序映射 childIds；
+ *  icons 只取三组键（M7a-T1：值目录外的旧值/未知组不携带，导出仅出三组）。
  *  visited 集合环防护（M4 挂账清偿，防御性）：childIds 环（core 写路径不可达——
  *  换父/删除同步维护父 children，但 crafted doc_state / 裸 Y 写可造出）时跳过回边，
  *  保证任意形状下终止（模式同 core subtreeIds 的环防御，环治理归 normalizeTree）。 */
@@ -28,9 +31,14 @@ export function docToXmindTree(doc: Y.Doc): XmindNode {
       visited.add(childId);
       children.push(walk(childId));
     }
+    const icons: XmindIcons = {};
+    if (snap.icons.priority !== undefined) icons.priority = snap.icons.priority;
+    if (snap.icons.icon !== undefined) icons.icon = snap.icons.icon;
+    if (snap.icons.emoji !== undefined) icons.emoji = snap.icons.emoji;
     return {
       title: snap.text,
       ...(snap.note ? { note: snap.note } : {}),
+      ...(Object.keys(icons).length > 0 ? { icons } : {}),
       children,
     };
   };

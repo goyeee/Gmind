@@ -9,6 +9,7 @@ import {
   setHref,
   setImage,
   setIcon,
+  setNodeTask,
   setNote,
   setStyle,
   setText,
@@ -52,9 +53,11 @@ export interface RestoreResult {
  *   重建节点纳入落位核对（②已按快照下标插入，正常零操作）——防御 ②③ 交错移位的
  *   边角，保证收敛是构造性的而非论证性的。
  * ④ 内容字段逐项对比（getNode 的 NodeSnapshot 全字段）：text/note/href/collapsed 直接
- *   比；icons 按 ICON_GROUPS 全组对比（组值不同 setIcon(value|null)）；image 按 key 对比
- *   （key 变更时 w/h 随快照值一并写回）；style 按键集对比（补/改/删键，value null 删）。
- *   重建节点的字段回填 = addChild 后立即走同一 diff 例程（新节点必全量不同）。
+ *   比；icons 按 ICON_GROUPS 全组对比（组值不同 setIcon(value|null)）；task（M7a-T1）
+ *   六字段逐项对比（全字段显式 patch 写回，联动规则对显式全量 patch 恒惰性）；
+ *   image 按 key 对比（key 变更时 w/h 随快照值一并写回）；style 按键集对比
+ *   （补/改/删键，value null 删）。重建节点的字段回填 = addChild 后立即走同一 diff
+ *   例程（新节点必全量不同）。
  * ⑤ meta：structureType/themeId diff → setDocMeta。**title 排除**——meta.title 镜像的
  *   是工作区文件名（useEditorDoc.setTitle 同步 meta 与 PATCH /files），版本恢复是文档
  *   内容回滚，若回写快照 title 会把用户在快照之后的改名一并吃掉，且 files.title 行值
@@ -215,7 +218,9 @@ function snapIndexInSnapshot(snapById: Map<string, NodeSnapshot>, id: string): n
     : (snapById.get(snap.parentId)?.childIds.indexOf(id) ?? -1);
 }
 
-/** ④ 内容字段是否存在差异（计划期判定 + 执行期复用同一判定写入）。 */
+/** ④ 内容字段是否存在差异（计划期判定 + 执行期复用同一判定写入）。
+ *  task（M7a-T1）按归一化快照逐字段对比；恢复走全字段 patch（显式值优先，
+ *  applyStatusRules 的联动注入对全量 patch 恒惰性——见 applyFieldDiff 注）。 */
 function hasFieldDiff(t: NodeSnapshot, s: NodeSnapshot): boolean {
   return (
     t.text !== s.text ||
@@ -224,7 +229,21 @@ function hasFieldDiff(t: NodeSnapshot, s: NodeSnapshot): boolean {
     t.collapsed !== s.collapsed ||
     diffImage(t.image, s.image) ||
     Object.keys(stylePatchOf(t.style, s.style)).length > 0 ||
-    ICON_GROUPS.some((group) => t.icons[group] !== s.icons[group])
+    ICON_GROUPS.some((group) => t.icons[group] !== s.icons[group]) ||
+    hasTaskDiff(t.task, s.task)
+  );
+}
+
+/** task 差异判定（快照 task 恒为归一化对象，逐字段比即可）。 */
+function hasTaskDiff(t: NodeSnapshot['task'], s: NodeSnapshot['task']): boolean {
+  return (
+    t.status !== s.status ||
+    t.progress !== s.progress ||
+    t.startDate !== s.startDate ||
+    t.dueDate !== s.dueDate ||
+    t.doneDate !== s.doneDate ||
+    t.owners.length !== s.owners.length ||
+    t.owners.some((v, i) => v !== s.owners[i])
   );
 }
 
@@ -254,6 +273,24 @@ function applyFieldDiff(target: Y.Doc, id: string, s: NodeSnapshot): boolean {
       setIcon(target, id, group, s.icons[group] ?? null, ORIGIN_RESTORE);
       changed = true;
     }
+  }
+  // task（M7a-T1）：全字段显式 patch——applyStatusRules 对「六键齐全」的 patch 不做
+  // 任何联动注入（doneDate/progress 显式给值则显式值胜），恢复结果即快照原值。
+  if (hasTaskDiff(t.task, s.task)) {
+    setNodeTask(
+      target,
+      id,
+      {
+        status: s.task.status,
+        progress: s.task.progress,
+        owners: [...s.task.owners],
+        startDate: s.task.startDate,
+        dueDate: s.task.dueDate,
+        doneDate: s.task.doneDate,
+      },
+      ORIGIN_RESTORE,
+    );
+    changed = true;
   }
   if (diffImage(t.image, s.image)) {
     setImage(target, id, s.image, ORIGIN_RESTORE);

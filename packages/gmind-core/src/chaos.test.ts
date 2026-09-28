@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import * as Y from 'yjs';
-import { ICON_GROUPS } from './constants';
+import { ICON_GROUPS, iconValuesOf } from './constants';
 import { ROOT_NODE_ID, createTemplateDoc, docFromState, docToState } from './doc';
 import type { TemplateNodeSpec } from './doc';
 import {
@@ -74,7 +74,6 @@ function pick<T>(rnd: () => number, arr: readonly T[]): T {
 
 const TEXT_ALPHABET = ['a', 'b', '字']; // 小字母表 ⇒ 高频同文本碰撞（放大 LWW 面）
 const FILL_PALETTE: Array<string | null> = ['#e74c3c', '#2ecc71', '#3498db', null];
-const ICON_VALUES: Array<string | null> = ['1', '2', '3', null];
 
 function randText(rnd: () => number): string {
   const len = 1 + randInt(rnd, TEXT_ALPHABET.length + 1);
@@ -217,10 +216,10 @@ function clientOp(
       break;
     }
     case 4: {
-      // setIcon：随机组/值（null 删该组）
+      // setIcon：随机组 + 组目录内随机值（M7a-T1 值校验；null 删该组）
       const id = pick(rnd, aliveAll);
       const group = pick(rnd, ICON_GROUPS);
-      const value = pick(rnd, ICON_VALUES);
+      const value = rnd() % 4 === 0 ? null : pick(rnd, iconValuesOf(group));
       setIcon(doc, id, group, value, ORIGIN_USER);
       logs.push(`${label} setIcon(${id} ${group}=${String(value)})`);
       break;

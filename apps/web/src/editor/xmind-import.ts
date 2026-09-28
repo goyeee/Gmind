@@ -1,9 +1,10 @@
 // xmind-import.ts：XMind 导入胶水（M4 Task 4，FR-IO-001/002）。
 //
 // file → { title, state, degraded }：大小预检 → parseXmind（@gmind/xmind-io）→
-// 经 @gmind/core 操作层组装 Y.Doc（唯一写入口约束：addChild/setNote，绝不直改 Y.Map）→
-// docToState → base64。错误一律以 Error.message 归因（FR-IO-001；NFR-USE-005 起三处
-// 归因文案均带「原因+下一步」两半）：
+// 经 @gmind/core 操作层组装 Y.Doc（唯一写入口约束：addChild/setNote/setIcon，绝不
+// 直改 Y.Map）→ docToState → base64。M7a-T1：解析层映射出的三组制标记（priority/
+// icon）经 setIcon 落到对应节点（含根主题）。错误一律以 Error.message 归因
+// （FR-IO-001；NFR-USE-005 起三处归因文案均带「原因+下一步」两半）：
 // - file.size > 20MB → 「文件大小超过 20MB 上限，请压缩后重试」（解析前预检）；
 // - XmindParseError UNSUPPORTED_FORMAT → 「无法识别的文件格式（仅支持 .xmind），请更换文件后重试」；
 // - 其余解析错误 → 「文件已损坏，无法解析，请检查文件后重试」。
@@ -15,9 +16,10 @@ import {
   getMeta,
   GmindCoreError,
   ROOT_NODE_ID,
+  setIcon,
   setNote,
 } from '@gmind/core';
-import { parseXmind, XmindParseError, type DegradedItem, type XmindNode } from '@gmind/xmind-io';
+import { parseXmind, XmindParseError, type DegradedItem, type XmindIcons, type XmindNode } from '@gmind/xmind-io';
 
 /** .xmind 导入大小上限（FR-IO-001）：超限直接拒绝，不进入解析。 */
 const MAX_IMPORT_BYTES = 20 * 1024 * 1024;
@@ -51,9 +53,11 @@ function bytesToBase64(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
-/** 导入 .xmind 文件：解析 → core 组装 → base64 文档状态。
+/** .xmind 导入：解析 → core 组装 → base64 文档状态。
  *  root 即 ROOT_NODE_ID，文本 = 根主题标题（缺省回落文件名去 .xmind 后缀）；
- *  树按先序 addChild/setNote 组装。degraded 原样透传给调用方呈现（FR-IO-002）。 */
+ *  树按先序 addChild/setNote 组装，标记（M7a-T1 三组制映射产物）经 setIcon 落盘
+ *  （解析层只产 priority/icon 目录内值；emoji 不来自 XMind）。degraded 原样透传给
+ *  调用方呈现（FR-IO-002）。 */
 export async function importXmindFile(
   file: File,
 ): Promise<{ title: string; state: string; degraded: DegradedItem[] }> {
@@ -71,14 +75,20 @@ export async function importXmindFile(
 
   const title = parsed.root.title || file.name.replace(/\.xmind$/i, '');
   const doc = createTemplateDoc({ title, children: [] });
+  const applyIcons = (id: string, icons: XmindIcons | undefined): void => {
+    if (icons?.priority !== undefined) setIcon(doc, id, 'priority', icons.priority);
+    if (icons?.icon !== undefined) setIcon(doc, id, 'icon', icons.icon);
+  };
   const walk = (node: XmindNode, parentId: string): void => {
     for (const child of node.children) {
       const id = addChild(doc, parentId, { text: child.title });
       if (child.note) setNote(doc, id, child.note);
+      applyIcons(id, child.icons);
       walk(child, id);
     }
   };
   try {
+    applyIcons(ROOT_NODE_ID, parsed.root.icons); // 根主题标记
     walk(parsed.root, ROOT_NODE_ID);
   } catch (e) {
     // core 组装失败归因（M4 挂账清偿）：解析出的树超出文档模型可承载范围——

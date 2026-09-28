@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import * as Y from 'yjs';
 import type { Transaction } from 'yjs';
-import { ROOT_NODE_ID, createTemplateDoc } from './doc';
+import { ROOT_NODE_ID, createTemplateDoc, docToState } from './doc';
 import { GmindCoreError } from './errors';
 import { childrenIds, countAlive, getNode } from './read';
 import {
@@ -11,6 +11,7 @@ import {
   moveNode,
   setImage,
   setIcon,
+  setNodeTask,
   setNote,
   setHref,
   setCollapsed,
@@ -494,57 +495,45 @@ describe('setImage', () => {
   });
 });
 
-describe('setIcon', () => {
-  it('同组替换即覆盖：flag 红→蓝后仅剩蓝（FR-EDT-021）', () => {
+describe('setIcon（M7a-T1 三组制）', () => {
+  it('同组替换即覆盖：icon done→flag 后仅剩 flag（FR-EDT-021）', () => {
     const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
     const id = childrenIds(doc, ROOT_NODE_ID)[0]!;
-    setIcon(doc, id, 'flag', 'red');
-    expect(getNode(doc, id)!.icons).toEqual({ flag: 'red' });
-    setIcon(doc, id, 'flag', 'blue');
-    expect(getNode(doc, id)!.icons).toEqual({ flag: 'blue' });
+    setIcon(doc, id, 'icon', 'done');
+    expect(getNode(doc, id)!.icons).toEqual({ icon: 'done' });
+    setIcon(doc, id, 'icon', 'flag');
+    expect(getNode(doc, id)!.icons).toEqual({ icon: 'flag' });
   });
 
-  it('跨组叠加：flag + priority + progress 三组并存', () => {
+  it('跨组叠加：priority + icon + emoji 三组并存（值目录内取值）', () => {
     const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
     const id = childrenIds(doc, ROOT_NODE_ID)[0]!;
-    setIcon(doc, id, 'flag', 'red');
-    setIcon(doc, id, 'priority', 'p1');
-    setIcon(doc, id, 'progress', '50');
-    expect(getNode(doc, id)!.icons).toEqual({ flag: 'red', priority: 'p1', progress: '50' });
+    setIcon(doc, id, 'priority', '3');
+    setIcon(doc, id, 'icon', 'flag');
+    setIcon(doc, id, 'emoji', '😄');
+    expect(getNode(doc, id)!.icons).toEqual({ priority: '3', icon: 'flag', emoji: '😄' });
   });
 
   it('value null 删除该组图标', () => {
     const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
     const id = childrenIds(doc, ROOT_NODE_ID)[0]!;
-    setIcon(doc, id, 'flag', 'red');
-    setIcon(doc, id, 'priority', 'p1');
-    setIcon(doc, id, 'flag', null);
-    expect(getNode(doc, id)!.icons).toEqual({ priority: 'p1' });
+    setIcon(doc, id, 'icon', 'flag');
+    setIcon(doc, id, 'priority', '1');
+    setIcon(doc, id, 'icon', null);
+    expect(getNode(doc, id)!.icons).toEqual({ priority: '1' });
   });
 
-  it('emoji 组设置/替换/取消往返：值为单个 emoji 字符（M6 T5 企微对标）', () => {
+  it('emoji 组设置/替换/取消往返：值为目录内 emoji 字符（M6 T5 语义沿用）', () => {
     const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
     const id = childrenIds(doc, ROOT_NODE_ID)[0]!;
-    setIcon(doc, id, 'emoji', '😊');
-    expect(getNode(doc, id)!.icons).toEqual({ emoji: '😊' });
+    setIcon(doc, id, 'emoji', '😄');
+    expect(getNode(doc, id)!.icons).toEqual({ emoji: '😄' });
     // 组内单选：换 emoji 即覆盖
-    setIcon(doc, id, 'emoji', '🚀');
-    expect(getNode(doc, id)!.icons).toEqual({ emoji: '🚀' });
+    setIcon(doc, id, 'emoji', '🤔');
+    expect(getNode(doc, id)!.icons).toEqual({ emoji: '🤔' });
     // 再点取消（value null 删组）
     setIcon(doc, id, 'emoji', null);
     expect(getNode(doc, id)!.icons).toEqual({});
-  });
-
-  it('emoji 与其他图标组并存：设 emoji 不清除 priority/flag（组间独立）', () => {
-    const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
-    const id = childrenIds(doc, ROOT_NODE_ID)[0]!;
-    setIcon(doc, id, 'priority', 'p1');
-    setIcon(doc, id, 'flag', '红');
-    setIcon(doc, id, 'emoji', '😊');
-    expect(getNode(doc, id)!.icons).toEqual({ priority: 'p1', flag: '红', emoji: '😊' });
-    // 取消 emoji 不动其他组
-    setIcon(doc, id, 'emoji', null);
-    expect(getNode(doc, id)!.icons).toEqual({ priority: 'p1', flag: '红' });
   });
 
   it('非法组名抛 INVALID_ICON_GROUP（消息固定）且文档零变更', () => {
@@ -560,6 +549,184 @@ describe('setIcon', () => {
       expect((e as GmindCoreError).message).toBe('未知的图标分组');
     }
     expect(fullSnapshot(doc)).toBe(before);
+  });
+
+  it('值不在组目录抛 INVALID_ICON_VALUE（消息固定）且文档零变更（M7a-T1 值校验）', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
+    const id = childrenIds(doc, ROOT_NODE_ID)[0]!;
+    const before = fullSnapshot(doc);
+    // priority 目录 '1'-'7'：'8' 越界、旧格式 'p1' 拒绝（旧值经 repair 收敛，不走写入口）
+    for (const bad of [['priority', '8'], ['priority', 'p1'], ['icon', 'nope'], ['emoji', '🚀']] as Array<[IconGroup, string]>) {
+      try {
+        setIcon(doc, id, bad[0] as IconGroup, bad[1]!);
+        expect.unreachable();
+      } catch (e) {
+        expect(e).toBeInstanceOf(GmindCoreError);
+        expect((e as GmindCoreError).code).toBe('INVALID_ICON_VALUE');
+        expect((e as GmindCoreError).message).toBe('未知的图标取值');
+      }
+    }
+    expect(fullSnapshot(doc)).toBe(before);
+  });
+
+  it('undo 回滚 setIcon：组值回到写入前', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
+    const id = childrenIds(doc, ROOT_NODE_ID)[0]!;
+    const um = createUndoManager(doc);
+    setIcon(doc, id, 'priority', '5');
+    expect(getNode(doc, id)!.icons).toEqual({ priority: '5' });
+    undo(um);
+    expect(getNode(doc, id)!.icons).toEqual({});
+  });
+});
+
+// ══ 任务字段（M7a-T1）══════════════════════════════════════════════════════
+
+/** 今日 YYYY-MM-DD（与 @gmind/shared todayStr 同式；联动断言用）。 */
+function todayLocal(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+describe('setNodeTask（M7a-T1）', () => {
+  it('缺省任务读取为 todo/0/[]/null×3；patch 各字段写入后读回', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
+    const id = childrenIds(doc, ROOT_NODE_ID)[0]!;
+    expect(getNode(doc, id)!.task).toEqual({
+      status: 'todo',
+      progress: 0,
+      owners: [],
+      startDate: null,
+      dueDate: null,
+      doneDate: null,
+    });
+    setNodeTask(doc, id, {
+      status: 'doing',
+      progress: 40,
+      owners: ['u1', 'u2'],
+      startDate: '2026-09-01',
+      dueDate: '2026-10-01',
+    });
+    expect(getNode(doc, id)!.task).toEqual({
+      status: 'doing',
+      progress: 40,
+      owners: ['u1', 'u2'],
+      startDate: '2026-09-01',
+      dueDate: '2026-10-01',
+      doneDate: null,
+    });
+  });
+
+  it('未提供的键不动；日期 null 清除（删键，读取回落 null）', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
+    const id = childrenIds(doc, ROOT_NODE_ID)[0]!;
+    setNodeTask(doc, id, { dueDate: '2026-12-31', progress: 10 });
+    setNodeTask(doc, id, { dueDate: null });
+    expect(getNode(doc, id)!.task).toMatchObject({ dueDate: null, progress: 10 });
+  });
+
+  it('空 patch 零变更（不开事务，状态字节级不变）', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
+    const id = childrenIds(doc, ROOT_NODE_ID)[0]!;
+    setNodeTask(doc, id, { progress: 30 });
+    const before = docToState(doc);
+    const origins: string[] = [];
+    doc.on('afterTransaction', (tr: Transaction) => origins.push(String(tr.origin)));
+    setNodeTask(doc, id, {});
+    expect(origins).toEqual([]);
+    expect(Buffer.from(docToState(doc)).equals(Buffer.from(before))).toBe(true);
+  });
+
+  it('status→done 联动：自动 doneDate=今天、progress=100（@gmind/shared applyStatusRules）', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
+    const id = childrenIds(doc, ROOT_NODE_ID)[0]!;
+    setNodeTask(doc, id, { progress: 40 });
+    setNodeTask(doc, id, { status: 'done' });
+    expect(getNode(doc, id)!.task).toMatchObject({ status: 'done', progress: 100, doneDate: todayLocal() });
+  });
+
+  it('status→done 时 patch 显式给值则显式值胜（progress/doneDate 不被覆盖）', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
+    const id = childrenIds(doc, ROOT_NODE_ID)[0]!;
+    setNodeTask(doc, id, { status: 'done', progress: 60, doneDate: '2026-01-15' });
+    expect(getNode(doc, id)!.task).toMatchObject({ status: 'done', progress: 60, doneDate: '2026-01-15' });
+  });
+
+  it('status 离开 done 清空 doneDate；手改 doneDate 不反写 status', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
+    const id = childrenIds(doc, ROOT_NODE_ID)[0]!;
+    setNodeTask(doc, id, { status: 'done' }); // doneDate=今天
+    setNodeTask(doc, id, { status: 'doing' });
+    expect(getNode(doc, id)!.task).toMatchObject({ status: 'doing', doneDate: null });
+    // 手改 doneDate：status 保持
+    setNodeTask(doc, id, { status: 'done' });
+    setNodeTask(doc, id, { doneDate: '2026-03-01' });
+    expect(getNode(doc, id)!.task).toMatchObject({ status: 'done', doneDate: '2026-03-01' });
+  });
+
+  it('校验拒绝（先于事务零变更）：status/progress/owners/date 四类错误码与两段式文案', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
+    const id = childrenIds(doc, ROOT_NODE_ID)[0]!;
+    const before = fullSnapshot(doc);
+    const cases: Array<[Record<string, unknown>, string]> = [
+      [{ status: 'finished' }, 'TASK_INVALID_STATUS'],
+      [{ progress: 101 }, 'TASK_INVALID_PROGRESS'],
+      [{ progress: 50.5 }, 'TASK_INVALID_PROGRESS'],
+      [{ progress: -1 }, 'TASK_INVALID_PROGRESS'],
+      [{ owners: 'u1' }, 'TASK_INVALID_OWNERS'],
+      [{ owners: ['', 'u1'] }, 'TASK_INVALID_OWNERS'],
+      [{ owners: ['x'.repeat(65)] }, 'TASK_INVALID_OWNERS'],
+      [{ owners: Array.from({ length: 21 }, (_, i) => `u${i}`) }, 'TASK_INVALID_OWNERS'],
+      [{ startDate: '2026-02-30' }, 'TASK_INVALID_DATE'],
+      [{ dueDate: '2026/02/28' }, 'TASK_INVALID_DATE'],
+      [{ doneDate: '26-02-28' }, 'TASK_INVALID_DATE'],
+    ];
+    for (const [patch, code] of cases) {
+      try {
+        setNodeTask(doc, id, patch as never);
+        expect.unreachable();
+      } catch (e) {
+        expect(e).toBeInstanceOf(GmindCoreError);
+        expect((e as GmindCoreError).code, JSON.stringify(patch)).toBe(code);
+        expect((e as GmindCoreError).message, JSON.stringify(patch)).toMatch(/，请/); // 两段式：原因 + 「，请…」下一步
+      }
+    }
+    expect(fullSnapshot(doc)).toBe(before); // 全部拒绝：零变更
+  });
+
+  it('owners 去重保序（≤20 项判定以去重后计），闰日合法接受', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
+    const id = childrenIds(doc, ROOT_NODE_ID)[0]!;
+    setNodeTask(doc, id, { owners: ['u1', 'u2', 'u1'] });
+    expect(getNode(doc, id)!.task.owners).toEqual(['u1', 'u2']);
+    setNodeTask(doc, id, { startDate: '2024-02-29' }); // 闰日合法
+    expect(getNode(doc, id)!.task.startDate).toBe('2024-02-29');
+  });
+
+  it('undo/redo：captureTimeout 内的连续任务写合并为一个撤销单元，一体回滚/重做', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
+    const id = childrenIds(doc, ROOT_NODE_ID)[0]!;
+    const um = createUndoManager(doc);
+    setNodeTask(doc, id, { progress: 40 });
+    setNodeTask(doc, id, { status: 'done' });
+    expect(getNode(doc, id)!.task).toMatchObject({ status: 'done', progress: 100, doneDate: todayLocal() });
+    undo(um); // 500ms 内两写同栈项：一次回滚到任务字段初始态
+    expect(getNode(doc, id)!.task).toMatchObject({ status: 'todo', progress: 0, doneDate: null });
+    redo(um);
+    expect(getNode(doc, id)!.task).toMatchObject({ status: 'done', progress: 100, doneDate: todayLocal() });
+  });
+
+  it('root 节点同样可写任务字段（任务常驻所有节点）；墓碑/缺失节点拒绝', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [] });
+    setNodeTask(doc, ROOT_NODE_ID, { status: 'doing' });
+    expect(getNode(doc, ROOT_NODE_ID)!.task.status).toBe('doing');
+    const ghost = 'not-exist';
+    try {
+      setNodeTask(doc, ghost, { status: 'todo' });
+      expect.unreachable();
+    } catch (e) {
+      expect((e as GmindCoreError).code).toBe('NODE_NOT_FOUND');
+    }
   });
 });
 
@@ -665,7 +832,8 @@ describe('富内容/样式 setter 存活校验', () => {
       () => setNote(doc, 'nope', 'n'),
       () => setHref(doc, 'nope', 'https://a.dev'),
       () => setImage(doc, 'nope', null),
-      () => setIcon(doc, 'nope', 'flag', 'red'),
+      () => setIcon(doc, 'nope', 'icon', 'flag'),
+      () => setNodeTask(doc, 'nope', { status: 'doing' }),
       () => setCollapsed(doc, 'nope', true),
       () => toggleCollapse(doc, 'nope'),
       () => setStyle(doc, 'nope', { color: 'red' }),

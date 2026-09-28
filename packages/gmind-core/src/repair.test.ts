@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import * as Y from 'yjs';
 import type { Transaction } from 'yjs';
 import { ROOT_NODE_ID, createTemplateDoc, docFromState, docToState } from './doc';
-import { ORIGIN_SYSTEM, ORIGIN_USER, addChild, deleteNodes, moveNode, setText, withTransaction } from './operations';
+import { ORIGIN_SYSTEM, ORIGIN_USER, addChild, deleteNodes, moveNode, setNodeTask, setText, withTransaction } from './operations';
 import { childrenIds, getNode, subtreeIds } from './read';
 import type { NodeSnapshot } from './read';
 import { normalizeTree } from './repair';
@@ -453,8 +453,7 @@ describe('normalizeTreeFor 事务脏区增量（与全量等价，Task 9 修复�
   });
 });
 
-describe('parentId 环破坏（全量扫描专属规则：导入/64 写清扫执行）', () => {
-  /** 制造 2 节点环：X.parentId=Y、Y.parentId=X 且互相出现在对方 children，
+describe('parentId 环破坏（全量扫描专属规则：导入/64 写清扫执行）', () => {  /** 制造 2 节点环：X.parentId=Y、Y.parentId=X 且互相出现在对方 children，
    * 并从 root.children 摘除二者——既有规则①-⑤对该文档零修复（纯环场景）。 */
   function cycleDoc(): { doc: Y.Doc; xId: string; yId: string } {
     const doc = createTemplateDoc({ title: 'T', children: [{ text: 'X' }, { text: 'Y' }] });
@@ -520,5 +519,88 @@ describe('parentId 环破坏（全量扫描专属规则：导入/64 写清扫执
     expect(fullSnapshot(docA)).toEqual(fullSnapshot(docB));
     expect(normalizeTree(docA, ORIGIN_SYSTEM)).toBe(0);
     expect(normalizeTree(docB, ORIGIN_SYSTEM)).toBe(0);
+  });
+});
+
+describe('图标三组制收敛（M7a-T1，随 normalizeTree 全量执行）', () => {
+  /** 构造一个带旧五组图标的节点（裸写 icons Y.Map，模拟 M6 存量文档）。 */
+  function nodeWithIcons(doc: Y.Doc, parentId: string, text: string, icons: Record<string, string>): string {
+    const id = addChild(doc, parentId, { text });
+    doc.transact(() => {
+      const map = new Y.Map<string>();
+      for (const [k, v] of Object.entries(icons)) map.set(k, v);
+      rawNode(doc, id).set('icons', map);
+    });
+    return id;
+  }
+
+  it('旧值映射：priority p8/p9→7、p1-p7→1-7；progress 删组并迁入 task.progress；flag→icon flag；star→icon important；emoji 原样', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [] });
+    const p8 = nodeWithIcons(doc, ROOT_NODE_ID, 'P8', { priority: 'p8' });
+    const p2 = nodeWithIcons(doc, ROOT_NODE_ID, 'P2', { priority: 'p2' });
+    const bare9 = nodeWithIcons(doc, ROOT_NODE_ID, 'B9', { priority: '9' });
+    const prog = nodeWithIcons(doc, ROOT_NODE_ID, 'PR', { progress: '50%' });
+    const flag = nodeWithIcons(doc, ROOT_NODE_ID, 'FL', { flag: '红' });
+    const star = nodeWithIcons(doc, ROOT_NODE_ID, 'ST', { star: '蓝' });
+    const emo = nodeWithIcons(doc, ROOT_NODE_ID, 'EM', { emoji: '🚀' }); // 值域外旧 emoji：原样保留
+    const junk = nodeWithIcons(doc, ROOT_NODE_ID, 'JK', { mystery: 'x', priority: 'zzz' });
+
+    expect(normalizeTree(doc)).toBe(7); // 每节点一处收敛（emoji 原样保留的节点不计）
+    expect(getNode(doc, p8)!.icons).toEqual({ priority: '7' });
+    expect(getNode(doc, p2)!.icons).toEqual({ priority: '2' });
+    expect(getNode(doc, bare9)!.icons).toEqual({ priority: '7' });
+    expect(getNode(doc, prog)!.icons).toEqual({});
+    expect(getNode(doc, prog)!.task.progress).toBe(50); // 旧进度迁入任务字段
+    expect(getNode(doc, flag)!.icons).toEqual({ icon: 'flag' });
+    expect(getNode(doc, star)!.icons).toEqual({ icon: 'important' });
+    expect(getNode(doc, emo)!.icons).toEqual({ emoji: '🚀' });
+    expect(getNode(doc, junk)!.icons).toEqual({}); // 未知组清除、不可解析 priority 删
+    // 旧进度迁移不覆盖既有任务进度：task.progress 已有键时仅删组
+    const keep = nodeWithIcons(doc, ROOT_NODE_ID, 'KP', { progress: '80%' });
+    setNodeTask(doc, keep, { progress: 10 });
+    expect(normalizeTree(doc)).toBe(1);
+    expect(getNode(doc, keep)!.icons).toEqual({});
+    expect(getNode(doc, keep)!.task.progress).toBe(10);
+  });
+
+  it('flag 与 star 同节点并存：star 胜（迁 icon important，跨副本确定）', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [] });
+    const id = nodeWithIcons(doc, ROOT_NODE_ID, 'FS', { flag: '红', star: '紫' });
+    expect(normalizeTree(doc)).toBe(1);
+    expect(getNode(doc, id)!.icons).toEqual({ icon: 'important' });
+  });
+
+  it('新三组规范值零修复（幂等第一态：干净文档返回 0、不开事务）', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [] });
+    nodeWithIcons(doc, ROOT_NODE_ID, 'OK', { priority: '3', icon: 'flag', emoji: '😄' });
+    const before = docToState(doc);
+    const origins: string[] = [];
+    doc.on('afterTransaction', (tr: Transaction) => origins.push(String(tr.origin)));
+    expect(normalizeTree(doc)).toBe(0);
+    expect(origins).toEqual([]);
+    expect(Buffer.from(docToState(doc)).equals(Buffer.from(before))).toBe(true);
+  });
+
+  it('幂等（第二态→第三态）：收敛后二次 normalize 返回 0 且状态不变；导入即收敛同样生效', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [] });
+    nodeWithIcons(doc, ROOT_NODE_ID, 'A', { priority: 'p9', progress: '25%', flag: '绿' });
+    expect(normalizeTree(doc)).toBe(1);
+    const state = docToState(doc);
+    expect(normalizeTree(doc)).toBe(0); // 幂等
+    expect(Buffer.from(docToState(doc)).equals(Buffer.from(state))).toBe(true);
+    const loaded = docFromState(state); // 装载通道入口收敛
+    const id = findIdByText(loaded, 'A');
+    expect(getNode(loaded, id)!.icons).toEqual({ priority: '7', icon: 'flag' });
+    expect(getNode(loaded, id)!.task.progress).toBe(25);
+  });
+
+  it('墓碑节点同样收敛（撤销可复活旧格式值；children 冻结不变量不受影响）', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [] });
+    const id = nodeWithIcons(doc, ROOT_NODE_ID, 'X', { flag: '红' });
+    deleteNodes(doc, [id]);
+    expect(getNode(doc, id)!.deleted).toBe(true);
+    expect(normalizeTree(doc)).toBe(1); // 墓碑 icons 收敛
+    expect(getNode(doc, id)!.icons).toEqual({ icon: 'flag' });
+    expect(getNode(doc, id)!.deleted).toBe(true); // 墓碑状态不变
   });
 });

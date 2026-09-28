@@ -1,8 +1,11 @@
 // parse-xml.ts：XMind 8 content.xml 解析（DOMParser，浏览器原生 / jsdom 测试）。
 // 层级在 <topic> > <children> > <topics type="attached"> > <topic> 下嵌套；备注取 <notes> > <plain> 文本。
-import type { DegradedItem, XmindNode } from './types';
+// 标记（M7a-T1）：<marker-refs> > <marker-ref marker-id> 经 markersToIcons 映射三组制；
+// 无对应的 marker 计入 style 降级（映射成功的不再计降级）。
+import type { DegradedItem, XmindIcons, XmindNode } from './types';
 import { XmindParseError } from './types';
 import { DegradedCollector } from './parse-json';
+import { markersToIcons } from './markers';
 
 /** el 的直接子元素中第一个 localName 匹配项（命名空间无关）。 */
 function childElement(el: Element, localName: string): Element | null {
@@ -46,7 +49,19 @@ function countXmlTree(el: Element): number {
 function walkXmlTopic(el: Element, d: DegradedCollector): XmindNode {
   // 降级统计只看本主题的直接子元素，避免把子主题的降级重复计入父级。
   const markerRefs = childElement(el, 'marker-refs');
-  if (markerRefs) d.add('style', countChildren(markerRefs, 'marker-ref'));
+  let icons: XmindIcons | undefined;
+  if (markerRefs) {
+    const ids: string[] = [];
+    for (let i = 0; i < markerRefs.children.length; i++) {
+      const ref = markerRefs.children[i];
+      if (ref.localName === 'marker-ref') ids.push(ref.getAttribute('marker-id') ?? '');
+    }
+    const mapped = markersToIcons(ids);
+    d.add('style', mapped.dropped); // 仅无对应的 marker 计降级（映射成功不丢）
+    if (mapped.icons.priority !== undefined || mapped.icons.icon !== undefined || mapped.icons.emoji !== undefined) {
+      icons = mapped.icons;
+    }
+  }
   const labelsEl = childElement(el, 'labels');
   if (labelsEl) d.add('style', countChildren(labelsEl, 'label'));
   if (childElement(el, 'image') || childElement(el, 'img')) d.add('media', 1);
@@ -64,6 +79,7 @@ function walkXmlTopic(el: Element, d: DegradedCollector): XmindNode {
   return {
     title: (titleEl?.textContent ?? '').trim(),
     ...(note !== undefined ? { note } : {}),
+    ...(icons !== undefined ? { icons } : {}),
     children: collectTopics(el, 'attached').map((t) => walkXmlTopic(t, d)),
   };
 }

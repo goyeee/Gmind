@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import * as Y from 'yjs';
-import { ICON_GROUPS } from './constants';
+import { ICON_GROUPS, iconValuesOf } from './constants';
 import { ROOT_NODE_ID, createTemplateDoc, docFromState, docToState } from './doc';
 import type { TemplateNodeSpec } from './doc';
 import {
@@ -11,6 +11,7 @@ import {
   setHref,
   setImage,
   setIcon,
+  setNodeTask,
   setNote,
   setStyle,
   setText,
@@ -72,6 +73,7 @@ function expectConverged(target: Y.Doc, snapshot: Y.Doc): void {
     expect(t.href, `href@${sId}`).toBe(s.href);
     expect(t.collapsed, `collapsed@${sId}`).toBe(s.collapsed);
     expect(t.icons, `icons@${sId}`).toEqual(s.icons);
+    expect(t.task, `task@${sId}`).toEqual(s.task);
     expect(t.image, `image@${sId}`).toEqual(s.image);
     expect(t.style, `style@${sId}`).toEqual(s.style);
     expect(t.childIds, `childIds.len@${sId}`).toHaveLength(s.childIds.length);
@@ -118,7 +120,7 @@ describe('restoreFromSnapshot', () => {
     const aId = idOf(base, 'A');
     setNote(base, aId, '原备注');
     setHref(base, aId, 'https://x');
-    setIcon(base, aId, 'flag', 'flag-red');
+    setIcon(base, aId, 'icon', 'flag');
     setImage(base, aId, { key: 'files/f1/pic.png', w: 100, h: 80 });
     setStyle(base, aId, { color: '#ff0000' });
     setCollapsed(base, aId, true);
@@ -135,7 +137,7 @@ describe('restoreFromSnapshot', () => {
     const s = getNode(base, restored)!;
     expect(s.note).toBe('原备注');
     expect(s.href).toBe('https://x');
-    expect(s.icons).toEqual({ flag: 'flag-red' });
+    expect(s.icons).toEqual({ icon: 'flag' });
     expect(s.image).toEqual({ key: 'files/f1/pic.png', w: 100, h: 80 });
     expect(s.style).toEqual({ color: '#ff0000' });
     expect(s.collapsed).toBe(true);
@@ -287,14 +289,17 @@ function subtreeContains(doc: Y.Doc, ancestorId: string, maybeDescendantId: stri
   return false;
 }
 
-/** 给随机树的部分节点补字段（icons 全组轮转 + image/style/note/href/collapsed）。 */
+/** 给随机树的部分节点补字段（icons 全组轮转[值取自组目录] + image/style/note/href/collapsed + task）。 */
 function enrichRandom(rnd: () => number, doc: Y.Doc): void {
   let i = 0;
   for (const id of aliveIds(doc)) {
     if (id === ROOT_NODE_ID || rnd() % 2 === 0) continue;
     setNote(doc, id, `note${i}`);
     if (i % 2 === 0) setHref(doc, id, `https://x/${i}`);
-    setIcon(doc, id, ICON_GROUPS[i % ICON_GROUPS.length]!, `g${i}`);
+    const group = ICON_GROUPS[i % ICON_GROUPS.length]!;
+    const values = iconValuesOf(group);
+    setIcon(doc, id, group, values[i % values.length]!);
+    if (i % 5 === 0) setNodeTask(doc, id, { status: 'doing', progress: i % 101, owners: [`u${i}`] });
     if (i % 3 === 0) setImage(doc, id, { key: `k${i}`, w: 10 + i, h: 20 + i });
     setStyle(doc, id, { color: `#${i}` });
     if (i % 4 === 0) setCollapsed(doc, id, true);

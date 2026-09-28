@@ -57,7 +57,7 @@ describe('parseXmind：2020+ content.json', () => {
     expect(degraded).toEqual([]);
   });
 
-  it('降级计数：markers/labels/realHTML 备注/漂浮主题', () => {
+  it('降级计数：labels/realHTML 备注/漂浮主题（M7a-T1：markers 有对应者映射不再计降级）', () => {
     const bytes = zipOf({
       'content.json': sheet({
         class: 'topic',
@@ -81,9 +81,54 @@ describe('parseXmind：2020+ content.json', () => {
     expect(root.children).toHaveLength(1); // detached 不进树
     expect(root.children[0].note).toBe('富'); // realHTML 剥标签取文本
     const kinds = Object.fromEntries(degraded.map((d) => [d.kind, d.count]));
-    expect(kinds.style).toBeGreaterThanOrEqual(2); // markers + labels
+    expect(kinds.style).toBe(1); // 仅 labels（priority-1 已映射进 icons）
     expect(kinds.media).toBeUndefined(); // 本例无媒体
     expect(kinds.structure).toBeGreaterThanOrEqual(1); // detached
+  });
+
+  it('M7a-T1 标记映射：priority 1-7 原值、8/9 收敛 7；flag-*/star-* → icon；同组首个胜；无对应丢弃并计降级', () => {
+    const topicOf = (markers: unknown[]) => ({
+      class: 'topic',
+      title: '中心',
+      markers,
+      children: { attached: [] },
+    });
+    const bytes = jsonZip(
+      JSON.stringify([
+        { class: 'sheet', title: 'S', rootTopic: topicOf([{ markerId: 'priority-3' }]) },
+      ]),
+    );
+    expect(parseXmind(bytes).root.icons).toEqual({ priority: '3' });
+
+    const hi = jsonZip(
+      JSON.stringify([
+        { class: 'sheet', title: 'S', rootTopic: topicOf([{ markerId: 'priority-9' }, { markerId: 'priority-2' }]) },
+      ]),
+    );
+    expect(parseXmind(hi).root.icons).toEqual({ priority: '7' }); // 9→7；同组首个胜（priority-9 先出现）
+
+    const fs = jsonZip(
+      JSON.stringify([
+        {
+          class: 'sheet',
+          title: 'S',
+          rootTopic: topicOf([{ markerId: 'flag-dark-green' }, { markerId: 'star-blue' }]),
+        },
+      ]),
+    );
+    expect(parseXmind(fs).root.icons).toEqual({ icon: 'flag' }); // flag-* 先出现胜出
+
+    const st = jsonZip(
+      JSON.stringify([{ class: 'sheet', title: 'S', rootTopic: topicOf([{ markerId: 'star-red' }]) }],
+      ),
+    );
+    expect(parseXmind(st).root.icons).toEqual({ icon: 'important' });
+
+    const dropped = parseXmind(
+      jsonZip(JSON.stringify([{ class: 'sheet', title: 'S', rootTopic: topicOf([{ markerId: 'task-start' }, { markerId: 'smiley-smile' }]) }])),
+    );
+    expect(dropped.root.icons).toBeUndefined(); // 无对应 → 不产 icons
+    expect(dropped.degraded).toEqual([{ kind: 'style', count: 2 }]); // 丢弃并登记
   });
 
   it('降级计数：图片/附件/备注内图片 → media，概要/额外 sheet → structure', () => {
@@ -186,19 +231,21 @@ describe('parseXmind：content.xml 回落（XMind 8）', () => {
     expect(kinds.media).toBeUndefined();
   });
 
-  it('xml markers/labels/图片/概要 计入对应降级', () => {
+  it('xml markers 映射三组制（priority/flag/star），无对应才计降级；labels/图片/概要 计入对应降级', () => {
     const topicXml =
       '<topic id="t1"><title>中心</title>' +
-      '<marker-refs><marker-ref marker-id="priority-1"/><marker-ref marker-id="star-red"/></marker-refs>' +
+      '<marker-refs><marker-ref marker-id="priority-1"/><marker-ref marker-id="star-red"/><marker-ref marker-id="task-start"/></marker-refs>' +
       '<labels><label>标签</label></labels>' +
       '<summaries><summary id="sum1" topic-id="t2"><title>概要</title></summary></summaries>' +
       '<children><topics type="attached">' +
-      '<topic id="t2"><title>A</title><xhtml:img xlink:href="a.png"/></topic>' +
+      '<topic id="t2"><title>A</title><marker-refs><marker-ref marker-id="flag-blue"/></marker-refs><xhtml:img xlink:href="a.png"/></topic>' +
       '</topics></children></topic>';
     const bytes = zipOf({ 'content.xml': xmlMap(`<sheet id="s1">${topicXml}</sheet>`) });
-    const { degraded } = parseXmind(bytes);
+    const { root, degraded } = parseXmind(bytes);
+    expect(root.icons).toEqual({ priority: '1', icon: 'important' }); // priority-1 + star-red→important
+    expect(root.children[0].icons).toEqual({ icon: 'flag' }); // flag-blue → icon flag
     const kinds = Object.fromEntries(degraded.map((d) => [d.kind, d.count]));
-    expect(kinds.style).toBe(3); // marker-ref 2 + label 1
+    expect(kinds.style).toBe(2); // task-start（无对应丢弃）+ label 1
     expect(kinds.media).toBe(1); // 图片
     expect(kinds.structure).toBe(1); // 概要
   });

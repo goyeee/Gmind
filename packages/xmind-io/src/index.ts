@@ -6,11 +6,13 @@ import type { DegradedItem, XmindNode } from './types';
 import { XmindParseError } from './types';
 
 export { buildXmind } from './build';
+export { iconsToMarkerIds, markersToIcons } from './markers';
 export { XmindParseError } from './types';
-export type { XmindNode, DegradedKind, DegradedItem, XmindErrorCode } from './types';
+export type { XmindIcons, XmindNode, DegradedKind, DegradedItem, XmindErrorCode } from './types';
 
 /** 解析 .xmind（zip 容器）：content.json（2020+）优先，回落 content.xml（XMind 8）。
- *  只保留层级/文本/备注；样式、标记、标签、图片、附件、漂浮主题、概要、额外 sheet 计入降级。 */
+ *  保留层级/文本/备注/标记（M7a-T1：priority/flag/star 族映射三组制，无对应丢弃并计
+ *  style 降级）；其余样式、标签、图片、附件、漂浮主题、概要、额外 sheet 计入降级。 */
 export function parseXmind(bytes: Uint8Array): { root: XmindNode; degraded: DegradedItem[] } {
   let files: Record<string, Uint8Array>;
   try {

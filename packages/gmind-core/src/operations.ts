@@ -1,14 +1,21 @@
 import * as Y from 'yjs';
 import { ulid } from 'ulid';
+import { applyStatusRules, type DeriveNode, type TaskPatch } from '@gmind/shared';
 import {
   ICON_GROUPS,
   MAX_NOTE_LENGTH,
+  MAX_TASK_OWNERS,
   MAX_TEXT_LENGTH,
+  TASK_OWNER_MAX_LENGTH,
+  TASK_OWNER_MIN_LENGTH,
+  TASK_STATUSES,
+  iconValuesOf,
+  isValidDateStr,
   type IconGroup,
 } from './constants';
 import { GmindCoreError } from './errors';
 import { ROOT_NODE_ID } from './doc';
-import { requireAliveNode, subtreeIds, type NodeImage } from './read';
+import { getNode, requireAliveNode, subtreeIds, type NodeImage } from './read';
 import { normalizeTree, normalizeTreeFor, deriveNormalizeDirty } from './repair';
 import { ORIGIN_SYSTEM, ORIGIN_USER, type WriteOrigin } from './undo';
 
@@ -301,7 +308,9 @@ export function setImage(
 /**
  * 设置节点图标（FR-EDT-021）：组内替换即覆盖；value null 删除该组。
  * icons 为节点上的 Y.Map（spec §4.1），缺失时同事务内创建（约定与 read.ts 读取侧一致）。
- * 校验（先于 transact，拒绝即零变更）：存活；group ∈ ICON_GROUPS，否则 INVALID_ICON_GROUP。
+ * 校验（先于 transact，拒绝即零变更）：存活；group ∈ ICON_GROUPS，否则 INVALID_ICON_GROUP；
+ * value 必须属于该组值目录（M7a-T1 三组制：priority '1'-'7' / icon 10 slug / emoji 10 字符），
+ * 否则 INVALID_ICON_VALUE。组内单选、组间并存语义不变。
  */
 export function setIcon(
   doc: Y.Doc,
@@ -312,6 +321,9 @@ export function setIcon(
 ): void {
   if (!ICON_GROUPS.includes(group)) {
     throw new GmindCoreError('INVALID_ICON_GROUP', '未知的图标分组');
+  }
+  if (value !== null && !iconValuesOf(group).includes(value)) {
+    throw new GmindCoreError('INVALID_ICON_VALUE', '未知的图标取值');
   }
   const node = requireAliveNode(doc, id);
   withTransaction(doc, origin, () => {
@@ -334,6 +346,122 @@ function writeIcon(node: Y.Map<unknown>, group: IconGroup, value: string | null)
   const icons = iconsMapOf(node);
   if (value === null) icons.delete(group);
   else icons.set(group, value);
+}
+
+// ══ 任务字段（M7a-T1，2026-09-28 需求方裁定「任务常驻」）════════════════════
+
+/**
+ * 设置节点任务字段（M7a-T1）：status('todo'|'doing'|'done'|'blocked') /
+ * progress(整数 0-100) / owners(用户ID 字符串数组) / startDate|dueDate|doneDate
+ * ('YYYY-MM-DD'|null)。task 为节点上的可选 Y.Map；未提供的键不动，日期 null 删键
+ * （读取侧缺省语义见 read.ts readTask）。默认 ORIGIN_USER（可撤销，经既有
+ * capUndoStack 纪律由页面侧 afterUserWrite 裁剪，与相邻 op 同路径）。
+ *
+ * 校验（先于 transact，拒绝即零变更，错误码 TASK_INVALID_*、文案两段式）：
+ * - status ∈ TASK_STATUSES，否则 TASK_INVALID_STATUS；
+ * - progress 为整数 0-100（拒绝小数/NaN/越界），否则 TASK_INVALID_PROGRESS；
+ * - owners 为字符串数组：每项长度 1-64（存用户ID）；**先去重（保序）再校验
+ *   去重后 ≤ MAX_TASK_OWNERS 项**，否则 TASK_INVALID_OWNERS；
+ * - 三个日期为 null 或日历合法的 'YYYY-MM-DD'（2026-02-30 这类拒绝），否则 TASK_INVALID_DATE。
+ *
+ * 状态联动（规则唯一实现在 @gmind/shared applyStatusRules，core 与 web 共用、禁止双写）：
+ * status→done 且未显式给 doneDate/已有完成日期时自动 doneDate=今天（本地日期字符串）
+ * + progress=100（patch 显式给值则以 patch 为准）；status 离开 done 且未显式给
+ * doneDate 时清空 doneDate；手改 doneDate 不反写 status。
+ */
+export function setNodeTask(
+  doc: Y.Doc,
+  id: string,
+  patch: TaskPatch,
+  origin: WriteOrigin = ORIGIN_USER,
+): void {
+  // —— 校验（先于事务；任一违规即抛，零变更）——
+  if (patch.status !== undefined && !(TASK_STATUSES as readonly string[]).includes(patch.status)) {
+    throw new GmindCoreError(
+      'TASK_INVALID_STATUS',
+      `任务状态非法（${JSON.stringify(String(patch.status))}），请从待开始/进行中/已完成/阻塞中选择`,
+    );
+  }
+  if (
+    patch.progress !== undefined &&
+    (!Number.isInteger(patch.progress) || patch.progress < 0 || patch.progress > 100)
+  ) {
+    throw new GmindCoreError(
+      'TASK_INVALID_PROGRESS',
+      '任务进度必须是 0-100 的整数，请调整后重试',
+    );
+  }
+  let owners: string[] | undefined;
+  if (patch.owners !== undefined) {
+    if (!Array.isArray(patch.owners)) {
+      throw new GmindCoreError('TASK_INVALID_OWNERS', '负责人必须是字符串数组，请刷新后重试');
+    }
+    for (const o of patch.owners) {
+      if (typeof o !== 'string' || o.length < TASK_OWNER_MIN_LENGTH || o.length > TASK_OWNER_MAX_LENGTH) {
+        throw new GmindCoreError(
+          'TASK_INVALID_OWNERS',
+          `负责人格式非法（每项须为 ${TASK_OWNER_MIN_LENGTH}-${TASK_OWNER_MAX_LENGTH} 字符的用户ID），请重新选择成员`,
+        );
+      }
+    }
+    owners = [...new Set(patch.owners)]; // 去重保序（存储口径：唯一用户ID 集）
+    if (owners.length > MAX_TASK_OWNERS) {
+      throw new GmindCoreError(
+        'TASK_INVALID_OWNERS',
+        `负责人最多 ${MAX_TASK_OWNERS} 人（去重后），请精简后重试`,
+      );
+    }
+  }
+  for (const key of ['startDate', 'dueDate', 'doneDate'] as const) {
+    const v = patch[key];
+    if (v === undefined || v === null) continue;
+    if (typeof v !== 'string' || !isValidDateStr(v)) {
+      throw new GmindCoreError(
+        'TASK_INVALID_DATE',
+        `任务日期非法（${key} 须为 YYYY-MM-DD 或留空），请重新选择日期`,
+      );
+    }
+  }
+
+  const node = requireAliveNode(doc, id);
+
+  // —— 状态联动（@gmind/shared 唯一实现）：before 取当前归一化任务快照。 ——
+  const current = getNode(doc, id)!.task;
+  const before: DeriveNode = { id, parentId: null, title: '', task: current };
+  const linked = applyStatusRules(before, owners === undefined ? { ...patch } : { ...patch, owners });
+  if (linked.owners === undefined && owners !== undefined) linked.owners = owners; // 去重结果随写
+
+  // 空 patch（且联动无注入）＝零变更：不开事务直接返回。
+  const definedKeys = (Object.keys(linked) as (keyof TaskPatch)[]).filter((k) => linked[k] !== undefined);
+  if (definedKeys.length === 0) return;
+
+  withTransaction(doc, origin, () => {
+    writeTaskPatch(node, linked);
+  });
+}
+
+/** 内部：取节点 task Y.Map（缺失则创建并挂到节点上，需在事务内调用）。 */
+function taskMapOf(node: Y.Map<unknown>): Y.Map<unknown> {
+  let task = node.get('task');
+  if (!(task instanceof Y.Map)) {
+    task = new Y.Map<unknown>();
+    node.set('task', task);
+  }
+  return task as Y.Map<unknown>;
+}
+
+/** 内部：向节点 task Y.Map 应用 patch（仅写已定义键；日期 null 删键，与读取缺省对称）。 */
+function writeTaskPatch(node: Y.Map<unknown>, patch: TaskPatch): void {
+  const task = taskMapOf(node);
+  if (patch.status !== undefined) task.set('status', patch.status);
+  if (patch.progress !== undefined) task.set('progress', patch.progress);
+  if (patch.owners !== undefined) task.set('owners', patch.owners);
+  for (const key of ['startDate', 'dueDate', 'doneDate'] as const) {
+    const v = patch[key];
+    if (v === undefined) continue;
+    if (v === null) task.delete(key);
+    else task.set(key, v);
+  }
 }
 
 /**

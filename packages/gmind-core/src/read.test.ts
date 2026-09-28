@@ -34,6 +34,7 @@ describe('getNode', () => {
       href: '',
       image: null,
       icons: {},
+      task: { status: 'todo', progress: 0, owners: [], startDate: null, dueDate: null, doneDate: null },
       style: {},
       collapsed: false,
       deleted: false,
@@ -64,7 +65,7 @@ describe('getNode', () => {
       n.set('href', 'https://x.dev');
       n.set('image', { key: 'files/f1/x.png', w: 120, h: 80 });
       const icons = new Y.Map();
-      icons.set('flag', 'red');
+      icons.set('icon', 'flag');
       n.set('icons', icons);
       const style = new Y.Map();
       style.set('fill', '#ffffff');
@@ -75,9 +76,75 @@ describe('getNode', () => {
     expect(snap.note).toBe('备注内容');
     expect(snap.href).toBe('https://x.dev');
     expect(snap.image).toEqual({ key: 'files/f1/x.png', w: 120, h: 80 });
-    expect(snap.icons).toEqual({ flag: 'red' });
+    expect(snap.icons).toEqual({ icon: 'flag' });
     expect(snap.style).toEqual({ fill: '#ffffff' });
     expect(snap.collapsed).toBe(true);
+  });
+
+  it('task 字段读取：显式 Y.Map 完整读回；远端坏数据归一化（不抛错）', () => {
+    const doc = new Y.Doc();
+    doc.transact(() => {
+      const nodes = doc.getMap('nodes');
+      const root = new Y.Map();
+      nodes.set(ROOT_NODE_ID, root);
+      root.set('text', 'R');
+      root.set('parentId', '');
+      const rootChildren = new Y.Array<string>();
+      root.set('children', rootChildren);
+      const good = new Y.Map();
+      nodes.set('good', good);
+      good.set('text', 'g');
+      good.set('parentId', ROOT_NODE_ID);
+      const task = new Y.Map();
+      task.set('status', 'doing');
+      task.set('progress', 40);
+      task.set('owners', ['u1', 'u2']);
+      task.set('startDate', '2026-09-01');
+      task.set('dueDate', '2026-10-01');
+      task.set('doneDate', null);
+      good.set('task', task);
+      rootChildren.push(['good', 'bad']);
+      const bad = new Y.Map();
+      nodes.set('bad', bad);
+      bad.set('text', 'b');
+      bad.set('parentId', ROOT_NODE_ID);
+      const badTask = new Y.Map();
+      badTask.set('status', 'weird');
+      badTask.set('progress', 250.4);
+      badTask.set('owners', ['u1', 42, null]);
+      badTask.set('startDate', '2026/09/01');
+      badTask.set('doneDate', '2026-13-40');
+      bad.set('task', badTask);
+    });
+    expect(getNode(doc, 'good')!.task).toEqual({
+      status: 'doing',
+      progress: 40,
+      owners: ['u1', 'u2'],
+      startDate: '2026-09-01',
+      dueDate: '2026-10-01',
+      doneDate: null,
+    });
+    // 坏数据按缺省/钳制归一化：status 非四枚举→todo、progress 钳 100、owners 只收字符串、日期形状不符→null
+    expect(getNode(doc, 'bad')!.task).toEqual({
+      status: 'todo',
+      progress: 100,
+      owners: ['u1'],
+      startDate: null,
+      dueDate: null,
+      doneDate: null,
+    });
+    // task 为非 Y.Map 垃圾（字符串）：缺省任务，不抛错
+    const doc2 = new Y.Doc();
+    doc2.transact(() => {
+      const nodes = doc2.getMap('nodes');
+      const root = new Y.Map();
+      nodes.set(ROOT_NODE_ID, root);
+      root.set('text', 'R');
+      root.set('parentId', '');
+      root.set('children', new Y.Array<string>());
+      root.set('task', 'garbage');
+    });
+    expect(getNode(doc2, ROOT_NODE_ID)!.task.status).toBe('todo');
   });
 
   it('不存在的节点返回 null', () => {

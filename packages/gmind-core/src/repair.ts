@@ -1,6 +1,7 @@
 import * as Y from 'yjs';
 import type { AbstractType, YEvent } from 'yjs';
 import { ROOT_NODE_ID } from './doc';
+import { ICON_VALUES, type IconGroup } from './constants';
 import { ORIGIN_SYSTEM } from './undo';
 import { applySummaryRepair, planSummaryRepair } from './summary';
 
@@ -228,6 +229,11 @@ export function normalizeTree(doc: Y.Doc, origin: string = ORIGIN_SYSTEM): numbe
     repairs += summaryPlan.removeIds.length + summaryPlan.updates.length;
   }
 
+  // ── 图标三组制收敛（M7a-T1）：旧五组值 → 新三组目录（映射口径见 planIconRepair
+  //    头注）。与树修复/概要收敛同一事务应用。
+  const iconPlan = planIconRepair(doc);
+  repairs += iconPlan.length;
+
   // ── 事务纪律：无修复不开事务、零写入；有修复则在单个 origin 事务内统一应用。
   if (repairs === 0) return 0;
   doc.transact(() => {
@@ -277,6 +283,7 @@ export function normalizeTree(doc: Y.Doc, origin: string = ORIGIN_SYSTEM): numbe
       }
     }
     applySummaryRepair(doc, summaryPlan); // 概要收敛（M6 T6）：同事务统一应用
+    applyIconRepair(doc, iconPlan); // 图标三组制收敛（M7a-T1）：同事务统一应用
   }, origin);
   return repairs;
 }
@@ -509,6 +516,129 @@ export function normalizeTreeFor(doc: Y.Doc, origin: string, dirtyNodeIds: Set<s
     applySummaryRepair(doc, summaryPlan); // 概要收敛（M6 T6）：同事务统一应用
   }, origin);
   return repairs;
+}
+
+// ══ 图标三组制收敛（M7a-T1，随全量 normalizeTree 执行）══════════════════════
+
+/** 图标收敛计划条目：该节点收敛后的 icons 全量新组键值 + 旧 progress 迁移的进度。 */
+export interface IconRepairEntry {
+  nodeId: string;
+  icons: Partial<Record<IconGroup, string>>;
+  /** 旧 progress 组解析出的 0-100 进度（null = 无迁移）；仅当节点 task 无 progress 键时写入。 */
+  taskProgress: number | null;
+}
+
+/**
+ * 规划图标三组制收敛（文档状态纯函数，replica 一致，幂等）。
+ *
+ * ── 旧值口径（M6 面板 MarkerPanel.tsx 的实际存储值，2026-09-28 核对）──────────
+ * priority 'p1'-'p9' ｜ progress '0%'/'10%'/'25%'/'40%'/'50%'/'60%'/'75%'/'100%'
+ * ｜ flag '红'/'蓝'/'绿'/'黄'/'紫'/'橙' ｜ star '红'/'蓝'/'绿'/'黄'/'紫'
+ * ｜ emoji 任意单字符（M6 表 72 个）。裸值 '1'-'9'（无 p 前缀）亦按可解析处理
+ * （兼容 xmind 导入历史与 crafted 状态）。
+ *
+ * ── 映射规则（spec M7a T1 裁定）────────────────────────────────────────────
+ * - priority：可解析为 1-7 → '1'-'7'；8/9 → '7'（收敛上限）；不可解析 → 删；
+ * - progress：组整体删除；值去 '%' 后可解析为 0-100 整数 → 迁入 task.progress
+ *   （节点 task 已有 progress 键时不覆盖——新格式数据优先，幂等）；不可解析 → 丢弃；
+ * - flag → icon 'flag'（颜色信息无对应位，丢弃）；
+ * - star → icon 'important'；**flag 与 star 同节点并存时 star 胜**（二者都迁入 icon
+ *   组必然冲突，固定取 important——与 mindgrid「重要」语义对齐，跨副本确定）；
+ *   节点已有合法 icon 组值时 icon 组值优先（新格式数据优先）；
+ * - emoji：值原样保留（值域外旧 emoji 不迁不删——emoji 值本身即字形，渲染/读取
+ *   均不依赖目录；写入口的目录校验只约束新写入）；
+ * - 未知组（非三组）与非字符串值：确定性清除（收敛到 ICON_GROUPS 目录）。
+ *
+ * 覆盖范围：全部节点（含墓碑——撤销/快照还原可复活旧格式值，children 冻结不变量
+ * 不涉及 icons；与 summary repair 相同的事务纪律）。
+ * 仅接入全量 normalizeTree：旧值只经「外部状态直入」出现在文档里（装载通道
+ * docFromState / 第 64 写摊销清扫 / 脏区不可识别的安全阀均走全量），增量路径的
+ * 脏区推导不含 icons 子 Map（deriveNormalizeDirty：非结构键无脏区），产品流新写
+ * 经 setIcon 目录校验不再制造旧值。
+ */
+export function planIconRepair(doc: Y.Doc): IconRepairEntry[] {
+  const nodes = nodesMap(doc);
+  const plan: IconRepairEntry[] = [];
+  for (const [nodeId, node] of nodes.entries()) {
+    const iconsRaw = node.get('icons');
+    const current: Array<[string, string]> =
+      iconsRaw instanceof Y.Map
+        ? [...iconsRaw.entries()].filter((e): e is [string, string] => typeof e[1] === 'string')
+        : [];
+    const mapped: Partial<Record<IconGroup, string>> = {};
+    let taskProgress: number | null = null;
+    let starSeen = false;
+    let flagSeen = false;
+    let legacyProgress: number | null = null;
+    for (const [group, value] of current) {
+      switch (group) {
+        case 'priority': {
+          const m = /^p?([1-9])$/.exec(value);
+          if (m) mapped.priority = Number(m[1]) >= 8 ? '7' : m[1] as string;
+          break;
+        }
+        case 'icon':
+          if ((ICON_VALUES as readonly string[]).includes(value)) mapped.icon = value;
+          break;
+        case 'emoji':
+          mapped.emoji = value; // 原样保留
+          break;
+        case 'progress': {
+          const m = /^(\d{1,3})%?$/.exec(value);
+          const n = m ? Number(m[1]) : NaN;
+          if (Number.isInteger(n) && n >= 0 && n <= 100) legacyProgress = n;
+          break;
+        }
+        case 'star':
+          starSeen = true;
+          break;
+        case 'flag':
+          flagSeen = true;
+          break;
+        default:
+          break; // 未知组：清除
+      }
+    }
+    if (starSeen) mapped.icon = mapped.icon ?? 'important'; // star 胜过 flag（头注口径）
+    else if (flagSeen) mapped.icon = mapped.icon ?? 'flag';
+    // 是否需要写入：收敛键数 ≠ 原键数（含 legacy 组/非字符串垃圾值/被删的 progress 组）
+    // 或任一保留键值变化；或存在进度迁移。
+    const needs =
+      Object.keys(mapped).length !== (iconsRaw instanceof Y.Map ? iconsRaw.size : 0) ||
+      current.some(([g, v]) => (mapped as Record<string, string | undefined>)[g] !== v);
+    if (legacyProgress !== null) {
+      const task = node.get('task');
+      const hasProgress = task instanceof Y.Map && task.get('progress') !== undefined;
+      if (!hasProgress) taskProgress = legacyProgress;
+    }
+    if (needs || taskProgress !== null) plan.push({ nodeId, icons: mapped, taskProgress });
+  }
+  return plan;
+}
+
+/** 应用图标收敛计划（必须在调用方已开启的事务内执行）：重写 icons Y.Map 为收敛
+ *  键值（缺 map 则不创建——无 icons 的节点本就无键可收敛，仅进度迁移时才建 task）。 */
+export function applyIconRepair(doc: Y.Doc, plan: IconRepairEntry[]): void {
+  const nodes = nodesMap(doc);
+  for (const entry of plan) {
+    const node = nodes.get(entry.nodeId);
+    if (!node) continue; // 防御：规划后理论不可达
+    const iconsRaw = node.get('icons');
+    if (iconsRaw instanceof Y.Map) {
+      for (const key of [...iconsRaw.keys()]) iconsRaw.delete(key);
+      for (const [group, value] of Object.entries(entry.icons)) {
+        iconsRaw.set(group, value as string);
+      }
+    }
+    if (entry.taskProgress !== null) {
+      let task = node.get('task');
+      if (!(task instanceof Y.Map)) {
+        task = new Y.Map<unknown>();
+        node.set('task', task);
+      }
+      (task as Y.Map<unknown>).set('progress', entry.taskProgress);
+    }
+  }
 }
 
 // ══ 远端事务收敛接线（M2 准入清单 §1）══════════════════════════════════════

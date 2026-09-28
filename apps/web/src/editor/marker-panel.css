@@ -1,7 +1,6 @@
 /*
- * 节点标记面板（2026-09-28 二次改版，需求方裁定）：右侧固定抽屉（对齐
- * ThemePanel 形态：fixed 右上、宽 320、纵向滚动），顶部「图标/表情」页签。
- * 首轮「菜单右侧子级弹层」形态被否（横向滚动 + 层级过深），已废弃。
+ * 节点标记面板（M7a-T1 内容切三组制；形态维持 2483652 版）：右侧固定抽屉
+ * （对齐 ThemePanel 形态：fixed 右上、宽 320、纵向滚动），顶部「图标/表情」页签。
  */
 
 .marker-panel {
@@ -79,7 +78,7 @@
   gap: 8px;
 }
 .marker-group-label {
-  flex: 0 0 36px;
+  flex: 0 0 40px;
   font-style: normal;
   color: #86909c;
   font-size: 12px;
@@ -117,19 +116,19 @@
   outline: 2px solid #3370ff;
   outline-offset: -1px;
 }
-/* 优先级圆徽：16px 圆底 + 白字数字（低中高三档配色由组件内联） */
+/* 优先级彩色数字方块：16px 方底 + 白字数字（M7a-T1 mindgrid 配色，内联背景） */
 .marker-priority-badge {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   width: 16px;
   height: 16px;
-  border-radius: 50%;
+  border-radius: 3px;
   color: #fff;
   font-size: 11px;
   font-weight: 600;
 }
-/* 表情区：tab 行 + 网格（自 rich-panel.css 迁移，testid 契约不变） */
+/* 表情页：10 emoji 网格（5 列两行） */
 .marker-emoji-body {
   flex: 1;
   min-width: 0;
@@ -137,27 +136,9 @@
   flex-direction: column;
   gap: 6px;
 }
-.emoji-tabs {
-  display: flex;
-  gap: 4px;
-}
-.emoji-tab {
-  padding: 3px 10px;
-  border: 1px solid #e5e6eb;
-  background: #fff;
-  border-radius: 12px;
-  font-size: 12px;
-  color: #4e5969;
-  cursor: pointer;
-}
-.emoji-tab.active {
-  border-color: #3370ff;
-  color: #3370ff;
-  background: #f0f5ff;
-}
 .emoji-grid {
   display: grid;
-  grid-template-columns: repeat(8, 1fr);
+  grid-template-columns: repeat(5, 1fr);
   gap: 2px;
 }
 .emoji-cell {
