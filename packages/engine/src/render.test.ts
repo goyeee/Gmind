@@ -132,6 +132,34 @@ describe('renderScene：初次渲染', () => {
     expect(nodeG('c')?.querySelector('.gm-icons')).toBeNull();
   });
 
+  it('emoji 组渲染存储值本身（M6 T5）：与其他组按固定组序并存，排组序末位', () => {
+    expect(ICON_GLYPHS['emoji']).toBeDefined();
+    const data = baseData();
+    data.set('b', { text: 'x', icons: { emoji: '😊', flag: 'red', priority: 'p1' } });
+    renderScene(createScene(svg), makeInput(baseLayout(), data));
+    // 组序 priority→flag→…→emoji：emoji 值本身即字形（文本渲染，emoji 字体自然支持）
+    expect(svg.querySelector('.gm-icons')?.textContent).toBe('①⚑😊');
+  });
+
+  it('emoji 换值/清除即时反映到 gm-icons（协调更新同槽位）', () => {
+    const scene = createScene(svg);
+    const data = baseData();
+    data.set('b', { text: 'x', icons: { emoji: '😊' } });
+    renderScene(scene, makeInput(baseLayout(), data));
+    const icons = nodeG('b')?.querySelector('.gm-icons') as SVGTextElement;
+    expect(icons.textContent).toBe('😊');
+    // 换值（组内单选）
+    const data2 = baseData();
+    data2.set('b', { text: 'x', icons: { emoji: '🚀' } });
+    renderScene(scene, makeInput(baseLayout(), data2));
+    expect(nodeG('b')?.querySelector('.gm-icons')?.textContent).toBe('🚀');
+    // 清除 → 元素移除
+    const data3 = baseData();
+    data3.set('b', { text: 'x' });
+    renderScene(scene, makeInput(baseLayout(), data3));
+    expect(nodeG('b')?.querySelector('.gm-icons')).toBeNull();
+  });
+
   it('note 角标（非空才渲染 N，含 <title> 悬停预览子元素）、link 角标（非空才渲染）', () => {
     const data = baseData();
     data.set('b', { text: 'x', note: '有笔记', href: 'https://example.com' });

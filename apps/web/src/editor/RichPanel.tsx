@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactElement } from 'react';
+import { useEffect, useRef, useState, type ReactElement } from 'react';
 import type * as Y from 'yjs';
 import {
   applyStyle,
@@ -13,6 +13,7 @@ import {
   type NodeSnapshot,
   type StyleScope,
 } from '@gmind/core';
+import { EmojiPicker } from './EmojiPicker';
 import { clampImageSize, MAX_IMAGE_BYTES, readImageSize, uploadImage } from './imageUpload';
 import './rich-panel.css';
 
@@ -32,6 +33,7 @@ const GROUP_LABELS: Record<(typeof ICON_GROUPS)[number], string> = {
   progress: '进度',
   flag: '旗帜',
   star: '星标',
+  emoji: '表情',
 };
 
 /** 样式色板（Task 15，8 色）：填充与文字色共用。 */
@@ -67,6 +69,10 @@ export function RichPanel(props: RichPanelProps): ReactElement {
   const [uploading, setUploading] = useState(false);
   // 样式作用域（FR-EDT-015）：默认含子树，可切仅当前节点
   const [styleScope, setStyleScope] = useState<StyleScope>('subtree');
+  // 表情弹层开关（M6 T5）：切节点不自动关（下述 effect 只回灌 note/href，
+  // 弹层属瞬时交互态；Esc/外点/再点触发钮关闭）。
+  const [emojiOpen, setEmojiOpen] = useState(false);
+  const emojiTriggerRef = useRef<HTMLButtonElement>(null);
 
   // 渲染期快照改为 props 注入（M6 Task 2）：EditorPage 每 tick 用 getNode 计算
   // selected 传入——面板与画布同帧同源；无选中/已删时为 null（样式区置灰）。
@@ -298,6 +304,33 @@ export function RichPanel(props: RichPanelProps): ReactElement {
               {group === 'progress' && PROGRESS_STEPS.map((s) => iconButton(group, s, `进度 ${s}`))}
               {group === 'flag' && FLAG_COLORS.map((c) => iconButton(group, c, `旗帜-${c}`))}
               {group === 'star' && STAR_COLORS.map((c) => iconButton(group, c, `星标-${c}`))}
+              {group === 'emoji' && (
+                <div className="emoji-entry">
+                  <button
+                    ref={emojiTriggerRef}
+                    type="button"
+                    data-testid="emoji-trigger"
+                    title="选择表情"
+                    aria-haspopup="dialog"
+                    aria-expanded={emojiOpen}
+                    className={snap.icons.emoji ? 'icon-btn active' : 'icon-btn'}
+                    onClick={() => setEmojiOpen((v) => !v)}
+                  >
+                    {snap.icons.emoji ?? '😀'}
+                  </button>
+                  {emojiOpen && emojiTriggerRef.current && (
+                    <EmojiPicker
+                      anchor={emojiTriggerRef.current}
+                      selected={snap.icons.emoji}
+                      onPick={(char) => {
+                        write(() => setIcon(doc, nodeId, 'emoji', char));
+                        setEmojiOpen(false); // 选中即收起（下拉语义；再点触发钮重开）
+                      }}
+                      onClose={() => setEmojiOpen(false)}
+                    />
+                  )}
+                </div>
+              )}
             </div>
           </div>
         ))}

@@ -522,6 +522,31 @@ describe('setIcon', () => {
     expect(getNode(doc, id)!.icons).toEqual({ priority: 'p1' });
   });
 
+  it('emoji 组设置/替换/取消往返：值为单个 emoji 字符（M6 T5 企微对标）', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
+    const id = childrenIds(doc, ROOT_NODE_ID)[0]!;
+    setIcon(doc, id, 'emoji', '😊');
+    expect(getNode(doc, id)!.icons).toEqual({ emoji: '😊' });
+    // 组内单选：换 emoji 即覆盖
+    setIcon(doc, id, 'emoji', '🚀');
+    expect(getNode(doc, id)!.icons).toEqual({ emoji: '🚀' });
+    // 再点取消（value null 删组）
+    setIcon(doc, id, 'emoji', null);
+    expect(getNode(doc, id)!.icons).toEqual({});
+  });
+
+  it('emoji 与其他图标组并存：设 emoji 不清除 priority/flag（组间独立）', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
+    const id = childrenIds(doc, ROOT_NODE_ID)[0]!;
+    setIcon(doc, id, 'priority', 'p1');
+    setIcon(doc, id, 'flag', '红');
+    setIcon(doc, id, 'emoji', '😊');
+    expect(getNode(doc, id)!.icons).toEqual({ priority: 'p1', flag: '红', emoji: '😊' });
+    // 取消 emoji 不动其他组
+    setIcon(doc, id, 'emoji', null);
+    expect(getNode(doc, id)!.icons).toEqual({ priority: 'p1', flag: '红' });
+  });
+
   it('非法组名抛 INVALID_ICON_GROUP（消息固定）且文档零变更', () => {
     const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
     const id = childrenIds(doc, ROOT_NODE_ID)[0]!;

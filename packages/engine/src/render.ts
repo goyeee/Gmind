@@ -10,7 +10,8 @@
  * - 节点 <g data-node-id> 子元素：rect（圆角=theme.nodeBorderRadius、填充/描边/
  *   描边宽 = styleOf 解析结果 + theme）、<text class="gm-text">（按 '\n' 分 tspan，
  *   fill/字体取解析样式）、<text class="gm-icons">（图标字符映射，固定组序
- *   priority→progress→flag→star，未知组忽略；M1b 值后缀不区分字形，视觉打磨后置）、
+ *   priority→progress→flag→star→emoji，未知组忽略；emoji 组值本身即字形（M6 T5）；
+ *   M1b 值后缀不区分字形，视觉打磨后置）、
  *   <text class="gm-note-badge">（note 非空渲染 'N'）、<text class="gm-link-badge">
  *   （href 非空渲染）、<text class="gm-comment-badge">（commentCount>0 渲染计数，
  *   FR-CMT-002；与 note/link 同一右上角错位方案，自右缘起 link→note→comment 让位）、
@@ -33,12 +34,17 @@ import type {
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
-/** 图标字符映射表：key=图标组名，value=M1b 占位字符（值后缀不区分，T12+ 再丰富）。 */
+/**
+ * 图标字符映射表：key=图标组名，value=M1b 占位字符（值后缀不区分，T12+ 再丰富）。
+ * emoji 组例外（M6 T5 企微对标）：值本身即字形——渲染存储的 emoji 字符本身，
+ * 此处仅登记组名以纳入固定组序（排末位）与存在性判定，占位字符不参与输出。
+ */
 export const ICON_GLYPHS: Record<string, string> = {
   priority: '①',
   progress: '◐',
   flag: '⚑',
   star: '★',
+  emoji: '□',
 };
 
 /** 折叠徽标几何（确定性常量）。 */
@@ -167,12 +173,13 @@ function syncOptional<T extends SVGElement>(
   return null;
 }
 
-/** 图标组按固定序拼字符（未知组忽略；无图标返回空串）。 */
+/** 图标组按固定序拼字符（未知组忽略；无图标返回空串）。
+ *  emoji 组（M6 T5）值本身即字形：直接拼接存储的 emoji 字符，其余组仍走占位映射。 */
 function iconGlyphs(icons: Record<string, unknown> | undefined): string {
   if (!icons) return '';
   let out = '';
   for (const group of Object.keys(ICON_GLYPHS)) {
-    if (group in icons) out += ICON_GLYPHS[group];
+    if (group in icons) out += group === 'emoji' ? String(icons[group]) : ICON_GLYPHS[group];
   }
   return out;
 }
