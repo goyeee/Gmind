@@ -62,6 +62,19 @@ import {
 } from '@gmind/engine';
 import { attachKeyboardMap, isEditableTarget } from '../editor/keyboardMap';
 import {
+  BackIcon,
+  ExportIcon,
+  FullscreenIcon,
+  HistoryIcon,
+  KeyboardIcon,
+  MembersIcon,
+  RedoIcon,
+  SearchIcon,
+  StructureIcon,
+  ThemeIcon,
+  UndoIcon,
+} from '../editor/icons';
+import {
   clampImageSize,
   MAX_IMAGE_BYTES,
   readImageSize,
@@ -1429,9 +1442,20 @@ export function EditorPage() {
   return (
     <div className="editor-page">
       <header className="editor-toolbar">
-        <button data-testid="back-btn" title="返回工作台" onClick={() => navigate('/workspace')}>
-          ←
-        </button>
+        {/* 工具栏图标化分组改版（M6 Task 1，企微对标）：单行 7 组 + 1px 竖线分隔。
+            组序：[返回] | [标题·星标·保存状态] | [撤销·重做] | [结构·主题] | [导出] |
+            [成员·版本历史·快捷键·查找] | [全屏]；全部按钮改内联 SVG 图标 + title 提示，
+            既有 data-testid 一概保留（members-btn 实名与既有用例一致）。 */}
+        <div className="toolbar-group">
+          <button
+            data-testid="back-btn"
+            className="toolbar-btn"
+            title="返回工作台"
+            onClick={() => navigate('/workspace')}
+          >
+            <BackIcon />
+          </button>
+        </div>
         {readOnly ? (
           /* 移动端工具栏精简版（OPEN-T-005）：仅返回 + 标题只读展示 + 保存状态 +
              评论开关——其余编辑项（结构/主题/撤销/重做/全屏/导出/标题输入/星标/
@@ -1453,151 +1477,217 @@ export function EditorPage() {
           </>
         ) : (
           <>
-        <select
-          data-testid="structure-select"
-          value={meta?.structureType ?? 'mindmap'}
-          onChange={(e) => {
-            if (!doc) return;
-            setDocMeta(doc, { structureType: e.target.value as 'mindmap' | 'logic' | 'org' }, ORIGIN_USER);
-            afterUserWrite();
-          }}
-        >
-          {STRUCTURE_OPTIONS.map((o) => (
-            <option key={o.value} value={o.value}>
-              {o.label}
-            </option>
-          ))}
-        </select>
-        <select
-          data-testid="theme-select"
-          value={themeId}
-          onChange={(e) => {
-            if (!doc) return;
-            setDocMeta(doc, { themeId: e.target.value }, ORIGIN_USER);
-            afterUserWrite();
-          }}
-        >
-          {THEME_OPTIONS.map((o) => (
-            <option key={o.value} value={o.value}>
-              {o.label}
-            </option>
-          ))}
-        </select>
-        <button data-testid="undo-btn" title="撤销 (Ctrl+Z)" onClick={() => um && coreUndo(um)}>
-          撤销
-        </button>
-        <button data-testid="redo-btn" title="重做 (Ctrl+Y)" onClick={() => um && coreRedo(um)}>
-          重做
-        </button>
-        <button data-testid="fullscreen-btn" title="全屏（Esc 退出）" onClick={toggleFullscreen}>
-          全屏
-        </button>
-        {/* 导出菜单（M4 Task 5，FR-IO-004）：XMind + PNG/JPG（Task 9 就地追加，
-            不改动既有 XMind 项）。文件名与 header 标题同源 getMeta(doc).title。 */}
-        <div className="export-wrap" ref={exportWrapRef}>
-          <button data-testid="export-menu" onClick={() => setExportOpen((v) => !v)}>
-            导出
+        <span className="toolbar-sep" />
+        {/* 标题组：标题输入 + 星标 + 保存状态（位置语义不变：返回之后的最左区）。
+            star-toggle 保留 ★/☆ 字形（editor.e2e 断言按钮文本，零回归约束）。 */}
+        <div className="toolbar-group toolbar-group-title">
+          <input
+            data-testid="title-input"
+            className="title-input"
+            value={meta?.title ?? ''}
+            onChange={(e) => {
+              const value = e.target.value;
+              if (value.trim() === '') {
+                // 空标题（fix round 1 minor b）：不落库不 PATCH，重渲染让受控值回灌恢复
+                setTick((t) => t + 1);
+                return;
+              }
+              setTitle(value);
+              afterUserWrite(); // fix round 1 minor a：标题写也走统一 capUndoStack 通道
+            }}
+            placeholder="文档标题"
+          />
+          <button
+            data-testid="star-toggle"
+            className={'star-toggle' + (starred ? ' starred' : '')}
+            title={starred ? '取消星标' : '加星标'}
+            onClick={toggleStar}
+          >
+            {starred ? '★' : '☆'}
           </button>
-          {exportOpen && (
-            <div className="export-menu" role="menu">
-              <button
-                data-testid="export-xmind"
-                role="menuitem"
-                onClick={() => {
-                  setExportOpen(false);
-                  if (!doc || !meta) return;
-                  try {
-                    exportXmind(doc, meta.title);
-                  } catch (e) {
-                    showToast(e instanceof Error ? e.message : '导出失败');
-                  }
-                }}
-              >
-                导出 XMind
-              </button>
-              {/* PNG/JPG（M4 Task 9，FR-IO-003）：透明背景仅 PNG 生效（JPG 恒白底，
-                  JPG 项标注白底），默认勾选。1x/2x/3x = 布局包围盒整倍放大。 */}
-              <label className="export-option">
-                <input
-                  type="checkbox"
-                  data-testid="export-transparent"
-                  checked={exportTransparent}
-                  onChange={(e) => setExportTransparent(e.target.checked)}
-                />
-                透明背景（PNG）
-              </label>
-              {[1, 2, 3].map((n) => (
-                <button
-                  key={`png-${n}`}
-                  data-testid={`export-png-${n}x`}
-                  role="menuitem"
-                  onClick={() => runImageExport('png', n as 1 | 2 | 3)}
-                >
-                  PNG {n}x
-                </button>
-              ))}
-              {[1, 2, 3].map((n) => (
-                <button
-                  key={`jpg-${n}`}
-                  data-testid={`export-jpg-${n}x`}
-                  role="menuitem"
-                  onClick={() => runImageExport('jpg', n as 1 | 2 | 3)}
-                >
-                  JPG {n}x（白底）
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-        <input
-          data-testid="title-input"
-          className="title-input"
-          value={meta?.title ?? ''}
-          onChange={(e) => {
-            const value = e.target.value;
-            if (value.trim() === '') {
-              // 空标题（fix round 1 minor b）：不落库不 PATCH，重渲染让受控值回灌恢复
-              setTick((t) => t + 1);
-              return;
-            }
-            setTitle(value);
-            afterUserWrite(); // fix round 1 minor a：标题写也走统一 capUndoStack 通道
-          }}
-          placeholder="文档标题"
-        />
-        <button
-          data-testid="star-toggle"
-          className={'star-toggle' + (starred ? ' starred' : '')}
-          title={starred ? '取消星标' : '加星标'}
-          onClick={toggleStar}
-        >
-          {starred ? '★' : '☆'}
-        </button>
-        <span className="save-status" data-testid="save-status">
-          {status}
-        </span>
-        {/* 版本历史（M4 Task 8，FR-VER-004 UI）：时间轴/只读预览/一键恢复入口 */}
-        <button data-testid="versions-toggle" title="版本历史" onClick={() => setVersionsOpen((v) => !v)}>
-          版本历史
-        </button>
-        {/* 快捷键帮助（M5 Task 2，FR-EDT-007）：工具栏入口，Ctrl/Cmd+? 同一开关 */}
-        <button
-          data-testid="help-toggle"
-          title="快捷键帮助 (Ctrl+?)"
-          onClick={() => setHelpOpen((v) => !v)}
-        >
-          快捷键
-        </button>
-        <button
-          data-testid="members-btn"
-          title="在线成员"
-          onClick={() => setMembersOpen((v) => !v)}
-        >
-          成员
-          <span className="members-badge" data-testid="members-count">
-            {members.length}
+          <span className="save-status" data-testid="save-status">
+            {status}
           </span>
-        </button>
+        </div>
+        <span className="toolbar-sep" />
+        {/* 历史组：撤销 / 重做 */}
+        <div className="toolbar-group">
+          <button
+            data-testid="undo-btn"
+            className="toolbar-btn"
+            title="撤销 (Ctrl+Z)"
+            onClick={() => um && coreUndo(um)}
+          >
+            <UndoIcon />
+          </button>
+          <button
+            data-testid="redo-btn"
+            className="toolbar-btn"
+            title="重做 (Ctrl+Y)"
+            onClick={() => um && coreRedo(um)}
+          >
+            <RedoIcon />
+          </button>
+        </div>
+        <span className="toolbar-sep" />
+        {/* 视图组：结构 / 主题（保持 <select> 功能件，图标前置）。
+            「格式」样式面板现为右列常驻面板（M3b 裁决），不设工具栏按钮、此位留空。 */}
+        <div className="toolbar-group">
+          <div className="toolbar-field" title="结构">
+            <StructureIcon />
+            <select
+              data-testid="structure-select"
+              value={meta?.structureType ?? 'mindmap'}
+              onChange={(e) => {
+                if (!doc) return;
+                setDocMeta(doc, { structureType: e.target.value as 'mindmap' | 'logic' | 'org' }, ORIGIN_USER);
+                afterUserWrite();
+              }}
+            >
+              {STRUCTURE_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="toolbar-field" title="主题">
+            <ThemeIcon />
+            <select
+              data-testid="theme-select"
+              value={themeId}
+              onChange={(e) => {
+                if (!doc) return;
+                setDocMeta(doc, { themeId: e.target.value }, ORIGIN_USER);
+                afterUserWrite();
+              }}
+            >
+              {THEME_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+        <span className="toolbar-sep" />
+        {/* 导出组（M4 Task 5，FR-IO-004）：XMind + PNG/JPG（Task 9 就地追加，
+            不改动既有 XMind 项）。文件名与 header 标题同源 getMeta(doc).title。 */}
+        <div className="toolbar-group">
+          <div className="export-wrap" ref={exportWrapRef}>
+            <button
+              data-testid="export-menu"
+              className="toolbar-btn"
+              title="导出"
+              onClick={() => setExportOpen((v) => !v)}
+            >
+              <ExportIcon />
+            </button>
+            {exportOpen && (
+              <div className="export-menu" role="menu">
+                <button
+                  data-testid="export-xmind"
+                  role="menuitem"
+                  onClick={() => {
+                    setExportOpen(false);
+                    if (!doc || !meta) return;
+                    try {
+                      exportXmind(doc, meta.title);
+                    } catch (e) {
+                      showToast(e instanceof Error ? e.message : '导出失败');
+                    }
+                  }}
+                >
+                  导出 XMind
+                </button>
+                {/* PNG/JPG（M4 Task 9，FR-IO-003）：透明背景仅 PNG 生效（JPG 恒白底，
+                    JPG 项标注白底），默认勾选。1x/2x/3x = 布局包围盒整倍放大。 */}
+                <label className="export-option">
+                  <input
+                    type="checkbox"
+                    data-testid="export-transparent"
+                    checked={exportTransparent}
+                    onChange={(e) => setExportTransparent(e.target.checked)}
+                  />
+                  透明背景（PNG）
+                </label>
+                {[1, 2, 3].map((n) => (
+                  <button
+                    key={`png-${n}`}
+                    data-testid={`export-png-${n}x`}
+                    role="menuitem"
+                    onClick={() => runImageExport('png', n as 1 | 2 | 3)}
+                  >
+                    PNG {n}x
+                  </button>
+                ))}
+                {[1, 2, 3].map((n) => (
+                  <button
+                    key={`jpg-${n}`}
+                    data-testid={`export-jpg-${n}x`}
+                    role="menuitem"
+                    onClick={() => runImageExport('jpg', n as 1 | 2 | 3)}
+                  >
+                    JPG {n}x（白底）
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+        <span className="toolbar-sep" />
+        {/* 协作/视图组：成员 / 版本历史 / 快捷键 / 查找（T3 查找替换接线前禁用占位） */}
+        <div className="toolbar-group">
+          <button
+            data-testid="members-btn"
+            className="toolbar-btn"
+            title="在线成员"
+            onClick={() => setMembersOpen((v) => !v)}
+          >
+            <MembersIcon />
+            <span className="members-badge" data-testid="members-count">
+              {members.length}
+            </span>
+          </button>
+          {/* 版本历史（M4 Task 8，FR-VER-004 UI）：时间轴/只读预览/一键恢复入口 */}
+          <button
+            data-testid="versions-toggle"
+            className="toolbar-btn"
+            title="版本历史"
+            onClick={() => setVersionsOpen((v) => !v)}
+          >
+            <HistoryIcon />
+          </button>
+          {/* 快捷键帮助（M5 Task 2，FR-EDT-007）：工具栏入口，Ctrl/Cmd+? 同一开关 */}
+          <button
+            data-testid="help-toggle"
+            className="toolbar-btn"
+            title="快捷键帮助 (Ctrl+?)"
+            onClick={() => setHelpOpen((v) => !v)}
+          >
+            <KeyboardIcon />
+          </button>
+          <button
+            data-testid="find-toggle"
+            className="toolbar-btn"
+            title="查找（即将开放）"
+            disabled
+          >
+            <SearchIcon />
+          </button>
+        </div>
+        <span className="toolbar-sep" />
+        {/* 全屏组（视图动作收尾） */}
+        <div className="toolbar-group">
+          <button
+            data-testid="fullscreen-btn"
+            className="toolbar-btn"
+            title="全屏（Esc 退出）"
+            onClick={toggleFullscreen}
+          >
+            <FullscreenIcon />
+          </button>
+        </div>
           </>
         )}
       </header>

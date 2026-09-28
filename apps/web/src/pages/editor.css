@@ -10,15 +10,19 @@
   overscroll-behavior: none;
 }
 
+/* 工具栏（M6 Task 1 企微对标：单行分组 + 图标按钮）：
+   [返回] | [标题·星标·保存状态] | [撤销·重做] | [结构·主题] | [导出] |
+   [成员·版本·快捷键·查找] | [全屏]，组间 1px 竖线分隔。 */
 .editor-toolbar {
   flex: none;
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
+  gap: 4px;
+  padding: 6px 10px;
   background: #fff;
   border-bottom: 1px solid #e5e6eb;
 }
+/* 兜底基线：未走 .toolbar-btn/.toolbar-field 的工具栏控件（移动端只读评论开关） */
 .editor-toolbar select,
 .editor-toolbar button {
   padding: 6px 10px;
@@ -27,13 +31,83 @@
   background: #fff;
   font-size: 13px;
 }
+/* 组间 1px 竖线分隔符 */
+.toolbar-sep {
+  flex: none;
+  width: 1px;
+  height: 16px;
+  background: #e5e6eb;
+}
+/* 分组容器；标题组弹性占满中段（标题输入伸展、右侧组贴右） */
+.toolbar-group {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.toolbar-group.toolbar-group-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  gap: 6px;
+}
+/* 图标按钮：28×28、无边框、hover 浅灰底（企微范式） */
+.editor-toolbar .toolbar-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: #4e5969;
+  cursor: pointer;
+}
+.editor-toolbar .toolbar-btn:hover:not(:disabled) {
+  background: #f2f3f5;
+}
+.editor-toolbar .toolbar-btn:disabled {
+  color: #c9cdd4;
+  cursor: default;
+}
+/* 结构/主题下拉：图标前置的紧凑功能件（保持 <select> 原生交互） */
+.toolbar-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 28px;
+  padding: 0 6px 0 4px;
+  border-radius: 6px;
+  color: #4e5969;
+}
+.toolbar-field:hover {
+  background: #f2f3f5;
+}
+.toolbar-field select {
+  height: 28px;
+  padding: 0 2px;
+  border: none;
+  background: transparent;
+  font-size: 12px;
+  color: #1f2329;
+  cursor: pointer;
+}
 .editor-toolbar .title-input {
   flex: 1;
   min-width: 120px;
-  padding: 6px 10px;
-  border: 1px solid #e5e6eb;
+  padding: 5px 8px;
+  border: none;
   border-radius: 6px;
+  background: transparent;
   font-size: 14px;
+}
+.editor-toolbar .title-input:hover {
+  background: #f2f3f5;
+}
+.editor-toolbar .title-input:focus {
+  outline: 1px solid #3370ff;
+  background: #fff;
 }
 .save-status {
   color: #86909c;
