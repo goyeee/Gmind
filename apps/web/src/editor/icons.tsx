@@ -152,6 +152,20 @@ export function FullscreenIcon({ className }: IconProps) {
   );
 }
 
+/** 格式刷（斜置刷子：右上刷柄 + 左下刷头）：T7 格式刷按钮 */
+export function PainterIcon({ className }: IconProps) {
+  return (
+    <svg {...svgProps(className)}>
+      {/* 刷柄（圆头斜杠） */}
+      <path d="M8.2 7.1 11.7 3.6a1.9 1.9 0 0 1 2.7 2.7L10.9 9.8Z" />
+      {/* 刷颈（柄与刷头的短连接） */}
+      <path d="M7.2 8.1 7.9 8.8" />
+      {/* 刷头（蘸色楔形） */}
+      <path d="M2.6 9.9 6.3 13.6C5 14.5 3.4 14.7 1.8 14.1 1.2 12.5 1.5 10.9 2.6 9.9Z" />
+    </svg>
+  );
+}
+
 /** 星标（五角轮廓）：T1 星标按钮保留既有字形（★/☆ 文案断言依赖），供后续任务换装 */
 export function StarIcon({ className }: IconProps) {
   return (

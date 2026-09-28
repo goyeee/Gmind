@@ -71,6 +71,16 @@
   color: #c9cdd4;
   cursor: default;
 }
+/* 激活态图标按钮（格式刷模式等，企微范式：浅蓝底 + 蓝字） */
+.editor-toolbar .toolbar-btn.active {
+  background: #e8f3ff;
+  color: #3370ff;
+}
+/* 格式刷（M6 Task 7）：模式激活期画布 copy 光标提示（body.painter-active 由
+   EditorPage 挂载；仅画布区域，工具栏/面板光标不受影响） */
+body.painter-active .editor-canvas svg {
+  cursor: copy;
+}
 /* 结构/主题下拉：图标前置的紧凑功能件（保持 <select> 原生交互） */
 .toolbar-field {
   display: inline-flex;

@@ -66,9 +66,9 @@ test('工具栏：单行分组 + 竖线分隔符（7 组 / ≥5 分隔线）', a
 test('工具栏：图标按钮均带内联 svg 与 title 提示', async ({ page }) => {
   await openSeedDoc(page);
   const iconButtons = page.locator('.editor-toolbar button.toolbar-btn');
-  // 返回/撤销/重做/导出/成员/版本历史/快捷键/查找/全屏/主题面板 = 10 个图标按钮
-  // （T4 新增 theme-panel-toggle，T1 清单 +1；既有 9 个零回归）
-  await expect(iconButtons).toHaveCount(10);
+  // 返回/撤销/重做/格式刷/导出/成员/版本历史/快捷键/查找/全屏/主题面板 = 11 个
+  // 图标按钮（T7 新增 format-painter，T4 新增 theme-panel-toggle；既有零回归）
+  await expect(iconButtons).toHaveCount(11);
   const count = await iconButtons.count();
   for (let i = 0; i < count; i++) {
     const btn = iconButtons.nth(i);

@@ -10,6 +10,7 @@ import {
   deleteNodes,
   getMeta,
   getNode,
+  ICON_GROUPS,
   markLastEditor,
   moveNode,
   ORIGIN_USER,
@@ -74,6 +75,7 @@ import {
   HistoryIcon,
   KeyboardIcon,
   MembersIcon,
+  PainterIcon,
   RedoIcon,
   SearchIcon,
   StructureIcon,
@@ -161,6 +163,16 @@ const ZOOM_PRESETS = [50, 75, 100, 150, 200];
  *  联合类型保留以对齐埋点契约；paste 一次粘贴动作记一行 node_add（多节点合并计数
  *  不拆行）。 */
 type NodeVia = 'keyboard' | 'context' | 'drag' | 'paste';
+
+/** 格式刷模式态（M6 Task 7，企微对标）：源节点 id + 格式快照（style 逐键 + icons
+ *  逐组，NodeSnapshot 读取侧纯数据）+ 是否粘滞（双击进入：连续应用到逐个点击的
+ *  节点，Esc / 再点按钮退出；单击 = 单发：应用一次即退出）。 */
+type PainterMode = {
+  sourceId: string;
+  style: Record<string, string>;
+  icons: Partial<Record<IconGroup, string>>;
+  sticky: boolean;
+};
 
 /** WS 断开（或全断网）时的保存指示（M2 Task 3，FR-EDT-034）。 */
 const OFFLINE_STATUS = '离线编辑中，恢复联网后自动同步';
@@ -258,6 +270,11 @@ export function EditorPage() {
   // 主题缩略图选择面板开合（M6 Task 4，企微对标）：theme-panel-toggle 打开，
   // theme-panel-close / 套用任一主题后关闭；与 theme-select 并存（零回归裁决）
   const [themePanelOpen, setThemePanelOpen] = useState(false);
+  // 格式刷（M6 Task 7，企微对标）：null = 未激活。state 驱动按钮 active / body
+  // 光标 class 渲染；painterRef 供事件处理器同步读——双击序列里 click#2 退出与
+  // dblclick 粘滞重进之间不等 React 提交，读 state 会拿到滞后一拍的旧值。
+  const [painter, setPainter] = useState<PainterMode | null>(null);
+  const painterRef = useRef<PainterMode | null>(null);
   // 当前用户身份（M4 Task 2 邀请区可见性）：与 awareness/last_editor 共用 users/me
   // 模块级缓存（不重发请求）；canInvite = 当前用户即创建者（WorkspacePage 行菜单
   // ownerUserId === me?.id 同口径），身份未装配（id 空串）一律不可见。
@@ -383,6 +400,37 @@ export function EditorPage() {
     return () => document.removeEventListener('keydown', onKeyDown, false);
   }, [findOpen]);
 
+  // —— 格式刷模式态副作用（M6 Task 7，企微对标）——
+  // Esc 退出（含粘滞）：输入控件让路（isEditableTarget 与查找条同一判定——节点
+  // 编辑覆盖层自身 stopPropagation，概要标签输入内的 Esc 不连带退出格式刷）。
+  // 移动端只读不装配（键盘映射同款 readOnly 依赖纪律）。
+  useEffect(() => {
+    if (!painter || readOnly) return;
+    const onKeyDown = (e: KeyboardEvent): void => {
+      if (e.key !== 'Escape' || isEditableTarget(e.target)) return;
+      e.preventDefault();
+      painterRef.current = null;
+      setPainter(null);
+    };
+    document.addEventListener('keydown', onKeyDown, false);
+    return () => document.removeEventListener('keydown', onKeyDown, false);
+  }, [painter, readOnly]);
+  // 光标提示：模式激活期 body 挂 painter-active（editor.css 画布 cursor:copy；
+  // 只挂画布区域，工具栏/面板光标不受影响）。卸载/退出即摘除。
+  useEffect(() => {
+    if (!painter) return;
+    document.body.classList.add('painter-active');
+    return () => document.body.classList.remove('painter-active');
+  }, [painter]);
+  // 移动端只读降级即退出（按钮随工具栏隐藏，模式态不留存；applyPainterTo 自身
+  // 亦持 readOnly 闸，此处收干净光标 class 等激活期副作用）
+  useEffect(() => {
+    if (readOnly && painterRef.current) {
+      painterRef.current = null;
+      setPainter(null);
+    }
+  }, [readOnly]);
+
   /**
    * 配额拦截闸（M2 终审修复轮）：置位期间阻止**新增**节点（PRD FR-ACC-003 语义），
    * 删除/既有节点文本编辑/样式修改/拖拽移动不受限。命中给出可行动 toast 并返回 true。
@@ -424,6 +472,97 @@ export function EditorPage() {
     void api(`/files/${fileId}/star`, { method: next ? 'PUT' : 'DELETE' }).catch(() =>
       setStarred(!next),
     );
+  };
+
+  // —— 格式刷（M6 Task 7，企微对标，FR-EDT-016 提前）——
+
+  /** ref + state 双轨写入（ref 同步可见，见 state 声明处注释）。 */
+  const setPainterSync = (next: PainterMode | null): void => {
+    painterRef.current = next;
+    setPainter(next);
+  };
+
+  /** 从当前单选节点复制格式快照进模式态；无单选（空选区/多选/已删）toast 提示。 */
+  const enterPainter = (sticky: boolean): void => {
+    const selection = selectionRef.current;
+    const single =
+      selection && selection.selected.size === 1 ? [...selection.selected][0] : null;
+    const snap = single && doc ? getNode(doc, single) : null;
+    if (!single || !snap || snap.deleted) {
+      showToast('请先选中要复制样式的节点');
+      return;
+    }
+    setPainterSync({
+      sourceId: single,
+      style: { ...snap.style },
+      icons: { ...snap.icons },
+      sticky,
+    });
+  };
+
+  /** 单击：未激活 = 复制快照进单发模式；已激活（单发/粘滞）= 退出（再点按钮退出）。 */
+  const onPainterClick = (): void => {
+    if (painterRef.current) {
+      setPainterSync(null);
+      return;
+    }
+    enterPainter(false);
+  };
+
+  /** 双击 = 粘滞（连续应用到逐个点击的节点）。双击序列里 click#1 进单发、click#2
+   *  退出、dblclick 到达——统一以粘滞重进（快照同源同值，选择未变）。 */
+  const onPainterDoubleClick = (): void => {
+    const cur = painterRef.current;
+    if (cur) {
+      setPainterSync({ ...cur, sticky: true });
+      return;
+    }
+    enterPainter(true);
+  };
+
+  /**
+   * 应用格式到目标节点：单事务 ORIGIN_USER（setStyle 逐键 + setIcon 逐组——内层
+   * withTransaction 嵌套复用外层事务，一次 Ctrl+Z 整体回滚）。格式整体复制语义：
+   * 源有的键/组写入，目标有而源没有的键/组清除（writeStylePatch null 删键 /
+   * setIcon null 删组）。自刷（源=目标）与未变更（快照与目标一致）均零写入——
+   * 不给撤销栈留空项。单发模式应用后退出；粘滞保持。
+   */
+  const applyPainterTo = (targetId: string): void => {
+    const mode = painterRef.current;
+    if (!mode || readOnly) return;
+    if (targetId !== mode.sourceId && doc) {
+      const target = getNode(doc, targetId);
+      if (target && !target.deleted) {
+        const patch: Record<string, string | number | null> = {};
+        for (const [attr, value] of Object.entries(mode.style)) patch[attr] = value;
+        for (const attr of Object.keys(target.style)) {
+          if (!(attr in mode.style)) patch[attr] = null;
+        }
+        const iconOps: { group: IconGroup; value: string | null }[] = [];
+        for (const group of ICON_GROUPS) {
+          const value = mode.icons[group];
+          const current = target.icons[group];
+          if (value === undefined) {
+            if (current !== undefined) iconOps.push({ group, value: null });
+          } else if (current !== value) {
+            iconOps.push({ group, value });
+          }
+        }
+        if (Object.keys(patch).length > 0 || iconOps.length > 0) {
+          try {
+            withTransaction(doc, ORIGIN_USER, () => {
+              if (Object.keys(patch).length > 0) setStyle(doc, targetId, patch);
+              for (const op of iconOps) setIcon(doc, targetId, op.group, op.value);
+            });
+            afterUserWrite();
+          } catch (e) {
+            showToast(e instanceof Error ? e.message : '格式应用失败');
+            return;
+          }
+        }
+      }
+    }
+    if (!mode.sticky) setPainterSync(null);
   };
 
   /** export_done 埋点（M4 Task 9 交付，M5 Task 4 收口到公共 track()：公共参数
@@ -1010,6 +1149,13 @@ export function EditorPage() {
       const press = pointerPressRef.current;
       const moved = press ? Math.hypot(e.clientX - press.x, e.clientY - press.y) > 4 : false;
       if (!e.shiftKey && !moved) selection.clear();
+      return;
+    }
+    // 格式刷（M6 Task 7）：模式激活时节点点击 = 应用格式并拦截（不让位给选中/
+    // 加减选——粘滞保持激活，单发应用后退出）。角标/折叠徽标/概要等先行分支不受
+    // 影响（各自 return 早于此处）。
+    if (painterRef.current) {
+      applyPainterTo(id);
       return;
     }
     // FR-EDT-008：Ctrl/Cmd+点击 = 加/减选；Shift+点击让位给框选起点（无操作，
@@ -1733,6 +1879,19 @@ export function EditorPage() {
             onClick={() => um && coreRedo(um)}
           >
             <RedoIcon />
+          </button>
+          {/* 格式刷（M6 Task 7，企微对标）：单击复制选中节点样式/图标 → 点目标应用
+              （单发）；双击粘滞连续刷；Esc / 再点按钮退出 */}
+          <button
+            data-testid="format-painter"
+            className={painter ? 'toolbar-btn active' : 'toolbar-btn'}
+            title="格式刷（双击连续刷）"
+            aria-label="格式刷"
+            aria-pressed={painter !== null}
+            onClick={onPainterClick}
+            onDoubleClick={onPainterDoubleClick}
+          >
+            <PainterIcon />
           </button>
         </div>
         <span className="toolbar-sep" />
