@@ -169,6 +169,10 @@ body.painter-active .editor-canvas svg {
     min-width: 0;
     text-overflow: ellipsis;
   }
+  /* K1-R 回归：900px 残留 .star-toggle × view-tab 相交一处，窄断点一并隐藏星标 */
+  .editor-toolbar .star-toggle {
+    display: none;
+  }
 }
 /* 工具栏星标切换（M3b 清偿包，FR-FIL-004）：未加星空心灰、加星金色 */
 .star-toggle {
