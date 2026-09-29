@@ -242,3 +242,86 @@ describe('startSaveLoop（last_editor 补报，M3a Task 4）', () => {
     doc.destroy();
   });
 });
+
+// ---------------------------------------------------------------------------
+// 「保存中」置位条件（M7c-E4，需求方 #4「内容没变化不该显示保存中」+ kimi 复验
+// P3「打开文档即亮保存中挂满看门狗时长」）：WS 模式下仅 本地用户写（user origin）
+// 且事务确有内容变更（tr.changed 非空）才亮；远端同步回声（provider origin）与
+// 零变更事务不亮。看门狗同步收紧 6s→4s（回落实测贴 6s 上限）。
+// ---------------------------------------------------------------------------
+
+/** WS 模式装配：shouldPutNow=false（服务端持久化接管）、provider 恒已同步。 */
+async function withWsSaveLoop(): Promise<{ doc: Y.Doc; statuses: string[]; stop: () => void }> {
+  return withMockedSave(async () => jsonResponse(200, { nodeCount: 1 }), {
+    collab: { shouldPutNow: () => false, offlineHint: () => null, hasUnsyncedChanges: () => false },
+  });
+}
+
+describe('startSaveLoop（「保存中」置位条件，M7c-E4）', () => {
+  it('远端同步回声（provider origin 事务）→ 不亮「保存中」（初始回放/协同更新无 ack 收尾）', async () => {
+    vi.useFakeTimers();
+    const { doc, statuses, stop } = await withWsSaveLoop();
+
+    // 任意非 user/system origin（模拟 y-websocket 回声：applyUpdate 的 origin=provider 实例）
+    doc.transact(() => {
+      doc.getMap('m').set('k', 'v');
+    }, 'provider-echo');
+    await vi.advanceTimersByTimeAsync(1000);
+
+    expect(statuses).not.toContain('保存中…');
+    stop();
+    doc.destroy();
+  });
+
+  it('user origin 但零变更事务（changed 空集）→ 不亮「保存中」（同值守卫外防线）', async () => {
+    vi.useFakeTimers();
+    const { doc, statuses, stop } = await withWsSaveLoop();
+
+    doc.transact(() => {}, 'user'); // 空事务：afterTransaction 照发、changed 为空
+    await vi.advanceTimersByTimeAsync(1000);
+
+    expect(statuses).not.toContain('保存中…');
+    stop();
+    doc.destroy();
+  });
+
+  it('user origin 有变更 → 亮「保存中」，看门狗 4s 后 provider 无未同步变更 → 回落「已保存」', async () => {
+    vi.useFakeTimers();
+    const { doc, statuses, stop } = await withWsSaveLoop();
+
+    doc.transact(() => {
+      doc.getMap('m').set('k', 'v');
+    }, 'user');
+    expect(statuses).toContain('保存中…');
+
+    await vi.advanceTimersByTimeAsync(3999);
+    expect(statuses.at(-1)).toBe('保存中…');
+    await vi.advanceTimersByTimeAsync(1);
+    expect(statuses.at(-1)).toMatch(/^已保存 /);
+    stop();
+    doc.destroy();
+  });
+
+  it('看门狗期间 provider 仍有未同步变更 → 不回落（真保存中不误报已保存）', async () => {
+    vi.useFakeTimers();
+    const { doc, statuses, stop } = await withMockedSave(
+      async () => jsonResponse(200, { nodeCount: 1 }),
+      {
+        collab: {
+          shouldPutNow: () => false,
+          offlineHint: () => null,
+          hasUnsyncedChanges: () => true, // 模拟 ack 未到的真实保存窗口
+        },
+      },
+    );
+
+    doc.transact(() => {
+      doc.getMap('m').set('k', 'v');
+    }, 'user');
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(statuses.at(-1)).toBe('保存中…');
+    stop();
+    doc.destroy();
+  });
+});

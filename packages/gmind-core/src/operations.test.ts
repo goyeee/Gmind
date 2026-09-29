@@ -952,3 +952,85 @@ describe('富内容/样式 setter 存活校验', () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// 同值守卫（M7c-E4，需求方 #4「内容没变化或最终没变化时不应该显示保存中——这得
+// 保存多少个历史啊」）：写入口在校验后、事务前比较现值，全同＝零变更不开事务。
+// 断言口径：afterTransaction 计数（零事务 = 不亮「保存中」、服务端不落空历史、
+// 撤销栈无空项，三者同源）。
+// ---------------------------------------------------------------------------
+
+describe('同值守卫（M7c-E4：内容无变化不开事务）', () => {
+  function withCounter(): { doc: Y.Doc; count: () => number } {
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: '甲' }] });
+    let n = 0;
+    doc.on('afterTransaction', () => {
+      n += 1;
+    });
+    return { doc, count: () => n };
+  }
+
+  it('setText 同值 → 零事务；写值变化 → 恰一次', () => {
+    const { doc, count } = withCounter();
+    const id = childrenIds(doc, ROOT_NODE_ID)[0]!;
+    setText(doc, id, '甲');
+    expect(count()).toBe(0);
+    setText(doc, id, '乙');
+    expect(count()).toBe(1);
+    setText(doc, id, '乙');
+    expect(count()).toBe(1);
+  });
+
+  it('setText 对缺 text 键节点写空串 → 零事务（缺键归空串，与读取侧口径一致）', () => {
+    const { doc, count } = withCounter();
+    const id = addChild(doc, ROOT_NODE_ID, {}); // 空节点（无文本写入；其建节点事务不计入）
+    const base = count();
+    setText(doc, id, '');
+    expect(count()).toBe(base);
+  });
+
+  it('setDescription / setNote 同值 → 零事务（含首次写缺省空串）', () => {
+    const { doc, count } = withCounter();
+    const id = childrenIds(doc, ROOT_NODE_ID)[0]!;
+    setDescription(doc, id, '');
+    setNote(doc, id, '');
+    expect(count()).toBe(0);
+    setDescription(doc, id, '描述');
+    setNote(doc, id, '备注');
+    expect(count()).toBe(2);
+    setDescription(doc, id, '描述');
+    setNote(doc, id, '备注');
+    expect(count()).toBe(2);
+  });
+
+  it('setIcon single 组同值/移除空组 → 零事务；multi 组移除空组 → 零事务', () => {
+    const { doc, count } = withCounter();
+    const id = childrenIds(doc, ROOT_NODE_ID)[0]!;
+    setIcon(doc, id, 'priority', null); // 组本就不存在=已是移除态
+    setIcon(doc, id, 'priority', 'p0');
+    expect(count()).toBe(1);
+    setIcon(doc, id, 'priority', 'p0'); // single 组同值
+    expect(count()).toBe(1);
+    setIcon(doc, id, 'other', null); // multi 组空组移除
+    expect(count()).toBe(1);
+    setIcon(doc, id, 'priority', null); // 真移除
+    expect(count()).toBe(2);
+  });
+
+  it('setNodeTask 同 patch 幂等 → 零事务；done 态重复点「已完成」（联动注入同值）→ 零事务', () => {
+    const { doc, count } = withCounter();
+    const id = childrenIds(doc, ROOT_NODE_ID)[0]!;
+    setNodeTask(doc, id, { status: 'doing' });
+    expect(count()).toBe(1);
+    setNodeTask(doc, id, { status: 'doing' });
+    expect(count()).toBe(1);
+    setNodeTask(doc, id, { status: 'done' }); // 联动注入 doneDate=今天+progress=100
+    const doneCount = count();
+    setNodeTask(doc, id, { status: 'done' }); // 注入字段与现值全同 → 零变更
+    expect(count()).toBe(doneCount);
+    setNodeTask(doc, id, { owners: ['U1'] });
+    expect(count()).toBe(doneCount + 1);
+    setNodeTask(doc, id, { owners: ['U1'] });
+    expect(count()).toBe(doneCount + 1);
+  });
+});

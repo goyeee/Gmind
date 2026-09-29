@@ -1,5 +1,5 @@
 import * as Y from 'yjs';
-import { docToState, getLastEditor } from '@gmind/core';
+import { ORIGIN_USER, docToState, getLastEditor } from '@gmind/core';
 import { MAX_DOC_NODES } from '@gmind/shared';
 import { api, ApiError } from '../api/client';
 import { track } from '../api/events';
@@ -32,8 +32,10 @@ import { track } from '../api/events';
  */
 
 const DEBOUNCE_MS = 2000;
-// 「保存中」看门狗时长：超过该时长仍无事务且 provider 无未同步变更 → 回落「已保存」
-const SAVING_WATCH_MS = 6000;
+// 「保存中」看门狗时长：超过该时长仍无事务且 provider 无未同步变更 → 回落「已保存」。
+// M7c-E4（kimi 复验 P3）：6s 回落实测贴上限（自导航 6.1s）→ 收紧到 4s；正常 ack
+// 亚秒级到达，4s 只在 ack 丢失/无变更不广播的异常窗口兜底。
+const SAVING_WATCH_MS = 4000;
 const RETRY_DELAYS_MS = [1000, 2000, 4000] as const;
 /** 403 配额终态文案（区别于网络类失败的重试文案，可直接行动）；上限数值与 server 共用 @gmind/shared。 */
 export const QUOTA_STATUS = `文档节点数超过上限（${MAX_DOC_NODES}），请删除部分节点后保存`;
@@ -275,16 +277,21 @@ export function startSaveLoop(
   };
 
 
-  const onAfterTransaction = (tr: { origin?: unknown }): void => {
+  const onAfterTransaction = (tr: Y.Transaction): void => {
     dirty = true;
     retries = 0; // 下一次事务重置重试计数
     if (!shouldPutNow()) {
       // WS 模式：本地写后且未收到 persisted ack 前，立即置「保存中」（binding 状态
-      // 语义）；若为远端同步触发的空变更，ack 收尾前同态，语义一致。
-      // M7b-W2 #8（需求方反馈「新开文档没敲字就显示保存中」）：system origin 事务
-      // （装载期 normalizeTree 收敛 / 远端收敛）不是本地编辑，不置「保存中」——
-      // dirty 计数保留（这些变更确需落库），状态仍由「尚未编辑」起始、ack 收尾。
-      if (tr.origin !== 'system') {
+      // 语义）。M7c-E4（需求方 #4「内容没变化不该显示保存中」+ kimi 复验 P3）收紧
+      // 置位条件为两条：
+      // ① 仅 user origin——「保存中」只对本地用户编辑有意义。装载期 normalizeTree
+      //   （system）与远端同步回声（provider origin：打开文档的初始回放/协同更新，
+      //   服务端本就是源头、无 ack 收尾）都不再亮——治「打开文档即亮保存中并挂满
+      //   看门狗时长」（kimi 实测打开后 ~100-310ms 亮、挂约 6s）。
+      // ② tr.changed 非空——Yjs 对零变更事务也发 afterTransaction，changed 空集
+      //   即本次事务没有任何内容写入（core 同值守卫之外的最后防线），不亮。
+      // dirty 计数保留：这些事务若确有变更仍需落库（PUT 兜底路径不受置位条件影响）。
+      if (tr.origin === ORIGIN_USER && tr.changed.size > 0) {
         setStatus('保存中…');
         armSavingWatch();
       }

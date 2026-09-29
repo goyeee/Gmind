@@ -150,6 +150,10 @@ export function setText(
     throw new GmindCoreError('TEXT_TOO_LONG', '节点文本长度已达上限');
   }
   const node = requireAliveNode(doc, id);
+  // 同值守卫（M7c-E4，需求方 #4）：文本未变化不开事务——行内编辑 blur 提交是
+  // 无条件 setText，无守卫时「点开又点走」也会生成一次空更新（亮「保存中」+服务端
+  // 白存一版历史）。缺键归 ''（与读取侧口径一致），首次写 '' 同为零变更。
+  if ((node.get('text') ?? '') === text) return;
   withTransaction(doc, origin, () => {
     node.set('text', text);
   });
@@ -267,6 +271,7 @@ export function setNote(
     throw new GmindCoreError('NOTE_TOO_LONG', '备注长度已达上限');
   }
   const node = requireAliveNode(doc, id);
+  if ((node.get('note') ?? '') === note) return; // 同值守卫（M7c-E4）：零变更不开事务
   withTransaction(doc, origin, () => {
     node.set('note', note);
   });
@@ -292,6 +297,7 @@ export function setDescription(
     );
   }
   const node = requireAliveNode(doc, id);
+  if ((node.get('description') ?? '') === text) return; // 同值守卫（M7c-E4）：零变更不开事务
   withTransaction(doc, origin, () => {
     node.set('description', text);
   });
@@ -367,6 +373,11 @@ export function setIcon(
     if (value !== null && !iconValuesOf(group).includes(value)) {
       throw new GmindCoreError('INVALID_ICON_VALUE', '未知的图标取值');
     }
+    // 同值守卫（M7c-E4）：single 组已是目标态（同值 / 移除已空的组）不开事务——
+    // 也避免 iconsMapOf 的建 Y.Map 副作用落在零变更路径上。
+    const current = readIconArray(node, group);
+    if (value === null && current.length === 0) return;
+    if (value !== null && current.length === 1 && current[0] === value) return;
     withTransaction(doc, origin, () => {
       if (value === null) iconsMapOf(node).delete(group);
       else iconsMapOf(node).set(group, Y.Array.from([value]));
@@ -377,6 +388,7 @@ export function setIcon(
   const current = readIconArray(node, group);
   const idx = value !== null ? current.indexOf(value) : -1;
   if (value === null) {
+    if (current.length === 0) return; // 同值守卫（M7c-E4）：组本就不存在=已是移除态
     withTransaction(doc, origin, () => {
       iconsMapOf(node).delete(group);
     });
@@ -525,6 +537,20 @@ export function setNodeTask(
   // 空 patch（且联动无注入）＝零变更：不开事务直接返回。
   const definedKeys = (Object.keys(linked) as (keyof TaskPatch)[]).filter((k) => linked[k] !== undefined);
   if (definedKeys.length === 0) return;
+
+  // 同值守卫（M7c-E4，需求方 #4）：linked 与当前归一化任务逐字段比较，全同＝零变更
+  // 不开事务——覆盖「重复点同一状态/同日期重复提交」等幂等操作（含 applyStatusRules
+  // 联动注入后的字段：已处 done 态再点「已完成」时注入的 doneDate/progress 与现值
+  // 相同，同样在此收敛）。owners 按去重保序数组比较；日期 undefined/null 归一
+  // （写入侧 null=删键、读取侧缺键=null，二者等价）。
+  const same = definedKeys.every((k) => {
+    const nv = linked[k];
+    if (k === 'owners') {
+      return JSON.stringify(nv ?? []) === JSON.stringify(current.owners);
+    }
+    return (nv ?? null) === (current[k] ?? null);
+  });
+  if (same) return;
 
   withTransaction(doc, origin, () => {
     writeTaskPatch(node, linked);
