@@ -32,6 +32,14 @@ import { MARKER_ROW_ORDER, colorForUser, markerChipText } from '@gmind/engine';
 import { api } from '../api/client';
 import { track } from '../api/events';
 import type { PresenceMember } from './collab';
+import {
+  Avatar,
+  chipActive,
+  SmartDateInput,
+  STATUS_KEYS,
+  STATUS_META,
+  type MemberOption,
+} from './TaskFields';
 import './task-table.css';
 
 /**
@@ -57,15 +65,8 @@ import './task-table.css';
  *   在线成员 ∪ 文档内已出现的 ID（昵称回退），成员色 = colorForUser(userId)。
  */
 
-/** 状态元数据（企微浅色系：todo 灰 / doing 蓝 / done 绿 / blocked 橙；不搬 mindgrid 深色值）。 */
-const STATUS_META: Record<TaskStatus, { label: string; color: string; bg: string }> = {
-  todo: { label: '待开始', color: '#86909c', bg: '#f2f3f5' },
-  doing: { label: '进行中', color: '#3370ff', bg: '#e8f3ff' },
-  done: { label: '已完成', color: '#34c724', bg: '#e8f7e8' },
-  blocked: { label: '阻塞', color: '#ff8800', bg: '#fff3e8' },
-};
-
-const STATUS_KEYS = Object.keys(STATUS_META) as TaskStatus[];
+/** 状态元数据（企微浅色系）与子组件（Avatar/SmartDateInput/chipActive）已抽至
+ *  TaskFields.tsx（M7c-C3/C4 抽公共）：TaskTable 改为共用，交互/类名/testid 零改动。 */
 
 /** 列定义：与 <td> 顺序一一对应（右键菜单按命中列决定排序方式）；首列行号不参与排序。 */
 type SortField =
@@ -109,16 +110,6 @@ interface Row {
   depth: number;
   hasChildren: boolean;
   dimmed: boolean;
-}
-
-interface MemberOption {
-  userId: string;
-  nickname: string;
-}
-
-/** 选中态 chip 样式（企微浅底 + 主题色描边）。 */
-function chipActive(color: string): React.CSSProperties {
-  return { color, borderColor: color, background: `${color}14` };
 }
 
 function toggleInSet<T>(set: Set<T>, v: T): Set<T> {
@@ -1048,22 +1039,9 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
 }
 
 // ---------------------------------------------------------------------------
-// 子组件（移植自 mindgrid bits.tsx / QuickEditor.tsx，样式改企微浅色系）
+// 子组件（NodeMarkers/TitleCellEditor/ProgressEditor 本文件留置——表格专属；
+// Avatar/SmartDateInput 等跨视图共用件已抽至 TaskFields.tsx，M7c-C3/C4 同源）
 // ---------------------------------------------------------------------------
-
-/** 成员头像：底色 = 成员色 15% 透明，字色 = 成员色（colorForUser 与 awareness 同源）。 */
-function Avatar({ userId, nickname, size = 18 }: { userId: string; nickname: string; size?: number }) {
-  const color = colorForUser(userId);
-  return (
-    <span
-      className="tt-avatar"
-      style={{ width: size, height: size, background: `${color}22`, color, fontSize: Math.round(size * 0.55) }}
-      title={nickname}
-    >
-      {nickname.charAt(0) || '？'}
-    </span>
-  );
-}
 
 /** 八组标记展示（M7b-W1 多值数组；chip 目录与 MarkerPanel/engine 同源
  *  MARKER_CATALOG，固定组序 MARKER_ROW_ORDER，目录外值忽略）。 */
@@ -1292,69 +1270,3 @@ function ProgressEditor({
   );
 }
 
-/**
- * 智能日期输入（移植自 mindgrid bits.tsx SmartDateInput）：聚焦空值预填当月 1 日
- * （本地临时态），真正选日/改值才提交；未选日离开自动清除预填、零写入。
- */
-function SmartDateInput({
-  value,
-  onCommit,
-  overdue,
-  today,
-  done,
-}: {
-  value: string | null;
-  onCommit: (v: string | null) => void;
-  /** 预期日期列：逾期红字 / 当天橙字。 */
-  overdue?: boolean;
-  today?: boolean;
-  /** 完成日期列：已填绿字。 */
-  done?: boolean;
-}) {
-  const [local, setLocal] = useState(value ?? '');
-  const provisional = useRef<string | null>(null);
-  useEffect(() => {
-    // 外部值变化同步（远端协同/撤销），聚焦编辑中不打断
-    if (document.activeElement?.getAttribute('data-smart-date') !== '1') {
-      setLocal(value ?? '');
-    }
-  }, [value]);
-  const color = overdue ? '#f53f3f' : today ? '#ff8800' : done ? '#34c724' : undefined;
-  return (
-    <input
-      type="date"
-      data-smart-date="1"
-      className="tt-date"
-      style={color ? { color } : undefined}
-      aria-label="任务日期"
-      value={local}
-      onFocus={() => {
-        if (!local) {
-          const d = new Date();
-          const p = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`;
-          provisional.current = p;
-          setLocal(p);
-        }
-      }}
-      onChange={(e) => {
-        const v = e.target.value;
-        if (provisional.current) {
-          if (v === provisional.current) {
-            setLocal(v);
-            return; // 仍是预填值，不提交
-          }
-          provisional.current = null; // 用户真正选了日期
-        }
-        setLocal(v);
-        onCommit(v || null);
-      }}
-      onBlur={() => {
-        if (provisional.current) {
-          // 没选日就离开 → 去掉预填的年月（预填是本地临时态，零写入）
-          provisional.current = null;
-          setLocal('');
-        }
-      }}
-    />
-  );
-}

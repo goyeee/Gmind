@@ -70,6 +70,7 @@ import {
   writeToSystemClipboard,
   Viewport,
 } from '@gmind/engine';
+import { todayStr } from '@gmind/shared';
 import { attachKeyboardMap, isEditableTarget } from '../editor/keyboardMap';
 import { ActivityPanel } from '../editor/ActivityPanel';
 import { ThemePanel } from '../editor/ThemePanel';
@@ -86,6 +87,7 @@ import {
   RedoIcon,
   SearchIcon,
   StructureIcon,
+  TaskIcon,
   ThemeIcon,
   UndoIcon,
 } from '../editor/icons';
@@ -100,6 +102,8 @@ import { MarkerPanel, MarkerChip, type MarkerTab } from '../editor/MarkerPanel';
 import { MemberPanel } from '../editor/MemberPanel';
 import { RichPanel } from '../editor/RichPanel';
 import { TaskTable } from '../editor/TaskTable';
+import { TaskQuickCard } from '../editor/TaskQuickCard';
+import { TaskPanel } from '../editor/TaskPanel';
 import { CommentPanel, type CommentThreadView } from '../editor/CommentPanel';
 import { FindReplace } from '../editor/FindReplace';
 import { VersionPanel } from '../editor/VersionPanel';
@@ -350,6 +354,11 @@ export function EditorPage() {
   const exportWrapRef = useRef<HTMLDivElement | null>(null);
   // 格式面板开合（M7b-R2 需求方裁定）：样式右列默认不显示，收进工具栏「格式」按钮。
   const [formatOpen, setFormatOpen] = useState(false);
+  // 右侧任务面板开合（M7c-C4）：与格式面板互斥（开任务收格式、开格式收任务）。
+  const [taskPanelOpen, setTaskPanelOpen] = useState(false);
+  // 任务快速设置弹层（M7c-C3）：nodeId + 弹出锚点（viewport 客户端坐标，fixed 定位）。
+  // 右键菜单「任务设置」/ 选中节点按 `,` 双入口；Esc/外点关（markerPicker 同机制）。
+  const [quickCard, setQuickCard] = useState<{ nodeId: string; x: number; y: number } | null>(null);
   // 插入菜单（2026-09-28 二次改版）+ 标记面板（M7b-W3 企微式竖层重做）：
   // 面板为**锚定弹出层**——挂在 .insert-wrap 下（absolute），状态 {open, tab, anchor}
   // 扩展 anchor = 插入按钮 getBoundingClientRect（面板顶贴按钮下沿、左缘对齐；
@@ -481,6 +490,74 @@ export function EditorPage() {
       document.removeEventListener('keydown', onKeyDown);
     };
   }, [markerPicker]);
+
+  // —— 任务快速设置弹层（M7c-C3）——
+  /**
+   * 打开快速卡：锚点显式给（右键点击点）或按节点盒右缘换算（`,` 快捷键触发——
+   * viewport 场景坐标 → svg 客户端坐标，fixed 定位）。节点不存在（空文档）按
+   * root 盒兜底定位。
+   */
+  const openQuickCard = (nodeId: string, x?: number, y?: number): void => {
+    let ax = x;
+    let ay = y;
+    const vp = viewportRef.current;
+    const svgEl = svgRef.current;
+    if ((ax === undefined || ay === undefined) && vp && svgEl) {
+      const box = boxesRef.current.find((b) => b.id === nodeId) ?? boxesRef.current[0];
+      if (box) {
+        const rect = svgEl.getBoundingClientRect();
+        const p = vp.toScreen(box.x + box.w, box.y);
+        ax = rect.left + p.x;
+        ay = rect.top + p.y;
+      }
+    }
+    setQuickCard({ nodeId, x: ax ?? 120, y: ay ?? 120 });
+  };
+
+  // 快速卡 Esc/外点关闭（markerPicker 同款：document mousedown 命中卡片之外即收）
+  useEffect(() => {
+    if (!quickCard) return;
+    const onDocMouseDown = (e: MouseEvent): void => {
+      if (!(e.target as Element | null)?.closest?.('.task-quickcard')) setQuickCard(null);
+    };
+    const onKeyDown = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') setQuickCard(null);
+    };
+    document.addEventListener('mousedown', onDocMouseDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', onDocMouseDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [quickCard]);
+
+  // 只读降级 / 切表格视图即收快速卡（写弹层不跨视图驻留）
+  useEffect(() => {
+    if (readOnly) setQuickCard(null);
+    if (readOnly && taskPanelOpen) setTaskPanelOpen(false);
+  }, [readOnly, taskPanelOpen]);
+  useEffect(() => {
+    if (view === 'table') setQuickCard(null);
+  }, [view]);
+
+  // `,`（逗号）快捷键（M7c-C3）：选中节点弹出任务快速卡。独立监听（不入
+  // keyboardMap——帮助清单契约不动）；让路纪律与 Ctrl+F 同款：覆盖层/输入控件/
+  // 表格视图不触发；恰单选才弹（多选无单一目标、空选无目标）。
+  useEffect(() => {
+    if (readOnly) return;
+    const onKeyDown = (e: KeyboardEvent): void => {
+      if (e.key !== ',') return;
+      if (overlay.isOpen || isEditableTarget(e.target)) return;
+      if (viewRef.current === 'table') return;
+      const selection = selectionRef.current;
+      if (!selection || selection.selected.size !== 1) return;
+      e.preventDefault();
+      openQuickCard([...selection.selected][0]);
+    };
+    document.addEventListener('keydown', onKeyDown, false);
+    return () => document.removeEventListener('keydown', onKeyDown, false);
+  }, [readOnly]);
+
 
   /**
    * 标记写入（M7b-W3 #5 批量语义）：对**选中集全部节点**逐个 setIcon，单事务
@@ -1526,6 +1603,10 @@ export function EditorPage() {
     const nodeId = menu.nodeId as string;
     const nodeBox = boxesRef.current.find((b) => b.id === nodeId) ?? null;
     switch (action) {
+      case 'task-quick':
+        // 任务设置（M7c-C3）：快速卡锚定右键点击点（menu.x/y），置顶项
+        openQuickCard(nodeId, menu.x, menu.y);
+        break;
       case 'insert-child':
         openNewNodeEditor(nodeId, undefined, nodeBox, 'child', 'context');
         break;
@@ -1821,6 +1902,9 @@ export function EditorPage() {
           // 评论角标计数（FR-CMT-002）：仅存活节点携带（服务端 counts 已排除
           // 已删节点线程与 resolved）；无评论的节点不设键 → 引擎按 0 处理不渲染
           commentCount: commentCountsRef.current[id],
+          // 任务字段（M7c-C2 接线）：状态条/任务行/徽标数据源。description 行不经
+          // nodeData——布局经 DocReader.getNode 直读（engine NodeSnapshotLike 通道）。
+          task: snap.task,
         });
       }
       renderScene(scene, {
@@ -1828,6 +1912,8 @@ export function EditorPage() {
         theme,
         styleOf: (id) => resolveNodeStyle(theme, depthById.get(id) ?? 0, getNode(d, id)?.style ?? {}),
         nodeData,
+        // 逾期判定「今天」（M7c-C2 接线）：宿主显式传当日，与表格视图口径一致
+        today: todayStr(),
       });
       applySelectionClasses();
       // 远端光标重画（FR-COL-002）：awareness 变化与 rerender（布局/主题变化）双
@@ -2365,7 +2451,9 @@ export function EditorPage() {
           </button>
         </div>
         <span className="toolbar-sep" />
-        {/* 格式按钮（M7b-R2 需求方裁定）：样式右列默认隐藏，点此开/关（右列弹出）。 */}
+        {/* 格式按钮（M7b-R2 需求方裁定）：样式右列默认隐藏，点此开/关（右列弹出）。
+            任务按钮（M7c-C4）：右侧任务面板开关，与格式互斥（开任务收格式、开格式
+            收任务——企微式图标+文字，同族装配）。 */}
         <div className="toolbar-group">
           <button
             data-testid="format-toggle"
@@ -2373,10 +2461,27 @@ export function EditorPage() {
             title="格式"
             aria-label="格式"
             aria-pressed={formatOpen}
-            onClick={() => setFormatOpen((v) => !v)}
+            onClick={() => {
+              setFormatOpen((v) => !v);
+              setTaskPanelOpen(false);
+            }}
           >
             <PainterIcon />
             <span className="toolbar-btn-label">格式</span>
+          </button>
+          <button
+            data-testid="task-toggle"
+            className={taskPanelOpen ? 'toolbar-btn toolbar-btn-text active' : 'toolbar-btn toolbar-btn-text'}
+            title="任务"
+            aria-label="任务"
+            aria-pressed={taskPanelOpen}
+            onClick={() => {
+              setTaskPanelOpen((v) => !v);
+              setFormatOpen(false);
+            }}
+          >
+            <TaskIcon />
+            <span className="toolbar-btn-label">任务</span>
           </button>
         </div>
         <span className="toolbar-sep" />
@@ -2709,7 +2814,7 @@ export function EditorPage() {
           )
         ) : (
           <>
-          {(formatOpen || commentsOpen) && (
+          {(formatOpen || taskPanelOpen || commentsOpen) && (
           <div className="editor-right">
             {/* M7b-R6：右列默认不渲染（需求方裁定「默认右侧不要有弹出」）——格式按钮开样式面板、
                 插入菜单「评论」项开评论面板；评论面板头部带 × 关闭。M6 Task 2 的常驻裁决就此改道。 */}
@@ -2721,6 +2826,22 @@ export function EditorPage() {
                 selected={selectedSnapshot}
                 afterUserWrite={afterUserWrite}
                 showToast={showToast}
+              />
+            )}
+            {/* 任务面板（M7c-C4）：与格式同列互斥（开任务收格式），评论面板可共存（纵排） */}
+            {taskPanelOpen && doc && (
+              <TaskPanel
+                doc={doc}
+                fileId={fileId}
+                nodeId={selectedNodeId ?? ''}
+                selected={selectedSnapshot}
+                docVersion={tick}
+                presence={members}
+                afterUserWrite={afterUserWrite}
+                showToast={showToast}
+                onOpenMarkers={() => openMarkerPanel('icon')}
+                onDelete={() => handleDelete('context')}
+                onClose={() => setTaskPanelOpen(false)}
               />
             )}
             {commentsOpen && (
@@ -2769,6 +2890,8 @@ export function EditorPage() {
             </button>
           ) : (
             ([
+              // 任务设置（M7c-C3）：置顶项（需求方裁定），弹出任务快速卡
+              ['task-quick', '任务设置'],
               ['insert-child', '插入子级'],
               ['insert-sibling', '插入同级'],
               ['add-summary', '添加概要'],
@@ -2835,6 +2958,27 @@ export function EditorPage() {
             })}
           </div>
         </div>
+      )}
+
+      {/* 任务快速设置弹层（M7c-C3）：右键菜单「任务设置」/`, 快捷键双入口；fixed 锚定
+          点击点/节点右缘、视口钳制（组件内），Esc/外点关（页面侧监听）；目标节点已删
+          不渲染；表格视图不渲染（画布专属浮层）。 */}
+      {!readOnly && quickCard && view === 'mind' && doc && (
+        <TaskQuickCard
+          doc={doc}
+          fileId={fileId}
+          nodeId={quickCard.nodeId}
+          docVersion={tick}
+          anchor={{ x: quickCard.x, y: quickCard.y }}
+          presence={members}
+          afterUserWrite={afterUserWrite}
+          showToast={showToast}
+          onMoreMarkers={() => {
+            setQuickCard(null);
+            openMarkerPanel('icon');
+          }}
+          onClose={() => setQuickCard(null)}
+        />
       )}
 
       {/* 底栏（画布专属：适应画布/缩放）：表格视图隐藏（M7a-T4） */}

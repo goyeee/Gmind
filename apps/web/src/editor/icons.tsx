@@ -166,6 +166,16 @@ export function InsertIcon({ className }: IconProps) {
   );
 }
 
+/** 任务（对勾方框：任务面板入口）：M7c-C4 右侧任务面板 */
+export function TaskIcon({ className }: IconProps) {
+  return (
+    <svg {...svgProps(className)}>
+      <rect x="1.5" y="1.5" width="13" height="13" rx="2.5" />
+      <path d="M5 8.2 7.2 10.4 11.2 5.6" />
+    </svg>
+  );
+}
+
 /** 动态（信息流：左列时间圆点 + 事件行）：T8 文档动态面板入口 */
 export function ActivityIcon({ className }: IconProps) {
   return (

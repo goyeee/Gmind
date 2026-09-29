@@ -1,0 +1,315 @@
+/*
+ * 任务快速设置弹层（M7c-C3）+ 右侧任务面板（M7c-C4）样式。
+ * C3 弹层 = fixed 视口浮层锚定点击点/节点右缘（同 .marker-picker 模式，视口内钳制
+ * 由页面侧坐标计算承担）；C4 面板 = 右列卡片分节（与 RichPanel 同族：白底、
+ * 280px 列宽自适应、分节标题）。共用 TaskFields 的 tt-chip/tt-date/tt-avatar
+ * 基线（task-table.css，全局已装载）。
+ */
+
+/* ── C3：快速设置弹层（对标 mindgrid NodeQuickCard，紧凑卡 ~300px） ─────── */
+.task-quickcard {
+  position: fixed;
+  z-index: 1210;
+  width: 300px;
+  max-width: calc(100vw - 16px);
+  max-height: 72vh;
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+  border: 1px solid #e5e6eb;
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(31, 35, 41, 0.16);
+  font-size: 12px;
+  color: #1f2329;
+}
+.task-quickcard-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border-bottom: 1px solid #f0f1f3;
+  flex: none;
+}
+.task-quickcard-title {
+  font-weight: 600;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.task-quickcard-sub {
+  color: #86909c;
+  font-size: 11px;
+  margin-left: 6px;
+  flex: none;
+}
+.task-quickcard-close {
+  border: none;
+  background: transparent;
+  color: #86909c;
+  font-size: 16px;
+  line-height: 1;
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  cursor: pointer;
+  padding: 0;
+  flex: none;
+}
+.task-quickcard-close:hover {
+  background: #f2f3f5;
+  color: #1f2329;
+}
+.task-quickcard-body {
+  padding: 10px 12px 12px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.task-field-label {
+  display: block;
+  color: #86909c;
+  font-size: 11px;
+  margin-bottom: 4px;
+}
+/* 状态四选：横向按钮组（色点+文字） */
+.task-status-row {
+  display: flex;
+  gap: 4px;
+}
+.task-status-btn {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 4px 2px;
+  border: 1px solid #e5e6eb;
+  border-radius: 6px;
+  background: #fff;
+  font-size: 11px;
+  color: #4e5969;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.task-status-btn:hover {
+  background: #f2f3f5;
+}
+.task-status-btn.active {
+  border-color: #3370ff;
+  background: #e8f3ff;
+  color: #3370ff;
+  font-weight: 500;
+}
+.task-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: none;
+}
+/* 优先级九徽 / 常用图标行：横排 chip 按钮 */
+.task-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+}
+.task-chip-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+}
+.task-chip-btn:hover {
+  background: #f2f3f5;
+}
+.task-chip-btn.active {
+  background: #f0f5ff;
+  outline: 2px solid #3370ff;
+  outline-offset: -1px;
+}
+/* 「更多」入口（跳标记面板） */
+.task-more-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px dashed #e5e6eb;
+  border-radius: 6px;
+  background: transparent;
+  color: #4e5969;
+  font-size: 11px;
+  cursor: pointer;
+}
+.task-more-btn:hover {
+  border-color: #3370ff;
+  color: #3370ff;
+}
+/* 日期行：label + date input 同行铺满 */
+.task-date-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.task-date-row .task-field-label {
+  margin-bottom: 0;
+  width: 52px;
+  flex: none;
+}
+.task-date-row .tt-date {
+  flex: 1;
+  border-color: #e5e6eb;
+  background: #fff;
+}
+/* 进度输入 */
+.task-progress-input {
+  width: 72px;
+  height: 24px;
+  padding: 0 6px;
+  border: 1px solid #e5e6eb;
+  border-radius: 6px;
+  font-size: 12px;
+  outline: none;
+}
+.task-progress-input:focus {
+  border-color: #3370ff;
+}
+.task-progress-sigma {
+  color: #3370ff;
+  font-variant-numeric: tabular-nums;
+}
+/* 成员多选容器（MemberMultiSelect） */
+.task-member-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+/* ── C4：右侧任务面板（与 RichPanel 同族右列卡片分节） ─────────────────── */
+.task-panel {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  font-size: 13px;
+  background: #fff;
+}
+.task-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex: none;
+}
+.task-panel-head h3 {
+  margin: 0;
+  font-size: 14px;
+  color: #1f2329;
+}
+.task-panel-close {
+  border: none;
+  background: transparent;
+  color: #86909c;
+  font-size: 18px;
+  line-height: 1;
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  cursor: pointer;
+  padding: 0;
+}
+.task-panel-close:hover {
+  background: #f2f3f5;
+  color: #1f2329;
+}
+.task-panel-empty {
+  color: #86909c;
+}
+.task-panel-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid #f0f1f3;
+}
+.task-panel-section:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+.task-panel-title {
+  font-weight: 600;
+  font-size: 13px;
+  color: #1f2329;
+  word-break: break-all;
+}
+.task-panel-desc {
+  width: 100%;
+  min-height: 56px;
+  resize: vertical;
+  padding: 6px 8px;
+  border: 1px solid #e5e6eb;
+  border-radius: 6px;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #1f2329;
+  box-sizing: border-box;
+}
+.task-panel-desc:focus {
+  outline: none;
+  border-color: #3370ff;
+}
+.task-panel-desc-count {
+  align-self: flex-end;
+  color: #86909c;
+  font-size: 11px;
+}
+.task-panel-markers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+  min-height: 20px;
+}
+.task-panel-markers-empty {
+  color: #86909c;
+  font-size: 12px;
+}
+.task-panel-jump {
+  align-self: flex-start;
+  padding: 4px 10px;
+  border: 1px solid #e5e6eb;
+  border-radius: 6px;
+  background: #fff;
+  font-size: 12px;
+  color: #3370ff;
+  cursor: pointer;
+}
+.task-panel-jump:hover {
+  border-color: #3370ff;
+  background: #e8f3ff;
+}
+.task-panel-delete {
+  align-self: stretch;
+  padding: 7px 0;
+  border: 1px solid #ffece8;
+  border-radius: 6px;
+  background: #fff;
+  color: #f53f3f;
+  font-size: 12px;
+  cursor: pointer;
+}
+.task-panel-delete:hover {
+  background: #ffece8;
+  border-color: #f53f3f;
+}
