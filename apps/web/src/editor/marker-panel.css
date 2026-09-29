@@ -169,6 +169,27 @@
   flex-direction: column;
   gap: 8px;
 }
+.marker-picker-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.marker-picker-close {
+  border: none;
+  background: transparent;
+  color: #86909c;
+  font-size: 16px;
+  line-height: 1;
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  cursor: pointer;
+  padding: 0;
+}
+.marker-picker-close:hover {
+  background: #f2f3f5;
+  color: #1f2329;
+}
 .marker-picker-label {
   font-style: normal;
   color: #86909c;

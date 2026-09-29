@@ -2196,7 +2196,7 @@ export function EditorPage() {
               （单发）；双击粘滞连续刷；Esc / 再点按钮退出 */}
           <button
             data-testid="format-painter"
-            className={painter ? 'toolbar-btn active' : 'toolbar-btn'}
+            className={painter ? 'toolbar-btn toolbar-btn-text active' : 'toolbar-btn toolbar-btn-text'}
             title="格式刷（双击连续刷）"
             aria-label="格式刷"
             aria-pressed={painter !== null}
@@ -2204,6 +2204,7 @@ export function EditorPage() {
             onDoubleClick={onPainterDoubleClick}
           >
             <PainterIcon />
+            <span className="toolbar-btn-label">格式刷</span>
           </button>
         </div>
         <span className="toolbar-sep" />
@@ -2215,7 +2216,7 @@ export function EditorPage() {
           <div className="insert-wrap" ref={insertWrapRef}>
             <button
               data-testid="insert-menu"
-              className="toolbar-btn"
+              className="toolbar-btn toolbar-btn-text"
               title="插入"
               aria-label="插入"
               aria-haspopup="menu"
@@ -2235,6 +2236,19 @@ export function EditorPage() {
             </button>
             {insertOpen && (
               <div className="insert-dropdown" role="menu" aria-label="插入">
+                <div className="popover-head">
+                  <span className="popover-head-title">插入</span>
+                  <button
+                    type="button"
+                    data-testid="insert-close"
+                    className="popover-close"
+                    title="关闭"
+                    aria-label="关闭插入菜单"
+                    onClick={() => closeInsertLayer()}
+                  >
+                    ×
+                  </button>
+                </div>
                 <button
                   data-testid="insert-icons"
                   role="menuitem"
@@ -2258,6 +2272,16 @@ export function EditorPage() {
                   }}
                 >
                   链接
+                </button>
+                <button
+                  data-testid="insert-comment"
+                  role="menuitem"
+                  onClick={() => {
+                    closeInsertLayer();
+                    setCommentsOpen(true);
+                  }}
+                >
+                  评论
                 </button>
                 <button
                   data-testid="insert-image"
@@ -2389,6 +2413,19 @@ export function EditorPage() {
             </button>
             {exportOpen && (
               <div className="export-menu" role="menu">
+                <div className="popover-head">
+                  <span className="popover-head-title">导出</span>
+                  <button
+                    type="button"
+                    data-testid="export-close"
+                    className="popover-close"
+                    title="关闭"
+                    aria-label="关闭导出菜单"
+                    onClick={() => setExportOpen(false)}
+                  >
+                    ×
+                  </button>
+                </div>
                 <button
                   data-testid="export-xmind"
                   role="menuitem"
@@ -2654,9 +2691,11 @@ export function EditorPage() {
             </div>
           )
         ) : (
+          <>
+          {(formatOpen || commentsOpen) && (
           <div className="editor-right">
-            {/* M6 Task 2：面板常驻（不再随 selectedNodeId 卸载）——无选中时样式区
-                置灰 + 提示，选中节点后回显该节点样式。 */}
+            {/* M7b-R6：右列默认不渲染（需求方裁定「默认右侧不要有弹出」）——格式按钮开样式面板、
+                插入菜单「评论」项开评论面板；评论面板头部带 × 关闭。M6 Task 2 的常驻裁决就此改道。 */}
             {formatOpen && doc && um && (
               <RichPanel
                 doc={doc}
@@ -2667,16 +2706,34 @@ export function EditorPage() {
                 showToast={showToast}
               />
             )}
-            <CommentPanel
-              threads={comments.threads}
-              filterNodeId={commentFilter}
-              selectedNodeId={selectedNodeId}
-              onClearFilter={() => setCommentFilter(null)}
-              onLocate={locateNode}
-              onAddComment={(content) => void submitComment(content)}
-              onReply={(threadId, content) => void submitReply(threadId, content)}
-            />
+            {commentsOpen && (
+              <div className="editor-comments-pane" data-testid="comment-pane">
+                <div className="editor-comments-head">
+                  <span className="editor-comments-title">评论</span>
+                  <button
+                    data-testid="comment-pane-close"
+                    className="editor-comments-close"
+                    title="关闭评论"
+                    aria-label="关闭评论"
+                    onClick={() => setCommentsOpen(false)}
+                  >
+                    ×
+                  </button>
+                </div>
+                <CommentPanel
+                  threads={comments.threads}
+                  filterNodeId={commentFilter}
+                  selectedNodeId={selectedNodeId}
+                  onClearFilter={() => setCommentFilter(null)}
+                  onLocate={locateNode}
+                  onAddComment={(content) => void submitComment(content)}
+                  onReply={(threadId, content) => void submitReply(threadId, content)}
+                />
+              </div>
+            )}
           </div>
+          )}
+          </>
         )}
       </div>
 
@@ -2727,7 +2784,19 @@ export function EditorPage() {
           role="menu"
           aria-label={`${MARKER_GROUP_LABELS[markerPicker.group]}选择`}
         >
-          <em className="marker-picker-label">{MARKER_GROUP_LABELS[markerPicker.group]}</em>
+          <div className="marker-picker-head">
+            <em className="marker-picker-label">{MARKER_GROUP_LABELS[markerPicker.group]}</em>
+            <button
+              type="button"
+              data-testid="marker-picker-close"
+              className="marker-picker-close"
+              title="关闭"
+              aria-label="关闭"
+              onClick={() => setMarkerPicker(null)}
+            >
+              ×
+            </button>
+          </div>
           <div className="marker-grid">
             {(MARKER_CATALOG[markerPicker.group] as readonly MarkerGlyphDef[]).map((def) => {
               const current = pickerSnapshot.icons?.[markerPicker.group] ?? [];

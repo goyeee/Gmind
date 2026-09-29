@@ -682,3 +682,68 @@ body.painter-active .editor-canvas svg {
     display: none;
   }
 }
+
+/* 评论右列面板壳（M7b-R6）：标题行 + × 关闭 */
+.editor-comments-pane {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+}
+.editor-comments-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px 6px;
+}
+.editor-comments-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #1f2329;
+}
+.editor-comments-close {
+  border: none;
+  background: transparent;
+  color: #86909c;
+  font-size: 18px;
+  line-height: 1;
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.editor-comments-close:hover {
+  background: #f2f3f5;
+  color: #1f2329;
+}
+
+/* 弹层头部（M7b-R7：所有弹层右上角关闭）——插入/导出下拉共用 */
+.popover-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 2px 2px 6px;
+  border-bottom: 1px solid #f0f1f3;
+  margin-bottom: 4px;
+}
+.popover-head-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #4e5969;
+}
+.popover-close {
+  border: none;
+  background: transparent;
+  color: #86909c;
+  font-size: 16px;
+  line-height: 1;
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  cursor: pointer;
+  padding: 0;
+}
+.popover-close:hover {
+  background: #f2f3f5;
+  color: #1f2329;
+}
