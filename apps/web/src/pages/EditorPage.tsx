@@ -928,14 +928,31 @@ export function EditorPage() {
         const snap = getNode(doc, createdId);
         if (snap && !snap.deleted) {
           try {
-            withTransaction(doc, ORIGIN_USER, () => deleteNodes(doc, [createdId]));
+            // M7b-K2-blocker（kimi 复核发现）：relation='parent' 时原节点已换父到新节点下，
+            // deleteNodes 级联墓碑会连原节点一起删（数据丢失）——取消路径先把原节点
+            // 换回原父原位，再删空新节点（同事务）。
+            withTransaction(doc, ORIGIN_USER, () => {
+              if (relation === 'parent' && nodeToOutdent) {
+                const moved = getNode(doc, nodeToOutdent);
+                const origParent = moved && !moved.deleted ? moved.parentId : parentId;
+                const origIndex =
+                  moved && !moved.deleted && origParent
+                    ? (getNode(doc, origParent)?.childIds.indexOf(nodeToOutdent) ?? -1)
+                    : -1;
+                if (origParent && origIndex >= 0) {
+                  moveNode(doc, nodeToOutdent, origParent, origIndex);
+                }
+              }
+              deleteNodes(doc, [createdId]);
+            });
             afterUserWrite();
           } catch {
             // 尽力而为：删除失败仅残留一个空节点，可手动删除
           }
         }
         // 取消后选中态若仍停在已删节点，后续 Tab/Enter 会静默 no-op——恢复到父节点
-        selectionRef.current?.selectOnly(parentId);
+        // （parent 关系恢复选中到原节点本身：它已被放回原位）
+        selectionRef.current?.selectOnly(relation === 'parent' && nodeToOutdent ? nodeToOutdent : parentId);
       };
       overlay.open({
         anchorRect: {

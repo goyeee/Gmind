@@ -88,8 +88,7 @@
   gap: 2px;
 }
 .toolbar-group.toolbar-group-title {
-  flex: 1 1 auto;
-  min-width: 0;
+  flex: none;
   gap: 6px;
 }
 /* 图标按钮：28×28、无边框、hover 浅灰底（企微范式） */
@@ -153,10 +152,9 @@ body.painter-active .editor-canvas svg {
   cursor: pointer;
 }
 .editor-toolbar .title-input {
-  flex: 0 1 auto;
+  flex: none;
   width: 200px;
   max-width: 320px;
-  min-width: 80px;
   padding: 5px 8px;
   border: none;
   border-radius: 6px;
@@ -184,7 +182,7 @@ body.painter-active .editor-canvas svg {
     display: none;
   }
   .editor-toolbar .title-input {
-    min-width: 0;
+    width: 140px;
     text-overflow: ellipsis;
   }
   /* K1-R 回归：900px 残留 .star-toggle × view-tab 相交一处，窄断点一并隐藏星标 */
