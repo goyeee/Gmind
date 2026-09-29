@@ -1,6 +1,6 @@
 import type { ReactElement } from 'react';
 import type { IconGroup } from '@gmind/core';
-import { MARKER_CATALOG, MARKER_GROUP_LABELS, type MarkerGlyphDef } from '@gmind/engine';
+import { MARKER_CATALOG, MARKER_GROUP_LABELS, drawMarkerBadge, type MarkerGlyphDef } from '@gmind/engine';
 import './marker-panel.css';
 
 /**
@@ -25,110 +25,31 @@ import './marker-panel.css';
  * aria-pressed 按交集回显。写入经 onSetIcon 上抛（origin 纪律不变）。
  */
 
-/** chip 几何（与 engine 徽标同 14px 视觉族；彩色圆徽/方块/三角 + 文字或字符）。 */
+/**
+ * chip 几何（M7b-R1 重做）：直接复用 engine drawMarkerBadge 的 SVG 徽章——
+ * 面板与画布字形**单一来源**（此前手写 CSS chip 缺 mood/star/bulb 等自定义
+ * kind 的分支，回落显示英文 slug；且 flex 压缩把圆徽压瘪）。SVG 按 size 缩放。
+ */
 export function MarkerChip({ def, size = 18 }: { def: MarkerGlyphDef; size?: number }): ReactElement {
-  const fontSize = (def.text?.length ?? 1) > 1 ? Math.round(size * 0.38) : Math.round(size * 0.52);
-  if (def.kind === 'pie' && (def.fraction ?? 1) < 1) {
-    const deg = Math.round((def.fraction ?? 0) * 360);
-    return (
-      <span
-        className="marker-chip-round"
-        style={{
-          width: size,
-          height: size,
-          background: `conic-gradient(${def.color} 0deg ${deg}deg, #ffffff ${deg}deg 360deg)`,
-          boxShadow: `inset 0 0 0 1.5px ${def.color}`,
-        }}
-        aria-hidden
-      />
-    );
-  }
-  if (def.kind === 'circleText' || def.kind === 'squareText' || def.kind === 'triangle') {
-    return (
-      <span
-        className="marker-chip-badge"
-        style={{
-          width: size,
-          height: size,
-          background: def.color,
-          borderRadius: def.kind === 'squareText' ? 4 : def.kind === 'triangle' ? 2 : '50%',
-          fontSize,
-          color: '#fff',
-          lineHeight: `${size}px`,
-        }}
-        aria-hidden
-      >
-        {def.text}
-      </span>
-    );
-  }
-  if (def.kind === 'mood') {
-    // 心情 chip（M7b-K2 补）：橙圆 + 白色眼/嘴，与 engine drawMarkerBadge mood 同族简化。
-    const v = def.variant ?? 0;
-    return (
-      <span
-        className="marker-chip-badge"
-        style={{ width: size, height: size, background: def.color, borderRadius: '50%', position: 'relative', overflow: 'hidden' }}
-        aria-hidden
-      >
-        <svg width={size} height={size} viewBox="0 0 14 14">
-          {v === 0 || v === 3 ? (
-            <>
-              {v === 0 ? (
-                <>
-                  <circle cx="4.7" cy="5.4" r="0.95" fill="#fff" />
-                  <circle cx="9.3" cy="5.4" r="0.95" fill="#fff" />
-                </>
-              ) : (
-                <>
-                  <path d="M 3.9 5.1 C 3.9 4.3 4.9 4.2 5.1 4.9 C 5.3 4.2 6.3 4.3 6.3 5.1 C 6.3 5.8 5.1 6.6 5.1 6.6 C 5.1 6.6 3.9 5.8 3.9 5.1 Z" fill="#fff" />
-                  <path d="M 7.9 5.1 C 7.9 4.3 8.9 4.2 9.1 4.9 C 9.3 4.2 10.3 4.3 10.3 5.1 C 10.3 5.8 9.1 6.6 9.1 6.6 C 9.1 6.6 7.9 5.8 7.9 5.1 Z" fill="#fff" />
-                </>
-              )}
-              <path d="M 4.4 8.4 Q 7 10.9 9.6 8.4" stroke="#fff" strokeWidth="1.1" strokeLinecap="round" fill="none" />
-            </>
-          ) : v === 1 ? (
-            <>
-              <circle cx="4.7" cy="5.6" r="0.95" fill="#fff" />
-              <circle cx="9.3" cy="5.6" r="0.95" fill="#fff" />
-              <path d="M 4.6 10.4 Q 7 8.2 9.4 10.4" stroke="#fff" strokeWidth="1.1" strokeLinecap="round" fill="none" />
-            </>
-          ) : v === 2 ? (
-            <>
-              <path d="M 4.5 3.9 L 4.5 6.1" stroke="#fff" strokeWidth="1.1" strokeLinecap="round" />
-              <path d="M 9.5 3.9 L 9.5 6.1" stroke="#fff" strokeWidth="1.1" strokeLinecap="round" />
-              <path d="M 5.8 10.2 L 8.2 10.2" stroke="#fff" strokeWidth="1.1" strokeLinecap="round" />
-            </>
-          ) : (
-            <>
-              <circle cx="4.7" cy="5.6" r="0.95" fill="#fff" />
-              <circle cx="9.3" cy="5.6" r="0.95" fill="#fff" />
-              <path d="M 4.6 5.2 Q 5.1 5.9 5.6 5.2" stroke="#fff" strokeWidth="0.9" strokeLinecap="round" fill="none" />
-              <path d="M 8.4 5.2 Q 8.9 5.9 9.4 5.2" stroke="#fff" strokeWidth="0.9" strokeLinecap="round" fill="none" />
-              <circle cx="7" cy="9.2" r="1.6" fill="#fff" />
-            </>
-          )}
-        </svg>
-      </span>
-    );
-  }
-  if (def.kind === 'pie') {
-    return (
-      <span
-        className="marker-chip-badge"
-        style={{ width: size, height: size, background: def.color, borderRadius: '50%', fontSize, color: '#fff', lineHeight: `${size}px` }}
-        aria-hidden
-      >
-        ✓
-      </span>
-    );
-  }
-  // text/star/heart/flag/arrow/emoji 等：字符本色渲染（emoji 字形自带彩色）。
-  const fg = def.chipFg === 'color' ? def.color : def.color === '#ffffff' ? undefined : def.color;
   return (
-    <span className="marker-chip-glyph" style={{ fontSize: Math.round(size * 0.86), color: fg }} aria-hidden>
-      {def.text ?? def.value}
-    </span>
+    <span
+      className="marker-chip-svg"
+      style={{ width: size, height: size, display: 'inline-block', flex: 'none' }}
+      aria-hidden
+      ref={(el) => {
+        if (!el || el.firstElementChild) return;
+        const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        svg.setAttribute('viewBox', '0 0 14 14');
+        svg.setAttribute('width', String(size));
+        svg.setAttribute('height', String(size));
+        const badge = drawMarkerBadge(def);
+        if (badge) {
+          badge.removeAttribute('class');
+          svg.appendChild(badge);
+        }
+        el.appendChild(svg);
+      }}
+    />
   );
 }
 

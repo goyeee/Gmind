@@ -140,14 +140,17 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  flex: none;
   font-weight: 600;
 }
 .marker-chip-round {
   display: inline-block;
+  flex: none;
   border-radius: 50%;
 }
 .marker-chip-glyph {
   display: inline-block;
+  flex: none;
   line-height: 1;
 }
 
