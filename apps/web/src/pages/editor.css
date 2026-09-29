@@ -283,6 +283,11 @@ body.painter-active .editor-canvas svg {
   flex: 1;
   position: relative;
   overflow: hidden;
+  /* M7b-R1（需求方反馈「拖节点时选中了文字」）：画布禁用原生文本选择——
+     SVG text/节点卡片拖拽时浏览器原生拖选蓝块即为该症状；行内编辑 textarea
+     在 body 层不受影响。 */
+  user-select: none;
+  -webkit-user-select: none;
 }
 .editor-canvas svg {
   width: 100%;
@@ -302,6 +307,24 @@ body.painter-active .editor-canvas svg {
   fill: rgba(51, 112, 255, 0.12);
   stroke: #3370ff;
   stroke-width: 1;
+}
+
+/* 拖拽落点反馈（M7c-D1）：类由 engine drag 写在节点 g / 悬浮层 line 上——
+   变子级=目标盒描边高亮；间隙插入=指示线（横线盖间隙，org 竖线）；
+   禁止=红描边。> rect:first-of-type 只中节点盒矩形（不含任务条等后续 rect）。 */
+.editor-canvas svg g.drop-target > rect:first-of-type {
+  stroke: #3370ff;
+  stroke-width: 2.5;
+}
+.editor-canvas svg g.drop-forbidden > rect:first-of-type {
+  stroke: #f54a45;
+  stroke-width: 2.5;
+}
+.editor-canvas svg .gm-drop-indicator {
+  stroke: #3370ff;
+  stroke-width: 3;
+  stroke-linecap: round;
+  pointer-events: none;
 }
 
 /* 概要 bracket（M6 Task 6，企微对标）：括弧/标签由引擎渲染（.gm-summary /

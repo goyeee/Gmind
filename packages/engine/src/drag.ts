@@ -1,53 +1,98 @@
 /**
- * 节点拖拽换父 / 浮动主题手势 — M1b Task 9（FR-EDT-003）。
+ * 节点拖拽：换父 / 同级排序插入 — M1b Task 9 起步，M7c-D1 按企微对标 spec P0-2 重做。
  *
- * 绑定裁决（M1b 计划 Task 9 + fix round 1）：
+ * M7c-D1 落点三分语义（需求方原话「拖动的功能简直糟糕透了，我都没看懂逻辑是啥」）：
+ * - 拖到目标节点**本体**（盒中线 ±25% 区域）= 变其子级（追加末尾，M1b 语义保留）；
+ * - 拖到盒子**边缘插入带**（上下各 25%；side='down' 的 org 结构兄弟横排，带在左右）
+ *   = 同级插入：悬停 100ms 显示插入指示线（`gm-drop-indicator`，横线盖在间隙上，
+ *   org 为竖线），释放调 core moveNode(id, anchor.parentId, index) 按落点排序——
+ *   index 由 childrenIdsOf 文档序 + 锚点位次结算，同父移动做「先移除后插入」的
+ *   前移修正（纪律#2：纯计算，全部在事务之外）；
+ * - 拖到**空白** = 移为 root 子级末尾（现状保留）。
+ * - 自身/自身后代仍是禁止目标（fix round 1）：整盒含边缘带一律 drop-forbidden、
+ *   释放静默取消不回调（否则 self 落 null 分支会把整枝浮动成根主题，破坏性）。
+ * - 根节点无 parentId：整盒 = 变其子级（根不可作兄弟锚点）。
+ *
+ * 反馈时机（300ms → 100ms，spec P0-2）：同一落点悬停满 100ms 才点亮高亮/指示线；
+ * 切换落点立即摘除并重置计时。**释放裁决不再要求悬停时长**——指针在哪里松开，
+ * 落点就按哪里结算（企微/XMind 通例）。旧版「未满 300ms 视同无目标 → onDrop(null)
+ * → 浮动到根」正是「看不懂逻辑」的主源：快速拖放会把整枝意外甩成根主题；改为
+ * 几何落点直判后「点亮 ⟹ 按落点生效、未点亮释放 ⟹ 同样按落点生效」，二者永不满
+ * 背离（fix round 1「高亮与释放配对」问题的根治）。
+ *
+ * 原生文字拖选根治（需求方「点击节点拖动时竟然把文字选中了」）：web 侧
+ * user-select:none（editor.css .editor-canvas）之外，engine 在候选 pointerdown 与
+ * 激活 move 上 e.preventDefault()——按 Pointer Events 规范，取消 pointerdown 抑制
+ * 其默认动作（含文本选择起锚与兼容 mousedown 派发），click/dblclick/contextmenu
+ * 合成不受影响（页面 onSvgClick / 双击编辑 / justDragged 防抖链路不变）。jsdom
+ * 无法复现原生拖选，测试以 event.defaultPrevented 断言；真机由浏览器默认动作
+ * 语义保证 + CSS 双保险。
+ *
+ * 生命周期绑定裁决（沿用 M1b Task 9 + fix round 1）：
  * - pointerdown 命中 <g data-node-id>（主键）才登记候选；折叠徽标 <g data-for-id>
- *   嵌在节点 g 内，须先按 data-for-id 排除——徽标点击归页面层（Task 11）。
- * - 位移阈值 4px（screen px）之前不激活：click 仍是 click（页面另接点击/编辑）。
- *   激活时记录拖拽 id 与 ghost 偏移（指针场景点 − 节点盒左上角，供页面画 ghost）。
- * - 拖动中每帧命中检测：viewport.toSceneFromEvent → 命中 NodeBox。**自身盒与
- *   后代盒同为「禁止目标」**（fix round 1：自身释放曾落入 null 分支 → 页面
- *   moveNode(id,'root') 会把整枝浮动成根主题，属合法但破坏性的意外；裁决改为
- *   静默取消，与后代同待遇）：悬停即亮 .drop-forbidden 反馈，释放不回调 onDrop。
- * - 合法目标需**同一目标**累计悬停 ≥300ms 才可释放换父：hoverStart 按目标记忆，
- *   切换目标即重置；未满 300ms 就释放视同无目标 → onDrop(id, null)。
- *   高亮时机与释放裁决配对（fix round 1）：.drop-target 满 300ms 才由定时器翻转
- *   点亮（悬停中即亮会诱导用户在 <300ms 时释放而触发 null/浮动），离开/切换/
- *   结束立即摘除并撤销未触发的定时器。计时全走 Date.now()/setTimeout，
- *   vitest fake timers 默认伪造二者，测试可确定性推进。
- * - 释放：合法目标（≥300ms）→ onDrop(id, targetId)；空白/未满阈值悬停 →
- *   onDrop(id, null)（浮动主题 = 页面层 moveNode(id, 'root')）；自身/后代 → 取消。
- * - 候选/拖拽期间额外挂 window 级 pointerup/pointercancel 兜底（fix round 1：
- *   pointerdown 未捕获指针时，svg 外释放——如拖出窗口——不会在 svg 上派发
- *   pointerup，candidate 卡死会使后续所有 pointerdown 被拒，拖拽永久失效）；
- *   结束/destroy 即卸载。svg 内释放先冒泡过 svg 处理器（状态已清），window
- *   处理器成 no-op，天然幂等。
- * - 生命周期仿 Viewport（Task 7）：构造不绑事件；attach() 绑定（幂等）、
- *   destroy() 全解绑、释放已持有的指针捕获并中止进行中的拖拽（不回调）；
- *   pointercancel 视为取消；setPointerCapture 特性探测 + try/catch（T7 先例）。
- * - 给 Task 11 的注记：拖拽激活后的释放**不会拦截**浏览器随后合成的 click
- *   事件（上层规范未授权 preventDefault）——页面点击选择须自行防抖「刚拖拽完」
- *   （如记录 last-drag 时间戳，click 距其 < X ms 内忽略）。
+ *   与标记徽标 <g data-marker-group> 嵌在节点 g 内，先排除——点击归页面层。
+ * - 位移阈值 4px（screen px）之前不激活：click 仍是 click；激活时记录拖拽 id 与
+ *   ghost 偏移（指针场景点 − 节点盒左上角，供页面画 ghost）。
+ * - 拖动中每帧命中检测：viewport.toSceneFromEvent → classifyAt 落点分类。
+ * - 候选/拖拽期间挂 window 级 pointerup/pointercancel 兜底：svg 外释放（如拖出
+ *   窗口）不走 svg 处理器，防候选/拖拽卡死；svg 内释放先冒泡过 svg 处理器（状态
+ *   已清），window 处理器成 no-op，天然幂等。
+ * - pointercancel 视为取消；setPointerCapture 特性探测 + try/catch（T7 先例）；
+ *   destroy() 全解绑、释放捕获、清反馈（不回调 onDrop）。
+ * - 给页面的注记：拖拽激活后的释放**不会拦截**浏览器随后合成的 click 事件（本控
+ *   制器只在 pointerdown/move 上 preventDefault）——页面仍需 justDragged 防抖
+ *   「刚拖拽完」的合成 click（EditorPage 现状）。
  */
 import type { NodeBox } from './types';
 import type { Viewport } from './viewport';
 
 /** 拖拽激活位移阈值（screen px）。 */
 export const DRAG_THRESHOLD_PX = 4;
-/** 悬停目标确认时长（同一目标累计 ≥ 此值才允许换父并点亮高亮）。 */
-export const DROP_HOVER_MS = 300;
+/** 落点反馈确认时长（同一落点累计悬停 ≥ 此值才点亮高亮/指示线；纯视觉时机，不裁决释放）。 */
+export const DROP_HOVER_MS = 100;
+/** 边缘插入带占比：盒高（org 为宽）两侧各此比例为「插入带」，其余为本体（变子级）。 */
+export const SIBLING_BAND_RATIO = 0.25;
+/** 插入指示线两端超出锚盒的外伸量（scene px）。 */
+const INDICATOR_EXTEND_PX = 8;
+const SVG_NS = 'http://www.w3.org/2000/svg';
 
-/** 依赖注入：坐标换算与换父裁决由页面侧提供。 */
+/** 悬停中的几何落点（未含文档序 index——index 仅在释放时按 childrenIdsOf 结算）。 */
+export type DropPlacement =
+  | { kind: 'child'; nodeId: string }
+  | { kind: 'sibling'; anchorId: string; position: 'before' | 'after' };
+
+/**
+ * 释放落点（onDrop 第二参，M7c-D1 三分）：
+ * - `{kind:'child'}` = 变 nodeId 子级（追加末尾）；
+ * - `{kind:'sibling'}` = 插为 parentId 的第 index 个子级（core moveNode 直用；
+ *   anchorId/position 为落点意图，供测试/调试，页面可忽略）；
+ * - `null` = 空白 → 页面层移为 root 子级（现状语义）。
+ */
+export type DropTarget =
+  | { kind: 'child'; nodeId: string }
+  | {
+      kind: 'sibling';
+      parentId: string;
+      index: number;
+      anchorId: string;
+      position: 'before' | 'after';
+    }
+  | null;
+
+/** 依赖注入：坐标换算与落点写参数由页面侧提供。 */
 export interface DragControllerDeps {
   svg: SVGSVGElement;
   viewport: Viewport;
   /** 当前布局节点盒（场景坐标；每次命中检测实时取，拖拽中可被重布局刷新）。 */
   getBoxes(): NodeBox[];
-  /** 释放回调：targetId 为 null 表示落到空白 → 页面层 moveNode(id, 'root') 浮动主题。 */
-  onDrop(id: string, targetId: string | null): void;
-  /** candidateId 是否为 id 的后代（含间接）——后代不可作为换父目标。 */
+  /** 释放回调：target 见 {@link DropTarget}（空白 null → 页面层 moveNode(id,'root')）。 */
+  onDrop(id: string, target: DropTarget): void;
+  /** candidateId 是否为 id 的后代（含间接）——后代不可作为落点锚（禁止目标）。 */
   isDescendant(id: string, candidateId: string): boolean;
+  /** 文档子级序（页面适配 core childrenIds）：sibling 落点 index 结算输入（事务外纯计算）。 */
+  childrenIdsOf(nodeId: string): string[];
+  /** 场景坐标悬浮层：插入指示线宿主（页面在视口 wrapper 内 nodesLayer 之上的 <g>）。 */
+  overlayLayer: SVGGElement;
   /** 可选：id 是否允许被换父（页面级门控，如只读态）；缺省允许。 */
   canReparent?(id: string): boolean;
 }
@@ -59,10 +104,10 @@ export interface DragSnapshot {
   offsetY: number;
 }
 
-/** 命中结果：命中的盒 + 是否为禁止目标（拖拽源自身或其后代）。 */
-interface Hit {
-  box: NodeBox;
-  forbidden: boolean;
+/** 落点比较键：落点切换（含同一节点本体↔边缘带互切）即重置反馈计时。 */
+function placementKey(p: DropPlacement | null): string | null {
+  if (!p) return null;
+  return p.kind === 'child' ? `child:${p.nodeId}` : `sibling:${p.anchorId}:${p.position}`;
 }
 
 export class DragController {
@@ -72,13 +117,14 @@ export class DragController {
   private candidate: { id: string; x: number; y: number; pointerId: number } | null = null;
   /** 激活中的拖拽。 */
   private drag: { id: string; pointerId: number; offsetX: number; offsetY: number } | null = null;
-  /** 当前悬停的合法目标与起悬时刻（Date.now()）；无目标为 null/0。 */
-  private hoverTarget: string | null = null;
-  private hoverStart = 0;
-  /** .drop-target 的 300ms 翻转定时器（离开/切换/结束即撤销）。 */
+  /** 当前悬停落点（比较键见 placementKey）；空白/禁止为 null。 */
+  private hoverPlacement: DropPlacement | null = null;
+  /** 落点反馈的 100ms 点亮定时器（离开/切换/结束即撤销）。 */
   private hoverTimer: ReturnType<typeof setTimeout> | null = null;
   /** 当前被标 drop-forbidden 的节点 id（自身或后代）。 */
   private hoverForbidden: string | null = null;
+  /** 插入指示线（悬浮层内临时 line；离开落点/结束即移除）。 */
+  private indicator: SVGLineElement | null = null;
   /** 候选/拖拽期间挂着的 window 级兜底监听标记。 */
   private windowBound = false;
   /** 已成功捕获的 pointerId（null = 未捕获）；finish/destroy 释放。 */
@@ -136,6 +182,9 @@ export class DragController {
     if (!g) return;
     const id = g.getAttribute('data-node-id');
     if (!id) return;
+    // 原生文字拖选根治（M7c-D1）：取消 pointerdown 默认动作——文本选择不再起锚、
+    // 兼容 mousedown 不派发；click/dblclick 合成不受影响（页面点击链路不变）。
+    e.preventDefault();
     this.candidate = { id, x: e.clientX, y: e.clientY, pointerId: e.pointerId };
     // 候选期尚未捕获指针：svg 外释放只在 window 上可见，兜底防候选卡死。
     this.bindWindowFallback();
@@ -147,7 +196,7 @@ export class DragController {
     if (this.drag) {
       if (e.pointerId !== this.drag.pointerId) return;
       const scene = deps.viewport.toSceneFromEvent(e);
-      this.updateHover(this.hitAt(scene.x, scene.y, this.drag.id));
+      this.updateHover(this.classifyAt(scene.x, scene.y, this.drag.id));
       return;
     }
     if (!this.candidate || e.pointerId !== this.candidate.pointerId) return;
@@ -167,17 +216,14 @@ export class DragController {
     if (!this.drag || e.pointerId !== this.drag.pointerId) return;
     const id = this.drag.id;
     const scene = deps.viewport.toSceneFromEvent(e);
-    const hit = this.hitAt(scene.x, scene.y, id);
-    const hoveredOk =
-      hit !== null && !hit.forbidden && this.hoverTarget === hit.box.id &&
-      Date.now() - this.hoverStart >= DROP_HOVER_MS;
-    this.finish();
-    if (hit === null) {
-      deps.onDrop(id, null); // 空白 → 浮动主题
-      return;
+    const { placement, forbiddenId } = this.classifyAt(scene.x, scene.y, id);
+    if (forbiddenId !== null) {
+      this.finish();
+      return; // 自身/自身后代：静默取消（fix round 1 裁决沿用）
     }
-    if (hit.forbidden) return; // 自身/自身后代：静默取消
-    deps.onDrop(id, hoveredOk ? hit.box.id : null); // 悬停未满 300ms 视同无目标
+    const target = this.resolveTarget(id, placement);
+    this.finish();
+    deps.onDrop(id, target); // 空白 null / child / sibling（含快速释放——见头注）
   };
 
   private onPointerCancel = (): void => {
@@ -195,6 +241,8 @@ export class DragController {
       this.unbindWindowFallback();
       return;
     }
+    // 激活即再抑制一次默认动作（拖选拖拽等），与 pointerdown 的抑制双保险。
+    e.preventDefault();
     const scene = deps.viewport.toSceneFromEvent(e);
     const box = deps.getBoxes().find((b) => b.id === cand.id);
     this.drag = {
@@ -212,10 +260,10 @@ export class DragController {
         /* 捕获失败可忽略：监听就在 svg 上 + window 兜底（Task 7 先例） */
       }
     }
-    this.updateHover(this.hitAt(scene.x, scene.y, cand.id));
+    this.updateHover(this.classifyAt(scene.x, scene.y, cand.id));
   }
 
-  /** 结束拖拽：清高亮、释放捕获、卸 window 兜底（不触发 onDrop——由调用方决定）。 */
+  /** 结束拖拽：清反馈、移指示线、释放捕获、卸 window 兜底（onDrop 由调用方决定）。 */
   private finish(): void {
     this.clearHighlights();
     this.candidate = null;
@@ -255,58 +303,161 @@ export class DragController {
     window.removeEventListener('pointercancel', this.onPointerCancel);
   }
 
-  /** 场景点命中：命中最先匹配的盒；自身与后代均为禁止目标（fix round 1）。 */
-  private hitAt(sceneX: number, sceneY: number, draggedId: string): Hit | null {
+  /**
+   * 场景点落点分类（M7c-D1 三分）：命中最先匹配的盒（getBoxes 序；盒不重叠）。
+   * - 自身/后代 → forbiddenId（整盒含边缘带一律禁止，fix round 1）；
+   * - 根（无 parentId）→ 整盒 = 变其子级（根不可作兄弟锚点）；
+   * - 其余按边缘插入带切分：横向布局（side left/right，兄弟纵排）取上下 25% 带，
+   *   org（side 'down'，兄弟横排）取左右 25% 带；带内 = sibling(before/after)，
+   *   带外本体 = child。
+   * - 未命中任何盒 → 空白（placement/forbiddenId 双 null）。
+   */
+  private classifyAt(
+    sceneX: number,
+    sceneY: number,
+    draggedId: string,
+  ): { placement: DropPlacement | null; forbiddenId: string | null } {
     const deps = this.deps;
-    if (!deps) return null;
+    if (!deps) return { placement: null, forbiddenId: null };
     for (const b of deps.getBoxes()) {
       if (sceneX < b.x || sceneX > b.x + b.w || sceneY < b.y || sceneY > b.y + b.h) continue;
-      return {
-        box: b,
-        forbidden: b.id === draggedId || deps.isDescendant(draggedId, b.id),
-      };
+      if (b.id === draggedId || deps.isDescendant(draggedId, b.id)) {
+        return { placement: null, forbiddenId: b.id };
+      }
+      if (b.parentId === undefined) {
+        return { placement: { kind: 'child', nodeId: b.id }, forbiddenId: null };
+      }
+      const vertical = b.side === 'down';
+      const rel = vertical ? (sceneX - b.x) / b.w : (sceneY - b.y) / b.h;
+      if (rel < SIBLING_BAND_RATIO || rel > 1 - SIBLING_BAND_RATIO) {
+        return {
+          placement: {
+            kind: 'sibling',
+            anchorId: b.id,
+            position: rel < SIBLING_BAND_RATIO ? 'before' : 'after',
+          },
+          forbiddenId: null,
+        };
+      }
+      return { placement: { kind: 'child', nodeId: b.id }, forbiddenId: null };
     }
-    return null;
+    return { placement: null, forbiddenId: null };
   }
 
-  /** 悬停状态机：目标切换重置计时；.drop-target 满 300ms 定时器翻转，禁止反馈即时。 */
-  private updateHover(hit: Hit | null): void {
-    const targetId = hit !== null && !hit.forbidden ? hit.box.id : null;
-    const forbiddenId = hit !== null && hit.forbidden ? hit.box.id : null;
-    if (targetId !== this.hoverTarget) {
-      this.clearTargetHighlight(); // 离开/切换：立即摘除 + 撤销未触发的翻转定时器
-      if (targetId !== null) {
-        this.hoverTarget = targetId;
-        this.hoverStart = Date.now(); // 换目标即重置 300ms 计时
+  /**
+   * 释放结算：把几何落点换算成文档写参数（纪律#2：纯计算，事务之外）。
+   * sibling 的 index = 锚点在 childrenIdsOf(parentId) 的位次（before 取本位、after
+   * 取下一位）；同父移动因 moveNode 先移除后插入，移除位次在结算位次之前时 index
+   * −1 修正。锚点不在文档序（协同删除窗口期/桩不一致）→ 降级为变其子级，由 core
+   * 校验兜底（拒绝即抛错走页面 toast）。
+   */
+  private resolveTarget(draggedId: string, placement: DropPlacement | null): DropTarget {
+    const deps = this.deps;
+    if (!deps || placement === null) return null;
+    if (placement.kind === 'child') return { kind: 'child', nodeId: placement.nodeId };
+    const anchor = deps.getBoxes().find((b) => b.id === placement.anchorId);
+    if (!anchor || anchor.parentId === undefined) {
+      return { kind: 'child', nodeId: placement.anchorId };
+    }
+    const parentId = anchor.parentId;
+    const siblings = deps.childrenIdsOf(parentId);
+    const anchorIdx = siblings.indexOf(anchor.id);
+    if (anchorIdx === -1) return { kind: 'child', nodeId: anchor.id };
+    let index = placement.position === 'before' ? anchorIdx : anchorIdx + 1;
+    const dragged = deps.getBoxes().find((b) => b.id === draggedId);
+    if (dragged && dragged.parentId === parentId) {
+      const curIdx = siblings.indexOf(draggedId);
+      if (curIdx !== -1 && curIdx < index) index -= 1; // 先移除自身：后续位次前移
+    }
+    return { kind: 'sibling', parentId, index, anchorId: anchor.id, position: placement.position };
+  }
+
+  /** 悬停反馈状态机：落点切换立即摘除旧反馈并重置计时；满 100ms 点亮；禁止即时。 */
+  private updateHover(hit: { placement: DropPlacement | null; forbiddenId: string | null }): void {
+    const key = placementKey(hit.placement);
+    if (key !== placementKey(this.hoverPlacement)) {
+      this.clearTargetFeedback(); // 离开/切换：立即摘除 + 撤销未触发的点亮定时器
+      if (hit.placement !== null) {
+        this.hoverPlacement = hit.placement;
         this.hoverTimer = setTimeout(() => {
           this.hoverTimer = null;
-          if (this.hoverTarget === targetId) this.setClass(targetId, 'drop-target', true);
+          if (placementKey(this.hoverPlacement) === key) {
+            this.applyFeedback(this.hoverPlacement as DropPlacement);
+          }
         }, DROP_HOVER_MS);
       }
     }
-    // 自身/后代的禁止反馈即时显隐，不参与 300ms 延迟。
-    if (forbiddenId !== this.hoverForbidden) {
+    // 自身/后代的禁止反馈即时显隐，不参与 100ms 延迟。
+    if (hit.forbiddenId !== this.hoverForbidden) {
       this.setClass(this.hoverForbidden, 'drop-forbidden', false);
-      this.hoverForbidden = forbiddenId;
-      if (forbiddenId !== null) this.setClass(forbiddenId, 'drop-forbidden', true);
+      this.hoverForbidden = hit.forbiddenId;
+      if (hit.forbiddenId !== null) this.setClass(hit.forbiddenId, 'drop-forbidden', true);
     }
   }
 
-  /** 摘除目标高亮：清定时器、去类、复位悬停状态。 */
-  private clearTargetHighlight(): void {
+  /** 点亮落点反馈：child=目标盒描边高亮（.drop-target）；sibling=插入指示线。 */
+  private applyFeedback(p: DropPlacement): void {
+    if (p.kind === 'child') {
+      this.setClass(p.nodeId, 'drop-target', true);
+      return;
+    }
+    this.showIndicator(p);
+  }
+
+  /** 摘除落点反馈：清定时器、去类/移指示线、复位落点。 */
+  private clearTargetFeedback(): void {
     if (this.hoverTimer !== null) {
       clearTimeout(this.hoverTimer);
       this.hoverTimer = null;
     }
-    this.setClass(this.hoverTarget, 'drop-target', false);
-    this.hoverTarget = null;
-    this.hoverStart = 0;
+    const p = this.hoverPlacement;
+    if (p) {
+      if (p.kind === 'child') this.setClass(p.nodeId, 'drop-target', false);
+      else this.removeIndicator();
+    }
+    this.hoverPlacement = null;
+  }
+
+  /** 插入指示线（gm-drop-indicator）：横线盖在锚盒上/下缘（org 为竖线贴左/右缘），
+   *  两端各外伸 8px；悬浮层 scene 坐标，CSS 定视觉（pointer-events:none）。 */
+  private showIndicator(p: { anchorId: string; position: 'before' | 'after' }): void {
+    const deps = this.deps;
+    if (!deps) return;
+    const anchor = deps.getBoxes().find((b) => b.id === p.anchorId);
+    if (!anchor) return;
+    let line = this.indicator;
+    if (!line) {
+      line = document.createElementNS(SVG_NS, 'line');
+      line.setAttribute('class', 'gm-drop-indicator');
+      deps.overlayLayer.appendChild(line);
+      this.indicator = line;
+    }
+    const before = p.position === 'before';
+    if (anchor.side === 'down') {
+      const x = before ? anchor.x : anchor.x + anchor.w;
+      line.setAttribute('x1', String(x));
+      line.setAttribute('x2', String(x));
+      line.setAttribute('y1', String(anchor.y - INDICATOR_EXTEND_PX));
+      line.setAttribute('y2', String(anchor.y + anchor.h + INDICATOR_EXTEND_PX));
+      return;
+    }
+    const y = before ? anchor.y : anchor.y + anchor.h;
+    line.setAttribute('x1', String(anchor.x - INDICATOR_EXTEND_PX));
+    line.setAttribute('x2', String(anchor.x + anchor.w + INDICATOR_EXTEND_PX));
+    line.setAttribute('y1', String(y));
+    line.setAttribute('y2', String(y));
+  }
+
+  private removeIndicator(): void {
+    this.indicator?.remove();
+    this.indicator = null;
   }
 
   private clearHighlights(): void {
-    this.clearTargetHighlight();
+    this.clearTargetFeedback();
     this.setClass(this.hoverForbidden, 'drop-forbidden', false);
     this.hoverForbidden = null;
+    this.removeIndicator(); // 兜底：任何结束路径指示线必摘（destroy 中途打断等）
   }
 
   private setClass(id: string | null, cls: string, on: boolean): void {
