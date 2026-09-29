@@ -44,6 +44,19 @@ async function goOnline(page: Page, context: BrowserContext): Promise<void> {
   });
 }
 
+/**
+ * 恢复联网的确定性编排（cases 2/4 专用）：先恢复 REST（WS 保持断开），让 saveLoop
+ * 的兜底 PUT 在 base 未变的前提下必然成功落库，**之后**再重连 WS。直接双通道同恢
+ * 存在既有产品竞态：重连窗口内兜底 PUT 与 WS 持久化竞速（重试定时器不随 WS 重连
+ * 取消），偶发 409 终态「文档已在别处更新」——本编排消除该窗口，语义不变
+ * （离线编辑在联网恢复后自动落库）。
+ */
+async function goOnlineStaged(page: Page, context: BrowserContext): Promise<void> {
+  await context.setOffline(false); // REST 先行：兜底 PUT 可达（WS 仍断开、base 未变 → 必成功）
+  await expect(page.getByTestId('save-status')).toHaveText(/已保存/, { timeout: 20_000 });
+  await goOnline(page, context); // WS 重连收尾（无未同步变更，不再有持久化竞速窗口）
+}
+
 async function registerAndLogin(page: Page, phone?: string): Promise<string> {
   await page.goto('/login');
   const target = phone ?? '138' + String(Math.floor(10000000 + Math.random() * 89999999));
@@ -63,12 +76,26 @@ async function openSeedDoc(page: Page, title: string): Promise<void> {
   await expect(page.locator('.editor-canvas svg .gm-text', { hasText: title })).toBeVisible();
 }
 
-/** 选中节点按 Tab 新建子节点并键入文本提交。 */
-async function addChildNode(page: Page, text: string): Promise<void> {
-  await page.keyboard.press('Tab');
+/** 惰性补开首键（带重试；editor.e2e pressFirstCharToOpen 同款，见其注）。 */
+async function pressFirstCharToOpen(page: Page): Promise<void> {
   const editor = page.locator('.gm-text-editor');
+  for (let i = 0; i < 20 && (await editor.count()) === 0; i += 1) {
+    await page.keyboard.press('x');
+    await page.waitForTimeout(25);
+  }
   await expect(editor).toBeVisible();
-  await page.keyboard.type(text);
+}
+
+/** 选中节点按 Tab 惰性新建子节点（立即落位「新主题」、敲字才开编辑框）并提交。 */
+async function addChildNode(page: Page, text: string): Promise<void> {
+  await page.keyboard.press('Tab'); // 立即创建「新主题」节点并选中（惰性，不开框）
+  const editor = page.locator('.gm-text-editor');
+  // 落位渲染先行：「新主题」文本可见 + 惰性锁定（编辑框不随创建出现）
+  await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '新主题' })).toBeVisible();
+  await expect(editor).toHaveCount(0);
+  await pressFirstCharToOpen(page);
+  await page.keyboard.press('Backspace'); // 清占位首键
+  await page.keyboard.insertText(text); // 与 IME 提交同路径
   await page.keyboard.press('Enter');
   await expect(editor).toHaveCount(0);
 }
@@ -92,7 +119,7 @@ test('断网编辑显示离线编辑中，恢复联网后自动同步', async ({
   await addChildNode(page, '离线节点');
   await expect(page.getByTestId('save-status')).toHaveText(OFFLINE_STATUS_RE, { timeout: 10_000 });
   await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '离线节点' })).toBeVisible();
-  await goOnline(page, context);
+  await goOnlineStaged(page, context);
   await expect(page.getByTestId('save-status')).toHaveText(SAVED_RE, { timeout: 10_000 });
   await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '离线节点' })).toBeVisible();
 });
@@ -172,7 +199,7 @@ test('断网编辑 3 个节点恢复联网后无重复', async ({ page, context 
   await expect(page.getByTestId('save-status')).toHaveText(OFFLINE_STATUS_RE, { timeout: 10_000 });
   // 种子 6（可达活跃，不含 root）+ 3 离线新增 = 9
   await expect(page.getByTestId('node-count')).toHaveText('9 节点');
-  await goOnline(page, context);
+  await goOnlineStaged(page, context); // 分阶段恢复：消除兜底 PUT × WS 持久化的 409 竞速
   await expect(page.getByTestId('save-status')).toHaveText(SAVED_RE, { timeout: 10_000 });
   await expect(page.getByTestId('node-count')).toHaveText('9 节点');
   await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '离线甲' })).toHaveCount(1);

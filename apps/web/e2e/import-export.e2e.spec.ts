@@ -102,6 +102,7 @@ async function openSeedDocWithNote(page: Page): Promise<void> {
   await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '本周计划' })).toBeVisible();
   await page.locator('.editor-canvas svg .gm-text', { hasText: '周一' }).click();
   const panel = page.getByTestId('rich-panel');
+  await page.getByTestId('format-toggle').click(); // 右列默认隐藏（M7b-R6）：点格式开
   await expect(panel).toBeVisible();
   await panel.getByLabel('节点备注').fill('评审要点');
   await panel.getByRole('button', { name: '保存备注' }).click();

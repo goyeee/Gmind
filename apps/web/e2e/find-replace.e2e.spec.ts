@@ -54,13 +54,23 @@ test('查找替换：Ctrl+F 打开 → 计数/循环定位 → 替换当前 → 
   test.setTimeout(60_000);
   await openSeedDoc(page, '本周计划');
 
-  // 建 3 个含「节点」的子节点（每次先选 root 再 Tab，避免上一次新建的选中态串位）
+  // 建 3 个含「节点」的子节点（每次先选 root 再 Tab——惰性创建落位「新主题」节点，
+  // 敲字才开编辑框；选中态由 Enter 提交后消费，避免上一次新建的选中串位）。
+  // 补开首键纪律见 editor.e2e pressFirstCharToOpen：ASCII 首键带重试，退格清占位、
+  // insertText 写入中文。
   for (const label of ['节点甲', '节点乙', '节点丙']) {
     await page.locator('.editor-canvas svg .gm-text', { hasText: '本周计划' }).click();
     await page.keyboard.press('Tab');
     const editor = page.locator('.gm-text-editor');
+    await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '新主题' })).toBeVisible();
+    await expect(editor).toHaveCount(0); // 惰性锁定：编辑框不随创建出现
+    for (let i = 0; i < 20 && (await editor.count()) === 0; i += 1) {
+      await page.keyboard.press('x');
+      await page.waitForTimeout(25);
+    }
     await expect(editor).toBeVisible();
-    await page.keyboard.type(label);
+    await page.keyboard.press('Backspace');
+    await page.keyboard.insertText(label);
     await page.keyboard.press('Enter');
     await expect(editor).toHaveCount(0);
   }
@@ -126,8 +136,9 @@ test('查找替换：Ctrl+F 打开 → 计数/循环定位 → 替换当前 → 
   await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '改乙' })).toBeVisible();
 
   // 单用户事务：一次撤销整体恢复甲乙（若逐节点拆事务，只回一个即红）；
-  // 撤销后匹配集重算 → 1/2（定位回第 1 个）
-  await page.getByTestId('undo-btn').click();
+  // 撤销后匹配集重算 → 1/2（定位回第 1 个）。用 Ctrl+Z 键撤销：2026-09-28 外点
+  // 关闭语义下，点击工具栏 undo-btn 的 pointerdown 会把查找条当「外点」收起。
+  await page.keyboard.press('Control+Z');
   await expect(page.getByTestId('find-count')).toHaveText('1/2');
   await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '节点甲' })).toBeVisible();
   await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '节点乙' })).toBeVisible();
@@ -161,12 +172,18 @@ test('查找：find-toggle 打开，查「周」6 处；定位展开折叠祖先
   await expect(page.getByTestId('find-count')).toHaveText('1/6');
   await expect(selectedText(page)).toHaveText('本周计划');
 
-  // 折叠 root：子树从画布消失（匹配集按数据层全量计，count 不变）
+  // 折叠 root：子树从画布消失（匹配集按数据层全量计，count 不变）。
+  // 右键点击画布命中「弹层外点」语义 → 查找条自动收起（2026-09-28 走查行为），
+  // 折叠后 Ctrl+F 重开：查询保留、计数重算定位回第 1 个。
   await page
     .locator('.editor-canvas svg .gm-text', { hasText: '本周计划' })
     .click({ button: 'right' });
   await page.getByTestId('context-menu').getByRole('button', { name: '折叠/展开' }).click();
   await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '周一' })).toHaveCount(0);
+  await expect(page.getByTestId('find-bar')).toHaveCount(0); // 画布外点已收起查找条
+  await page.keyboard.press('Control+F');
+  await expect(page.getByTestId('find-bar')).toBeVisible();
+  await expect(page.getByTestId('find-input')).toHaveValue('周');
   await expect(page.getByTestId('find-count')).toHaveText('1/6');
 
   // next → 2/6 = 周一：定位展开折叠祖先，节点重新可见并选中（locateNode 复用）

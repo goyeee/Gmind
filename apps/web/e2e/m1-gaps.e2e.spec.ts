@@ -144,6 +144,7 @@ test('样式：填充红作用域含子树 → 本节点与子节点 rect 同变
   await openSeedDoc(page, '本周计划');
   await page.locator('.editor-canvas svg .gm-text', { hasText: '周三' }).click();
   const panel = page.getByTestId('rich-panel');
+  await page.getByTestId('format-toggle').click(); // 右列默认隐藏（M7b-R6）：点格式开
   await expect(panel.getByTestId('style-section')).toBeVisible();
   await expect(panel.getByTestId('style-scope-select')).toHaveValue('subtree'); // 默认含子树
   await panel.getByTitle('填充-红').click();
@@ -165,13 +166,15 @@ test('样式：作用域切「仅当前节点」设字号 24 → 子节点字号
   await openSeedDoc(page, '本周计划');
   await page.locator('.editor-canvas svg .gm-text', { hasText: '周三' }).click();
   const panel = page.getByTestId('rich-panel');
+  await page.getByTestId('format-toggle').click(); // 右列默认隐藏（M7b-R6）：点格式开
+  await expect(panel.getByTestId('style-scope-select')).toBeVisible();
   const childText = nodeGroup(page, '方案评审').locator('.gm-text');
   const childBefore = await childText.getAttribute('font-size');
   await panel.getByTestId('style-scope-select').selectOption('single');
   await panel.getByTestId('font-size-select').selectOption('24');
   await expect(nodeGroup(page, '周三').locator('.gm-text')).toHaveAttribute('font-size', '24');
   await expect(childText).toHaveAttribute('font-size', childBefore ?? '');
-  // 焦点移出下拉（keyboardMap 对 select 让路）后再撤销恢复（rAF 重渲染，用重试断言）
+  // 焦点移出下拉（keyboardMap 对 select 让路；画布点击同时按外点语义收面板）后撤销恢复
   await page.locator('.editor-canvas svg').click({ position: { x: 30, y: 30 } });
   await page.keyboard.press('Control+Z');
   await expect
@@ -205,6 +208,8 @@ test('跨文件粘贴：图片随迁到目标文件新 key；同文件粘贴沿�
   await openSeedDoc(page, '本周计划'); // 文件 A
   await page.locator('.editor-canvas svg .gm-text', { hasText: '周五' }).click();
   const panel = page.getByTestId('rich-panel');
+  await page.getByTestId('format-toggle').click(); // 右列默认隐藏（M7b-R6）：点格式开
+  await expect(panel.getByTestId('image-input')).toBeVisible();
   await panel.getByTestId('image-input').setInputFiles(FIXTURE_PNG);
   const imageA = nodeGroup(page, '周五').locator('image.gm-image');
   await expect(imageA).toBeVisible();

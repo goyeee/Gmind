@@ -34,19 +34,28 @@ async function selectNodeByText(page: Page, text: string): Promise<void> {
   await page.locator('.editor-canvas svg .gm-text', { hasText: text }).click();
 }
 
+/** 打开工具栏「格式」右列样式面板（M7b-R6：右列默认不渲染，点格式开）。 */
+async function openFormatPanel(page: Page) {
+  await page.getByTestId('format-toggle').click();
+  const panel = page.getByTestId('rich-panel');
+  await expect(panel).toBeVisible();
+  return panel;
+}
+
 function nodeGroup(page: Page, text: string) {
   return page.locator('.editor-canvas svg g[data-node-id]').filter({ hasText: text });
 }
 
 // 用例 1：选 A（周三）设填充红 → 色钮回显 pressed 且画布 rect 变红；字号回显；
-// 切换到 B（周五，未设样式）→ 无任何色钮 pressed、面板可用；点空白画布清空选择
-// → 样式区置灰 + 提示可见。
-test('格式面板：填充色钮随选中回显 pressed，切节点清空，清空选择后置灰', async ({ page }) => {
+// 切换到 B（周五，未设样式）→ 无任何色钮 pressed、面板可用；点空白画布 →
+// 面板按「外点关闭」收起（2026-09-28 走查语义）+ 清空选择；重开面板 → 样式区
+// 置灰（disabled）+ 提示「选中节点后设置样式」。
+test('格式面板：填充色钮随选中回显 pressed，画布点击收面板，空选重开置灰', async ({ page }) => {
   await openSeedDoc(page, '本周计划');
 
   // —— A：周三（有子节点 方案评审）——
   await selectNodeByText(page, '周三');
-  const panel = page.getByTestId('rich-panel');
+  const panel = await openFormatPanel(page);
   const section = panel.getByTestId('style-section');
   await expect(section).toBeVisible();
   // fieldset 非 Playwright 可禁用件集（按钮/输入等）成员，启用态以内部控件为准
@@ -61,8 +70,10 @@ test('格式面板：填充色钮随选中回显 pressed，切节点清空，清
   await expect(panel.getByTestId('font-size-select')).toHaveValue('24');
   await expect(nodeGroup(page, '周三').locator('.gm-text')).toHaveAttribute('font-size', '24');
 
-  // —— B：周五（未设样式）→ 无任何样式色钮 pressed，面板仍可用 ——
+  // —— B：周五（画布点击命中「弹层外点」语义：面板收起，选中照常切换）——
   await selectNodeByText(page, '周五');
+  await expect(panel).toHaveCount(0);
+  await openFormatPanel(page);
   await expect(panel.getByTestId('font-size-select')).toBeEnabled();
   await expect(panel.getByTitle('填充-红')).toHaveAttribute('aria-pressed', 'false');
   await expect(panel.getByTitle('文字-红')).toHaveAttribute('aria-pressed', 'false');
@@ -70,32 +81,43 @@ test('格式面板：填充色钮随选中回显 pressed，切节点清空，清
   await expect(panel.locator('.swatch[aria-pressed="true"]')).toHaveCount(0);
   await expect(panel.getByTestId('font-size-select')).toHaveValue('');
 
-  // —— 清空选择：点空白画布（角落，远离自适应居中的内容）→ 样式区置灰 + 提示 ——
+  // —— 清空选择：点空白画布（角落，远离自适应居中的内容）→ 面板收起 + 清选；
+  //     重开面板 → 样式区置灰 + 提示 ——
   await page.locator('.editor-canvas svg').click({ position: { x: 6, y: 6 } });
+  await expect(panel).toHaveCount(0);
+  await openFormatPanel(page);
   // fieldset 自身断言 disabled 属性；禁用级联以内部控件 toBeDisabled 双重钉死
   await expect(section).toHaveAttribute('disabled', '');
   await expect(panel.getByTestId('font-size-select')).toBeDisabled();
   await expect(panel.getByTitle('填充-红')).toBeDisabled();
   await expect(panel.getByTestId('style-hint')).toBeVisible();
   await expect(panel.getByTestId('style-hint')).toHaveText('选中节点后设置样式');
-  // 面板仍常驻：重新选 A 即恢复回显（红钮 pressed 复现）
+  // 重新选 A：画布点击会再收面板 → 重开面板后回显恢复（红钮 pressed 复现）
+  await page.getByTestId('format-toggle').click(); // 收起（toggle）
   await selectNodeByText(page, '周三');
+  await openFormatPanel(page);
   await expect(panel.getByTestId('font-size-select')).toBeEnabled();
   await expect(panel.getByTitle('填充-红')).toHaveAttribute('aria-pressed', 'true');
 });
 
-// 用例 2：文字色回显——设文字-蓝后色钮 pressed；默认（无值）时全不 pressed。
+// 用例 2：文字色回显——设文字-蓝后色钮 pressed；默认（无值）时全不 pressed；
+// 切节点（画布点击收面板）重开后回显即时刷新（不残留上一节点的 pressed）。
 test('格式面板：文字色钮随选中回显 pressed', async ({ page }) => {
   await openSeedDoc(page, '本周计划');
   await selectNodeByText(page, '周一');
-  const panel = page.getByTestId('rich-panel');
+  const panel = await openFormatPanel(page);
   await expect(panel.getByTitle('文字-蓝')).toHaveAttribute('aria-pressed', 'false');
   await panel.getByTitle('文字-蓝').click();
   await expect(panel.getByTitle('文字-蓝')).toHaveAttribute('aria-pressed', 'true');
   await expect(panel.getByTitle('文字-红')).toHaveAttribute('aria-pressed', 'false');
-  // 同面板切到未设样式的节点再切回：回显即时刷新（不残留上一节点的 pressed）
+  // 同面板切到未设样式的节点：画布点击收面板 → 重开后回显随新节点
   await selectNodeByText(page, '周五');
+  await expect(panel).toHaveCount(0);
+  await openFormatPanel(page);
   await expect(panel.getByTitle('文字-蓝')).toHaveAttribute('aria-pressed', 'false');
+  // 切回 周一：回显恢复 pressed（选中态画布切换）
+  await page.getByTestId('format-toggle').click();
   await selectNodeByText(page, '周一');
+  await openFormatPanel(page);
   await expect(panel.getByTitle('文字-蓝')).toHaveAttribute('aria-pressed', 'true');
 });

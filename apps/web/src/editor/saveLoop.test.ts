@@ -325,3 +325,44 @@ describe('startSaveLoop（「保存中」置位条件，M7c-E4）', () => {
     doc.destroy();
   });
 });
+
+// ---------------------------------------------------------------------------
+// clearRetry（M7c-E3 收尾修复）：断网期间 PUT 失败的 1s/2s/4s 退避重试在 WS 重连
+// （synced）时必须取消——否则重试的兜底全量 PUT 与恢复后的 WS 持久化竞速，偶发
+// 409「文档已在别处更新」误报终态（e2e collab 压测 ~40% 复现）。
+// ---------------------------------------------------------------------------
+describe('startSaveLoop（clearRetry：WS 重连取消兜底 PUT 重试）', () => {
+  it('PUT 失败退避重试 armed 后 clearRetry → 不再发射；下次事务照常防抖 PUT', async () => {
+    vi.useFakeTimers();
+    let fail = true;
+    const { doc, stop } = await withMockedSave(async () =>
+      fail ? Promise.reject(new TypeError('网络失败')) : jsonResponse(200, { nodeCount: 1 }),
+    );
+    const handleRef: { current: ReturnType<typeof startSaveLoop> | null } = { current: null };
+    // withMockedSave 未暴露句柄：重开一个直接装配的循环
+    stop();
+    vi.stubGlobal('fetch', vi.fn(async () =>
+      fail ? Promise.reject(new TypeError('网络失败')) : jsonResponse(200, { nodeCount: 1 }),
+    ));
+    vi.stubGlobal('localStorage', { getItem: () => 'token', setItem: () => undefined, removeItem: () => undefined });
+    const doc2 = new Y.Doc();
+    const handle = startSaveLoop(doc2, 'file-1', () => undefined);
+    handleRef.current = handle;
+
+    doc2.getMap('m').set('k', 'v');
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS); // 首发 PUT 失败 → armRetry(1s)
+    handle.clearRetry(); // 模拟 WS 重连（synced）
+    await vi.advanceTimersByTimeAsync(10_000); // 退避窗全推进：不得再发 PUT
+    const duringRetry = vi.mocked(fetch).mock.calls.filter(([p]) => String(p).includes('/doc-state'));
+    expect(duringRetry).toHaveLength(1); // 仅首发那次失败请求
+
+    fail = false;
+    doc2.getMap('m').set('k2', 'v2'); // 新事务重新进入防抖 → 成功
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS + 100);
+    const after = vi.mocked(fetch).mock.calls.filter(([p]) => String(p).includes('/doc-state'));
+    expect(after.length).toBeGreaterThan(1);
+
+    handle.stop();
+    doc2.destroy();
+  });
+});

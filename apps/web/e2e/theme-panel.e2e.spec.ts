@@ -3,10 +3,9 @@ import { expect, test, type Page } from '@playwright/test';
 /**
  * 主题扩容 3→12 + 缩略图选择面板 E2E — M6 Task 4（企微对标）。
  *
- * 零回归裁决：既有 theme-select <select> 保留（工具栏/mobile-readonly/toolbar
- * 既有用例依赖其 selectOption 路径），本任务为纯增量——select 展示 12 选项，
- * 旁边新增 theme-panel-toggle 按钮打开缩略图网格抽屉（testid theme-panel /
- * theme-item-{id}）。两条路径套用主题均为 setDocMeta themeId（可撤销）。
+ * 主题入口（M7b-W2 #6 需求方裁定）只留面板按钮：原 theme-select <select> 下拉已
+ * 移除（双入口重复），本 spec 全部走 theme-panel-toggle → theme-item-{id} 面板路径。
+ * 套用任一主题为 setDocMeta themeId（可撤销），套用即关闭抽屉。
  * 颜色断言钉引擎主题主色（与 themes.test 主色钉定同源）：
  * gmind-blue root #3370ff / forest root #2d6a4f / violet root #5e3a99。
  */
@@ -55,9 +54,9 @@ test('主题面板：打开后展示 12 个缩略图，关闭按钮收起', asyn
   await expect(page.getByTestId('theme-panel')).toHaveCount(0);
 });
 
-// 用例 2：面板点 forest → root fill #3370ff→#2d6a4f，标题/保存指示不受影响，
-// select 同步为 forest；Ctrl+Z 撤销恢复 #3370ff
-test('主题面板：点新主题画布变色、select 同步、Ctrl+Z 恢复', async ({ page }) => {
+// 用例 2：面板点 forest → root fill #3370ff→#2d6a4f，套用即收起抽屉；标题/保存
+// 指示不受影响；Ctrl+Z 撤销恢复 #3370ff
+test('主题面板：点新主题画布变色、套用即收起、Ctrl+Z 恢复', async ({ page }) => {
   await openSeedDoc(page, '本周计划');
   const rootFill = rootRectFill(page, '本周计划');
   await expect(rootFill).toHaveAttribute('fill', '#3370ff'); // 默认 gmind-blue
@@ -68,7 +67,6 @@ test('主题面板：点新主题画布变色、select 同步、Ctrl+Z 恢复', 
   // 套用即关闭抽屉 + 画布重建为 forest 三级色
   await expect(page.getByTestId('theme-panel')).toHaveCount(0);
   await expect(rootFill).toHaveAttribute('fill', '#2d6a4f');
-  await expect(page.getByTestId('theme-select')).toHaveValue('forest');
   // 文档面不受影响：标题不变、保存链路照常推进
   await expect(page.getByTestId('title-input')).toHaveValue(titleBefore);
   await expect(page.getByTestId('save-status')).toHaveText(/已保存/);
@@ -76,18 +74,16 @@ test('主题面板：点新主题画布变色、select 同步、Ctrl+Z 恢复', 
   await page.locator('.editor-canvas svg').click({ position: { x: 30, y: 30 } });
   await page.keyboard.press('Control+Z');
   await expect(rootFill).toHaveAttribute('fill', '#3370ff');
-  await expect(page.getByTestId('theme-select')).toHaveValue('gmind-blue');
 });
 
-// 用例 3（零回归）：select 路径保留且扩容到 12 项——selectOption(violet) 同样
-// 变色 + 可撤销
-test('主题下拉：12 选项保留 selectOption 路径，切换 violet 可撤销', async ({ page }) => {
+// 用例 3：violet 套用路径（select 下拉已移除，面板为唯一入口）——变色 + 可撤销
+test('主题面板：套用 violet 变色可撤销', async ({ page }) => {
   await openSeedDoc(page, '本周计划');
-  const select = page.getByTestId('theme-select');
-  await expect(select.locator('option')).toHaveCount(12);
   const rootFill = rootRectFill(page, '本周计划');
   await expect(rootFill).toHaveAttribute('fill', '#3370ff');
-  await select.selectOption('violet');
+  await page.getByTestId('theme-panel-toggle').click();
+  await page.getByTestId('theme-item-violet').click();
+  await expect(page.getByTestId('theme-panel')).toHaveCount(0);
   await expect(rootFill).toHaveAttribute('fill', '#5e3a99');
   await page.locator('.editor-canvas svg').click({ position: { x: 30, y: 30 } });
   await page.keyboard.press('Control+Z');

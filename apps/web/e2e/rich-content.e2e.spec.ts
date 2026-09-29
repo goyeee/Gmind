@@ -37,14 +37,31 @@ async function selectNodeByText(page: Page, text: string): Promise<void> {
   await page.locator('.editor-canvas svg .gm-text', { hasText: text }).click();
 }
 
-/** 打开工具栏「插入」→「标记」右侧层面板（2026-09-28 图标区迁出 RichPanel 后的
- *  标记写入路径），返回标记面板定位器。 */
+/** 打开工具栏「格式」右列样式/富内容面板（M7b-R6：右列默认不渲染，点格式开）。 */
+async function openFormatPanel(page: Page) {
+  await page.getByTestId('format-toggle').click();
+  const panel = page.getByTestId('rich-panel');
+  await expect(panel).toBeVisible();
+  return panel;
+}
+
+/** 打开工具栏「插入」→「图标」标记面板（2026-09-28 图标区迁出 RichPanel 后的
+ *  标记写入路径；「标记」项更名「图标」，表情独立为 insert-emoji），返回标记面板。 */
 async function openMarkerPanel(page: Page) {
   await page.getByTestId('insert-menu').click();
-  await page.getByTestId('insert-markers').click();
+  await page.getByTestId('insert-icons').click();
   const panel = page.getByTestId('marker-panel');
   await expect(panel).toBeVisible();
   return panel;
+}
+
+/** 节点标记徽标（M7b-W1 起渲染层为 .gm-markers 容器 + 逐值 .gm-marker-badge）。 */
+function markerBadges(page: Page, text: string) {
+  return nodeGroup(page, text).locator('.gm-markers .gm-marker-badge');
+}
+
+function markerBadgeByValue(page: Page, text: string, value: string) {
+  return nodeGroup(page, text).locator(`.gm-markers .gm-marker-badge[data-marker-value="${value}"]`);
 }
 
 function nodeGroup(page: Page, text: string) {
@@ -55,8 +72,7 @@ function nodeGroup(page: Page, text: string) {
 test('富内容：面板写备注保存后角标出现且刷新仍在', async ({ page }) => {
   await openSeedDoc(page, '本周计划');
   await selectNodeByText(page, '周一');
-  const panel = page.getByTestId('rich-panel');
-  await expect(panel).toBeVisible();
+  const panel = await openFormatPanel(page); // 右列默认隐藏：点格式开
   await panel.getByLabel('节点备注').fill('评审要点');
   await panel.getByRole('button', { name: '保存备注' }).click();
   const g = nodeGroup(page, '周一');
@@ -75,7 +91,7 @@ test('富内容：面板写备注保存后角标出现且刷新仍在', async ({
 test('富内容：https 链接显示角标，javascript: 提示错误且不写入', async ({ page }) => {
   await openSeedDoc(page, '本周计划');
   await selectNodeByText(page, '周三');
-  const panel = page.getByTestId('rich-panel');
+  const panel = await openFormatPanel(page); // 右列默认隐藏：点格式开
   await panel.getByLabel('节点链接').fill('https://example.com');
   await panel.getByRole('button', { name: '保存链接' }).click();
   const g = nodeGroup(page, '周三');
@@ -93,13 +109,14 @@ test('富内容：https 链接显示角标，javascript: 提示错误且不写�
 test('富内容：点击链接角标新标签页打开且不改变选中', async ({ page }) => {
   await openSeedDoc(page, '本周计划');
   await selectNodeByText(page, '周三');
-  const panel = page.getByTestId('rich-panel');
+  const panel = await openFormatPanel(page); // 右列默认隐藏：点格式开
   const origin = new URL(page.url()).origin;
   await panel.getByLabel('节点链接').fill(`${origin}/login`);
   await panel.getByRole('button', { name: '保存链接' }).click();
   const badge = nodeGroup(page, '周三').locator('.gm-link-badge');
   await expect(badge).toBeVisible();
-  await page.locator('.editor-canvas svg .gm-text', { hasText: '周五' }).click(); // 选中他人
+  // 选中他人（画布点击按外点语义收面板，链接角标点击不再需要面板）
+  await page.locator('.editor-canvas svg .gm-text', { hasText: '周五' }).click();
   await expect(nodeGroup(page, '周五')).toHaveClass(/gm-selected/);
   const [popup] = await Promise.all([page.waitForEvent('popup'), badge.click()]);
   expect(popup.url()).toBe(`${origin}/login`);
@@ -112,7 +129,7 @@ test('富内容：点击链接角标新标签页打开且不改变选中', async
 test('富内容：上传图片渲染且盒高计入图片，移除后消失', async ({ page }) => {
   await openSeedDoc(page, '本周计划');
   await selectNodeByText(page, '周五');
-  const panel = page.getByTestId('rich-panel');
+  const panel = await openFormatPanel(page); // 右列默认隐藏：点格式开
   await panel.getByTestId('image-input').setInputFiles(FIXTURE_PNG);
   const g = nodeGroup(page, '周五');
   const image = g.locator('image.gm-image');
@@ -138,26 +155,28 @@ test('富内容：上传图片渲染且盒高计入图片，移除后消失', as
   await expect(g.locator('image.gm-image')).toHaveCount(0);
 });
 
-// 用例 4：加旗帜 → ⚑；再加优先级 → 并存；换旗帜色 → 仍一个 ⚑（组内替换）。
-// 标记写入路径自 RichPanel 图标区迁至插入菜单右侧层标记面板（断言语义不变）。
+// 用例 4：加旗帜 → ⚑；再加优先级 → 并存；换旗帜字形 → 仍一个旗帜徽标（组内替换）。
+// 标记写入路径在插入菜单「图标」面板（M7b-W1 目录：旗帜组 = flag/flagRect/flagPennant，
+// 优先级 p0-p4/急/高/中/低）；渲染层 .gm-markers 徽标按组序展开（priority 在 flag 前）。
 test('富内容：图标组并存与组内替换', async ({ page }) => {
   await openSeedDoc(page, '本周计划');
   await selectNodeByText(page, '周一');
   const panel = await openMarkerPanel(page);
-  const icons = nodeGroup(page, '周一').locator('.gm-icons');
-  await panel.getByTitle('旗帜-红').click();
-  await expect(icons).toHaveText('⚑');
-  await panel.getByTitle('优先级 1').click();
-  await expect(icons).toHaveText('①⚑'); // 异组并存（固定组序 priority→flag）
-  const before = (await icons.textContent()) ?? '';
-  await panel.getByTitle('旗帜-蓝').click();
-  await expect(icons).toHaveText(before); // 同组替换：仍恰一个 ⚑
-  // 组内替换钉死：选中态由红迁到蓝
-  await expect(panel.getByTitle('旗帜-蓝')).toHaveAttribute('aria-pressed', 'true');
-  await expect(panel.getByTitle('旗帜-红')).toHaveAttribute('aria-pressed', 'false');
+  await panel.getByTestId('marker-flag-flag').click();
+  await expect(markerBadgeByValue(page, '周一', 'flag')).toHaveCount(1); // ⚑ 波浪旗
+  await panel.getByTestId('marker-priority-p1').click();
+  await expect(markerBadges(page, '周一')).toHaveCount(2); // 异组并存
+  // 组内替换：换旗帜字形（flagRect 方旗）→ 旗帜仍恰一枚、优先级不动
+  await panel.getByTestId('marker-flag-flagRect').click();
+  await expect(markerBadgeByValue(page, '周一', 'flagRect')).toHaveCount(1);
+  await expect(markerBadgeByValue(page, '周一', 'flag')).toHaveCount(0);
+  await expect(markerBadgeByValue(page, '周一', 'p1')).toHaveCount(1);
+  // 组内替换钉死：选中态由波浪旗迁到方旗
+  await expect(panel.getByTestId('marker-flag-flagRect')).toHaveAttribute('aria-pressed', 'true');
+  await expect(panel.getByTestId('marker-flag-flag')).toHaveAttribute('aria-pressed', 'false');
 });
 
-// 用例 5：右键菜单插入子级可用
+// 用例 5：右键菜单插入子级可用（惰性：插入即落位「新主题」，敲字才进编辑框）
 test('富内容：右键菜单插入子级可用', async ({ page }) => {
   await openSeedDoc(page, '本周计划');
   await selectNodeByText(page, '周五');
@@ -166,8 +185,16 @@ test('富内容：右键菜单插入子级可用', async ({ page }) => {
   await expect(menu).toBeVisible();
   await menu.getByRole('button', { name: '插入子级' }).click();
   const editor = page.locator('.gm-text-editor');
+  // 落位渲染先行 + 惰性锁定；补开首键纪律见 editor.e2e pressFirstCharToOpen
+  await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '新主题' })).toBeVisible();
+  await expect(editor).toHaveCount(0);
+  for (let i = 0; i < 20 && (await editor.count()) === 0; i += 1) {
+    await page.keyboard.press('x');
+    await page.waitForTimeout(25);
+  }
   await expect(editor).toBeVisible();
-  await page.keyboard.type('右键子节点');
+  await page.keyboard.press('Backspace');
+  await page.keyboard.insertText('右键子节点');
   await page.keyboard.press('Enter');
   await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '右键子节点' })).toBeVisible();
 });
@@ -197,16 +224,16 @@ test('富内容：画布粘贴截图直插选中节点', async ({ page }) => {
 test('富内容：链接/图片/图标齐设后刷新全部仍在', async ({ page }) => {
   await openSeedDoc(page, '本周计划');
   await selectNodeByText(page, '周五');
-  const panel = page.getByTestId('rich-panel');
+  const panel = await openFormatPanel(page); // 右列默认隐藏：点格式开
   const g = nodeGroup(page, '周五');
   await panel.getByLabel('节点链接').fill('https://example.com/gmind');
   await panel.getByRole('button', { name: '保存链接' }).click();
   await expect(g.locator('.gm-link-badge')).toBeVisible();
   await panel.getByTestId('image-input').setInputFiles(FIXTURE_PNG);
   await expect(g.locator('image.gm-image')).toBeVisible();
-  const markers = await openMarkerPanel(page);
-  await markers.getByTitle('旗帜-红').click();
-  await expect(g.locator('.gm-icons')).toHaveText('⚑');
+  const markers = await openMarkerPanel(page); // 插入菜单「图标」面板（点击收格式右列）
+  await markers.getByTestId('marker-flag-flag').click();
+  await expect(markerBadgeByValue(page, '周五', 'flag')).toHaveCount(1);
   await expect(page.getByTestId('save-status')).toHaveText(/已保存/);
   // 刷新（重连协同 + 从 doc_state 恢复）：三个角标全部仍在
   await page.reload();
@@ -214,5 +241,5 @@ test('富内容：链接/图片/图标齐设后刷新全部仍在', async ({ pag
   const gAfter = nodeGroup(page, '周五');
   await expect(gAfter.locator('.gm-link-badge')).toBeVisible();
   await expect(gAfter.locator('image.gm-image')).toBeVisible();
-  await expect(gAfter.locator('.gm-icons')).toHaveText('⚑');
+  await expect(markerBadgeByValue(page, '周五', 'flag')).toHaveCount(1);
 });

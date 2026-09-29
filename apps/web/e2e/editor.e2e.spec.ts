@@ -28,13 +28,37 @@ async function openSeedDoc(page: Page, title: string): Promise<void> {
   await expect(page.locator('.editor-canvas svg .gm-text', { hasText: title })).toBeVisible();
 }
 
-/** 用例 2 的创建流程：选中 root 按 Tab → 键入 → Enter 提交。 */
-async function createNewNodeViaKeyboard(page: Page): Promise<void> {
-  await page.keyboard.press('Tab'); // root 为默认选中：新建子节点并进入编辑态
+/**
+ * 惰性补开首键（带重试）：Tab 后布局盒子流水未就绪时，补开按键被保留待重试
+ * （openPendingEditor 就绪语义；盒就绪前的按键不产生任何文本插入）——重试按
+ * ASCII 首键至编辑框出现，首键即占位字符（随后退格清掉、insertText 写入中文）。
+ * Playwright 纪律：非美式键盘字符（中文）经 keyboard.type/insertText 不产生
+ * keydown，触发不了惰性补开，首键必须用 ASCII 可打印键。
+ */
+async function pressFirstCharToOpen(page: Page): Promise<void> {
   const editor = page.locator('.gm-text-editor');
+  for (let i = 0; i < 20 && (await editor.count()) === 0; i += 1) {
+    await page.keyboard.press('x');
+    await page.waitForTimeout(25);
+  }
   await expect(editor).toBeVisible();
+}
+
+/**
+ * 用例 2 的创建流程（2026-09-28 惰性编辑语义）：Tab **立即创建**文本为「新主题」的
+ * 节点并选中，但**不**立刻打开行内编辑框；敲下首个可打印字符时编辑框才出现
+ * （打开即全选默认文本，首字符替换之、其余追加），Enter 提交。
+ */
+async function createNewNodeViaKeyboard(page: Page): Promise<void> {
+  await page.keyboard.press('Tab'); // root 为默认选中：立即落位「新主题」节点（惰性，不开框）
+  const editor = page.locator('.gm-text-editor');
+  // 落位渲染先行：「新主题」文本可见 + 惰性锁定（编辑框不随创建出现）
+  await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '新主题' })).toBeVisible();
+  await expect(editor).toHaveCount(0);
+  await pressFirstCharToOpen(page);
   await expect(editor).toBeFocused();
-  await page.keyboard.type('新节点');
+  await page.keyboard.press('Backspace'); // 清占位首键
+  await page.keyboard.insertText('新节点'); // 与 IME 提交同路径
   await page.keyboard.press('Enter');
   await expect(editor).toHaveCount(0);
 }
@@ -64,24 +88,31 @@ test('编辑器：Tab 新建节点提交后画布出现且自动保存', async (
   await expect(status).toHaveText(/已保存/);
 });
 
-// 用例 2b（2026-09-27 GUI 走查修复）：Tab 按下即出现空节点盒（输入框锚定其上），
-// 输入前节点已在树中落位；Esc 取消回收空节点不留壳
-test('编辑器：新建先落位空节点再输入，Esc 取消不留空壳', async ({ page }) => {
+// 用例 2b（2026-09-28 惰性创建语义）：Tab 立即落位「新主题」节点、敲字才进编辑、
+// Esc 取消回收（待编辑态下按 Esc 直接删掉新建节点，不留空壳）
+test('编辑器：惰性创建——Tab 立即落位新主题节点、敲字才进编辑、Esc 取消回收', async ({ page }) => {
   await openSeedDoc(page, '本周计划');
   const groups = page.locator('.editor-canvas svg g[data-node-id]');
   const before = await groups.count();
   await page.keyboard.press('Tab');
-  // 空节点盒立即出现（minNodeWidth 下限保证可见），编辑器锚定其上
+  // 节点立即出现在树中（默认文本「新主题」同事务写入，不落空壳）
   await expect(groups).toHaveCount(before + 1);
-  await expect(page.locator('.gm-text-editor')).toBeVisible();
+  await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '新主题' })).toBeVisible();
+  // 惰性锁定：编辑框此刻不出现
+  await expect(page.locator('.gm-text-editor')).toHaveCount(0);
+  // 待编辑态 Esc 取消创建：节点回收不留壳，编辑框始终未出现
   await page.keyboard.press('Escape');
   await expect(page.locator('.gm-text-editor')).toHaveCount(0);
-  await expect(groups).toHaveCount(before); // 取消回收，不留空壳
-  // 再次新建：完整输入路径仍工作
+  await expect(groups).toHaveCount(before);
+  // 再次新建：敲字补开编辑框 → Enter 提交路径仍工作
   await page.keyboard.press('Tab');
   await expect(groups).toHaveCount(before + 1);
-  await page.keyboard.type('落位节点');
+  await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '新主题' })).toBeVisible();
+  await pressFirstCharToOpen(page);
+  await page.keyboard.press('Backspace');
+  await page.keyboard.insertText('落位节点');
   await page.keyboard.press('Enter');
+  await expect(page.locator('.gm-text-editor')).toHaveCount(0);
   await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '落位节点' })).toBeVisible();
   await expect(groups).toHaveCount(before + 1);
 });
@@ -138,7 +169,8 @@ test('编辑器：折叠 root 后出现 +N 徽标，展开后消失', async ({ p
 
 // ─────────────── fix round 1 新增 ───────────────
 
-// 修复 1：主题切换重建场景后视口变换保留（不回到恒等变换）
+// 修复 1：主题切换重建场景后视口变换保留（不回到恒等变换）。
+// 主题入口（M7b-W2 #6 裁定）只留面板按钮：theme-select 下拉已移除，走 theme-panel。
 test('编辑器：主题切换后视口变换保留', async ({ page }) => {
   await openSeedDoc(page, '本周计划');
   await page.waitForTimeout(300); // 等待初始「适应画布」（rAF 内执行）
@@ -146,7 +178,9 @@ test('编辑器：主题切换后视口变换保留', async ({ page }) => {
   const before = await vpG.getAttribute('transform');
   expect(before).toBeTruthy();
   expect(before).not.toBe('translate(0, 0) scale(1)'); // 初始 fit 后必非恒等
-  await page.getByTestId('theme-select').selectOption('gmind-warm');
+  await page.getByTestId('theme-panel-toggle').click();
+  await page.getByTestId('theme-item-gmind-warm').click(); // 套用即关闭抽屉
+  await expect(page.getByTestId('theme-panel')).toHaveCount(0);
   await expect(vpG).toHaveAttribute('transform', before as string);
 });
 
@@ -166,13 +200,14 @@ test('编辑器：编辑后立即返回工作台，卸载冲刷保存持久化',
 });
 
 // 修复 3：Shift+Tab 在节点与父之间插入新父（P→N→C，PRD FR-EDT-001）——按保存后的
-// docState 结构断言：原父在原 index 处持有新空节点，新节点 children = [原节点]。
+// docState 结构断言：原父在原 index 处持有新节点（惰性创建默认文本「新主题」），
+// 新节点 children = [原节点]。
 test('编辑器：Shift+Tab 在节点与父之间插入新父', async ({ page }) => {
   await openSeedDoc(page, '本周计划');
   await expect(page.locator('.editor-canvas svg .gm-text')).toHaveCount(7);
   await page.locator('.editor-canvas svg .gm-text', { hasText: '周三' }).click(); // 周三有子「方案评审」
   await page.keyboard.press('Shift+Tab');
-  await expect(page.locator('.editor-canvas svg .gm-text')).toHaveCount(8); // +1 空新节点
+  await expect(page.locator('.editor-canvas svg .gm-text')).toHaveCount(8); // +1 新节点（默认文本「新主题」）
   await expect(page.getByTestId('save-status')).toHaveText(/已保存/);
 
   // 从服务端读回 docState 反解结构（避免依赖渲染几何）
@@ -194,7 +229,7 @@ test('编辑器：Shift+Tab 在节点与父之间插入新父', async ({ page })
   const textOf = (id: string): string => String(nodes.get(id)?.get('text') ?? '');
 
   const rootKids = childIds('root');
-  expect(rootKids.map(textOf)).toEqual(['周一', '', '周五']); // 新空节点占据周三原 index
+  expect(rootKids.map(textOf)).toEqual(['周一', '新主题', '周五']); // 新节点（默认文本）占据周三原 index
   const newId = rootKids[1] as string;
   expect(childIds(newId).map(textOf)).toEqual(['周三']); // 原节点成为新节点之子
   expect(String(nodes.get(newId)?.get('parentId'))).toBe('root');
@@ -254,6 +289,20 @@ test('编辑器：复制节点后选中另一节点 Ctrl+V 粘贴为其子级', 
   expect(childIds(copyId as string).map(textOf)).toEqual(['方案评审']); // 子树完整跟随
   // 原「周三」仍在 root 下：复制不动原节点
   expect(childIds('root').map(textOf)).toContain('周三');
+});
+
+// —— 2026-09-28 走查配套锁定：编辑文字时点画布任意处 = 提交并关闭编辑框 ——
+
+test('编辑器：编辑既有节点时点击画布任意处提交并关闭编辑框', async ({ page }) => {
+  await openSeedDoc(page, '本周计划');
+  await page.locator('.editor-canvas svg .gm-text', { hasText: '周一' }).dblclick();
+  const editor = page.locator('.gm-text-editor');
+  await expect(editor).toBeVisible(); // 双击编辑既有节点：立即开框（惰性仅限新建）
+  await page.keyboard.type('周一改'); // 打开即全选：键入直接覆盖
+  await page.locator('.editor-canvas svg').click({ position: { x: 30, y: 30 } }); // 画布点击=提交
+  await expect(editor).toHaveCount(0);
+  await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '周一改' })).toBeVisible();
+  await expect(page.getByTestId('save-status')).toHaveText(/已保存/);
 });
 
 // —— M3b 清偿包（FR-FIL-004 编辑器加星入口） ——

@@ -66,12 +66,27 @@ async function openSeedDoc(page: Page, title: string): Promise<string> {
   return page.url().split('/edit/')[1] ?? '';
 }
 
-/** 选中节点按 Tab 新建子节点并键入文本提交（collab.e2e.spec.ts 同款）。 */
-async function addChildNode(page: Page, text: string): Promise<void> {
-  await page.keyboard.press('Tab');
+/** 惰性补开首键（带重试；editor.e2e pressFirstCharToOpen 同款，见其注）。 */
+async function pressFirstCharToOpen(page: Page): Promise<void> {
   const editor = page.locator('.gm-text-editor');
+  for (let i = 0; i < 20 && (await editor.count()) === 0; i += 1) {
+    await page.keyboard.press('x');
+    await page.waitForTimeout(25);
+  }
   await expect(editor).toBeVisible();
-  await page.keyboard.type(text);
+}
+
+/** 选中节点按 Tab 惰性新建子节点并键入文本提交（collab.e2e.spec.ts 同款）。
+ *  埋点时机不变：node_add 在 Tab 创建瞬间即上报，编辑框只是延迟到首字符。 */
+async function addChildNode(page: Page, text: string): Promise<void> {
+  await page.keyboard.press('Tab'); // 立即创建「新主题」节点并选中（惰性，不开框）
+  const editor = page.locator('.gm-text-editor');
+  // 落位渲染先行：「新主题」文本可见 + 惰性锁定（编辑框不随创建出现）
+  await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '新主题' })).toBeVisible();
+  await expect(editor).toHaveCount(0);
+  await pressFirstCharToOpen(page);
+  await page.keyboard.press('Backspace'); // 清占位首键
+  await page.keyboard.insertText(text); // 与 IME 提交同路径
   await page.keyboard.press('Enter');
   await expect(editor).toHaveCount(0);
 }
@@ -127,13 +142,17 @@ test('右键菜单增删节点：node_add/node_delete 的 via=context', async ({
   await registerAndLogin(page);
   await openSeedDoc(page, '本周计划');
 
-  // root 节点上右键 → 插入子级 → 输入提交
+  // root 节点上右键 → 插入子级 → 输入提交（惰性：插入即落位「新主题」，敲字才开框）
   const rootText = page.locator('.editor-canvas svg .gm-text', { hasText: '本周计划' });
   await rootText.click({ button: 'right' });
   await page.getByRole('menu').getByRole('button', { name: '插入子级' }).click();
   const editor = page.locator('.gm-text-editor');
-  await expect(editor).toBeVisible();
-  await page.keyboard.type('右键新节点');
+  // 落位渲染先行：「新主题」文本可见 + 惰性锁定（右键插入也不立即开框）
+  await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '新主题' })).toBeVisible();
+  await expect(editor).toHaveCount(0);
+  await pressFirstCharToOpen(page);
+  await page.keyboard.press('Backspace');
+  await page.keyboard.insertText('右键新节点'); // 与 IME 提交同路径
   await page.keyboard.press('Enter');
   await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '右键新节点' })).toBeVisible();
 
@@ -142,9 +161,14 @@ test('右键菜单增删节点：node_add/node_delete 的 via=context', async ({
   expect(added[0].payload.via).toBe('context');
   await expectCommonParams(page, added[0]);
 
-  // 新节点上右键 → 删除
+  // 新节点上右键 → 删除。右键菜单（含「任务设置」等 9 项）锚定点击点向下展开、
+  // 无视口钳制：新节点落位偏下时「删除」项会越出视口底缘（产品挂账：菜单越界），
+  // 沿用 versions spec 的 DOM click 直发模式触发同一 React onClick 路径。
   await page.locator('.editor-canvas svg .gm-text', { hasText: '右键新节点' }).click({ button: 'right' });
-  await page.getByRole('menu').getByRole('button', { name: '删除', exact: true }).click();
+  await page
+    .getByRole('menu')
+    .getByRole('button', { name: '删除', exact: true })
+    .dispatchEvent('click');
   await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '右键新节点' })).toHaveCount(0);
 
   const deleted = events.filter((e) => e.type === 'node_delete');

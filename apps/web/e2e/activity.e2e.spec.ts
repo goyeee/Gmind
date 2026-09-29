@@ -42,9 +42,12 @@ async function nicknameOf(page: Page): Promise<string> {
   });
 }
 
-/** 选中指定文本的节点并在评论面板顶部输入框发布评论（comments.e2e 同款链路）。 */
+/** 选中指定文本的节点并在评论面板顶部输入框发布评论（comments.e2e 同款链路；
+ *  评论右列默认不渲染（M7b-R6），经插入菜单「评论」项开启）。 */
 async function commentOnNode(page: Page, nodeText: string, content: string): Promise<void> {
   await page.locator('.editor-canvas svg .gm-text', { hasText: nodeText }).first().click();
+  await page.getByTestId('insert-menu').click();
+  await page.getByTestId('insert-comment').click();
   await page.getByTestId('comment-input').fill(content);
   await page.getByTestId('comment-send').click();
   await expect(page.locator('[data-testid="comment-thread"]', { hasText: content })).toBeVisible({

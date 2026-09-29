@@ -64,9 +64,17 @@ async function grantCollaborator(
   if (!res.ok()) throw new Error(`授予协作者失败：${res.status()}`);
 }
 
+/** 打开评论右列（M7b-R6：右列默认不渲染，插入菜单「评论」项开启）。 */
+async function openComments(page: Page): Promise<void> {
+  await page.getByTestId('insert-menu').click();
+  await page.getByTestId('insert-comment').click();
+  await expect(page.getByTestId('comment-pane')).toBeVisible();
+}
+
 /** 选中指定文本的节点并在评论面板顶部输入框发布评论。 */
 async function commentOnNode(page: Page, nodeText: string, content: string): Promise<void> {
   await page.locator('.editor-canvas svg .gm-text', { hasText: nodeText }).first().click();
+  await openComments(page);
   await page.getByTestId('comment-input').fill(content);
   await page.getByTestId('comment-send').click();
   // 自身 POST 的广播路径回流：面板出现线程即发布成功
@@ -107,7 +115,8 @@ test('A 评论 → B 角标出现并回复 → A 面板见回复（comment-updat
   await commentOnNode(pageA, '周三', '请确认周三方案');
   await expect(badgeOf(pageB, '周三')).toHaveText('1', { timeout: 10_000 });
 
-  // B 面板（常驻右列）见线程：作者昵称 + 内容 + 节点快照
+  // B 面板（评论右列，M7b-R6 起插入菜单「评论」项开启）见线程：作者昵称 + 内容 + 节点快照
+  await openComments(pageB);
   const threadB = pageB.locator('[data-testid="comment-thread"]', { hasText: '请确认周三方案' });
   await expect(threadB.getByTestId('comment-author')).toHaveText(nickA);
   await expect(threadB.getByTestId('comment-node-snap')).toHaveText('周三');
@@ -140,10 +149,13 @@ test('角标点击过滤线程且不改选区；面板条目定位选中并展�
   await commentOnNode(page, '周五', '周五评论');
   await expect(page.getByTestId('comment-thread')).toHaveCount(2);
 
-  // 折叠 root（右键 → 折叠/展开）：深层节点从画布消失
+  // 折叠 root（右键 → 折叠/展开）：深层节点从画布消失；画布右键命中「弹层外点」
+  // 语义 → 评论右列自动收起（2026-09-28 走查行为），操作后重开
   await page.locator('.editor-canvas svg .gm-text', { hasText: '本周计划' }).click({ button: 'right' });
   await page.getByTestId('context-menu').getByRole('button', { name: '折叠/展开' }).click();
   await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '周三' })).toHaveCount(0);
+  await expect(page.getByTestId('comment-pane')).toHaveCount(0);
+  await openComments(page);
 
   // 面板条目点击 → 定位：折叠祖先展开、节点重新可见并带 .gm-selected
   await page
@@ -154,8 +166,11 @@ test('角标点击过滤线程且不改选区；面板条目定位选中并展�
   await expect(gZhou3).toBeVisible({ timeout: 5_000 });
   await expect(gZhou3).toHaveClass(/gm-selected/);
 
-  // 角标点击 → 过滤到该节点线程（查看全部返回）；不改变画布选区（仍选中周三）
+  // 角标点击 → 过滤到该节点线程（查看全部返回）；角标在画布上，点击按「弹层外点」
+  // 语义收起评论右列（过滤态保留）——重开面板为过滤视图；不改变画布选区（仍选中周三）
   await badgeOf(page, '周五').click();
+  await expect(page.getByTestId('comment-pane')).toHaveCount(0);
+  await openComments(page);
   await expect(page.getByTestId('comment-back-all')).toBeVisible();
   await expect(page.getByTestId('comment-thread')).toHaveCount(1);
   await expect(page.getByTestId('comment-thread').first()).toContainText('周五评论');
@@ -190,6 +205,8 @@ test('节点删除后线程保留全文并标记原节点已删除；刷新后�
   });
 
   // 已删节点线程：全文保留 + 「原节点已删除」标记；存活线程与角标不受影响
+  // （刷新后评论右列默认收起：重开面板读取）
+  await openComments(page);
   const deletedThread = page.locator('[data-testid="comment-thread"]', { hasText: '周三待办评论' });
   await expect(deletedThread).toBeVisible({ timeout: 10_000 });
   await expect(deletedThread.getByTestId('comment-node-deleted')).toHaveText('原节点已删除');

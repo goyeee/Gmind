@@ -149,6 +149,10 @@ export type SaveStatusSetter = (status: string) => void;
 export interface SaveLoopHandle {
   stop(): void;
   armSavingWatch(): void;
+  /** WS 重连时取消已 armed 的 PUT 计时（防抖/重试一并）：增量通道恢复后兜底
+   *  全量 PUT 若继续发射，会与 WS 持久化竞速出 409 误报（collab 压测 ~40% 复现
+   *  「文档已在别处更新」）；本地未同步变更由 WS 通道自身同步，无需兜底。 */
+  clearRetry(): void;
 }
 
 /** 启动自动保存循环，返回句柄（卸载时调 stop；collab 置「保存中」时调 armSavingWatch）。 */
@@ -303,6 +307,10 @@ export function startSaveLoop(
   return {
     /** 「保存中」看门狗：外部（collab onStatus 置保存中）也复用同一计时回落。 */
     armSavingWatch,
+    clearRetry: (): void => {
+      clearTimer();
+      retries = 0;
+    },
     stop: () => {
     stopped = true;
     clearTimer();

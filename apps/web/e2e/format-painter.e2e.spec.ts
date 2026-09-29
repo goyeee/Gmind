@@ -3,11 +3,11 @@ import { expect, test, type Page } from '@playwright/test';
 /**
  * 格式刷 E2E — M6 Task 7（企微对标，FR-EDT-016 提前）。
  *
- * 单击刷 = 复制当前选中节点 style+icons 快照 → 光标 copy 提示（body.painter-active）
- * → 点目标节点 = 单事务应用（setStyle 逐键 + setIcon 逐组）并退出；
- * 双击刷 = 粘滞模式（连续应用到逐个点击的节点，Esc / 再点按钮退出）；
- * 无单选点按钮 → toast「请先选中要复制样式的节点」；自刷（源=目标）零写入；
- * 一次 Ctrl+Z 整体回滚单次应用（单事务语义）。
+ * 单击刷 = 复制当前选中节点 **style 快照**（M7b-W2 #10 需求方裁定：只刷样式，
+ * 不复制标记/表情）→ 光标 copy 提示（body.painter-active）→ 点目标节点 = 单事务
+ * 应用（setStyle 逐键）并退出；双击刷 = 粘滞模式（连续应用到逐个点击的节点，
+ * Esc / 再点按钮退出）；无单选点按钮 → toast「请先选中要复制样式的节点」；
+ * 自刷（源=目标）零写入；一次 Ctrl+Z 整体回滚单次应用（单事务语义）。
  *
  * 复用 format-panel.e2e 的登录/种子文档模式（「本周计划」树：root 下有
  * 周一/周三/周五，各带一个子节点——周会对齐/方案评审/周报复盘）。撤销用例间以
@@ -44,24 +44,32 @@ function nodeGroup(page: Page, text: string) {
   return page.locator('.editor-canvas svg g[data-node-id]').filter({ hasText: text });
 }
 
-/** 选中节点并设填充红 + 旗帜红（源格式）。填充红在 RichPanel 样式区，旗帜红经
- *  插入→标记面板路径（2026-09-28 图标区迁出 RichPanel）。 */
+/** 节点标记徽标（M7b-W1 起 .gm-markers 容器 + 逐值 .gm-marker-badge）。 */
+function markerBadgeByValue(page: Page, text: string, value: string) {
+  return nodeGroup(page, text).locator(`.gm-markers .gm-marker-badge[data-marker-value="${value}"]`);
+}
+
+/** 选中节点并设填充红 + 旗帜红（源格式）。填充红在格式右列样式区（M7b-R6 起点格式
+ *  按钮开），旗帜红经插入菜单「图标」标记面板（M7b-W1 目录：flag 波浪旗）。 */
 async function styleSourceRedFlag(page: Page, text: string) {
   await selectNodeByText(page, text);
   const panel = page.getByTestId('rich-panel');
+  await page.getByTestId('format-toggle').click(); // 右列默认隐藏：点格式开
+  await expect(panel).toBeVisible();
   await panel.getByTitle('填充-红').click();
   await expect(nodeGroup(page, text).locator('rect')).toHaveAttribute('fill', RED);
   await page.getByTestId('insert-menu').click();
-  await page.getByTestId('insert-markers').click();
+  await page.getByTestId('insert-icons').click();
   const markers = page.getByTestId('marker-panel');
   await expect(markers).toBeVisible();
-  await markers.getByTitle('旗帜-红').click();
-  await expect(nodeGroup(page, text).locator('.gm-icons')).toHaveText('⚑');
+  await markers.getByTestId('marker-flag-flag').click();
+  await expect(markerBadgeByValue(page, text, 'flag')).toHaveCount(1);
   return panel;
 }
 
 // 用例 1（单击）：源 周三 设红+旗 → 单击刷（进入模式：pressed + body 光标 class）
-// → 点 周五 → 周五 变红带旗且模式退出；源节点保持原样。
+// → 点 周五 → 周五 变红（**不带旗**：M7b-W2 #10 只刷样式裁定）且模式退出；
+// 源节点保持原样。
 test('格式刷：单击复制选中节点样式，点目标应用后自动退出', async ({ page }) => {
   await openSeedDoc(page, '本周计划');
   await styleSourceRedFlag(page, '周三');
@@ -72,16 +80,16 @@ test('格式刷：单击复制选中节点样式，点目标应用后自动退�
   await expect(painterBtn).toHaveAttribute('aria-pressed', 'true');
   await expect(page.locator('body')).toHaveClass(/painter-active/);
 
-  // 点目标 周五：应用格式（不让位给选中切换）
+  // 点目标 周五：应用格式（不让位给选中切换）；标记不随刷
   await selectNodeByText(page, '周五');
   await expect(nodeGroup(page, '周五').locator('rect')).toHaveAttribute('fill', RED);
-  await expect(nodeGroup(page, '周五').locator('.gm-icons')).toHaveText('⚑');
+  await expect(markerBadgesCount(page, '周五')).toHaveCount(0);
   // 单发模式：应用一次即退出（按钮回落、光标提示摘除）
   await expect(painterBtn).toHaveAttribute('aria-pressed', 'false');
   await expect(page.locator('body')).not.toHaveClass(/painter-active/);
   // 源节点保持红+旗（复制不搬移）
   await expect(nodeGroup(page, '周三').locator('rect')).toHaveAttribute('fill', RED);
-  await expect(nodeGroup(page, '周三').locator('.gm-icons')).toHaveText('⚑');
+  await expect(markerBadgeByValue(page, '周三', 'flag')).toHaveCount(1);
 });
 
 // 用例 2（粘滞 + Esc）：双击刷 → 连点 周一、周五 都应用；Esc 退出后再点
@@ -95,14 +103,14 @@ test('格式刷：双击进入粘滞模式连续应用，Esc 退出后点击不�
   await expect(painterBtn).toHaveAttribute('aria-pressed', 'true');
   await expect(page.locator('body')).toHaveClass(/painter-active/);
 
-  // 粘滞：连续两个目标都应用，模式保持
+  // 粘滞：连续两个目标都应用（只刷样式：目标变红、不带旗），模式保持
   await selectNodeByText(page, '周一');
   await expect(nodeGroup(page, '周一').locator('rect')).toHaveAttribute('fill', RED);
-  await expect(nodeGroup(page, '周一').locator('.gm-icons')).toHaveText('⚑');
+  await expect(markerBadgesCount(page, '周一')).toHaveCount(0);
   await expect(painterBtn).toHaveAttribute('aria-pressed', 'true');
   await selectNodeByText(page, '周五');
   await expect(nodeGroup(page, '周五').locator('rect')).toHaveAttribute('fill', RED);
-  await expect(nodeGroup(page, '周五').locator('.gm-icons')).toHaveText('⚑');
+  await expect(markerBadgesCount(page, '周五')).toHaveCount(0);
   await expect(painterBtn).toHaveAttribute('aria-pressed', 'true');
 
   // Esc 退出：按钮回落、光标提示摘除；再点 周一对齐 不应用（单节点作用域：
@@ -112,14 +120,23 @@ test('格式刷：双击进入粘滞模式连续应用，Esc 退出后点击不�
   await expect(page.locator('body')).not.toHaveClass(/painter-active/);
   await selectNodeByText(page, '周会对齐');
   await expect(nodeGroup(page, '周会对齐').locator('rect')).not.toHaveAttribute('fill', RED);
-  await expect(nodeGroup(page, '周会对齐').locator('.gm-icons')).toHaveCount(0);
+  await expect(markerBadgesCount(page, '周会对齐')).toHaveCount(0);
 });
+
+/** 节点标记徽标集合。 */
+function markerBadgesCount(page: Page, text: string) {
+  return nodeGroup(page, text).locator('.gm-markers .gm-marker-badge');
+}
 
 // 用例 3（无选中）：清空选择后点刷 → toast 提示，不进入模式。
 test('格式刷：无选中节点点按钮给出 toast 提示', async ({ page }) => {
   await openSeedDoc(page, '本周计划');
-  // 点空白画布清空选择（远离自适应居中的内容）
+  // 打开格式右列再点空白画布：画布点击按「外点关闭」收面板 + 清空选择（M7b-R6 起右列默认隐藏）
+  await page.getByTestId('format-toggle').click();
+  await expect(page.getByTestId('rich-panel')).toBeVisible();
   await page.locator('.editor-canvas svg').click({ position: { x: 6, y: 6 } });
+  await expect(page.getByTestId('rich-panel')).toHaveCount(0);
+  await page.getByTestId('format-toggle').click(); // 重开：空选 → 样式区置灰提示态
   await expect(page.getByTestId('rich-panel').getByTestId('style-hint')).toBeVisible();
 
   const painterBtn = page.getByTestId('format-painter');
@@ -136,13 +153,15 @@ test('格式刷：自刷（源=目标）零写入', async ({ page }) => {
   // 两个写之间 >500ms，各自独立成撤销单元
   await selectNodeByText(page, '周三');
   const panel = page.getByTestId('rich-panel');
+  await page.getByTestId('format-toggle').click(); // 右列默认隐藏（M7b-R6）：点格式开
+  await expect(panel).toBeVisible();
   await panel.getByTitle('填充-红').click();
   await expect(nodeGroup(page, '周三').locator('rect')).toHaveAttribute('fill', RED);
   await page.waitForTimeout(UNDO_GAP);
   await page.getByTestId('insert-menu').click();
-  await page.getByTestId('insert-markers').click();
-  await page.getByTestId('marker-panel').getByTitle('旗帜-红').click();
-  await expect(nodeGroup(page, '周三').locator('.gm-icons')).toHaveText('⚑');
+  await page.getByTestId('insert-icons').click();
+  await page.getByTestId('marker-panel').getByTestId('marker-flag-flag').click();
+  await expect(markerBadgeByValue(page, '周三', 'flag')).toHaveCount(1);
   await page.waitForTimeout(UNDO_GAP);
 
   // 单击刷 → 点源节点自身：外观不变、模式退出（单发语义）
@@ -151,38 +170,40 @@ test('格式刷：自刷（源=目标）零写入', async ({ page }) => {
   await selectNodeByText(page, '周三');
   await expect(painterBtn).toHaveAttribute('aria-pressed', 'false');
   await expect(nodeGroup(page, '周三').locator('rect')).toHaveAttribute('fill', RED);
-  await expect(nodeGroup(page, '周三').locator('.gm-icons')).toHaveText('⚑');
+  await expect(markerBadgeByValue(page, '周三', 'flag')).toHaveCount(1);
 
   // 撤销一步 = 撤「加旗帜」（自刷零写入的直接证据：旗帜消失、红色保留）
   await page.keyboard.press('Control+Z');
-  await expect(nodeGroup(page, '周三').locator('.gm-icons')).toHaveCount(0);
+  await expect(markerBadgesCount(page, '周三')).toHaveCount(0);
   await expect(nodeGroup(page, '周三').locator('rect')).toHaveAttribute('fill', RED);
 });
 
-// 用例 5（单事务撤销）：单击应用后一次 Ctrl+Z 同时回滚样式与图标
-// （fill 回默认且旗帜消失——若拆多事务则需两次撤销）。
+// 用例 5（单事务撤销）：单击应用后一次 Ctrl+Z 整体回滚样式
+// （fill 回默认——若拆多事务则需两次撤销；标记不随刷，见 M7b-W2 #10 裁定）。
 test('格式刷：单次应用可被一次 Ctrl+Z 整体回滚', async ({ page }) => {
   await openSeedDoc(page, '本周计划');
   await selectNodeByText(page, '周三');
   const panel = page.getByTestId('rich-panel');
+  await page.getByTestId('format-toggle').click(); // 右列默认隐藏（M7b-R6）：点格式开
+  await expect(panel).toBeVisible();
   await panel.getByTitle('填充-红').click();
   await page.waitForTimeout(UNDO_GAP);
   await page.getByTestId('insert-menu').click();
-  await page.getByTestId('insert-markers').click();
-  await page.getByTestId('marker-panel').getByTitle('旗帜-红').click();
+  await page.getByTestId('insert-icons').click();
+  await page.getByTestId('marker-panel').getByTestId('marker-flag-flag').click();
   // 与应用隔开 >500ms：格式刷事务独立成撤销单元
   await page.waitForTimeout(UNDO_GAP);
 
   await page.getByTestId('format-painter').click();
   await selectNodeByText(page, '周五');
   await expect(nodeGroup(page, '周五').locator('rect')).toHaveAttribute('fill', RED);
-  await expect(nodeGroup(page, '周五').locator('.gm-icons')).toHaveText('⚑');
+  await expect(markerBadgesCount(page, '周五')).toHaveCount(0); // 只刷样式：不带旗
 
-  // 一次 Ctrl+Z：样式 + 图标一并回滚
+  // 一次 Ctrl+Z：样式回滚（红色消失；标记本就未随刷）
   await page.keyboard.press('Control+Z');
   await expect(nodeGroup(page, '周五').locator('rect')).not.toHaveAttribute('fill', RED);
-  await expect(nodeGroup(page, '周五').locator('.gm-icons')).toHaveCount(0);
+  await expect(markerBadgesCount(page, '周五')).toHaveCount(0);
   // 源节点不受撤销影响（事务只覆盖目标写入）
   await expect(nodeGroup(page, '周三').locator('rect')).toHaveAttribute('fill', RED);
-  await expect(nodeGroup(page, '周三').locator('.gm-icons')).toHaveText('⚑');
+  await expect(markerBadgeByValue(page, '周三', 'flag')).toHaveCount(1);
 });

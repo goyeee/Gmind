@@ -578,11 +578,16 @@ export function EditorPage() {
     const onDocPointerDown = (e: PointerEvent): void => {
       const el = e.target as Element | null;
       if (!el?.closest) return;
+      // 插入/导出菜单内部（含「链接/图片」等右列联动菜单项）豁免：菜单项点击的
+      // pointerdown 若在此收掉 formatOpen，紧随的 click 再开会出现一帧收-开抖动，
+      // 且聚焦时序与互斥语义纠缠（E3 回归修复）——菜单自身的开合由各自监听管理。
       if (
         el.closest('[data-popover-toggle]') ||
         el.closest(
           '.editor-right, .editor-mobile-comments, .theme-panel, .activity-panel, .help-panel, .find-bar, .member-panel, .version-panel',
-        )
+        ) ||
+        insertWrapRef.current?.contains(el) ||
+        exportWrapRef.current?.contains(el)
       ) {
         return;
       }
@@ -726,6 +731,17 @@ export function EditorPage() {
     }
     el.scrollIntoView({ block: 'nearest' });
     el.focus();
+  };
+
+  /**
+   * M7c-E3 回归修复：右列默认不渲染（M7b-R6）后，链接/图片项的控件只有
+   * formatOpen 时才在 DOM——先开格式面板，下一帧（面板挂载后）再聚焦，控件
+   * 仍缺（无选中节点）才落到可行动 toast。同帧直接查 DOM 会查空（React 尚未
+   * 提交渲染）。
+   */
+  const openRichAndFocus = (selector: string, hint: string): void => {
+    setFormatOpen(true);
+    requestAnimationFrame(() => focusRichControl(selector, hint));
   };
 
   const triggerImageInput = (): void => {
@@ -2251,6 +2267,10 @@ export function EditorPage() {
         if (collabStatus === 'synced') {
           collabRef.current.wsConnected = true;
           collabRef.current.wsEverConnected = true;
+          // 增量通道恢复即取消已 armed 的兜底 PUT 计时：继续发射会与 WS 持久化
+          // 竞速出 409 误报（断网重连窗口，e2e collab 压测 ~40% 复现）——本地未
+          // 同步变更由 WS 通道自身同步。
+          stopSave.clearRetry();
           // 重连无待同步变更时不会有 persisted ack，主动清掉离线指示；
           // 有待同步变更则等 ack 收尾（先落到「保存中」）
           if (collab.provider.hasUnsyncedChanges) {
@@ -2625,7 +2645,7 @@ export function EditorPage() {
                   role="menuitem"
                   onClick={() => {
                     closeInsertLayer();
-                    focusRichControl('input[aria-label="节点链接"]', '选中节点后编辑链接');
+                    openRichAndFocus('input[aria-label="节点链接"]', '选中节点后编辑链接');
                   }}
                 >
                   链接
@@ -2645,7 +2665,9 @@ export function EditorPage() {
                   role="menuitem"
                   onClick={() => {
                     closeInsertLayer();
-                    triggerImageInput();
+                    setFormatOpen(true);
+                    // 面板挂载后一帧再触发系统文件选择器（同 openRichAndFocus 时序）
+                    requestAnimationFrame(() => triggerImageInput());
                   }}
                 >
                   图片

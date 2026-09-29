@@ -162,6 +162,9 @@ test('⑦ 导出过大：拒绝文案含「文件过大」+「拆分后导出」
 // ⑧a 评论 501 字：服务端 400 message 透出——含上限数值（原因）+ 精简动作（下一步）
 test('⑧a 评论超 500 字：toast 含「500 字」上限数值与下一步动作', async ({ page }) => {
   await openSeedDoc(page, '本周计划');
+  // 评论右列默认不渲染（M7b-R6）：插入菜单「评论」项开启
+  await page.getByTestId('insert-menu').click();
+  await page.getByTestId('insert-comment').click();
   // 装配完成默认单选 root → 评论输入可用
   const input = page.getByTestId('comment-input');
   await expect(input).toBeEnabled();
@@ -176,6 +179,7 @@ test('⑧a 评论超 500 字：toast 含「500 字」上限数值与下一步动
 test('⑧b 图片超 10MB：toast 含「10MB 限制」上限数值与下一步动作', async ({ page }) => {
   await openSeedDoc(page, '本周计划');
   const panel = page.getByTestId('rich-panel');
+  await page.getByTestId('format-toggle').click(); // 右列默认隐藏（M7b-R6）：点格式开
   await expect(panel).toBeVisible();
   await panel.getByTestId('image-input').setInputFiles({
     name: '巨图.png',
