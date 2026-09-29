@@ -280,24 +280,110 @@ describe('Viewport 滚轮（attach 后）', () => {
   });
 });
 
-describe('Viewport 空白拖拽平移（attach 后）', () => {
-  it('svg 空白处 pointer 拖拽 → 平移量 = 位移增量，pointerup 后停止', () => {
+describe('Viewport 拖拽平移（M7b-W3 平移改道：中键 / 空格+左键）', () => {
+  it('无修饰左键空白拖拽不平移（空白左拖=框选，归页面层 SelectionModel）', () => {
     vp.attach();
     svg.dispatchEvent(pointerEvent('pointerdown', { button: 0, clientX: 10, clientY: 10, pointerId: 1 }));
     svg.dispatchEvent(pointerEvent('pointermove', { clientX: 60, clientY: 25, pointerId: 1 }));
     svg.dispatchEvent(pointerEvent('pointerup', { clientX: 60, clientY: 25, pointerId: 1 }));
-    let t = parseTransform();
+    expect(parseTransform()).toEqual({ tx: 0, ty: 0, scale: 1 });
+  });
+
+  it('中键拖拽 → 平移量 = 位移增量，pointerup 后停止；pointerdown preventDefault（抑制自动滚动）', () => {
+    vp.attach();
+    const down = pointerEvent('pointerdown', { button: 1, clientX: 10, clientY: 10, pointerId: 1, cancelable: true });
+    const spy = vi.spyOn(down, 'preventDefault');
+    svg.dispatchEvent(down);
+    svg.dispatchEvent(pointerEvent('pointermove', { clientX: 60, clientY: 25, pointerId: 1 }));
+    svg.dispatchEvent(pointerEvent('pointerup', { clientX: 60, clientY: 25, pointerId: 1 }));
+    const t = parseTransform();
     expect(t.tx).toBeCloseTo(50, 4);
     expect(t.ty).toBeCloseTo(15, 4);
+    expect(spy).toHaveBeenCalledOnce();
 
     // 抬起后再移动不再平移
     svg.dispatchEvent(pointerEvent('pointermove', { clientX: 200, clientY: 200, pointerId: 1 }));
-    t = parseTransform();
-    expect(t.tx).toBeCloseTo(50, 4);
-    expect(t.ty).toBeCloseTo(15, 4);
+    const t2 = parseTransform();
+    expect(t2.tx).toBeCloseTo(50, 4);
+    expect(t2.ty).toBeCloseTo(15, 4);
   });
 
-  it('目标在 [data-node-id] 内（含子元素）→ 不平移', () => {
+  it('中键在节点目标上拖拽也平移（节点拖拽只认主键，中键不冲突）', () => {
+    const g = document.createElementNS(SVG_NS, 'g');
+    g.setAttribute('data-node-id', 'n1');
+    const rect = document.createElementNS(SVG_NS, 'rect');
+    g.appendChild(rect);
+    sceneRoot.appendChild(g);
+    vp.attach();
+    rect.dispatchEvent(pointerEvent('pointerdown', { button: 1, clientX: 10, clientY: 10, pointerId: 1 }));
+    svg.dispatchEvent(pointerEvent('pointermove', { clientX: 90, clientY: 90, pointerId: 1 }));
+    svg.dispatchEvent(pointerEvent('pointerup', { clientX: 90, clientY: 90, pointerId: 1 }));
+    const t = parseTransform();
+    expect(t.tx).toBeCloseTo(80, 4);
+    expect(t.ty).toBeCloseTo(80, 4);
+  });
+
+  it('空格按住 + 左键空白拖拽 → 平移；keyup 后左键拖拽恢复为不平移', () => {
+    vp.attach();
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: ' ' }));
+    expect(vp.spacePressed).toBe(true);
+    svg.dispatchEvent(pointerEvent('pointerdown', { button: 0, clientX: 5, clientY: 5, pointerId: 1 }));
+    svg.dispatchEvent(pointerEvent('pointermove', { clientX: 45, clientY: 30, pointerId: 1 }));
+    svg.dispatchEvent(pointerEvent('pointerup', { clientX: 45, clientY: 30, pointerId: 1 }));
+    let t = parseTransform();
+    expect(t.tx).toBeCloseTo(40, 4);
+    expect(t.ty).toBeCloseTo(25, 4);
+
+    window.dispatchEvent(new KeyboardEvent('keyup', { key: ' ' }));
+    expect(vp.spacePressed).toBe(false);
+    svg.dispatchEvent(pointerEvent('pointerdown', { button: 0, clientX: 5, clientY: 5, pointerId: 2 }));
+    svg.dispatchEvent(pointerEvent('pointermove', { clientX: 105, clientY: 105, pointerId: 2 }));
+    svg.dispatchEvent(pointerEvent('pointerup', { clientX: 105, clientY: 105, pointerId: 2 }));
+    t = parseTransform();
+    expect(t.tx).toBeCloseTo(40, 4);
+    expect(t.ty).toBeCloseTo(25, 4);
+  });
+
+  it('空格按住时 repeat keydown 不翻转状态，window blur 复位', () => {
+    vp.attach();
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: ' ' }));
+    window.dispatchEvent(new KeyboardEvent('keyup', { key: ' ' }));
+    window.dispatchEvent(new KeyboardEvent('keyup', { key: ' ' })); // 多余 keyup 不出错
+    expect(vp.spacePressed).toBe(false);
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', repeat: true }));
+    // repeat 不置位（按住期间 OS 重复事件不干扰状态机）
+    expect(vp.spacePressed).toBe(false);
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: ' ' }));
+    expect(vp.spacePressed).toBe(true);
+    window.dispatchEvent(new Event('blur'));
+    expect(vp.spacePressed).toBe(false);
+  });
+
+  it('空格按住 + 左键在节点/概要/折叠徽标目标上不平移（左键仍归节点手势/页面层）', () => {
+    const g = document.createElementNS(SVG_NS, 'g');
+    g.setAttribute('data-node-id', 'n1');
+    sceneRoot.appendChild(g);
+    const badge = document.createElementNS(SVG_NS, 'g');
+    badge.setAttribute('data-for-id', 'n1');
+    sceneRoot.appendChild(badge);
+    vp.attach();
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: ' ' }));
+    badge.dispatchEvent(pointerEvent('pointerdown', { button: 0, clientX: 5, clientY: 5, pointerId: 1 }));
+    svg.dispatchEvent(pointerEvent('pointermove', { clientX: 70, clientY: 70, pointerId: 1 }));
+    svg.dispatchEvent(pointerEvent('pointerup', { clientX: 70, clientY: 70, pointerId: 1 }));
+    expect(parseTransform()).toEqual({ tx: 0, ty: 0, scale: 1 });
+  });
+
+  it('spacePressed 随 destroy 复位（状态不跨生命周期残留）', () => {
+    vp.attach();
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: ' ' }));
+    expect(vp.spacePressed).toBe(true);
+    vp.destroy();
+    expect(vp.spacePressed).toBe(false);
+  });
+
+  it('无修饰左键在节点目标上也不平移（左键只做选择/节点拖拽，平移已改道）', () => {
+    // 语义注记：无修饰左键无论目标是否节点都不平移（平移改道后左键只做选择/拖拽）
     const g = document.createElementNS(SVG_NS, 'g');
     g.setAttribute('data-node-id', 'n1');
     const rect = document.createElementNS(SVG_NS, 'rect');
@@ -307,19 +393,6 @@ describe('Viewport 空白拖拽平移（attach 后）', () => {
     rect.dispatchEvent(pointerEvent('pointerdown', { button: 0, clientX: 10, clientY: 10, pointerId: 1 }));
     svg.dispatchEvent(pointerEvent('pointermove', { clientX: 90, clientY: 90, pointerId: 1 }));
     svg.dispatchEvent(pointerEvent('pointerup', { clientX: 90, clientY: 90, pointerId: 1 }));
-    const t = parseTransform();
-    expect(t.tx).toBe(0);
-    expect(t.ty).toBe(0);
-  });
-
-  it('目标为折叠徽标 [data-for-id] → 不平移', () => {
-    const badge = document.createElementNS(SVG_NS, 'g');
-    badge.setAttribute('data-for-id', 'n1');
-    sceneRoot.appendChild(badge);
-    vp.attach();
-    badge.dispatchEvent(pointerEvent('pointerdown', { button: 0, clientX: 5, clientY: 5, pointerId: 1 }));
-    svg.dispatchEvent(pointerEvent('pointermove', { clientX: 70, clientY: 70, pointerId: 1 }));
-    svg.dispatchEvent(pointerEvent('pointerup', { clientX: 70, clientY: 70, pointerId: 1 }));
     const t = parseTransform();
     expect(t.tx).toBe(0);
     expect(t.ty).toBe(0);
@@ -335,7 +408,7 @@ describe('Viewport 空白拖拽平移（attach 后）', () => {
     expect(t.ty).toBe(0);
   });
 
-  it('Shift+主键空白按下不平移（留给页面层框选，Task 15 FR-EDT-008）', () => {
+  it('Shift+主键空白按下不平移（框选/加选语义归页面层）', () => {
     vp.attach();
     svg.dispatchEvent(pointerEvent('pointerdown', { button: 0, shiftKey: true, clientX: 10, clientY: 10, pointerId: 1 }));
     svg.dispatchEvent(pointerEvent('pointermove', { shiftKey: true, clientX: 80, clientY: 80, pointerId: 1 }));

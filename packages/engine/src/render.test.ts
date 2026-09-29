@@ -135,6 +135,11 @@ describe('renderScene：初次渲染', () => {
     renderScene(createScene(svg), makeInput(baseLayout(), data));
     const badges = svg.querySelectorAll('.gm-markers .gm-marker-badge');
     expect(badges.length).toBe(4); // p0 + done + cancel + 😄（组序 mood→priority→…→other→emoji）
+    expect(badges[0].getAttribute('data-marker-group')).toBe('priority'); // 点击换组命中锚点（M7b-W3）
+    expect(badges[0].getAttribute('data-marker-value')).toBe('p0');
+    expect(badges[1].getAttribute('data-marker-group')).toBe('other');
+    expect(badges[1].getAttribute('data-marker-value')).toBe('done');
+    expect(badges[3].getAttribute('data-marker-group')).toBe('emoji');
     expect(nodeG('c')?.querySelectorAll('.gm-markers .gm-marker-badge').length).toBe(0); // 未知值不产徽标（容器空）
   });
 

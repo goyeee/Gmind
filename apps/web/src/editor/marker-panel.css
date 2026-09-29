@@ -1,106 +1,124 @@
 /*
- * 节点标记面板（M7a-T1 内容切三组制；形态维持 2483652 版）：右侧固定抽屉
- * （对齐 ThemePanel 形态：fixed 右上、宽 320、纵向滚动），顶部「图标/表情」页签。
+ * 节点标记面板（M7b-W3 企微式竖层重做）：**锚定弹出层**——挂在工具栏 .insert-wrap
+ * 下（absolute，顶贴按钮下沿、左缘与按钮对齐，向下展开），不再有任何
+ * position:fixed 视口抽屉几何。内部：标题行 + 分段页签 + 分组竖排滚动体。
+ * 迷你选盘（节点徽章点击换组弹层）样式同文件维护（.marker-picker*）。
  */
 
 .marker-panel {
-  position: fixed;
-  top: 56px;
-  right: 16px;
-  width: 320px;
-  max-height: calc(100vh - 80px);
-  overflow-y: auto;
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  width: 340px;
+  max-width: calc(100vw - 16px);
+  max-height: 70vh;
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 12px;
+  padding: 14px 16px 12px;
   background: #fff;
   border: 1px solid #e5e6eb;
-  border-radius: 8px;
-  box-shadow: 0 4px 16px rgba(31, 35, 41, 0.14);
-  z-index: 1150;
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(31, 35, 41, 0.16);
+  z-index: 1200;
   font-size: 13px;
 }
-/* 头部：图标/表情页签 + 关闭钮 */
-.marker-panel-header {
+/* 头部：大标题（当前页签名）+ 右上角 ×（企微截图同构） */
+.marker-panel-head {
   display: flex;
   align-items: center;
+  justify-content: space-between;
 }
-.marker-tabs {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  width: 100%;
-}
-.marker-tab {
-  padding: 4px 14px;
-  border: none;
-  background: transparent;
-  border-radius: 14px;
-  font-size: 13px;
-  color: #4e5969;
-  cursor: pointer;
-}
-.marker-tab.active {
-  background: #f0f5ff;
-  color: #3370ff;
+.marker-panel-title {
+  margin: 0;
+  font-size: 17px;
   font-weight: 600;
+  color: #1f2329;
+  line-height: 24px;
 }
 .marker-panel-close {
-  margin-left: auto;
-  width: 24px;
-  height: 24px;
+  width: 28px;
+  height: 28px;
   border: none;
   background: transparent;
   border-radius: 6px;
-  font-size: 16px;
-  color: #86909c;
+  font-size: 18px;
+  line-height: 1;
+  color: #4e5969;
   cursor: pointer;
 }
 .marker-panel-close:hover {
   background: #f2f3f5;
 }
-.marker-panel-body {
+/* 分段页签（企微范式）：灰底胶囊容器 + 选中白底段 */
+.marker-tabs {
   display: flex;
-  flex-direction: column;
-  gap: 10px;
+  margin-top: 10px;
+  padding: 2px;
+  border-radius: 8px;
+  background: #f2f3f5;
 }
-/* 无选中节点提示（与 T2 样式区 style-hint 同口径） */
+.marker-tab {
+  flex: 1;
+  padding: 6px 0;
+  border: none;
+  background: transparent;
+  border-radius: 6px;
+  font-size: 13px;
+  color: #4e5969;
+  cursor: pointer;
+}
+.marker-tab.active {
+  background: #fff;
+  color: #1f2329;
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(31, 35, 41, 0.1);
+}
+/* 无选中节点提示（保留 T2 文案口径） */
 .marker-hint {
-  margin: 0;
+  margin: 8px 0 0;
   color: #86909c;
   font-size: 12px;
 }
-/* 分组行：组名左列窄栏 + 图标区右扩 */
+/* 滚动体：分组竖排（企微「竖着的层、内部分组」） */
+.marker-panel-body {
+  margin-top: 10px;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding-bottom: 2px;
+}
+/* 分组：组名左上小字 + 图标行（非 M7a 左列窄栏版式） */
 .marker-group {
   display: flex;
-  align-items: flex-start;
-  gap: 8px;
+  flex-direction: column;
+  gap: 6px;
 }
 .marker-group-label {
-  flex: 0 0 40px;
   font-style: normal;
   color: #86909c;
   font-size: 12px;
-  line-height: 28px;
+  line-height: 18px;
 }
 .marker-grid {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 2px;
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 2px 4px;
+  justify-items: center;
 }
-/* 标记按钮：28×28、hover 浅灰底、选中蓝描边环 */
+/* 标记按钮：34×34、hover 浅灰底、选中蓝描边环 */
 .marker-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
+  width: 34px;
+  height: 34px;
   padding: 0;
   border: none;
   border-radius: 6px;
   background: transparent;
-  font-size: 15px;
+  font-size: 16px;
   line-height: 1;
   cursor: pointer;
 }
@@ -115,51 +133,6 @@
   background: #f0f5ff;
   outline: 2px solid #3370ff;
   outline-offset: -1px;
-}
-/* 优先级彩色数字方块：16px 方底 + 白字数字（M7a-T1 mindgrid 配色，内联背景） */
-.marker-priority-badge {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 16px;
-  height: 16px;
-  border-radius: 3px;
-  color: #fff;
-  font-size: 11px;
-  font-weight: 600;
-}
-/* 表情页：10 emoji 网格（5 列两行） */
-.marker-emoji-body {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-.emoji-grid {
-  display: grid;
-  grid-template-columns: repeat(5, 1fr);
-  gap: 2px;
-}
-.emoji-cell {
-  padding: 2px 0;
-  border: none;
-  background: none;
-  border-radius: 5px;
-  font-size: 18px;
-  line-height: 1.4;
-  cursor: pointer;
-}
-.emoji-cell:hover:not(:disabled) {
-  background: #f2f3f5;
-}
-.emoji-cell:disabled {
-  opacity: 0.45;
-  cursor: default;
-}
-.emoji-cell.active {
-  background: #f0f5ff;
-  outline: 1px solid #3370ff;
 }
 
 /* ── M7b-W1 企微全量目录 chip（MarkerChip 内联配色；此处只管排布基线）──────── */
@@ -176,4 +149,29 @@
 .marker-chip-glyph {
   display: inline-block;
   line-height: 1;
+}
+
+/* ── M7b-W3 节点标记点击换组：迷你选盘浮层（HTML 层，锚定点击点）────────────── */
+.marker-picker {
+  position: fixed;
+  z-index: 1210;
+  width: 252px;
+  max-width: calc(100vw - 16px);
+  padding: 10px 12px 12px;
+  background: #fff;
+  border: 1px solid #e5e6eb;
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(31, 35, 41, 0.16);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.marker-picker-label {
+  font-style: normal;
+  color: #86909c;
+  font-size: 12px;
+  line-height: 16px;
+}
+.marker-picker .marker-grid {
+  grid-template-columns: repeat(6, 1fr);
 }

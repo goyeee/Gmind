@@ -9,12 +9,15 @@
  * - 滚轮（viewport 自有手势）：无修饰键 = 平移 panBy(-deltaX, -deltaY)；ctrl/meta =
  *   以光标为锚缩放（deltaY<0 → ×1.1，否则 ×1/1.1），preventDefault 阻止浏览器缩放，
  *   监听 { passive: false }。cx/cy 与 toScene 输入均为 svg 相对坐标。
- * - 空白拖拽平移也归 Viewport（裁决：Task 9 只做节点手势）：pointerdown（主键）且
- *   目标不在 [data-node-id]（节点盒及其子元素）也不在 [data-for-id]（折叠徽标）内
- *   即开始，pointermove 按位移增量 panBy，pointerup/pointercancel 结束；
- *   setPointerCapture 特性探测（jsdom 无该 API 时降级为 svg 自身监听）。
- *   例外（Task 15，FR-EDT-008）：Shift+主键在空白处留给页面层框选起点
- *   （SelectionModel.beginMarquee），Viewport 对 shift 按下不启动平移。
+ * - 拖拽平移（M7b-W3 平移改道，需求方裁定「空白左拖=框选」后平移让位）：
+ *   触发条件 = **鼠标中键拖动**（任意目标，preventDefault 抑制中键自动滚动）或
+ *   **空格按住 + 左键拖动**（仅空白处；节点/折叠徽标/概要上的左键仍归节点拖拽/
+ *   页面层手势）。空格状态由 Viewport 自持（attach 期 window keydown/keyup/blur
+ *   跟踪，公开只读 spacePressed 供页面层框选起点让位判定），destroy 即解绑。
+ *   pointermove 按位移增量 panBy，pointerup/pointercancel 结束；setPointerCapture
+ *   特性探测（jsdom 无该 API 时降级为 svg 自身监听）。
+ *   历史（Task 15，FR-EDT-008）：空白无修饰左键（原 Shift+左键）留给页面层框选
+ *   起点（SelectionModel.beginMarquee），Viewport 不启动平移。
  * - 生命周期：构造不绑任何事件；attach() 显式绑定、destroy() 全部解绑
  *   （幂等：未 attach 时 destroy 是 no-op，attach 可再次复用）。
  */
@@ -125,11 +128,18 @@ export class Viewport {
   private attached = false;
   private panning = false;
   private lastPan: Point = { x: 0, y: 0 };
+  /** 空格按住状态（attach 期 window 键盘跟踪；平移手势闸，M7b-W3 平移改道）。 */
+  private spaceDown = false;
 
   constructor(svg: SVGSVGElement, sceneRoot: SVGGElement) {
     this.svg = svg;
     this.sceneRoot = sceneRoot;
     this.apply();
+  }
+
+  /** 空格是否按住（页面层框选起点据此让位给平移手势；未 attach 恒 false）。 */
+  get spacePressed(): boolean {
+    return this.attached && this.spaceDown;
   }
 
   /** 把当前状态写到 sceneRoot：`translate(tx, ty) scale(scale)`（4 位小数）。 */
@@ -185,7 +195,7 @@ export class Viewport {
     );
   }
 
-  /** 绑定滚轮与空白拖拽平移监听（幂等）。 */
+  /** 绑定滚轮与拖拽平移监听（幂等）。 */
   attach(): void {
     if (this.attached) return;
     this.attached = true;
@@ -194,6 +204,10 @@ export class Viewport {
     this.svg.addEventListener('pointermove', this.onPointerMove);
     this.svg.addEventListener('pointerup', this.onPointerUp);
     this.svg.addEventListener('pointercancel', this.onPointerUp);
+    // 空格跟踪（window 级）：按住即置位，抬起/窗口失焦即复位（防按住时切窗卡死）。
+    window.addEventListener('keydown', this.onSpaceKeyDown);
+    window.addEventListener('keyup', this.onSpaceKeyUp);
+    window.addEventListener('blur', this.onSpaceBlur);
   }
 
   /** 解绑全部监听并结束进行中的拖拽（幂等；之后可再次 attach）。 */
@@ -201,11 +215,15 @@ export class Viewport {
     if (!this.attached) return;
     this.attached = false;
     this.panning = false;
+    this.spaceDown = false;
     this.svg.removeEventListener('wheel', this.onWheel);
     this.svg.removeEventListener('pointerdown', this.onPointerDown);
     this.svg.removeEventListener('pointermove', this.onPointerMove);
     this.svg.removeEventListener('pointerup', this.onPointerUp);
     this.svg.removeEventListener('pointercancel', this.onPointerUp);
+    window.removeEventListener('keydown', this.onSpaceKeyDown);
+    window.removeEventListener('keyup', this.onSpaceKeyUp);
+    window.removeEventListener('blur', this.onSpaceBlur);
   }
 
   private set(state: ViewportState): void {
@@ -226,19 +244,39 @@ export class Viewport {
     }
   };
 
+  private onSpaceKeyDown = (e: KeyboardEvent): void => {
+    if (e.key === ' ' && !e.repeat) this.spaceDown = true;
+  };
+
+  private onSpaceKeyUp = (e: KeyboardEvent): void => {
+    if (e.key === ' ') this.spaceDown = false;
+  };
+
+  private onSpaceBlur = (): void => {
+    this.spaceDown = false;
+  };
+
   private onPointerDown = (e: PointerEvent): void => {
-    if (e.button !== 0) return;
-    if (e.shiftKey) return; // Shift+左键空白 = 框选起点（页面层），不平移
+    // M7b-W3 平移改道：中键拖动（任意目标）或空格+左键（仅空白）才平移；
+    // 无修饰左键空白留给页面层框选（SelectionModel.beginMarquee），不平移。
+    const isMiddle = e.button === 1;
+    const isSpaceLeft = e.button === 0 && this.spaceDown;
+    if (!isMiddle && !isSpaceLeft) return;
+    if (isSpaceLeft && e.shiftKey) return;
     const target = e.target as Element | null;
     // 概要 bracket（M6 T6）非空白：其命中既不平移也不捕获指针——捕获会把随后的
     // click 重定向到 svg，页面层「点标签编辑概要」将收不到命中元素。
+    // 空白判定仅约束空格+左键（中键拖动在节点上也平移，不与节点拖拽冲突——
+    // DragController 只认主键）。
     if (
-      target?.closest('[data-node-id]') ||
-      target?.closest('[data-for-id]') ||
-      target?.closest('[data-summary-id]')
+      !isMiddle &&
+      (target?.closest('[data-node-id]') ||
+        target?.closest('[data-for-id]') ||
+        target?.closest('[data-summary-id]'))
     ) {
       return;
     }
+    e.preventDefault(); // 中键抑制浏览器自动滚动；空格+左键抑制选中文本等默认行为
     this.panning = true;
     this.lastPan = { x: e.clientX, y: e.clientY };
     // 指针捕获保证移出 svg 仍收到 move/up；jsdom 无该 API，特性探测降级。

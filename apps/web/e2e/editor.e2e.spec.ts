@@ -205,11 +205,12 @@ test('编辑器：Shift+Tab 在节点与父之间插入新父', async ({ page })
 
 // ─────────────── M1 验收修复轮新增 ───────────────
 
-// FR-EDT-005：选中节点按空格进入编辑态（双击/Enter 之外的第三入口）
-test('编辑器：选中节点按空格进入编辑态并提交生效', async ({ page }) => {
+// FR-EDT-005：选中节点按 F2 进入编辑态（双击/Enter 之外的第三入口；M7b-W3 起
+// 原 Space 绑定让位给「空格+左拖平移」手势，编辑改绑 F2，keyboardMap 同步）
+test('编辑器：选中节点按 F2 进入编辑态并提交生效', async ({ page }) => {
   await openSeedDoc(page, '本周计划');
   await page.locator('.editor-canvas svg .gm-text', { hasText: '周一' }).click();
-  await page.keyboard.press(' ');
+  await page.keyboard.press('F2');
   const editor = page.locator('.gm-text-editor');
   await expect(editor).toBeVisible();
   await expect(editor).toBeFocused();

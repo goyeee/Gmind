@@ -11,8 +11,9 @@
  *   描边宽 = styleOf 解析结果 + theme）、<text class="gm-text">（按 '\n' 分 tspan，
  *   fill/字体取解析样式）、标记区（M7b-W1 八组制多值，固定组序
  *   mood→priority→number→arrow→flag→progress→other→emoji，位置不变——节点框内
- *   文字左侧）：<g class="gm-markers"> 内逐值绘制彩色徽标 <g class="gm-marker-badge">
- *   （MARKER_CATALOG 字形/配色，槽宽自适应徽标数；目录外值确定性忽略）、
+ *   文字左侧）：<g class="gm-markers"> 内逐值绘制彩色徽标 <g class="gm-marker-badge"
+ *   data-marker-group data-marker-value>（M7b-W3 起携带组/值锚点供页面层点击换组；
+ *   MARKER_CATALOG 字形/配色，槽宽自适应徽标数；目录外值确定性忽略）、
  *   <text class="gm-note-badge">（note 非空渲染 'N'）、<text class="gm-link-badge">
  *   （href 非空渲染）、<text class="gm-comment-badge">（commentCount>0 渲染计数，
  *   FR-CMT-002；与 note/link 同一右上角错位方案，自右缘起 link→note→comment 让位）、
@@ -198,16 +199,17 @@ function syncOptional<T extends SVGElement>(
 }
 
 /** 标记区徽标绘制（M7b-W1）：按固定组序展开各组值数组，逐值经 MARKER_CATALOG
- *  绘制彩色徽标；目录外值（未收敛窗口期）确定性忽略。 */
-function markerDefsOf(icons: Record<string, unknown> | undefined): MarkerGlyphDef[] {
+ *  绘制彩色徽标；目录外值（未收敛窗口期）确定性忽略。M7b-W3 起徽标携带
+ *  data-marker-group/data-marker-value（节点标记点击换组的页面层命中锚点）。 */
+function markerDefsOf(icons: Record<string, unknown> | undefined): Array<{ def: MarkerGlyphDef; group: string }> {
   if (!icons) return [];
-  const defs: MarkerGlyphDef[] = [];
+  const defs: Array<{ def: MarkerGlyphDef; group: string }> = [];
   for (const group of MARKER_ROW_ORDER) {
     const values = icons[group];
     const list = Array.isArray(values) ? values : typeof values === 'string' && values !== '' ? [values] : [];
     for (const value of list) {
       const def = markerDefOf(group, String(value));
-      if (def) defs.push(def);
+      if (def) defs.push({ def, group });
     }
   }
   return defs;
@@ -315,11 +317,15 @@ function applyNode(
   if (entry.markers && entry.lastMarkersSig !== markersSig) {
     const defs = markerDefsOf(visual.icons);
     const children: SVGGElement[] = [];
-    defs.forEach((def, i) => {
+    defs.forEach(({ def, group }, i) => {
       const badge = drawMarkerBadge(def);
       if (!badge) return; // 未知值：确定性忽略（槽位仍由布局按值数预留）
       const bx = theme.nodePaddingX + i * theme.iconSlotWidth + (theme.iconSlotWidth - MARKER_BADGE_SIZE) / 2;
       badge.setAttribute('transform', `translate(${fmt(bx)}, ${fmt(b.h / 2 - MARKER_BADGE_SIZE / 2)})`);
+      // 点击换组命中锚点（M7b-W3）：组/值随签名重建写入，签名不变则引用保持、
+      // 属性亦不变，无需每帧回填。
+      badge.setAttribute('data-marker-group', group);
+      badge.setAttribute('data-marker-value', def.value);
       children.push(badge);
     });
     entry.markers.replaceChildren(...children);

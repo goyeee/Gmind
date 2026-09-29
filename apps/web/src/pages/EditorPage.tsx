@@ -11,6 +11,7 @@ import {
   getMeta,
   getNode,
   ICON_GROUPS,
+  MARKER_GROUP_MODE,
   markLastEditor,
   moveNode,
   ORIGIN_USER,
@@ -46,6 +47,9 @@ import {
   type IDocHandle,
   layout,
   type LayoutResult,
+  MARKER_CATALOG,
+  MARKER_GROUP_LABELS,
+  type MarkerGlyphDef,
   type NodeBox,
   navigate as navigateGeometry,
   type NodeVisual,
@@ -58,7 +62,6 @@ import {
   resolveThemeId,
   type SceneRoot,
   type TextStyle,
-  type ThemeId,
   siblingEnd,
   SelectionModel,
   THEMES,
@@ -92,7 +95,7 @@ import {
   uploadImage,
 } from '../editor/imageUpload';
 import { HelpPanel } from '../editor/HelpPanel';
-import { MarkerPanel } from '../editor/MarkerPanel';
+import { MarkerPanel, MarkerChip, type MarkerTab } from '../editor/MarkerPanel';
 import { MemberPanel } from '../editor/MemberPanel';
 import { RichPanel } from '../editor/RichPanel';
 import { TaskTable } from '../editor/TaskTable';
@@ -127,9 +130,15 @@ import './editor.css';
  * - 键盘映射 document 冒泡 + 覆盖层/输入控件让路（carry-in 裁决）；
  * - 所有用户写后统一 capUndoStack（afterUserWrite 集中封装）。
  *
- * M1 验收修复轮（2026-09-22）新增：空格进编辑态（FR-EDT-005）、粘贴为选中节点
+ * M1 验收修复轮（2026-09-22）新增：空格进编辑态（FR-EDT-005，M7b-W3 改绑 F2——
+ * Space 让位给「空格+左拖平移」手势）、粘贴为选中节点
  * 子级（FR-EDT-009，推翻旧「同级」实现）、链接角标新标签页打开（FR-EDT-019）、
  * 画布粘贴截图直插（FR-EDT-020，imageUpload 共享助手）、剪贴板错误码映射。
+ *
+ * M7b-W3（2026-09-29，企微对标二批交互）：标记面板重做为企微式锚定竖层（挂
+ * insert-wrap 下，弃 fixed 视口抽屉）+ 批量标记（多选全含则移除否则设置，单事务）；
+ * 节点标记徽章点击换组（同组迷你选盘浮层）；空白无修饰左拖=框选（原 Shift+左拖，
+ * 平移改道空格+左拖/中键，Viewport 自理）。
  *
  * M2 终审修复轮（2026-09-22）：WS 路径配额强制（FR-ACC-003 P0，M1b 终审裁定）——
  * quota-exceeded 广播置 quotaBlockedRef（nextQuotaBlock 事件机），新增入口
@@ -338,14 +347,26 @@ export function EditorPage() {
   // PNG 透明背景勾选（M4 Task 9，FR-IO-003）：默认勾选；JPG 无 alpha 恒白底。
   const [exportTransparent, setExportTransparent] = useState(true);
   const exportWrapRef = useRef<HTMLDivElement | null>(null);
-  // 插入菜单（2026-09-28 二次改版）：下拉开合 + 右侧抽屉标记面板
-  // {open, tab}（tab 由「图标/表情」菜单项决定，抽屉内可切换；对齐主题面板形态）。
+  // 插入菜单（2026-09-28 二次改版）+ 标记面板（M7b-W3 企微式竖层重做）：
+  // 面板为**锚定弹出层**——挂在 .insert-wrap 下（absolute），状态 {open, tab, anchor}
+  // 扩展 anchor = 插入按钮 getBoundingClientRect（面板顶贴按钮下沿、左缘对齐；
+  // 右缘越界时按 anchor 换算 offsetLeft 收回视口）。tab 由「图标/表情」菜单项决定，
+  // 面板内可切换；对齐企微「顶部按钮点开竖层」形态，不再是 fixed 视口抽屉。
   const [insertOpen, setInsertOpen] = useState(false);
-  const [markerPanel, setMarkerPanel] = useState<{ open: boolean; tab: 'icon' | 'emoji' }>({
-    open: false,
-    tab: 'icon',
-  });
+  const [markerPanel, setMarkerPanel] = useState<{
+    open: boolean;
+    tab: MarkerTab;
+    anchor: { left: number; top: number };
+  }>({ open: false, tab: 'icon', anchor: { left: 0, top: 0 } });
   const insertWrapRef = useRef<HTMLDivElement | null>(null);
+  // 节点标记点击换组（M7b-W3 #4）：徽章命中 → 该组迷你选盘浮层（HTML 层锚定点击点，
+  // contextMenu 同款 fixed 定位；nodeId/group 为写入目标，x/y 为弹出锚点）。
+  const [markerPicker, setMarkerPicker] = useState<{
+    nodeId: string;
+    group: IconGroup;
+    x: number;
+    y: number;
+  } | null>(null);
   // 右键菜单（Task 12）：nodeId 为节点菜单锚点；summaryId 为概要菜单锚点（M6 T6，
   // 二者互斥——右键命中 bracket 时弹概要菜单，命中节点时弹节点菜单）
   const [contextMenu, setContextMenu] = useState<
@@ -401,14 +422,25 @@ export function EditorPage() {
     return () => document.removeEventListener('mousedown', onDocMouseDown);
   }, [exportOpen]);
 
-  // —— 插入菜单 + 标记抽屉（2026-09-28 二次改版）——
-  // 菜单：外点 / Esc 关闭；只读降级即收。标记抽屉独立于菜单（Esc 关抽屉、
-  // 点画布节点不关——支持连续设置），× 按钮与 Esc 关闭。
+  // —— 插入菜单 + 标记面板弹层（M7b-W3：面板同挂 insert-wrap，Esc/外点关闭沿用
+  // insert-layer 机制）——菜单与面板互斥（开面板收菜单、开菜单收面板）；打开期间
+  // document mousedown 命中 insert-wrap 之外即收、Esc 即收；只读降级即收。
   const closeInsertLayer = (): void => {
     setInsertOpen(false);
+    setMarkerPanel((p) => (p.open ? { ...p, open: false } : p));
+  };
+  /** 「图标/表情」菜单项入口：记录插入按钮 anchor（getBoundingClientRect）后开面板。 */
+  const openMarkerPanel = (tab: MarkerTab): void => {
+    const rect = insertWrapRef.current?.getBoundingClientRect();
+    setInsertOpen(false);
+    setMarkerPanel({
+      open: true,
+      tab,
+      anchor: rect ? { left: rect.left, top: rect.bottom } : { left: 0, top: 0 },
+    });
   };
   useEffect(() => {
-    if (!insertOpen) return;
+    if (!(insertOpen || markerPanel.open)) return;
     const onDocMouseDown = (e: MouseEvent): void => {
       if (insertWrapRef.current && !insertWrapRef.current.contains(e.target as Node)) {
         closeInsertLayer();
@@ -423,31 +455,93 @@ export function EditorPage() {
       document.removeEventListener('mousedown', onDocMouseDown);
       document.removeEventListener('keydown', onKeyDown);
     };
-  }, [insertOpen]);
+  }, [insertOpen, markerPanel.open]);
   useEffect(() => {
     if (readOnly && (insertOpen || markerPanel.open)) {
       closeInsertLayer();
-      setMarkerPanel((p) => ({ ...p, open: false }));
     }
   }, [readOnly, insertOpen, markerPanel.open]);
-  // 抽屉 Esc 关闭（独立监听，与菜单 Esc 同按键但互不依赖）
+
+  // —— 迷你选盘（节点标记点击换组）Esc/外点关闭（面板同机制）——
   useEffect(() => {
-    if (!markerPanel.open) return;
-    const onKeyDown = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') setMarkerPanel((p) => ({ ...p, open: false }));
+    if (!markerPicker) return;
+    const onDocMouseDown = (e: MouseEvent): void => {
+      if (!(e.target as Element | null)?.closest?.('.marker-picker')) setMarkerPicker(null);
     };
+    const onKeyDown = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') setMarkerPicker(null);
+    };
+    document.addEventListener('mousedown', onDocMouseDown);
     document.addEventListener('keydown', onKeyDown);
-    return () => document.removeEventListener('keydown', onKeyDown);
-  }, [markerPanel.open]);
+    return () => {
+      document.removeEventListener('mousedown', onDocMouseDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [markerPicker]);
 
   /**
-   * 标记写入（数据模型零改动）：setIcon 组内单选（null=取消）/ 组间并存，
-   * 统一 afterUserWrite（origin/capUndoStack 既有纪律）；错误 toast 两段式。
+   * 标记写入（M7b-W3 #5 批量语义）：对**选中集全部节点**逐个 setIcon，单事务
+   * 一次性提交（内层 withTransaction 嵌套复用外层事务，一次 Ctrl+Z 整体回滚）；
+   * afterUserWrite 统一收口（origin/capUndoStack 纪律不变），错误 toast 两段式。
+   *
+   * 方向展开（需求方 #5 裁定「single 组全组已含该值→移除，否则设置」，multi 组
+   * toggle 同义）：single 组全部选中已含 → 逐节点置 null 移除该组，否则给缺该值
+   * 的节点设置（已含者零写入，不给撤销栈留空项）；multi 组全部已含 → toggle 移除，
+   * 否则给缺该值节点 toggle 叠加（setIcon 的 toggle 语义天然收敛到目标态）。
    */
-  const applyMarker = (group: IconGroup, value: string | null): void => {
-    if (!doc || !selectedNodeId) return;
+  const applyMarker = (group: IconGroup, value: string): void => {
+    if (!doc) return;
+    const selection = selectionRef.current;
+    if (!selection) return;
+    const ids = [...selection.selected].filter((id) => {
+      const snap = getNode(doc, id);
+      return !!snap && !snap.deleted;
+    });
+    if (ids.length === 0) return;
+    const hasValue = (id: string): boolean =>
+      getNode(doc, id)?.icons?.[group]?.includes(value) ?? false;
     try {
-      setIcon(doc, selectedNodeId, group, value);
+      withTransaction(doc, ORIGIN_USER, () => {
+        const allHave = ids.every(hasValue);
+        if (MARKER_GROUP_MODE[group] === 'multi') {
+          const desired = !allHave; // 全含 → 全移除；否则补齐到全含
+          for (const id of ids) {
+            if (hasValue(id) !== desired) setIcon(doc, id, group, value);
+          }
+        } else if (allHave) {
+          for (const id of ids) setIcon(doc, id, group, null);
+        } else {
+          for (const id of ids) {
+            if (!hasValue(id)) setIcon(doc, id, group, value);
+          }
+        }
+      });
+      afterUserWrite();
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : '标记设置失败');
+    }
+  };
+
+  /**
+   * 迷你选盘写入（M7b-W3 #4，单节点）：同值 = 移除（single 置 null / multi toggle
+   * 同值即移除），他值 = single 组内替换 / multi 叠加——core setIcon 组语义直写 +
+   * afterUserWrite。目标节点已删（选盘开着被协同删除等）即收盘。
+   */
+  const applyPickerValue = (value: string): void => {
+    const picker = markerPicker;
+    if (!doc || !picker) return;
+    const snap = getNode(doc, picker.nodeId);
+    if (!snap || snap.deleted) {
+      setMarkerPicker(null);
+      return;
+    }
+    const has = snap.icons?.[picker.group]?.includes(value) ?? false;
+    try {
+      if (MARKER_GROUP_MODE[picker.group] === 'single') {
+        setIcon(doc, picker.nodeId, picker.group, has ? null : value);
+      } else {
+        setIcon(doc, picker.nodeId, picker.group, value); // multi：core toggle（含则移除）
+      }
       afterUserWrite();
     } catch (e) {
       showToast(e instanceof Error ? e.message : '标记设置失败');
@@ -1219,6 +1313,19 @@ export function EditorPage() {
       if (nodeId) setCommentFilter(nodeId);
       return;
     }
+    // 标记徽章（M7b-W3 #4 点击换组）：点击 → 该组迷你选盘浮层；先于折叠徽标/
+    // 节点选择处理并直接 return——不触发选中/反选/折叠（角标家族同一让位纪律；
+    // 节点拖拽侧已由 engine drag 排除 data-marker-group 候选）。只读不弹（写路径）。
+    const markerBadge = target.closest('.gm-marker-badge[data-marker-group]');
+    if (markerBadge && !readOnly) {
+      const nodeId = target.closest('[data-node-id]')?.getAttribute('data-node-id');
+      const group = markerBadge.getAttribute('data-marker-group');
+      if (nodeId && group && ICON_GROUPS.includes(group as IconGroup)) {
+        setContextMenu(null);
+        setMarkerPicker({ nodeId, group: group as IconGroup, x: e.clientX, y: e.clientY });
+        return;
+      }
+    }
     const badge = target.closest('[data-for-id]');
     if (badge) {
       const id = badge.getAttribute('data-for-id');
@@ -1243,12 +1350,13 @@ export function EditorPage() {
     const g = target.closest('[data-node-id]');
     const id = g?.getAttribute('data-node-id');
     if (!id) {
-      // 空白点击清空选择（M6 Task 2 企微对标，格式面板随选中联动配套）：Shift+空白
-      // 点击是框选起点占位（维持原样不清空）；平移/框选拖拽释放后的合成 click 以
-      // 位移 >4px 排除（与节点拖拽 justDraggedRef 同一「拖拽不算点击」纪律）。
+      // 空白点击清空选择（M6 Task 2 企微对标，格式面板随选中联动配套）：修饰键
+      // （Shift/Ctrl/Cmd）空白点击不清空（加/减选语义占位）；框选/平移（空格+左拖、
+      // 中键）拖拽释放后的合成 click 以位移 >4px 排除（与节点拖拽 justDraggedRef
+      // 同一「拖拽不算点击」纪律）。
       const press = pointerPressRef.current;
       const moved = press ? Math.hypot(e.clientX - press.x, e.clientY - press.y) > 4 : false;
-      if (!e.shiftKey && !moved) selection.clear();
+      if (!e.shiftKey && !e.ctrlKey && !e.metaKey && !moved) selection.clear();
       return;
     }
     // 格式刷（M6 Task 7）：模式激活时节点点击 = 应用格式并拦截（不让位给选中/
@@ -1258,8 +1366,8 @@ export function EditorPage() {
       applyPainterTo(id);
       return;
     }
-    // FR-EDT-008：Ctrl/Cmd+点击 = 加/减选；Shift+点击让位给框选起点（无操作，
-    // 裁决：右键已被 contextmenu 占用，框选 = Shift+左键拖拽）
+    // FR-EDT-008：Ctrl/Cmd+点击 = 加/减选；Shift+点击无操作（加选占位；M7b-W3 起
+    // 框选 = 无修饰左键拖拽，不再依赖 Shift）
     if (e.shiftKey) return;
     if (e.ctrlKey || e.metaKey) {
       selection.toggle(id);
@@ -1268,11 +1376,18 @@ export function EditorPage() {
     selection.selectOnly(id);
   };
 
-  /** Shift+左键在空白处按下 → 引擎 beginMarquee（scene 坐标）+ 起画橡皮筋。 */
+  /**
+   * 空白左键按下 → 引擎 beginMarquee（scene 坐标）+ 起画橡皮筋（M7b-W3 #5 改道：
+   * 需求方裁定「鼠标按住滑动直接框选」——原 Shift+左拖改为**无修饰左拖**；平移
+   * 改道空格+左拖 / 鼠标中键（Viewport 自理），空格按住时框选让位给平移手势）。
+   */
   const onSvgPointerDown = (e: React.PointerEvent<SVGSVGElement>): void => {
     if (e.button !== 0) return;
     pointerPressRef.current = { x: e.clientX, y: e.clientY }; // 空白点击位移判定（M6 Task 2）
-    if (!e.shiftKey || e.ctrlKey || e.metaKey) return;
+    // 修饰键组合不进框选（Ctrl/Cmd=加减选、Shift=加选占位）；空格按住 = Viewport
+    // 平移手势（spacePressed），框选让位。
+    if (e.shiftKey || e.ctrlKey || e.metaKey) return;
+    if (viewportRef.current?.spacePressed) return;
     const selection = selectionRef.current;
     const vp = viewportRef.current;
     const svgEl = svgRef.current;
@@ -1454,6 +1569,40 @@ export function EditorPage() {
   // 选中节点快照（M6 Task 2 企微对标）：RichPanel 样式区回显数据源；无选中（空选
   // 区/多选/已删）为 null → 样式区置灰 + 提示。tick 驱动重渲染，切换节点即时刷新。
   const selectedSnapshot = doc && selectedNodeId ? getNode(doc, selectedNodeId) : null;
+
+  // —— 标记面板批量口径（M7b-W3 #5）——
+  // 选中集存活节点（root 亦可携标记，随选区一并计入）；标记回显 = **交集口径**
+  // （组值仅当全部选中节点都含才亮，与批量「全含则移除否则设置」同一语义）。
+  const selectedIds =
+    selectionNow && doc
+      ? [...selectionNow.selected].filter((id) => {
+          const snap = getNode(doc, id);
+          return !!snap && !snap.deleted;
+        })
+      : [];
+  const selectedIcons: Partial<Record<IconGroup, string[]>> = {};
+  if (doc && selectedIds.length > 0) {
+    for (const group of ICON_GROUPS) {
+      let acc: string[] | null = null;
+      for (const id of selectedIds) {
+        const vals = getNode(doc, id)?.icons?.[group] ?? [];
+        acc = acc === null ? [...vals] : acc.filter((v) => vals.includes(v));
+        if (acc.length === 0) break;
+      }
+      if (acc && acc.length > 0) selectedIcons[group] = acc;
+    }
+  }
+  // 面板右缘越界钳制（企微弹层贴插入按钮左缘展开；越界时整体左移收回视口）。
+  const MARKER_PANEL_WIDTH = 340;
+  const markerOffsetLeft =
+    markerPanel.anchor.left + MARKER_PANEL_WIDTH > window.innerWidth - 8
+      ? window.innerWidth - 8 - MARKER_PANEL_WIDTH - markerPanel.anchor.left
+      : 0;
+
+  // —— 迷你选盘派生（M7b-W3 #4）：目标节点快照 + 视口内钳制的弹出坐标 ——
+  const pickerSnapshot = markerPicker && doc ? getNode(doc, markerPicker.nodeId) : null;
+  const pickerLeft = markerPicker ? Math.min(markerPicker.x + 6, window.innerWidth - 262) : 0;
+  const pickerTop = markerPicker ? Math.min(markerPicker.y + 6, window.innerHeight - 260) : 0;
 
   // —— 顶栏头像栏派生（M6 Task 9，企微对标）——
   // 在线判定 = 当前 presence 集；展示集 = 会话内已见成员首见序前 MAX_AVATARS 枚，
@@ -2054,10 +2203,10 @@ export function EditorPage() {
           </button>
         </div>
         <span className="toolbar-sep" />
-        {/* 插入组（2026-09-28 二次改版，需求方裁定）：下拉两并列项「图标」「表情」
-            打开右侧固定抽屉 MarkerPanel（对齐格式/主题面板形态，抽屉内可切换图标/
-            表情页签）；备注/链接/图片聚焦 RichPanel 对应控件。不再使用菜单右侧
-            子级弹层（首轮实现被否——横向滚动且层级过深）。 */}
+        {/* 插入组（2026-09-28 二次改版；M7b-W3 面板重做）：下拉两并列项「图标」「表情」
+            打开**锚定弹出层** MarkerPanel（企微式竖层：挂 .insert-wrap 下、顶贴按钮
+            下沿向下展开，面板内可切换图标/表情页签）；备注/链接/图片聚焦 RichPanel
+            对应控件。不再使用 fixed 视口抽屉（需求方 #1 裁定）。 */}
         <div className="toolbar-group">
           <div className="insert-wrap" ref={insertWrapRef}>
             <button
@@ -2067,7 +2216,15 @@ export function EditorPage() {
               aria-label="插入"
               aria-haspopup="menu"
               aria-expanded={insertOpen}
-              onClick={() => (insertOpen ? closeInsertLayer() : setInsertOpen(true))}
+              onClick={() => {
+                if (insertOpen) {
+                  closeInsertLayer();
+                  return;
+                }
+                // 开菜单收面板（二者同挂 insert-wrap，互斥——注释契约见 closeInsertLayer）
+                setMarkerPanel((p) => (p.open ? { ...p, open: false } : p));
+                setInsertOpen(true);
+              }}
             >
               <InsertIcon />
               <span className="toolbar-btn-label">插入</span>
@@ -2077,20 +2234,14 @@ export function EditorPage() {
                 <button
                   data-testid="insert-icons"
                   role="menuitem"
-                  onClick={() => {
-                    closeInsertLayer();
-                    setMarkerPanel({ open: true, tab: 'icon' });
-                  }}
+                  onClick={() => openMarkerPanel('icon')}
                 >
                   图标
                 </button>
                 <button
                   data-testid="insert-emoji"
                   role="menuitem"
-                  onClick={() => {
-                    closeInsertLayer();
-                    setMarkerPanel({ open: true, tab: 'emoji' });
-                  }}
+                  onClick={() => openMarkerPanel('emoji')}
                 >
                   表情
                 </button>
@@ -2125,6 +2276,20 @@ export function EditorPage() {
                   图片
                 </button>
               </div>
+            )}
+            {/* 标记面板（M7b-W3 企微式竖层）：锚定弹出层，absolute 于 .insert-wrap
+                （顶贴按钮下沿、左缘对齐，offsetLeft 右缘越界钳制）；批量口径见
+                applyMarker（多选可批量应用），无选中禁用+提示。 */}
+            {markerPanel.open && (
+              <MarkerPanel
+                icons={selectedIcons}
+                selectedCount={selectedIds.length}
+                onSetIcon={applyMarker}
+                tab={markerPanel.tab}
+                onTabChange={(tab) => setMarkerPanel((p) => ({ ...p, tab }))}
+                onClose={() => setMarkerPanel((p) => ({ ...p, open: false }))}
+                offsetLeft={markerOffsetLeft}
+              />
             )}
           </div>
         </div>
@@ -2506,6 +2671,41 @@ export function EditorPage() {
         </div>
       )}
 
+      {/* 节点标记迷你选盘（M7b-W3 #4 点击换组）：徽章点击弹出该组值网格（HTML 层
+          锚定点击点，视口内钳制），当前值高亮；同值=移除、他值=single 替换/multi
+          叠加；Esc/外点关。目标节点已删不渲染；表格视图不渲染（画布专属浮层）。 */}
+      {!readOnly && markerPicker && view === 'mind' && pickerSnapshot && (
+        <div
+          className="marker-picker"
+          data-testid="marker-picker"
+          style={{ left: pickerLeft, top: pickerTop }}
+          role="menu"
+          aria-label={`${MARKER_GROUP_LABELS[markerPicker.group]}选择`}
+        >
+          <em className="marker-picker-label">{MARKER_GROUP_LABELS[markerPicker.group]}</em>
+          <div className="marker-grid">
+            {(MARKER_CATALOG[markerPicker.group] as readonly MarkerGlyphDef[]).map((def) => {
+              const current = pickerSnapshot.icons?.[markerPicker.group] ?? [];
+              const active = current.includes(def.value);
+              return (
+                <button
+                  key={def.value}
+                  type="button"
+                  data-testid={`marker-picker-value-${def.value}`}
+                  title={def.label}
+                  aria-label={def.label}
+                  aria-pressed={active}
+                  className={active ? 'marker-btn active' : 'marker-btn'}
+                  onClick={() => applyPickerValue(def.value)}
+                >
+                  <MarkerChip def={def} />
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {/* 底栏（画布专属：适应画布/缩放）：表格视图隐藏（M7a-T4） */}
       {view === 'mind' && (
         <footer className="editor-bottombar">
@@ -2577,15 +2777,6 @@ export function EditorPage() {
       <HelpPanel open={helpOpen} onClose={() => setHelpOpen(false)} />
       {/* 主题缩略图选择面板（M6 Task 4）：套用 = setDocMeta themeId（与 select 同一
           写链路，可撤销）+ afterUserWrite，套用后关闭抽屉 */}
-      {markerPanel.open && (
-        <MarkerPanel
-          selected={selectedSnapshot}
-          onSetIcon={applyMarker}
-          tab={markerPanel.tab}
-          onTabChange={(tab) => setMarkerPanel((p) => ({ ...p, tab }))}
-          onClose={() => setMarkerPanel((p) => ({ ...p, open: false }))}
-        />
-      )}
       <ThemePanel
         open={themePanelOpen}
         currentId={themeId}

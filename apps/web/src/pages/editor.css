@@ -594,8 +594,8 @@ body.painter-active .editor-canvas svg {
   cursor: pointer;
 }
 
-/* 插入菜单（2026-09-28 二次改版）：仅下拉（图标/表情/备注/链接/图片）——
-   标记面板已迁为右侧固定抽屉（marker-panel.css），不再有子级弹层。
+/* 插入菜单（2026-09-28 二次改版；M7b-W3 面板重做）：仅下拉（图标/表情/备注/链接/
+   图片）——标记面板已重做为企微式锚定弹出层（挂本 wrap 下，marker-panel.css）。
    定位对齐 .export-menu（absolute 于 relative 的 .insert-wrap，顶距 4px）。 */
 .insert-wrap {
   position: relative;

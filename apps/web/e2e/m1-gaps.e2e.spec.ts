@@ -7,7 +7,8 @@ import { fileURLToPath } from 'node:url';
  *
  * 复用 Task 11 登录模式（新手机号注册即赠 3 个种子文件）；各用例独立注册、互不共享
  * 状态、可并行：
- * - ① 框选：Shift+左键空白拖拽（右键已被 contextmenu 占用，裁决 Shift+左键）→
+ * - ① 框选：空白左键拖拽（M7b-W3 改道：需求方裁定「按住滑动直接框选」，原
+ *   Shift+左键改无修饰左拖；平移改道空格+左拖/中键）→
  *   相交入选、空结果清空；Ctrl/Cmd+点击加/减选（FR-EDT-008）；
  * - ② 样式面板基础版：填充（含子树）/字号（仅当前节点）两态 + 撤销（FR-EDT-015）；
  * - ③ 缩放快捷档位 50%~200% 与页面级全屏按钮（FR-EDT-027/028）；
@@ -47,7 +48,7 @@ function allGroups(page: Page) {
 
 // ─────────────── ① 框选 + Ctrl/Cmd 加减选（FR-EDT-008） ───────────────
 
-test('框选：Shift+空白拖拽相交节点全选，橡皮筋出现后移除', async ({ page }) => {
+test('框选：空白左键拖拽相交节点全选，橡皮筋出现后移除（M7b-W3 无修饰左拖）', async ({ page }) => {
   await openSeedDoc(page, '本周计划');
   const svgBox = (await page.locator('.editor-canvas svg').boundingBox()) as {
     x: number;
@@ -91,16 +92,14 @@ test('框选：Shift+空白拖拽相交节点全选，橡皮筋出现后移除',
     y2: Math.max(start.y, end.y),
   };
 
-  await page.keyboard.down('Shift');
+  // M7b-W3：无修饰左键空白拖拽即框选（原 Shift+左拖改道；平移走空格+左拖/中键）
   await page.mouse.move(start.x, start.y);
   await page.mouse.down();
   await page.mouse.move(end.x, end.y, { steps: 6 });
   // 拖动中橡皮筋可见，抬起后移除
   await expect(page.locator('.editor-canvas svg .gm-marquee')).toHaveCount(1);
   await page.mouse.up();
-  await page.keyboard.up('Shift');
   await expect(page.locator('.editor-canvas svg .gm-marquee')).toHaveCount(0);
-
   // 相交（含边界）入选，框外不入选——按各盒与实际矩形的几何关系逐个断言
   const intersects = (bb: { x: number; y: number; width: number; height: number }): boolean =>
     bb.x <= dragRect.x2 && bb.x + bb.width >= dragRect.x1 && bb.y <= dragRect.y2 && bb.y + bb.height >= dragRect.y1;

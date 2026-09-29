@@ -58,7 +58,7 @@ export const SHORTCUT_LIST: readonly ShortcutItem[] = [
   { id: 'undo', group: '节点编辑', label: '撤销', win: 'Ctrl+Z', mac: '⌘Z' },
   { id: 'redo', group: '节点编辑', label: '重做', win: 'Ctrl+Shift+Z / Ctrl+Y', mac: '⌘⇧Z / ⌘Y' },
   { id: 'enter', group: '节点编辑', label: '新建同级节点', win: 'Enter', mac: 'Return' },
-  { id: 'edit-selected', group: '节点编辑', label: '编辑选中节点', win: 'Space', mac: 'Space' },
+  { id: 'edit-selected', group: '节点编辑', label: '编辑选中节点', win: 'F2', mac: 'F2' },
   { id: 'insert-child', group: '节点编辑', label: '新建子级节点', win: 'Tab', mac: 'Tab' },
   {
     id: 'insert-parent',
@@ -96,7 +96,8 @@ export interface KeyboardMapDeps {
   redo(): void;
   /** Enter（未编辑态）：新建同级节点（root 上新建子级）并进入编辑。 */
   onEnter(): void;
-  /** Space（未编辑态，FR-EDT-005）：主选中节点进入编辑态。 */
+  /** F2（未编辑态，FR-EDT-005）：主选中节点进入编辑态。原 Space 绑定让位给
+   *  「空格按住 + 左键拖拽 = 平移画布」手势（M7b-W3 平移改道，需求方裁定）。 */
   onEditSelected(): void;
   /** Tab 新建子级 / Shift+Tab 在当前与父之间插新父级。 */
   onTab(shift: boolean): void;
@@ -174,7 +175,7 @@ export function resolveShortcutAction(e: ShortcutKeySnapshot): ShortcutActionId 
   switch (key) {
     case 'Enter':
       return 'enter';
-    case ' ':
+    case 'F2': // M7b-W3：原 Space「进入编辑」让位给平移手势（空格+左键拖拽），改绑 F2
       return 'edit-selected';
     case 'Tab':
       return e.shiftKey ? 'insert-parent' : 'insert-child';
@@ -262,7 +263,8 @@ export function attachKeyboardMap(deps: KeyboardMapDeps): () => void {
       return;
     }
     // 命中即抑制默认行为（原 if 链各分支逐个 preventDefault 的口径不变）；
-    // Space 抑制滚动/按钮激活、Tab 抑制焦点移动等均沿袭。
+    // F2 抑制部分浏览器的重命名/查找语义、Tab 抑制焦点移动等均沿袭。
+    // Space 不在此层接管：按键让位给 Viewport 平移手势（空格按住 + 左键拖拽）。
     e.preventDefault();
     dispatchAction(deps, action, e);
   };

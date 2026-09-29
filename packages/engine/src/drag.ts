@@ -129,6 +129,9 @@ export class DragController {
     const target = e.target as Element | null;
     // 折叠徽标（嵌于节点 g 内）优先排除：徽标点击归页面层。
     if (target?.closest('[data-for-id]')) return;
+    // 标记徽标（M7b-W3 点击换组）：同折叠徽标让位纪律——徽标上的按下不进节点
+    // 拖拽候选（click 归页面层「点徽章弹同组选盘」）。
+    if (target?.closest('[data-marker-group]')) return;
     const g = target?.closest('[data-node-id]');
     if (!g) return;
     const id = g.getAttribute('data-node-id');

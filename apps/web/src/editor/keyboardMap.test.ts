@@ -85,9 +85,11 @@ describe('resolveShortcutAction（绑定行为快照）', () => {
     expect(resolveShortcutAction(keys({ key: 'a', ctrlKey: true }))).toBe('select-all');
   });
 
-  it('单键族：Enter/Space/Tab 两态/删除/方向键/Home/End；修饰键一律不触发', () => {
+  it('单键族：Enter/F2/Tab 两态/删除/方向键/Home/End；修饰键一律不触发', () => {
     expect(resolveShortcutAction(keys({ key: 'Enter' }))).toBe('enter');
-    expect(resolveShortcutAction(keys({ key: ' ' }))).toBe('edit-selected');
+    // M7b-W3 平移改道：Space 键位让位给「空格+左键拖拽平移」手势，编辑改绑 F2
+    expect(resolveShortcutAction(keys({ key: 'F2' }))).toBe('edit-selected');
+    expect(resolveShortcutAction(keys({ key: ' ' }))).toBeNull();
     expect(resolveShortcutAction(keys({ key: 'Tab' }))).toBe('insert-child');
     expect(resolveShortcutAction(keys({ key: 'Tab', shiftKey: true }))).toBe('insert-parent');
     expect(resolveShortcutAction(keys({ key: 'Delete' }))).toBe('delete-node');
