@@ -1,7 +1,7 @@
 // build.ts：XmindNode → 2020+ 格式 zip（[content.json, metadata.json]）。
-// 备注写为 notes.plain.content；标记（M7a-T1）仅出三组中有 XMind 原生 marker-id
-// 对应的值（iconsToMarkerIds：priority-N / flag-red / star-red；emoji 与其余 icon
-// slug 无原生对应，不导出——映射口径见 markers.ts 头注）。
+// 备注写为 notes.plain.content；标记（M7b-W1）各数组逐枚出有 XMind 原生 marker-id
+// 对应的值（iconsToMarkerIds：priority-N / flag-red / star-red；mood/number/arrow/
+// progress/emoji 与其余 other slug 无原生对应，不导出——映射口径见 markers.ts 头注）。
 import { strToU8, zipSync } from 'fflate';
 import { iconsToMarkerIds } from './markers';
 import type { JsonTopic, XmindNode } from './types';

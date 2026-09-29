@@ -1,14 +1,20 @@
 // types.ts：对外的统一树节点 / 降级条目 / 错误契约，以及 content.json（2020+）的宽松原始形状。
 
 /**
- * 节点标记（M7a-T1 三组制子集，与 @gmind/core 值目录一致；本包零依赖 gmind/*，
- * 故本地定义同形结构）：priority '1'-'7' / icon 10 slug（done/cancel/important/flag/
- * question/alert/idea/like/link/clock）/ emoji 10 字符。
+ * 节点标记（M7b-W1 八组制多值，与 @gmind/core 值目录一致；本包零依赖 gmind/*，
+ * 故本地定义同形结构）：组键 ∈ 八组制（mood/priority/number/arrow/flag/progress/
+ * other/emoji），每组值为 slug/字符数组（单选组至多 1 枚、多选组至多 8 枚）。
+ * 导入只产 priority/flag/other 三组（映射口径见 markers.ts 头注）。
  */
 export interface XmindIcons {
-  priority?: string;
-  icon?: string;
-  emoji?: string;
+  mood?: string[];
+  priority?: string[];
+  number?: string[];
+  arrow?: string[];
+  flag?: string[];
+  progress?: string[];
+  other?: string[];
+  emoji?: string[];
 }
 
 /** 解析后的统一树节点：只保留层级/文本/备注/标记。title 允许空串（xmind 源文件可缺 title）。 */

@@ -17,6 +17,7 @@ export * from './types';
 export * from './measure';
 export * from './layout';
 export * from './themes';
+export * from './markers';
 export * from './render';
 export * from './viewport';
 export * from './selection';

@@ -1,7 +1,15 @@
 import * as Y from 'yjs';
 import type { AbstractType, YEvent } from 'yjs';
 import { ROOT_NODE_ID } from './doc';
-import { ICON_VALUES, type IconGroup } from './constants';
+import {
+  ICON_GROUPS,
+  ICON_LEGACY_MAP,
+  MARKER_MULTI_MAX,
+  PRIORITY_LEGACY_MAP,
+  iconValuesOf,
+  progressStageOf,
+  type IconGroup,
+} from './constants';
 import { ORIGIN_SYSTEM } from './undo';
 import { applySummaryRepair, planSummaryRepair } from './summary';
 
@@ -518,36 +526,46 @@ export function normalizeTreeFor(doc: Y.Doc, origin: string, dirtyNodeIds: Set<s
   return repairs;
 }
 
-// ══ 图标三组制收敛（M7a-T1，随全量 normalizeTree 执行）══════════════════════
+// ══ 图标八组制收敛（M7b-W1，随全量 normalizeTree 执行）══════════════════════
 
-/** 图标收敛计划条目：该节点收敛后的 icons 全量新组键值 + 旧 progress 迁移的进度。 */
+/** 图标收敛计划条目：该节点收敛后的 icons 全量新组键值（组值数组）。 */
 export interface IconRepairEntry {
   nodeId: string;
-  icons: Partial<Record<IconGroup, string>>;
-  /** 旧 progress 组解析出的 0-100 进度（null = 无迁移）；仅当节点 task 无 progress 键时写入。 */
-  taskProgress: number | null;
+  icons: Partial<Record<IconGroup, string[]>>;
+}
+
+/** 内部：组值数组的规范化（字符串过滤、去重保序、目录校验、multi 上限；emoji 组
+ *  目录外字符保留——emoji 值本身即字形，M7a 口径沿用）。 */
+function canonicalIconValues(group: IconGroup, values: string[]): string[] {
+  const out: string[] = [];
+  for (const v of values) {
+    if (typeof v !== 'string' || v === '') continue;
+    if (group !== 'emoji' && !iconValuesOf(group).includes(v)) continue;
+    if (out.includes(v)) continue;
+    out.push(v);
+    if (out.length >= MARKER_MULTI_MAX) break;
+  }
+  return out;
 }
 
 /**
- * 规划图标三组制收敛（文档状态纯函数，replica 一致，幂等）。
+ * 规划图标八组制收敛（文档状态纯函数，replica 一致，幂等）。
  *
- * ── 旧值口径（M6 面板 MarkerPanel.tsx 的实际存储值，2026-09-28 核对）──────────
- * priority 'p1'-'p9' ｜ progress '0%'/'10%'/'25%'/'40%'/'50%'/'60%'/'75%'/'100%'
- * ｜ flag '红'/'蓝'/'绿'/'黄'/'紫'/'橙' ｜ star '红'/'蓝'/'绿'/'黄'/'紫'
- * ｜ emoji 任意单字符（M6 表 72 个）。裸值 '1'-'9'（无 p 前缀）亦按可解析处理
- * （兼容 xmind 导入历史与 crafted 状态）。
- *
- * ── 映射规则（spec M7a T1 裁定）────────────────────────────────────────────
- * - priority：可解析为 1-7 → '1'-'7'；8/9 → '7'（收敛上限）；不可解析 → 删；
- * - progress：组整体删除；值去 '%' 后可解析为 0-100 整数 → 迁入 task.progress
- *   （节点 task 已有 progress 键时不覆盖——新格式数据优先，幂等）；不可解析 → 丢弃；
- * - flag → icon 'flag'（颜色信息无对应位，丢弃）；
- * - star → icon 'important'；**flag 与 star 同节点并存时 star 胜**（二者都迁入 icon
- *   组必然冲突，固定取 important——与 mindgrid「重要」语义对齐，跨副本确定）；
- *   节点已有合法 icon 组值时 icon 组值优先（新格式数据优先）；
- * - emoji：值原样保留（值域外旧 emoji 不迁不删——emoji 值本身即字形，渲染/读取
- *   均不依赖目录；写入口的目录校验只约束新写入）；
- * - 未知组（非三组）与非字符串值：确定性清除（收敛到 ICON_GROUPS 目录）。
+ * ── 输入形状（两代格式并存，逐键处理）────────────────────────────────────
+ * - M7b 新格式：组键 ∈ ICON_GROUPS 且值为 Y.Array——值规范化（去重/目录/上限）后保留；
+ * - M6/M7a 旧格式：**字符串值（无论组键是否与八组同名——Y.Array 才是新格式形状）**
+ *   与组键 ∉ ICON_GROUPS 的旧键（icon/star/progress），按 M7a 口径解析后再入新目录
+ *   （映射表单源 constants.ts）：
+ *   · priority 'pN'/裸 'N'：可解析 1-9 → 8/9 先 clamp 到 7（M7a 收敛上限）→
+ *     PRIORITY_LEGACY_MAP 档位映射（p0-p4/mid/low）；不可解析 → 删；
+ *   · icon（M7a 10 slug）→ ICON_LEGACY_MAP 逐 slug 落位（flag→flag 组、like→heart、
+ *     其余→other 同名/近似位）；
+ *   · progress 'N%'/'N'（M6 环）→ progressStageOf 最近 1/8 档；不可解析 → 丢弃；
+ *   · flag（M6 颜色串）→ flag 组 'flag'；star（M6 颜色串）→ other 'important'
+ *     （M7b 起二者落不同组、可并存，不再有 M7a 的 star 胜 flag 冲突）；
+ *   · emoji（任意单字符）→ 原样保留（仅当同节点需要重写时才随整表转成数组；
+ *     纯 emoji 旧字符串的节点零修复——M7a「原样保留不计修复」沿用）；
+ *   · 其余未知组/非字符串：确定性清除。
  *
  * 覆盖范围：全部节点（含墓碑——撤销/快照还原可复活旧格式值，children 冻结不变量
  * 不涉及 icons；与 summary repair 相同的事务纪律）。
@@ -561,82 +579,118 @@ export function planIconRepair(doc: Y.Doc): IconRepairEntry[] {
   const plan: IconRepairEntry[] = [];
   for (const [nodeId, node] of nodes.entries()) {
     const iconsRaw = node.get('icons');
-    const current: Array<[string, string]> =
-      iconsRaw instanceof Y.Map
-        ? [...iconsRaw.entries()].filter((e): e is [string, string] => typeof e[1] === 'string')
-        : [];
-    const mapped: Partial<Record<IconGroup, string>> = {};
-    let taskProgress: number | null = null;
-    let starSeen = false;
-    let flagSeen = false;
-    let legacyProgress: number | null = null;
-    for (const [group, value] of current) {
-      switch (group) {
+    if (!(iconsRaw instanceof Y.Map)) continue;
+    const mapped: Partial<Record<IconGroup, string[]>> = {};
+    let needs = false;
+    for (const [key, raw] of [...iconsRaw.entries()] as Array<[string, unknown]>) {
+      const inGroups = (ICON_GROUPS as readonly string[]).includes(key);
+      if (inGroups && raw instanceof Y.Array) {
+        // M7b 新格式键：规范化后保留；规范化结果 ≠ 原值（目录外/去重/截断/非字符串）
+        // 即需重写。
+        const group = key as IconGroup;
+        const rawValues = raw.toArray().filter((s): s is string => typeof s === 'string');
+        const canonical = canonicalIconValues(group, rawValues);
+        if (canonical.length > 0) mapped[group] = canonical;
+        if (rawValues.length !== raw.length || canonical.length !== rawValues.length || canonical.some((v, i) => v !== rawValues[i])) {
+          needs = true;
+        }
+        continue;
+      }
+      // 旧格式（字符串值或旧组键）→ 新目录；一律需要重写（emoji 例外，见下）。
+      const asStrings = (v: unknown): string[] =>
+        typeof v === 'string' ? [v] : v instanceof Y.Array ? v.toArray().filter((s): s is string => typeof s === 'string') : [];
+      if (inGroups && typeof raw === 'string' && key === 'emoji') {
+        if (raw !== '') mapped.emoji = [raw]; // 原样保留：仅随其他重写转成数组
+        continue; // 不触发 needs（M7a「原样保留不计修复」沿用）
+      }
+      needs = true;
+      if (inGroups && typeof raw === 'string') {
+        const group = key as IconGroup;
+        if (group === 'priority') {
+          const m = /^p?([1-9])$/.exec(raw);
+          if (m) {
+            const legacy = Number(m[1]) >= 8 ? '7' : m[1];
+            const target = PRIORITY_LEGACY_MAP[legacy];
+            if (target) mapped.priority = [target];
+          }
+        } else if (group === 'flag') {
+          mapped.flag = ['flag']; // M6 颜色串：形状/颜色信息无对应位，丢弃
+        } else if (group === 'progress') {
+          // M6 百分比环 'N%'/'N'：同名组键的旧字符串值，走最近 1/8 档映射（与
+          // 下方旧组 switch 的 progress 分支同口径——switch 只接组键 ∉ 八组的旧键）
+          const m = /^(\d{1,3})%?$/.exec(raw);
+          const stage = m ? progressStageOf(Number(m[1])) : null;
+          if (stage) mapped.progress = [stage];
+        } else {
+          const canonical = canonicalIconValues(group, [raw]);
+          if (canonical.length > 0) mapped[group] = canonical; // 窗口期字符串单值：可解析则入组
+        }
+        continue;
+      }
+      // 组键 ∉ ICON_GROUPS：M6/M7a 旧组 → 新目录
+      switch (key) {
         case 'priority': {
-          const m = /^p?([1-9])$/.exec(value);
-          if (m) mapped.priority = Number(m[1]) >= 8 ? '7' : m[1] as string;
+          for (const v of asStrings(raw)) {
+            const m = /^p?([1-9])$/.exec(v);
+            if (!m) continue;
+            const legacy = Number(m[1]) >= 8 ? '7' : (m[1] as string);
+            const target = PRIORITY_LEGACY_MAP[legacy];
+            if (target) mapped.priority = [target];
+            break; // 单选组：首个可解析值胜
+          }
           break;
         }
-        case 'icon':
-          if ((ICON_VALUES as readonly string[]).includes(value)) mapped.icon = value;
+        case 'icon': {
+          for (const v of asStrings(raw)) {
+            const target = ICON_LEGACY_MAP[v];
+            if (target) {
+              mapped[target.group] = [target.value];
+              break; // 单值旧格式：首个可映射值胜
+            }
+          }
           break;
-        case 'emoji':
-          mapped.emoji = value; // 原样保留
-          break;
+        }
         case 'progress': {
-          const m = /^(\d{1,3})%?$/.exec(value);
-          const n = m ? Number(m[1]) : NaN;
-          if (Number.isInteger(n) && n >= 0 && n <= 100) legacyProgress = n;
+          for (const v of asStrings(raw)) {
+            const m = /^(\d{1,3})%?$/.exec(v);
+            if (!m) continue;
+            const stage = progressStageOf(Number(m[1]));
+            if (stage) {
+              mapped.progress = [stage];
+              break;
+            }
+          }
           break;
         }
-        case 'star':
-          starSeen = true;
+        case 'flag': {
+          if (asStrings(raw).length > 0) mapped.flag = ['flag'];
           break;
-        case 'flag':
-          flagSeen = true;
+        }
+        case 'star': {
+          if (asStrings(raw).length > 0) mapped.other = ['important'];
           break;
+        }
         default:
-          break; // 未知组：清除
+          break; // 未知组：清除（needs 已置位）
       }
     }
-    if (starSeen) mapped.icon = mapped.icon ?? 'important'; // star 胜过 flag（头注口径）
-    else if (flagSeen) mapped.icon = mapped.icon ?? 'flag';
-    // 是否需要写入：收敛键数 ≠ 原键数（含 legacy 组/非字符串垃圾值/被删的 progress 组）
-    // 或任一保留键值变化；或存在进度迁移。
-    const needs =
-      Object.keys(mapped).length !== (iconsRaw instanceof Y.Map ? iconsRaw.size : 0) ||
-      current.some(([g, v]) => (mapped as Record<string, string | undefined>)[g] !== v);
-    if (legacyProgress !== null) {
-      const task = node.get('task');
-      const hasProgress = task instanceof Y.Map && task.get('progress') !== undefined;
-      if (!hasProgress) taskProgress = legacyProgress;
-    }
-    if (needs || taskProgress !== null) plan.push({ nodeId, icons: mapped, taskProgress });
+    if (needs) plan.push({ nodeId, icons: mapped });
   }
   return plan;
 }
 
-/** 应用图标收敛计划（必须在调用方已开启的事务内执行）：重写 icons Y.Map 为收敛
- *  键值（缺 map 则不创建——无 icons 的节点本就无键可收敛，仅进度迁移时才建 task）。 */
+/** 应用图标收敛计划（必须在调用方已开启的事务内执行）：整表重写 icons Y.Map 为
+ *  收敛键值（组值数组；空组不写键）。 */
 export function applyIconRepair(doc: Y.Doc, plan: IconRepairEntry[]): void {
   const nodes = nodesMap(doc);
   for (const entry of plan) {
     const node = nodes.get(entry.nodeId);
     if (!node) continue; // 防御：规划后理论不可达
     const iconsRaw = node.get('icons');
-    if (iconsRaw instanceof Y.Map) {
-      for (const key of [...iconsRaw.keys()]) iconsRaw.delete(key);
-      for (const [group, value] of Object.entries(entry.icons)) {
-        iconsRaw.set(group, value as string);
-      }
-    }
-    if (entry.taskProgress !== null) {
-      let task = node.get('task');
-      if (!(task instanceof Y.Map)) {
-        task = new Y.Map<unknown>();
-        node.set('task', task);
-      }
-      (task as Y.Map<unknown>).set('progress', entry.taskProgress);
+    if (!(iconsRaw instanceof Y.Map)) continue;
+    for (const key of [...iconsRaw.keys()]) iconsRaw.delete(key);
+    for (const [group, values] of Object.entries(entry.icons)) {
+      if (values.length > 0) iconsRaw.set(group, Y.Array.from(values));
     }
   }
 }

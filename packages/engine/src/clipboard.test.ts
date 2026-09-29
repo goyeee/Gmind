@@ -36,7 +36,7 @@ interface StubNode {
   note: string;
   href: string;
   image: { key: string; w: number; h: number } | null;
-  icons: Record<string, string>;
+  icons: Record<string, string[]>;
   style: Record<string, string>;
   collapsed: boolean;
   deleted: boolean;
@@ -155,7 +155,7 @@ class StubDoc implements IDocHandle {
     const n = this.nodes.get(id);
     if (!n) return;
     if (value === null) delete n.icons[group];
-    else n.icons[group] = value;
+    else n.icons[group] = [value];
   }
 
   setStyle(id: string, patch: Record<string, string | number | null>, origin?: string): void {
@@ -210,7 +210,7 @@ describe('copyNodes（内部结构化 + 文本大纲双格式）', () => {
       note: '备注A',
       href: 'https://a.example',
       image: { key: 'img-a', w: 100, h: 80 },
-      icons: { priority: 'high' },
+      icons: { priority: ['high'] },
       style: { color: '#ff0000' },
     });
     doc.addNode({ id: 'a1', parentId: 'a', text: 'A1', style: { color: '#00ff00' } });
@@ -227,7 +227,7 @@ describe('copyNodes（内部结构化 + 文本大纲双格式）', () => {
     expect(a.note).toBe('备注A');
     expect(a.href).toBe('https://a.example');
     expect(a.image).toEqual({ key: 'img-a', w: 100, h: 80 });
-    expect(a.icons).toEqual({ priority: 'high' });
+    expect(a.icons).toEqual({ priority: ['high'] });
     expect(a.style).toEqual({ color: '#ff0000' });
     expect(a.children).toHaveLength(1);
     expect(a.children[0].id).toBe('a1');
@@ -262,7 +262,7 @@ describe('pasteNodes（内部 payload 粘贴）', () => {
         note: 'n1',
         href: 'https://h.example',
         image: { key: 'old-key', w: 12, h: 34 },
-        icons: { priority: '3', icon: 'flag' },
+        icons: { priority: ['p2'], other: ['done'] },
         style: { color: 'red' },
         children: [emptyNode('srcC', 'C1')],
       },
@@ -297,8 +297,9 @@ describe('pasteNodes（内部 payload 粘贴）', () => {
       'setNote',
       'setHref',
       'setImage',
-      'setIcon', // priority
-      'setIcon', // icon
+      'setIcon', // priority（single 组写首枚）
+      'setIcon', // other：multi 组先清组
+      'setIcon', // other：toggle 追加 'done'
       'setStyle',
       'addChild', // C1（空字段不产生额外写调用）
       'addChild', // R2
@@ -310,7 +311,7 @@ describe('pasteNodes（内部 payload 粘贴）', () => {
     expect(r1.note).toBe('n1');
     expect(r1.href).toBe('https://h.example');
     expect(r1.image).toEqual({ key: 'new-old-key', w: 12, h: 34 });
-    expect(r1.icons).toEqual({ priority: '3', icon: 'flag' });
+    expect(r1.icons).toEqual({ priority: ['p2'], other: ['done'] });
     expect(r1.style).toEqual({ color: 'red' });
 
     // 结构：p.children = [E, R1, R2]（首根插在 index=1，R2 追加末尾）
@@ -356,7 +357,7 @@ describe('pasteNodes（内部 payload 粘贴）', () => {
     expect(doc.calls).toHaveLength(0);
   });
 
-  it('M7a-T1：payload 携带旧五组/越界图标值 → 目录外静默跳过（不抛错、不半途失败）', async () => {
+  it('M7b-W1：payload 携带旧值/越界值/超限 multi → 目录外静默跳过（不抛错、不半途失败）', async () => {
     const doc = new StubDoc();
     doc.addNode({ id: 'root' });
     doc.addNode({ id: 'p', parentId: 'root', text: 'P' });
@@ -369,16 +370,16 @@ describe('pasteNodes（内部 payload 粘贴）', () => {
           note: '',
           href: '',
           image: null,
-          // 旧五组值（跨版本部署的系统剪贴板遗留）+ 越界 priority + 目录外 emoji
-          icons: { priority: '8', progress: '50%', flag: '红', star: '蓝', emoji: '🚀', icon: 'done' },
+          // 跨版本遗留：旧五组字符串值 + 组值数组里的越界值/目录外 emoji + 未知组
+          icons: { priority: '8', progress: '50%', flag: '红', star: '蓝', icon: 'done', other: ['done', 'junk'], emoji: ['🚀'] as unknown as string[] } as unknown as Record<string, string[]>,
           style: {},
           children: [],
         },
       ],
     };
     const ids = await pasteNodes(doc, 'p', 0, payload);
-    expect(doc.nodes.get(ids[0])!.icons).toEqual({ icon: 'done' }); // 只有目录内 (icon,'done') 落写
-    expect(doc.ops()).toEqual(['addChild', 'setIcon']);
+    expect(doc.nodes.get(ids[0])!.icons).toEqual({ other: ['done'] }); // 只有目录内 (other,'done') 落写
+    expect(doc.ops()).toEqual(['addChild', 'setIcon', 'setIcon']); // multi 组：清组 + 逐枚 toggle（'done' 落写，'junk' 被收敛剔除）
   });
 });
 

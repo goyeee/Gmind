@@ -1,5 +1,11 @@
 import * as Y from 'yjs';
-import { ICON_GROUPS, iconValuesOf, type IconGroup } from './constants';
+import {
+  ICON_GROUPS,
+  MARKER_GROUP_MODE,
+  MARKER_MULTI_MAX,
+  iconValuesOf,
+  type IconGroup,
+} from './constants';
 import { ROOT_NODE_ID } from './doc';
 import {
   addChild,
@@ -53,10 +59,11 @@ export interface RestoreResult {
  *   重建节点纳入落位核对（②已按快照下标插入，正常零操作）——防御 ②③ 交错移位的
  *   边角，保证收敛是构造性的而非论证性的。
  * ④ 内容字段逐项对比（getNode 的 NodeSnapshot 全字段）：text/note/href/collapsed 直接
- *   比；icons 按 ICON_GROUPS 全组对比（组值不同 setIcon(value|null)；**快照组值为值域外
- *   旧标记——M6 旧 emoji 等 repair 有意保留、setIcon 目录校验拒绝——时计划期（事务外）
- *   按 iconValuesOf 目录过滤，跳过恢复该标记：不回写快照值、也不清除 target 现状，
- *   与 engine 剪贴板 isWritableIcon 同策略**）；task（M7a-T1）
+ *   比；icons（M7b-W1 多值）按 ICON_GROUPS 全组数组对比——single 组 setIcon(值|null)、
+ *   multi 组清组后逐枚 toggle 追加（等价整组覆写）；**快照组值为值域外旧标记——repair
+ *   有意保留、setIcon 目录校验拒绝——时计划期（事务外）按 canonicalSnapIcons 目录过滤，
+ *   组内全为值外值即跳过恢复该标记：不回写快照值、也不清除 target 现状，与 engine
+ *   剪贴板 isWritableIcon 同策略**；task（M7a-T1）
  *   六字段逐项对比（全字段显式 patch 写回，doneDate 恒显式给值含 null →
  *   applyStatusRules 联动分支不触发，恢复结果即快照原值）；
  *   image 按 key 对比（key 变更时 w/h 随快照值一并写回）；style 按键集对比
@@ -223,7 +230,9 @@ function snapIndexInSnapshot(snapById: Map<string, NodeSnapshot>, id: string): n
 }
 
 /** ④ 内容字段是否存在差异（计划期判定 + 执行期复用同一判定写入）。
- *  icons：快照组值为值域外旧标记时该组整体跳过（不写不清，恒视为无差异——见头注④）；
+ *  icons（M7b-W1 多值）：快照组值先经 canonicalSnapIcons 规范化（目录校验/去重/
+ *  上限，emoji 组目录外字符保留）；快照组非空但规范化后为空（值域外旧标记——repair
+ *  有意保留、setIcon 目录校验拒绝）时该组整体跳过（不写不清，恒视为无差异——见头注④）；
  *  task（M7a-T1）按归一化快照逐字段对比；恢复走全字段 patch（doneDate 恒显式给值含
  *  null，applyStatusRules 联动分支不触发——见 applyFieldDiff 注）。 */
 function hasFieldDiff(t: NodeSnapshot, s: NodeSnapshot): boolean {
@@ -239,16 +248,36 @@ function hasFieldDiff(t: NodeSnapshot, s: NodeSnapshot): boolean {
   );
 }
 
-/** 组图标差异（B1）：快照组值为值域外旧标记（repair 有意保留、setIcon 目录校验拒绝）
- *  时返回 false（跳过该组）；快照组值缺失仍正常比对——target 多出的目录内值要清掉
+/**
+ * 快照组值的恢复口径规范化（M7b-W1）：目录校验（所有组严格——写入口 setIcon 的
+ * 目录口径；repair 对旧 emoji 的「原样保留」只作用于存量文档，不构成可写值域）+
+ * 去重保序 + multi 上限钳制。返回规范化数组（可能为空）。
+ */
+function canonicalSnapIcons(group: IconGroup, values: string[] | undefined): string[] {
+  if (!values) return [];
+  const catalog = iconValuesOf(group);
+  const out: string[] = [];
+  for (const v of values) {
+    if (typeof v !== 'string' || v === '' || !catalog.includes(v)) continue;
+    if (!out.includes(v)) out.push(v);
+    if (out.length >= MARKER_MULTI_MAX) break;
+  }
+  return out;
+}
+
+/** 组图标差异（B1，M7b-W1 数组版）：快照组非空而规范化后为空（值域外旧标记）时
+ *  返回 false（跳过该组）；快照组缺失仍正常比对——target 多出的目录内值要清掉
  *  （恢复 = 回滚到快照态，setIcon(null) 合法）。 */
 function iconGroupDiffers(
   group: IconGroup,
-  tValue: string | undefined,
-  sValue: string | undefined,
+  tValue: string[] | undefined,
+  sValue: string[] | undefined,
 ): boolean {
-  if (sValue !== undefined && !iconValuesOf(group).includes(sValue)) return false;
-  return tValue !== sValue;
+  const snap = canonicalSnapIcons(group, sValue);
+  if (sValue !== undefined && sValue.length > 0 && snap.length === 0) return false;
+  const target = canonicalSnapIcons(group, tValue);
+  if (target.length !== snap.length) return true;
+  return target.some((v, i) => v !== snap[i]);
 }
 
 /** task 差异判定（快照 task 恒为归一化对象，逐字段比即可）。 */
@@ -286,12 +315,22 @@ function applyFieldDiff(target: Y.Doc, id: string, s: NodeSnapshot): boolean {
     changed = true;
   }
   for (const group of ICON_GROUPS as readonly IconGroup[]) {
-    const snapValue = s.icons[group];
-    // B1：快照组值为值域外旧标记 → 跳过恢复该标记（计划期已按同规则过滤出计划，
-    // 此处执行期同判保证 setIcon 只收到目录内值或 null，事务内不再抛 INVALID_ICON_VALUE）。
-    if (snapValue !== undefined && !iconValuesOf(group).includes(snapValue)) continue;
-    if (t.icons[group] !== snapValue) {
-      setIcon(target, id, group, snapValue ?? null, ORIGIN_RESTORE);
+    const snapValue = canonicalSnapIcons(group, s.icons[group]);
+    // B1：快照组非空而规范化后为空（值域外旧标记）→ 跳过恢复该标记（计划期已按同
+    // 规则过滤出计划，此处执行期同判保证 setIcon 只收到目录内值或 null，事务内不再抛）。
+    const snapRaw = s.icons[group];
+    if (snapRaw !== undefined && snapRaw.length > 0 && snapValue.length === 0) continue;
+    const tValue = canonicalSnapIcons(group, t.icons[group]);
+    if (tValue.length !== snapValue.length || tValue.some((v, i) => v !== snapValue[i])) {
+      if (snapValue.length === 0) {
+        setIcon(target, id, group, null, ORIGIN_RESTORE);
+      } else if (MARKER_GROUP_MODE[group] === 'single') {
+        setIcon(target, id, group, snapValue[0] as string, ORIGIN_RESTORE);
+      } else {
+        // multi 组：先清组再逐枚 toggle 追加（setIcon 多值语义下等价于整组覆写）
+        setIcon(target, id, group, null, ORIGIN_RESTORE);
+        for (const v of snapValue) setIcon(target, id, group, v, ORIGIN_RESTORE);
+      }
       changed = true;
     }
   }

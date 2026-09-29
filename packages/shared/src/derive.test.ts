@@ -219,13 +219,23 @@ describe('applyStatusRules（完成联动，源自 mindgrid；规则唯一实现
     expect(patch).toEqual({ status: 'done', doneDate: '2026-01-01' });
   });
 
-  it('移出 done：自动清 doneDate（未显式传时）；显式传 doneDate 则保留', () => {
+  it('移出 done（M7b-W1 uniform）：doneDate 清空且 progress 回退 0（显式 progress 也被覆盖）；显式传 doneDate 则分支不触发', () => {
     const before = node('n', null, { task: task({ status: 'done', progress: 100, doneDate: '2026-01-01' }) });
-    expect(applyStatusRules(before, { status: 'todo' })).toEqual({ status: 'todo', doneDate: null });
+    expect(applyStatusRules(before, { status: 'todo' })).toEqual({ status: 'todo', doneDate: null, progress: 0 });
+    // uniform：done→任意目标（doing/blocked）同样回退 0；显式 progress 一并覆盖
+    expect(applyStatusRules(before, { status: 'doing', progress: 40 })).toEqual({
+      status: 'doing',
+      doneDate: null,
+      progress: 0,
+    });
+    // 显式传 doneDate（restore 全字段 patch 口径）：联动分支不触发，progress 保留 patch 值
     expect(applyStatusRules(before, { status: 'todo', doneDate: '2026-03-03' })).toEqual({
       status: 'todo',
       doneDate: '2026-03-03',
     });
+    // before 为 done 但 doneDate 已是 null（crafted/恢复产物）：仍按 uniform 回退 progress=0
+    const doneBare = node('nb', null, { task: task({ status: 'done', progress: 80 }) });
+    expect(applyStatusRules(doneBare, { status: 'blocked' })).toEqual({ status: 'blocked', doneDate: null, progress: 0 });
   });
 
   it('status 未变化不触发联动；无 task 的 before 按缺省 todo 处理', () => {

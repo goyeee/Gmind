@@ -37,19 +37,19 @@ describe('buildXmind', () => {
     expect(sheets[0].rootTopic).toEqual({ class: 'topic', title: '单点' });
   });
 
-  it('M7a-T1 标记导出仅出三组（有原生 marker-id 对应者）：priority-N / flag-red / star-red；其余不导出', () => {
+  it('M7b-W1 标记导出各数组逐枚（有原生 marker-id 对应者）：priority-N / flag-red / star-red；其余不导出', () => {
     const tree: XmindNode = {
       title: '根',
       children: [
         {
           title: 'A',
-          icons: { priority: '5', icon: 'flag' },
+          icons: { priority: ['p4'], flag: ['flag'] },
           children: [
-            { title: 'A1', icons: { priority: '9' }, children: [] }, // 值域外防御：不导出
+            { title: 'A1', icons: { priority: ['urgent'] }, children: [] }, // urgent→1（最高档）
           ],
         },
-        { title: 'B', icons: { icon: 'important' }, children: [] },
-        { title: 'C', icons: { icon: 'done', emoji: '😄' }, children: [] }, // 无原生对应：不导出
+        { title: 'B', icons: { other: ['important'] }, children: [] },
+        { title: 'C', icons: { other: ['done'], emoji: ['😄'] }, children: [] }, // 无原生对应：不导出
       ],
     };
     const files = unzipSync(buildXmind(tree));
@@ -58,7 +58,7 @@ describe('buildXmind', () => {
     expect(rootTopic.markers).toBeUndefined(); // 根无标记不产 markers 键
     const a = rootTopic.children.attached[0];
     expect(a.markers).toEqual([{ markerId: 'priority-5' }, { markerId: 'flag-red' }]);
-    expect(a.children.attached[0].markers).toBeUndefined(); // '9' 越界（未收敛窗口期）防御不导出
+    expect(a.children.attached[0].markers).toEqual([{ markerId: 'priority-1' }]); // urgent→1
     expect(rootTopic.children.attached[1].markers).toEqual([{ markerId: 'star-red' }]);
     expect(rootTopic.children.attached[2].markers).toBeUndefined(); // done/emoji 无对应，不导出
   });

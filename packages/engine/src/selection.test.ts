@@ -357,7 +357,7 @@ const goldenBoxes = (structure: 'mindmap' | 'logic' | 'org'): NodeBox[] =>
     makeReader({
       root: { text: '中心主题', children: ['g1', 'g2', 'g3'] },
       g1: { text: '分支一', children: ['ga', 'gb'] },
-      ga: { text: '叶子甲', icons: { tag: 't' } },
+      ga: { text: '叶子甲', icons: { other: ['done'] } },
       gb: { text: '叶子乙' },
       g2: { text: '分支二', children: ['gc'] },
       gc: { text: '长文本节点内容' },

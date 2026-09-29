@@ -3,6 +3,8 @@ import { ulid } from 'ulid';
 import { applyStatusRules, type DeriveNode, type TaskPatch } from '@gmind/shared';
 import {
   ICON_GROUPS,
+  MARKER_GROUP_MODE,
+  MARKER_MULTI_MAX,
   MAX_NOTE_LENGTH,
   MAX_TASK_OWNERS,
   MAX_TEXT_LENGTH,
@@ -306,11 +308,23 @@ export function setImage(
 }
 
 /**
- * 设置节点图标（FR-EDT-021）：组内替换即覆盖；value null 删除该组。
- * icons 为节点上的 Y.Map（spec §4.1），缺失时同事务内创建（约定与 read.ts 读取侧一致）。
- * 校验（先于 transact，拒绝即零变更）：存活；group ∈ ICON_GROUPS，否则 INVALID_ICON_GROUP；
- * value 必须属于该组值目录（M7a-T1 三组制：priority '1'-'7' / icon 10 slug / emoji 10 字符），
- * 否则 INVALID_ICON_VALUE。组内单选、组间并存语义不变。
+ * 设置节点图标（FR-EDT-021，M7b-W1 多值模型）：按组语义写入组值数组——
+ * - single 组（MARKER_GROUP_MODE，优先级/心情/数字/箭头/旗帜/进程）：value=null 删组，
+ *   否则整组替换为 [value]（组内单选替换；再点同值由面板先发 null，op 层不做 toggle）；
+ * - multi 组（其他/表情）：toggle 语义——value 已在组数组中则移除该枚（组空则删键），
+ *   否则追加；追加前校验单组上限 MARKER_MULTI_MAX(8)，超出抛 INVALID_ICON_OVERFLOW。
+ *
+ * icons 存储形状（Yjs 裁定）：节点 icons 为 Y.Map<组名, Y.Array<string>>——每组值
+ * 恒为 Y.Array（单选组 0/1 枚、多选组 0-8 枚）。选 Y.Array 而非 JSON 字符串的理由：
+ * ① 多值组的并发 toggle 是元素级 CRDT 合并（两端各自新增的枚都存活、跨副本确定性
+ * 收敛），JSON 串是组级 LWW、并发丢一端；② 与仓库 children Y.Array 纪律一致。
+ * 代价登记：multi 组删除单枚会经 deriveNormalizeDirty 的「未知数组删除」防御路径
+ * 退回全量 normalizeTree 安全阀（确定性、有界，与第 64 写摊销清扫同机制）。
+ * 缺失时同事务内创建（约定与 read.ts 读取侧一致）。
+ *
+ * 校验（先于 transact，拒绝即零变更）：存活；group ∈ ICON_GROUPS，否则
+ * INVALID_ICON_GROUP；single 替换值 / multi 追加值必须属于该组值目录，否则
+ * INVALID_ICON_VALUE（multi 移除方向不校验目录——清除目录外旧值恒合法）。
  */
 export function setIcon(
   doc: Y.Doc,
@@ -322,30 +336,78 @@ export function setIcon(
   if (!ICON_GROUPS.includes(group)) {
     throw new GmindCoreError('INVALID_ICON_GROUP', '未知的图标分组');
   }
-  if (value !== null && !iconValuesOf(group).includes(value)) {
+  const node = requireAliveNode(doc, id);
+  if (MARKER_GROUP_MODE[group] === 'single') {
+    if (value !== null && !iconValuesOf(group).includes(value)) {
+      throw new GmindCoreError('INVALID_ICON_VALUE', '未知的图标取值');
+    }
+    withTransaction(doc, origin, () => {
+      if (value === null) iconsMapOf(node).delete(group);
+      else iconsMapOf(node).set(group, Y.Array.from([value]));
+    });
+    return;
+  }
+  // multi 组 toggle：先读现值（校验先于事务），移除方向不校验目录
+  const current = readIconArray(node, group);
+  const idx = value !== null ? current.indexOf(value) : -1;
+  if (value === null) {
+    withTransaction(doc, origin, () => {
+      iconsMapOf(node).delete(group);
+    });
+    return;
+  }
+  if (idx >= 0) {
+    withTransaction(doc, origin, () => {
+      const arr = readIconArrayY(node, group);
+      arr?.delete(idx, 1);
+      if (arr !== undefined && arr.length === 0) iconsMapOf(node).delete(group); // 组空删键
+    });
+    return;
+  }
+  if (!iconValuesOf(group).includes(value)) {
     throw new GmindCoreError('INVALID_ICON_VALUE', '未知的图标取值');
   }
-  const node = requireAliveNode(doc, id);
+  if (current.length >= MARKER_MULTI_MAX) {
+    throw new GmindCoreError(
+      'INVALID_ICON_OVERFLOW',
+      `该组图标最多 ${MARKER_MULTI_MAX} 个，请先移除后再添加`,
+    );
+  }
   withTransaction(doc, origin, () => {
-    writeIcon(node, group, value);
+    const arr = readIconArrayY(node, group);
+    if (arr) arr.push([value]);
+    else iconsMapOf(node).set(group, Y.Array.from([value]));
   });
 }
 
 /** 内部：取节点 icons Y.Map（缺失则创建并挂到节点上，需在事务内调用）。 */
-function iconsMapOf(node: Y.Map<unknown>): Y.Map<string> {
-  let icons = node.get('icons') as Y.Map<string> | undefined;
-  if (!icons) {
-    icons = new Y.Map<string>();
+function iconsMapOf(node: Y.Map<unknown>): Y.Map<unknown> {
+  let icons = node.get('icons');
+  if (!(icons instanceof Y.Map)) {
+    icons = new Y.Map<unknown>();
     node.set('icons', icons);
   }
-  return icons;
+  return icons as Y.Map<unknown>;
 }
 
-/** 内部：向节点 icons Y.Map 写入/删除一组图标。 */
-function writeIcon(node: Y.Map<unknown>, group: IconGroup, value: string | null): void {
-  const icons = iconsMapOf(node);
-  if (value === null) icons.delete(group);
-  else icons.set(group, value);
+/** 内部：读节点某组的值数组（防御形状；快照外的旧字符串单值包装为单元素）。 */
+function readIconArray(node: Y.Map<unknown>, group: IconGroup): string[] {
+  const raw = iconsValueOf(node, group);
+  if (raw instanceof Y.Array) return raw.toArray().filter((v): v is string => typeof v === 'string');
+  if (typeof raw === 'string' && raw !== '') return [raw];
+  return [];
+}
+
+/** 内部：读节点某组的 Y.Array 本体（形状不符返回 undefined）。 */
+function readIconArrayY(node: Y.Map<unknown>, group: IconGroup): Y.Array<string> | undefined {
+  const raw = iconsValueOf(node, group);
+  return raw instanceof Y.Array ? (raw as Y.Array<string>) : undefined;
+}
+
+function iconsValueOf(node: Y.Map<unknown>, group: IconGroup): unknown {
+  const icons = node.get('icons');
+  if (!(icons instanceof Y.Map)) return undefined;
+  return icons.get(group);
 }
 
 // ══ 任务字段（M7a-T1，2026-09-28 需求方裁定「任务常驻」）════════════════════
@@ -369,7 +431,8 @@ function writeIcon(node: Y.Map<unknown>, group: IconGroup, value: string | null)
  * doneDate）时自动 doneDate=今天（本地日期字符串）+ progress=100——mindgrid 语义：
  * 联动分支 progress 恒置 100，patch 显式给的 progress 也被覆盖；patch 显式给 doneDate
  * 时联动分支不触发（progress 保留 patch 值）。status 离开 done 且 patch 未显式给
- * doneDate 时清空既有 doneDate；手改 doneDate 不反写 status。
+ * doneDate 时清空既有 doneDate **且 progress 回退 0**（M7b-W1 需求方裁定「改回待开始
+ * 进度改为 0%」，uniform 适用于 done→任意目标）；手改 doneDate 不反写 status。
  */
 export function setNodeTask(
   doc: Y.Doc,

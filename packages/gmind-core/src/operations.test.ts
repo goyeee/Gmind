@@ -23,7 +23,7 @@ import {
   ORIGIN_USER,
 } from './operations';
 import { createUndoManager, redo, undo } from './undo';
-import { MAX_NOTE_LENGTH, type IconGroup } from './constants';
+import { MARKER_MULTI_MAX, MAX_NOTE_LENGTH, OTHER_VALUES, type IconGroup } from './constants';
 
 /** 按文本查节点 id（测试辅助；模板生成的 ULID 不可预知）。 */
 function findIdByText(doc: Y.Doc, text: string): string {
@@ -495,42 +495,76 @@ describe('setImage', () => {
   });
 });
 
-describe('setIcon（M7a-T1 三组制）', () => {
-  it('同组替换即覆盖：icon done→flag 后仅剩 flag（FR-EDT-021）', () => {
+describe('setIcon（M7b-W1 八组制多值）', () => {
+  it('single 组替换即覆盖：flag flag→flagPennant 后仅剩新值（组内单选语义）', () => {
     const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
     const id = childrenIds(doc, ROOT_NODE_ID)[0]!;
-    setIcon(doc, id, 'icon', 'done');
-    expect(getNode(doc, id)!.icons).toEqual({ icon: 'done' });
-    setIcon(doc, id, 'icon', 'flag');
-    expect(getNode(doc, id)!.icons).toEqual({ icon: 'flag' });
+    setIcon(doc, id, 'flag', 'flag');
+    expect(getNode(doc, id)!.icons).toEqual({ flag: ['flag'] });
+    setIcon(doc, id, 'flag', 'flagPennant');
+    expect(getNode(doc, id)!.icons).toEqual({ flag: ['flagPennant'] });
   });
 
-  it('跨组叠加：priority + icon + emoji 三组并存（值目录内取值）', () => {
+  it('跨组并存 + multi 组叠加：mood/priority/other/emoji 四组（值目录内取值）', () => {
     const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
     const id = childrenIds(doc, ROOT_NODE_ID)[0]!;
-    setIcon(doc, id, 'priority', '3');
-    setIcon(doc, id, 'icon', 'flag');
+    setIcon(doc, id, 'priority', 'p2');
+    setIcon(doc, id, 'mood', 'smile');
+    setIcon(doc, id, 'other', 'important');
+    setIcon(doc, id, 'other', 'done'); // multi 组叠加
     setIcon(doc, id, 'emoji', '😄');
-    expect(getNode(doc, id)!.icons).toEqual({ priority: '3', icon: 'flag', emoji: '😄' });
+    expect(getNode(doc, id)!.icons).toEqual({
+      mood: ['smile'],
+      priority: ['p2'],
+      other: ['important', 'done'],
+      emoji: ['😄'],
+    });
   });
 
-  it('value null 删除该组图标', () => {
+  it('multi 组 toggle：同值再点移除该枚（组空删键）；异值继续追加至上限 8', () => {
     const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
     const id = childrenIds(doc, ROOT_NODE_ID)[0]!;
-    setIcon(doc, id, 'icon', 'flag');
-    setIcon(doc, id, 'priority', '1');
-    setIcon(doc, id, 'icon', null);
-    expect(getNode(doc, id)!.icons).toEqual({ priority: '1' });
+    setIcon(doc, id, 'other', 'important');
+    setIcon(doc, id, 'other', 'important'); // 再点同值 = 移除该枚
+    expect(getNode(doc, id)!.icons).toEqual({});
+    for (const v of OTHER_VALUES.slice(0, MARKER_MULTI_MAX)) setIcon(doc, id, 'other', v); // 前 8 枚入组（目录 27 枚，只取上限数）
+    expect(getNode(doc, id)!.icons.other).toHaveLength(MARKER_MULTI_MAX);
+    expect(() => setIcon(doc, id, 'other', 'printer')).toThrow(GmindCoreError);
+    try {
+      setIcon(doc, id, 'other', 'printer');
+      expect.unreachable();
+    } catch (e) {
+      expect((e as GmindCoreError).code).toBe('INVALID_ICON_OVERFLOW');
+      expect((e as GmindCoreError).message).toBe('该组图标最多 8 个，请先移除后再添加');
+    }
+    // 移除一枚后可继续追加（toggle 语义）
+    setIcon(doc, id, 'other', 'done');
+    expect(getNode(doc, id)!.icons.other).toHaveLength(7);
+    setIcon(doc, id, 'other', 'printer');
+    expect(getNode(doc, id)!.icons.other).toHaveLength(8);
+    expect(getNode(doc, id)!.icons.other).not.toContain('done');
   });
 
-  it('emoji 组设置/替换/取消往返：值为目录内 emoji 字符（M6 T5 语义沿用）', () => {
+  it('value null 删除该组图标（single/multi 同语义）', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
+    const id = childrenIds(doc, ROOT_NODE_ID)[0]!;
+    setIcon(doc, id, 'other', 'done');
+    setIcon(doc, id, 'priority', 'p0');
+    setIcon(doc, id, 'other', null);
+    expect(getNode(doc, id)!.icons).toEqual({ priority: ['p0'] });
+  });
+
+  it('emoji 组 multi 语义：目录内字符追加/同值再点移除/null 清组', () => {
     const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
     const id = childrenIds(doc, ROOT_NODE_ID)[0]!;
     setIcon(doc, id, 'emoji', '😄');
-    expect(getNode(doc, id)!.icons).toEqual({ emoji: '😄' });
-    // 组内单选：换 emoji 即覆盖
-    setIcon(doc, id, 'emoji', '🤔');
-    expect(getNode(doc, id)!.icons).toEqual({ emoji: '🤔' });
+    expect(getNode(doc, id)!.icons).toEqual({ emoji: ['😄'] });
+    // multi：再点同值 = 移除该枚（组空删键）
+    setIcon(doc, id, 'emoji', '😄');
+    expect(getNode(doc, id)!.icons).toEqual({});
+    setIcon(doc, id, 'emoji', '😄');
+    setIcon(doc, id, 'emoji', '👍'); // 叠加
+    expect(getNode(doc, id)!.icons).toEqual({ emoji: ['😄', '👍'] });
     // 再点取消（value null 删组）
     setIcon(doc, id, 'emoji', null);
     expect(getNode(doc, id)!.icons).toEqual({});
@@ -551,12 +585,12 @@ describe('setIcon（M7a-T1 三组制）', () => {
     expect(fullSnapshot(doc)).toBe(before);
   });
 
-  it('值不在组目录抛 INVALID_ICON_VALUE（消息固定）且文档零变更（M7a-T1 值校验）', () => {
+  it('值不在组目录抛 INVALID_ICON_VALUE（消息固定）且文档零变更（M7a-T1 值校验沿用）', () => {
     const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
     const id = childrenIds(doc, ROOT_NODE_ID)[0]!;
     const before = fullSnapshot(doc);
-    // priority 目录 '1'-'7'：'8' 越界、旧格式 'p1' 拒绝（旧值经 repair 收敛，不走写入口）
-    for (const bad of [['priority', '8'], ['priority', 'p1'], ['icon', 'nope'], ['emoji', '🚀']] as Array<[IconGroup, string]>) {
+    // 企微目录外值一律拒绝：priority 无 '9'/'p9'，other 无 'nope'，emoji 目录 28 字符外拒绝（旧值经 repair 收敛，不走写入口）
+    for (const bad of [['priority', '9'], ['priority', 'p9'], ['other', 'nope'], ['emoji', '🚀']] as Array<[IconGroup, string]>) {
       try {
         setIcon(doc, id, bad[0] as IconGroup, bad[1]!);
         expect.unreachable();
@@ -569,12 +603,26 @@ describe('setIcon（M7a-T1 三组制）', () => {
     expect(fullSnapshot(doc)).toBe(before);
   });
 
+  it('multi 组移除方向不校验目录：目录外旧值可被 toggle 清除（repair 窗口期兜底）', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
+    const id = childrenIds(doc, ROOT_NODE_ID)[0]!;
+    // 造目录外旧值（裸写 icons Y.Map，模拟 repair 未收敛窗口）
+    withTransaction(doc, ORIGIN_USER, () => {
+      const node = doc.getMap('nodes').get(id) as Y.Map<unknown>;
+      const icons = new Y.Map<unknown>();
+      node.set('icons', icons);
+      icons.set('other', Y.Array.from(['junk']));
+    });
+    setIcon(doc, id, 'other', 'junk'); // 移除方向：无需目录内
+    expect(getNode(doc, id)!.icons).toEqual({});
+  });
+
   it('undo 回滚 setIcon：组值回到写入前', () => {
     const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
     const id = childrenIds(doc, ROOT_NODE_ID)[0]!;
     const um = createUndoManager(doc);
-    setIcon(doc, id, 'priority', '5');
-    expect(getNode(doc, id)!.icons).toEqual({ priority: '5' });
+    setIcon(doc, id, 'priority', 'p4');
+    expect(getNode(doc, id)!.icons).toEqual({ priority: ['p4'] });
     undo(um);
     expect(getNode(doc, id)!.icons).toEqual({});
   });
@@ -839,7 +887,7 @@ describe('富内容/样式 setter 存活校验', () => {
       () => setNote(doc, 'nope', 'n'),
       () => setHref(doc, 'nope', 'https://a.dev'),
       () => setImage(doc, 'nope', null),
-      () => setIcon(doc, 'nope', 'icon', 'flag'),
+      () => setIcon(doc, 'nope', 'flag', 'flag'),
       () => setNodeTask(doc, 'nope', { status: 'doing' }),
       () => setCollapsed(doc, 'nope', true),
       () => toggleCollapse(doc, 'nope'),

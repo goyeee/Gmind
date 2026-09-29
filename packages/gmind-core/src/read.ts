@@ -1,7 +1,7 @@
 import * as Y from 'yjs';
 import type { StructureType } from '@gmind/shared';
 import { ROOT_NODE_ID } from './doc';
-import { isValidDateStr, TASK_STATUSES, type IconGroup } from './constants';
+import { isValidDateStr, ICON_GROUPS, TASK_STATUSES, type IconGroup } from './constants';
 import { GmindCoreError } from './errors';
 // undo 是叶子模块（仅依赖 yjs），此导入不构成新环（无 cycle 风险，评审轮已核）。
 import { ORIGIN_SYSTEM, ORIGIN_USER, type WriteOrigin } from './undo';
@@ -51,7 +51,9 @@ export interface NodeSnapshot {
   note: string;
   href: string;
   image: NodeImage | null;
-  icons: Partial<Record<IconGroup, string>>;
+  /** 图标组值数组（M7b-W1 多值模型）：每组恒为数组（缺省空数组=组不存在；单选组
+   *  至多 1 枚、多选组至多 8 枚——目录/上限由 repair 收敛，读取侧只做形状防御）。 */
+  icons: Partial<Record<IconGroup, string[]>>;
   /** 任务字段（M7a-T1）：恒为归一化对象（缺省 todo/0/[]/null×3），防御读取远端坏数据。 */
   task: NodeTask;
   style: Record<string, string>;
@@ -124,11 +126,31 @@ function readTask(raw: unknown): NodeTask {
   };
 }
 
+/**
+ * 读取侧图标归一化（M7b-W1 多值模型）：icons Y.Map 每组的值读取为字符串数组。
+ * Y.Array → 过滤非字符串元素；字符串（旧单值格式，repair 未收敛窗口期）→ 包装为
+ * 单元素数组。只做形状防御，不做目录校验/去重/上限——目录与上限收敛是 repair 的
+ * 职责（同状态 ⇒ 同行为），渲染/消费方按目录过滤未知值。
+ */
+function readIcons(raw: unknown): Partial<Record<IconGroup, string[]>> {
+  if (!(raw instanceof Y.Map)) return {};
+  const out: Partial<Record<IconGroup, string[]>> = {};
+  for (const [key, value] of raw.entries()) {
+    if (!(ICON_GROUPS as readonly string[]).includes(key)) continue; // 旧五组/M7a 组：repair 落位前的窗口期不入快照
+    if (value instanceof Y.Array) {
+      const arr = value.toArray().filter((v): v is string => typeof v === 'string');
+      if (arr.length > 0) out[key as IconGroup] = arr;
+    } else if (typeof value === 'string' && value !== '') {
+      out[key as IconGroup] = [value];
+    }
+  }
+  return out;
+}
+
 export function getNode(doc: Y.Doc, id: string): NodeSnapshot | null {
   const node = nodesMap(doc).get(id);
   if (!node) return null;
   const children = node.get('children') as Y.Array<string> | undefined;
-  const icons = node.get('icons') as Y.Map<string> | undefined;
   const style = node.get('style') as Y.Map<string> | undefined;
   const image = node.get('image') as NodeImage | undefined;
   return {
@@ -139,7 +161,7 @@ export function getNode(doc: Y.Doc, id: string): NodeSnapshot | null {
     note: asString(node.get('note')),
     href: asString(node.get('href')),
     image: image ?? null,
-    icons: icons ? Object.fromEntries(icons.entries()) : {},
+    icons: readIcons(node.get('icons')),
     task: readTask(node.get('task')),
     style: style ? Object.fromEntries(style.entries()) : {},
     collapsed: node.get('collapsed') === true,

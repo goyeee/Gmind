@@ -65,7 +65,9 @@ describe('getNode', () => {
       n.set('href', 'https://x.dev');
       n.set('image', { key: 'files/f1/x.png', w: 120, h: 80 });
       const icons = new Y.Map();
-      icons.set('icon', 'flag');
+      icons.set('flag', Y.Array.from(['flag']));
+      icons.set('emoji', Y.Array.from(['😄']));
+      icons.set('legacy', 'junk'); // 旧组键（repair 未收敛窗口期）：不入快照
       n.set('icons', icons);
       const style = new Y.Map();
       style.set('fill', '#ffffff');
@@ -76,7 +78,7 @@ describe('getNode', () => {
     expect(snap.note).toBe('备注内容');
     expect(snap.href).toBe('https://x.dev');
     expect(snap.image).toEqual({ key: 'files/f1/x.png', w: 120, h: 80 });
-    expect(snap.icons).toEqual({ icon: 'flag' });
+    expect(snap.icons).toEqual({ flag: ['flag'], emoji: ['😄'] });
     expect(snap.style).toEqual({ fill: '#ffffff' });
     expect(snap.collapsed).toBe(true);
   });

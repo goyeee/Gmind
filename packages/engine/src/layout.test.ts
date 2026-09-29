@@ -112,7 +112,7 @@ const TREE_BUILDERS: Record<string, () => DocReader> = {
     makeReader({
       root: { text: '根', children: ['m1', 'm2', 'm3'] },
       m1: { text: '多行\n文本' },
-      m2: { text: '图标', icons: { tag: 't', star: 's' }, collapsed: true },
+      m2: { text: '图标', icons: { other: ['done', 'cancel'] }, collapsed: true },
       m3: { text: '墓碑', deleted: true, children: ['m3a'] },
       m3a: { text: '不可达' },
     }),
@@ -556,7 +556,7 @@ function goldenReader(): DocReader {
   return makeReader({
     root: { text: '中心主题', children: ['g1', 'g2', 'g3'] },
     g1: { text: '分支一', children: ['ga', 'gb'] },
-    ga: { text: '叶子甲', icons: { tag: 't' } },
+    ga: { text: '叶子甲', icons: { other: ['done'] } },
     gb: { text: '叶子乙' },
     g2: { text: '分支二', children: ['gc'] },
     gc: { text: '长文本节点内容' },

@@ -1,60 +1,87 @@
 import type { ReactElement } from 'react';
-import type { IconGroup, NodeSnapshot } from '@gmind/core';
+import { MARKER_GROUP_MODE, type IconGroup, type NodeSnapshot } from '@gmind/core';
+import { MARKER_CATALOG, MARKER_GROUP_LABELS, type MarkerGlyphDef } from '@gmind/engine';
 import './marker-panel.css';
 
 /**
- * 节点标记面板（M7a-T1 内容切换，2026-09-28 需求方裁定「功能冲突以 mindgrid 为准」）。
+ * 节点标记面板（M7b-W1 目录扩容：企微全量八组制 + 多值激活态）。
  *
- * 形态维持 2483652 版：**右侧固定抽屉**（对齐 ThemePanel/格式面板形态），顶部
- * 「图标 / 表情」页签——插入下拉的两并列项分别以对应页签打开；容器 testid
+ * 形态维持 M7a 版右侧固定抽屉（W3 才做企微式竖层重做，本任务只换内容与激活态）：
+ * 顶部「图标 / 表情」页签——图标页 = 心情/优先级/数字/箭头/旗帜/进程/其他 七组
+ * （MARKER_CATALOG 逐值渲染彩色 chip）；表情页 = 28 枚 emoji。容器 testid
  * （marker-panel-close/marker-tab-icon/marker-tab-emoji/marker-icon-page/
- * marker-emoji-page）全部保留。
+ * marker-emoji-page）与逐值 testid `marker-{group}-{slug}` 全部保留。
  *
- * 内容切 mindgrid 三组制：图标页 = 优先级（1-7 彩色数字方块）+ 图标（10 个符号）；
- * 表情页 = 10 个 emoji。旧五组（进度/旗帜/星标）内容移除——status/progress 迁入
- * 节点任务字段（M7a 后续任务交付编辑 UI）。
- *
- * 语义沿用冻结口径：组内单选（同值再点=取消 null）、组间并存、aria-pressed
- * 按选中节点回显、无选中禁用+提示。写入经 onSetIcon 上抛（origin 纪律不变），
- * 值域与 core 常量一致（setIcon 目录校验的后端）。
+ * 语义（M7b-W1 组语义常量）：single 组（心情/优先级/数字/箭头/旗帜/进程）组内
+ * 单选替换——同值再点发 null 移除该组；multi 组（其他/表情）toggle——同值再点发
+ * 同值，core setIcon 按「已存在则移除该枚」处理。aria-pressed 按选中节点组值数组
+ * includes 回显；无选中禁用+提示。写入经 onSetIcon 上抛（origin 纪律不变），值域
+ * 与 core 常量一致（setIcon 目录校验的后端）。
  */
 
-/** 优先级 1-7 方块配色（mindgrid --c-priority-1..7 原值，与 engine 渲染层同源取值）。
- *  导出供 TaskTable 标题列标记展示复用（M7a-T4，单一来源防漂移）。 */
-export const PRIORITY_COLORS = ['#d9534f', '#d98841', '#d9a441', '#4d9960', '#7aa2f7', '#bb9af7', '#8a8a8a'];
-
-/** 优先级 1-7（值 = core PRIORITY_VALUES；slug 即数字本身）。 */
-const PRIORITY_MARKERS = PRIORITY_COLORS.map((color, i) => ({
-  value: String(i + 1),
-  slug: String(i + 1),
-  label: `优先级 ${i + 1}`,
-  color,
-}));
-
-/** 图标组 10 个（值 = core ICON_VALUES；字形与 engine ICON_GLYPHS 一致）。
- *  导出供 TaskTable 标题列标记展示复用（M7a-T4）。 */
-export const ICON_MARKERS = [
-  { value: 'done', glyph: '✓', label: '完成' },
-  { value: 'cancel', glyph: '✗', label: '取消' },
-  { value: 'important', glyph: '★', label: '重要' },
-  { value: 'flag', glyph: '⚑', label: '旗帜' },
-  { value: 'question', glyph: '?', label: '疑问' },
-  { value: 'alert', glyph: '!', label: '注意' },
-  { value: 'idea', glyph: '💡', label: '想法' },
-  { value: 'like', glyph: '♥', label: '喜欢' },
-  { value: 'link', glyph: '🔗', label: '关联' },
-  { value: 'clock', glyph: '⏰', label: '提醒' },
-];
-
-/** 表情组 10 个（值 = core EMOJI_VALUES，与 mindgrid MARKER_GROUPS.emoji 完全一致）。 */
-const EMOJI_MARKERS = ['😄', '🙂', '😐', '😟', '😢', '😠', '😴', '🤔', '👍', '👎'];
+/** chip 几何（与 engine 徽标同 14px 视觉族；彩色圆徽/方块/三角 + 文字或字符）。 */
+function MarkerChip({ def, size = 18 }: { def: MarkerGlyphDef; size?: number }): ReactElement {
+  const fontSize = (def.text?.length ?? 1) > 1 ? Math.round(size * 0.38) : Math.round(size * 0.52);
+  if (def.kind === 'pie' && (def.fraction ?? 1) < 1) {
+    const deg = Math.round((def.fraction ?? 0) * 360);
+    return (
+      <span
+        className="marker-chip-round"
+        style={{
+          width: size,
+          height: size,
+          background: `conic-gradient(${def.color} 0deg ${deg}deg, #ffffff ${deg}deg 360deg)`,
+          boxShadow: `inset 0 0 0 1.5px ${def.color}`,
+        }}
+        aria-hidden
+      />
+    );
+  }
+  if (def.kind === 'circleText' || def.kind === 'squareText' || def.kind === 'triangle') {
+    return (
+      <span
+        className="marker-chip-badge"
+        style={{
+          width: size,
+          height: size,
+          background: def.color,
+          borderRadius: def.kind === 'squareText' ? 4 : def.kind === 'triangle' ? 2 : '50%',
+          fontSize,
+          color: '#fff',
+          lineHeight: `${size}px`,
+        }}
+        aria-hidden
+      >
+        {def.text}
+      </span>
+    );
+  }
+  if (def.kind === 'pie') {
+    return (
+      <span
+        className="marker-chip-badge"
+        style={{ width: size, height: size, background: def.color, borderRadius: '50%', fontSize, color: '#fff', lineHeight: `${size}px` }}
+        aria-hidden
+      >
+        ✓
+      </span>
+    );
+  }
+  // text/star/heart/flag/arrow/emoji 等：字符本色渲染（emoji 字形自带彩色）。
+  const fg = def.chipFg === 'color' ? def.color : def.color === '#ffffff' ? undefined : def.color;
+  return (
+    <span className="marker-chip-glyph" style={{ fontSize: Math.round(size * 0.86), color: fg }} aria-hidden>
+      {def.text ?? def.value}
+    </span>
+  );
+}
 
 export type MarkerTab = 'icon' | 'emoji';
 
 export interface MarkerPanelProps {
   /** 当前选中节点快照（回显数据源）；无选中为 null → 禁用态。 */
   selected: NodeSnapshot | null;
-  /** 写入回调：value=新值；null=取消（同值再点）。 */
+  /** 写入回调：value=新值（multi 组 toggle，single 组替换）；null=移除该组。 */
   onSetIcon: (group: IconGroup, value: string | null) => void;
   /** 当前页签（受控：由插入下拉「图标/表情」项决定初始页）。 */
   tab: MarkerTab;
@@ -62,32 +89,30 @@ export interface MarkerPanelProps {
   onClose: () => void;
 }
 
+/** 图标页组序（表情组独占第二页）。 */
+const ICON_PAGE_GROUPS = ['mood', 'priority', 'number', 'arrow', 'flag', 'progress', 'other'] as const;
+
 export function MarkerPanel(props: MarkerPanelProps): ReactElement {
   const { selected, onSetIcon, tab, onTabChange, onClose } = props;
   const disabled = !selected || selected.deleted;
   const icons = selected?.icons ?? {};
 
-  const markerButton = (
-    group: IconGroup,
-    value: string,
-    slug: string,
-    label: string,
-    children: ReactElement,
-  ): ReactElement => {
-    const active = icons[group] === value;
+  const markerButton = (group: IconGroup, def: MarkerGlyphDef): ReactElement => {
+    const active = icons[group]?.includes(def.value) ?? false;
+    const single = MARKER_GROUP_MODE[group] === 'single';
     return (
       <button
-        key={slug}
+        key={def.value}
         type="button"
-        data-testid={`marker-${group}-${slug}`}
-        title={label}
-        aria-label={label}
+        data-testid={`marker-${group}-${def.value}`}
+        title={def.label}
+        aria-label={def.label}
         aria-pressed={active}
         disabled={disabled}
         className={active ? 'marker-btn active' : 'marker-btn'}
-        onClick={() => onSetIcon(group, active ? null : value)}
+        onClick={() => onSetIcon(group, single && active ? null : def.value)}
       >
-        {children}
+        <MarkerChip def={def} />
       </button>
     );
   };
@@ -134,50 +159,20 @@ export function MarkerPanel(props: MarkerPanelProps): ReactElement {
       )}
       {tab === 'icon' ? (
         <div className="marker-panel-body" data-testid="marker-icon-page">
-          <div className="marker-group" data-testid="marker-group-priority">
-            <em className="marker-group-label">优先级</em>
-            <div className="marker-grid">
-              {PRIORITY_MARKERS.map((m) =>
-                markerButton(
-                  'priority', m.value, m.slug, m.label,
-                  <span className="marker-priority-badge" style={{ background: m.color }}>
-                    {m.value}
-                  </span>,
-                ),
-              )}
+          {ICON_PAGE_GROUPS.map((group) => (
+            <div className="marker-group" key={group} data-testid={`marker-group-${group}`}>
+              <em className="marker-group-label">{MARKER_GROUP_LABELS[group]}</em>
+              <div className="marker-grid">
+                {(MARKER_CATALOG[group] as readonly MarkerGlyphDef[]).map((def) => markerButton(group as IconGroup, def))}
+              </div>
             </div>
-          </div>
-          <div className="marker-group" data-testid="marker-group-icon">
-            <em className="marker-group-label">图标</em>
-            <div className="marker-grid">
-              {ICON_MARKERS.map((m) =>
-                markerButton('icon', m.value, m.value, `图标-${m.label}`, <span>{m.glyph}</span>),
-              )}
-            </div>
-          </div>
+          ))}
         </div>
       ) : (
         <div className="marker-panel-body" data-testid="marker-emoji-page">
           <div className="marker-emoji-body" data-testid="emoji-picker" role="group" aria-label="表情选择">
             <div className="emoji-grid">
-              {EMOJI_MARKERS.map((ch) => {
-                const active = icons.emoji === ch;
-                return (
-                  <button
-                    key={ch}
-                    type="button"
-                    data-testid={`marker-emoji-${ch}`}
-                    title={`表情 ${ch}`}
-                    aria-label={`表情 ${ch}`}
-                    aria-pressed={active}
-                    disabled={disabled}
-                    className={active ? 'emoji-cell active' : 'emoji-cell'}
-                    onClick={() => onSetIcon('emoji', active ? null : ch)}
-                  >
-                    {ch}
-                  </button>
-                );
-              })}
+              {(MARKER_CATALOG.emoji as readonly MarkerGlyphDef[]).map((def) => markerButton('emoji', def))}
             </div>
           </div>
         </div>

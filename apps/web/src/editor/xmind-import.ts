@@ -9,7 +9,7 @@
 // - XmindParseError UNSUPPORTED_FORMAT → 「无法识别的文件格式（仅支持 .xmind），请更换文件后重试」；
 // - 其余解析错误 → 「文件已损坏，无法解析，请检查文件后重试」。
 // 降级提示文案（FR-IO-002）由 degradedSummary 统一构造。
-import {
+import { type IconGroup,
   addChild,
   createTemplateDoc,
   docToState,
@@ -76,8 +76,11 @@ export async function importXmindFile(
   const title = parsed.root.title || file.name.replace(/\.xmind$/i, '');
   const doc = createTemplateDoc({ title, children: [] });
   const applyIcons = (id: string, icons: XmindIcons | undefined): void => {
-    if (icons?.priority !== undefined) setIcon(doc, id, 'priority', icons.priority);
-    if (icons?.icon !== undefined) setIcon(doc, id, 'icon', icons.icon);
+    if (!icons) return;
+    for (const [group, values] of Object.entries(icons)) {
+      if (!Array.isArray(values)) continue;
+      for (const value of values) setIcon(doc, id, group as IconGroup, value);
+    }
   };
   const walk = (node: XmindNode, parentId: string): void => {
     for (const child of node.children) {

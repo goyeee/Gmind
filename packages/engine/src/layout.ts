@@ -22,6 +22,7 @@
  *   bezier 控制点水平外伸 max(60, dx×0.5)；org 取父下中点/子上中点，elbow。折叠节点无子边。
  * - 根盒中心恒为 (0,0)；输出 bbox 宽高为全部节点盒的极差。
  */
+import { markerCountOf } from './markers';
 import { measureNodeBox } from './measure';
 import { themeTextStyleOf } from './themes';
 import type {
@@ -94,7 +95,8 @@ function collectTree(
     visited.add(id);
     const snap = reader.getNode(id);
     if (!snap || snap.deleted) return null;
-    const iconCount = snap.icons ? Object.keys(snap.icons).length : 0;
+    // M7b-W1 多值标记：槽位数 = 各组值数组元素总数（markerCountOf 防御非数组形状）。
+    const iconCount = markerCountOf(snap.icons);
     // T6 carry-in 裁决（Task 12 落地）：盒高计入图片高度。图片尺寸就在树遍历已取的
     // snap 上（reader.getNode），无需新增布局入参——直接作为测量选项下传。
     const image = snap.image ?? null;

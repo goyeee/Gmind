@@ -86,7 +86,7 @@ describe('parseXmind：2020+ content.json', () => {
     expect(kinds.structure).toBeGreaterThanOrEqual(1); // detached
   });
 
-  it('M7a-T1 标记映射：priority 1-7 原值、8/9 收敛 7；flag-*/star-* → icon；star 恒胜；同组后续与无对应均计降级', () => {
+  it('M7b-W1 标记映射：priority 1-9 → 企微档位（8/9 clamp 7→low）；flag-*/star-* 落不同组可并存；同组后续与无对应均计降级', () => {
     const topicOf = (markers: unknown[]) => ({
       class: 'topic',
       title: '中心',
@@ -98,7 +98,7 @@ describe('parseXmind：2020+ content.json', () => {
         { class: 'sheet', title: 'S', rootTopic: topicOf([{ markerId: 'priority-3' }]) },
       ]),
     );
-    expect(parseXmind(bytes).root.icons).toEqual({ priority: '3' });
+    expect(parseXmind(bytes).root.icons).toEqual({ priority: ['p2'] }); // 3 → p2（企微同档位）
 
     const hi = parseXmind(
       jsonZip(
@@ -107,7 +107,7 @@ describe('parseXmind：2020+ content.json', () => {
         ]),
       ),
     );
-    expect(hi.root.icons).toEqual({ priority: '7' }); // 9→7；同组首个胜（priority-9 先出现）
+    expect(hi.root.icons).toEqual({ priority: ['low'] }); // 9→7→low；同组首个胜（priority-9 先出现）
     expect(hi.degraded).toEqual([{ kind: 'style', count: 1 }]); // 被单选吞掉的 priority-2 计入 dropped（R1 2.4）
 
     const fs = parseXmind(
@@ -121,8 +121,8 @@ describe('parseXmind：2020+ content.json', () => {
         ]),
       ),
     );
-    expect(fs.root.icons).toEqual({ icon: 'important' }); // star 恒胜：无条件覆盖 flag 映射（对齐 repair）
-    expect(fs.degraded).toEqual([{ kind: 'style', count: 1 }]); // 被 star 吞掉的 flag 计入 dropped
+    expect(fs.root.icons).toEqual({ flag: ['flag'], other: ['important'] }); // M7b：flag/star 落不同组、可并存
+    expect(fs.degraded).toEqual([]); // 颜色信息无对应位丢弃，但 marker 均已映射不再计降级
 
     const sf = parseXmind(
       jsonZip(
@@ -135,14 +135,13 @@ describe('parseXmind：2020+ content.json', () => {
         ]),
       ),
     );
-    expect(sf.root.icons).toEqual({ icon: 'important' }); // star 恒胜与出现顺序无关
-    expect(sf.degraded).toEqual([{ kind: 'style', count: 1 }]); // 两种顺序下 flag 同样被吞掉计入 dropped
+    expect(sf.root.icons).toEqual({ flag: ['flag'], other: ['important'] }); // 与出现顺序无关
 
     const st = jsonZip(
       JSON.stringify([{ class: 'sheet', title: 'S', rootTopic: topicOf([{ markerId: 'star-red' }]) }],
       ),
     );
-    expect(parseXmind(st).root.icons).toEqual({ icon: 'important' });
+    expect(parseXmind(st).root.icons).toEqual({ other: ['important'] });
 
     const dropped = parseXmind(
       jsonZip(JSON.stringify([{ class: 'sheet', title: 'S', rootTopic: topicOf([{ markerId: 'task-start' }, { markerId: 'smiley-smile' }]) }])),
@@ -251,7 +250,7 @@ describe('parseXmind：content.xml 回落（XMind 8）', () => {
     expect(kinds.media).toBeUndefined();
   });
 
-  it('xml markers 映射三组制（priority/flag/star），无对应才计降级；labels/图片/概要 计入对应降级', () => {
+  it('xml markers 映射八组制（priority/flag/star 落新目录），无对应才计降级；labels/图片/概要 计入对应降级', () => {
     const topicXml =
       '<topic id="t1"><title>中心</title>' +
       '<marker-refs><marker-ref marker-id="priority-1"/><marker-ref marker-id="star-red"/><marker-ref marker-id="task-start"/></marker-refs>' +
@@ -262,8 +261,8 @@ describe('parseXmind：content.xml 回落（XMind 8）', () => {
       '</topics></children></topic>';
     const bytes = zipOf({ 'content.xml': xmlMap(`<sheet id="s1">${topicXml}</sheet>`) });
     const { root, degraded } = parseXmind(bytes);
-    expect(root.icons).toEqual({ priority: '1', icon: 'important' }); // priority-1 + star-red→important
-    expect(root.children[0].icons).toEqual({ icon: 'flag' }); // flag-blue → icon flag
+    expect(root.icons).toEqual({ priority: ['p0'], other: ['important'] }); // priority-1→p0 + star-red→other important
+    expect(root.children[0].icons).toEqual({ flag: ['flag'] }); // flag-blue → flag 组（颜色丢弃）
     const kinds = Object.fromEntries(degraded.map((d) => [d.kind, d.count]));
     expect(kinds.style).toBe(2); // task-start（无对应丢弃）+ label 1
     expect(kinds.media).toBe(1); // 图片

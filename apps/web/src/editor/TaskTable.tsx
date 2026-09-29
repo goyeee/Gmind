@@ -8,7 +8,6 @@ import {
   moveNode,
   ORIGIN_SYSTEM,
   ORIGIN_USER,
-  PRIORITY_VALUES,
   ROOT_NODE_ID,
   setCollapsed,
   setNodeTask,
@@ -16,7 +15,6 @@ import {
   subtreeIds,
   toggleCollapse,
   withTransaction,
-  type IconGroup,
   type NodeSnapshot,
 } from '@gmind/core';
 import {
@@ -29,11 +27,10 @@ import {
   type TaskPatch,
   type TaskStatus,
 } from '@gmind/shared';
-import { colorForUser } from '@gmind/engine';
+import { MARKER_ROW_ORDER, colorForUser, markerChipText } from '@gmind/engine';
 import { api } from '../api/client';
 import { track } from '../api/events';
 import type { PresenceMember } from './collab';
-import { ICON_MARKERS, PRIORITY_COLORS } from './MarkerPanel';
 import './task-table.css';
 
 /**
@@ -99,9 +96,9 @@ const EMPTY_FILTERS: Filters = {
   unassignedOnly: false,
 };
 
-/** 表格行节点：DeriveNode（shared 派生规则输入）+ 标记（标题列展示）。 */
+/** 表格行节点：DeriveNode（shared 派生规则输入）+ 标记（标题列展示，M7b-W1 多值数组）。 */
 interface RowNode extends DeriveNode {
-  icons: Partial<Record<IconGroup, string>>;
+  icons: Record<string, string[]>;
 }
 
 interface Row {
@@ -1040,30 +1037,64 @@ function Avatar({ userId, nickname, size = 18 }: { userId: string; nickname: str
   );
 }
 
-/** 三组标记展示（优先级方块 / 图标符号 / 表情字符；目录与 MarkerPanel/engine 同源）。 */
-function NodeMarkers({ icons }: { icons: Partial<Record<IconGroup, string>> }): React.ReactElement | null {
-  const priIdx =
-    icons.priority !== undefined
-      ? PRIORITY_VALUES.indexOf(icons.priority as (typeof PRIORITY_VALUES)[number])
-      : -1;
-  const iconDef = icons.icon !== undefined ? ICON_MARKERS.find((m) => m.value === icons.icon) : undefined;
-  const emoji = icons.emoji;
-  if (priIdx < 0 && !iconDef && emoji === undefined) return null;
-  return (
-    <span className="tt-markers">
-      {priIdx >= 0 && (
-        <span className="tt-pri" style={{ background: PRIORITY_COLORS[priIdx] }} title={`优先级 ${priIdx + 1}`}>
-          {priIdx + 1}
-        </span>
-      )}
-      {iconDef && (
-        <span className="tt-icon-mark" title={`图标-${iconDef.label}`}>
-          {iconDef.glyph}
-        </span>
-      )}
-      {emoji !== undefined && <span className="tt-icon-mark">{emoji}</span>}
-    </span>
-  );
+/** 八组标记展示（M7b-W1 多值数组；chip 目录与 MarkerPanel/engine 同源
+ *  MARKER_CATALOG，固定组序 MARKER_ROW_ORDER，目录外值忽略）。 */
+function NodeMarkers({ icons }: { icons: Record<string, string[]> }): React.ReactElement | null {
+  const chips: React.ReactElement[] = [];
+  for (const group of MARKER_ROW_ORDER) {
+    for (const value of icons[group] ?? []) {
+      const chip = markerChipText(group, value);
+      if (!chip) continue; // 目录外值（未收敛窗口期）：确定性忽略
+      if (chip.kind === 'pie' && chip.fraction !== undefined && chip.fraction < 1) {
+        const deg = Math.round(chip.fraction * 360);
+        chips.push(
+          <span
+            key={`${group}-${value}`}
+            className="tt-icon-mark tt-mark-round"
+            style={{
+              background: `conic-gradient(${chip.color} 0deg ${deg}deg, #ffffff ${deg}deg 360deg)`,
+              boxShadow: `inset 0 0 0 1.5px ${chip.color}`,
+            }}
+            title={value}
+          />,
+        );
+        continue;
+      }
+      if (chip.kind === 'pie') {
+        chips.push(
+          <span key={`${group}-${value}`} className="tt-icon-mark tt-mark-round" style={{ background: chip.color, color: '#fff' }} title={value}>
+            ✓
+          </span>,
+        );
+        continue;
+      }
+      if (chip.kind === 'circleText' || chip.kind === 'squareText' || chip.kind === 'triangle') {
+        chips.push(
+          <span
+            key={`${group}-${value}`}
+            className="tt-icon-mark tt-mark-round"
+            style={{ background: chip.color, color: '#fff', borderRadius: chip.kind === 'squareText' ? 3 : '50%' }}
+            title={value}
+          >
+            {chip.text}
+          </span>,
+        );
+        continue;
+      }
+      chips.push(
+        <span
+          key={`${group}-${value}`}
+          className="tt-icon-mark"
+          style={chip.fg === 'color' ? { color: chip.color } : undefined}
+          title={value}
+        >
+          {chip.text}
+        </span>,
+      );
+    }
+  }
+  if (chips.length === 0) return null;
+  return <span className="tt-markers">{chips}</span>;
 }
 
 /** 进度迷你条（danger=逾期红；auto=父级 Σ 自动值）。 */

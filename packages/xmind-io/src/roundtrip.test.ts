@@ -21,19 +21,19 @@ describe('buildXmind → parseXmind 往返', () => {
     expect(parsed.degraded).toEqual([]);
   });
 
-  it('M7a-T1 标记往返：priority/icon(flag·important) 经 marker-id 往返保真；无对应的 slug 单向丢失', () => {
+  it('M7b-W1 标记往返：priority/flag/other(important) 经 marker-id 往返保真；无对应组单向丢失', () => {
     const tree: XmindNode = {
       title: '根',
       children: [
-        { title: 'A', icons: { priority: '3' }, children: [] },
-        { title: 'B', icons: { icon: 'flag' }, children: [] },
-        { title: 'C', icons: { priority: '7', icon: 'important' }, children: [] },
+        { title: 'A', icons: { priority: ['p2'] }, children: [] },
+        { title: 'B', icons: { flag: ['flag'] }, children: [] },
+        { title: 'C', icons: { priority: ['low'], other: ['important'] }, children: [] },
       ],
     };
     const parsed = parseXmind(buildXmind(tree));
-    expect(parsed.root.children[0].icons).toEqual({ priority: '3' });
-    expect(parsed.root.children[1].icons).toEqual({ icon: 'flag' });
-    expect(parsed.root.children[2].icons).toEqual({ priority: '7', icon: 'important' });
+    expect(parsed.root.children[0].icons).toEqual({ priority: ['p2'] });
+    expect(parsed.root.children[1].icons).toEqual({ flag: ['flag'] });
+    expect(parsed.root.children[2].icons).toEqual({ priority: ['low'], other: ['important'] });
     expect(parsed.degraded).toEqual([]); // 导出的 marker 均有对应，零降级
   });
 

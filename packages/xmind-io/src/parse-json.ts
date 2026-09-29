@@ -62,7 +62,7 @@ function walkTopic(t: JsonTopic, d: DegradedCollector): XmindNode {
       : ''));
     const mapped = markersToIcons(ids);
     d.add('style', mapped.dropped);
-    if (mapped.icons.priority !== undefined || mapped.icons.icon !== undefined || mapped.icons.emoji !== undefined) {
+    if (Object.keys(mapped.icons).length > 0) {
       icons = mapped.icons;
     }
   }

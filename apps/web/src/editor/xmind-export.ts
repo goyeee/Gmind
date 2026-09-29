@@ -9,7 +9,7 @@
 // 标记（M7a-T1）：仅出三组（priority/icon/emoji，值目录内；marker-id 映射口径在
 // @gmind/xmind-io markers.ts）。
 import type * as Y from 'yjs';
-import { getNode, ROOT_NODE_ID } from '@gmind/core';
+import { ICON_GROUPS, getNode, ROOT_NODE_ID } from '@gmind/core';
 import { buildXmind, type XmindIcons, type XmindNode } from '@gmind/xmind-io';
 
 /** 存活树 → XmindNode：title = node.text；note 非空才产出 note 键（'' 即无备注，
@@ -32,9 +32,10 @@ export function docToXmindTree(doc: Y.Doc): XmindNode {
       children.push(walk(childId));
     }
     const icons: XmindIcons = {};
-    if (snap.icons.priority !== undefined) icons.priority = snap.icons.priority;
-    if (snap.icons.icon !== undefined) icons.icon = snap.icons.icon;
-    if (snap.icons.emoji !== undefined) icons.emoji = snap.icons.emoji;
+    for (const group of ICON_GROUPS) {
+      const values = snap.icons[group];
+      if (values !== undefined && values.length > 0) icons[group] = values;
+    }
     return {
       title: snap.text,
       ...(snap.note ? { note: snap.note } : {}),

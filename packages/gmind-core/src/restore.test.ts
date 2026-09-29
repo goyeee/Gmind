@@ -120,7 +120,7 @@ describe('restoreFromSnapshot', () => {
     const aId = idOf(base, 'A');
     setNote(base, aId, '原备注');
     setHref(base, aId, 'https://x');
-    setIcon(base, aId, 'icon', 'flag');
+    setIcon(base, aId, 'flag', 'flag');
     setImage(base, aId, { key: 'files/f1/pic.png', w: 100, h: 80 });
     setStyle(base, aId, { color: '#ff0000' });
     setCollapsed(base, aId, true);
@@ -137,7 +137,7 @@ describe('restoreFromSnapshot', () => {
     const s = getNode(base, restored)!;
     expect(s.note).toBe('原备注');
     expect(s.href).toBe('https://x');
-    expect(s.icons).toEqual({ icon: 'flag' });
+    expect(s.icons).toEqual({ flag: ['flag'] });
     expect(s.image).toEqual({ key: 'files/f1/pic.png', w: 100, h: 80 });
     expect(s.style).toEqual({ color: '#ff0000' });
     expect(s.collapsed).toBe(true);
@@ -150,18 +150,19 @@ describe('restoreFromSnapshot', () => {
   });
 
   it('恢复：快照含值域外旧 emoji（M6 遗留）计划期跳过——不抛错、该标记不回写、其余字段正常恢复', () => {
-    // B1（M7a-R1）：M6 存过 72 emoji、新目录仅 10；repair 有意保留值域外旧 emoji，
-    // setIcon 目录校验拒绝它们——修复前 restore 在事务内把快照值直交 setIcon，
-    // 部分恢复落库（500 + 半恢复）。修复后计划期（事务外）按 iconValuesOf 目录过滤。
+    // B1（M7a-R1，M7b-W1 数组版沿用）：M6 存过 72 emoji、目录仅 28；repair 有意保留
+    // 值域外旧 emoji（emoji 值本身即字形），setIcon 目录校验拒绝它们——restore 在
+    // 计划期（事务外）按 canonicalSnapIcons 目录过滤，不可写值的组整体跳过。
     const base = makeDoc(); // root → [A[A1], B]
     const aId = idOf(base, 'A');
     // M6 遗留注入：值域外旧 emoji 经「外部状态直入」落库（绕过 setIcon 目录校验，
-    // 与 repair 保留口径同形）；快照装载 docFromState 的 normalize 不收敛它。
-    const legacyIcons = new Y.Map<string>();
+    // 与 repair 保留口径同形）；快照装载 docFromState 的 normalize 不收敛它
+    // （M7b repair 对 emoji 组保留目录外字符）。
+    const legacyIcons = new Y.Map<unknown>();
     legacyIcons.set('emoji', '🚀');
     (base.getMap('nodes').get(aId) as Y.Map<unknown>).set('icons', legacyIcons);
     const snap = docFromState(docToState(base));
-    expect(getNode(snap, aId)!.icons).toEqual({ emoji: '🚀' }); // 前置：值域外值确在快照中
+    expect(getNode(snap, aId)!.icons).toEqual({ emoji: ['🚀'] }); // 前置：值域外值确在快照中
 
     // 漂移：文本改写 + 旧 emoji 换成目录内新值（日常触发场景），随后恢复旧版本
     setText(base, aId, '改了');
@@ -170,13 +171,13 @@ describe('restoreFromSnapshot', () => {
     const r = restoreFromSnapshot(base, snap); // 修复前：setIcon 拒绝 🚀 → 事务内抛错半恢复
     expect(r.updated).toBe(1); // 仅文本差异入计划；🚀 组计划期跳过
     expect(getNode(base, aId)!.text).toBe('A'); // 其余字段正常恢复
-    expect(getNode(base, aId)!.icons).toEqual({ emoji: '😄' }); // 不可回写标记跳过：现状 😄 保留
+    expect(getNode(base, aId)!.icons).toEqual({ emoji: ['😄'] }); // 不可回写标记跳过：现状 😄 保留
     expect(normalizeTree(base, ORIGIN_SYSTEM)).toBe(0);
 
     // 变体：target 现状无 emoji——同样跳过，不回写快照值也不写 null 清除（现状保留）
     const base2 = makeDoc();
     const a2 = idOf(base2, 'A');
-    const legacyIcons2 = new Y.Map<string>();
+    const legacyIcons2 = new Y.Map<unknown>();
     legacyIcons2.set('emoji', '🚀');
     (base2.getMap('nodes').get(a2) as Y.Map<unknown>).set('icons', legacyIcons2);
     const snap2 = docFromState(docToState(base2));

@@ -9,12 +9,10 @@
  *   文本 tspan 仅在文本变化时重建（未变文本的 tspan 元素引用也不变）。
  * - 节点 <g data-node-id> 子元素：rect（圆角=theme.nodeBorderRadius、填充/描边/
  *   描边宽 = styleOf 解析结果 + theme）、<text class="gm-text">（按 '\n' 分 tspan，
- *   fill/字体取解析样式）、标记区（M7a-T1 三组制，固定组序 priority→icon→emoji，
- *   图标行位置不变——节点框内文字左侧）：priority '1'-'7' 渲染为彩色数字方块
- *   <g class="gm-priority-badge">（rect+text，取 mindgrid --c-priority-1..7 配色），
- *   icon 组 10 符号与 emoji 组 10 字符拼进同一 <text class="gm-icons">（icon 组按
- *   ICON_GLYPHS slug→符号；emoji 值本身即字形）；旧 progress 环/旗帜/星标组与
- *   未知组一律忽略（存量文档经 core repair 收敛，未收敛窗口期忽略即可）、
+ *   fill/字体取解析样式）、标记区（M7b-W1 八组制多值，固定组序
+ *   mood→priority→number→arrow→flag→progress→other→emoji，位置不变——节点框内
+ *   文字左侧）：<g class="gm-markers"> 内逐值绘制彩色徽标 <g class="gm-marker-badge">
+ *   （MARKER_CATALOG 字形/配色，槽宽自适应徽标数；目录外值确定性忽略）、
  *   <text class="gm-note-badge">（note 非空渲染 'N'）、<text class="gm-link-badge">
  *   （href 非空渲染）、<text class="gm-comment-badge">（commentCount>0 渲染计数，
  *   FR-CMT-002；与 note/link 同一右上角错位方案，自右缘起 link→note→comment 让位）、
@@ -35,50 +33,17 @@ import type {
   SummaryBox,
   ThemeTokens,
 } from './types';
+import {
+  MARKER_BADGE_SIZE,
+  MARKER_ROW_ORDER,
+  drawMarkerBadge,
+  markerCountOf,
+  markerDefOf,
+  markerSignatureOf,
+  type MarkerGlyphDef,
+} from './markers';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
-
-/** 标记三组固定渲染序（M7a-T1）：priority 方块占第 1 槽，icon/emoji 字形随后。 */
-const MARKER_ROW_ORDER = ['priority', 'icon', 'emoji'] as const;
-
-/**
- * 优先级方块配色（M7a-T1，取 mindgrid app/src/index.css --c-priority-1..7 原值）：
- * 1 红 #d9534f / 2 橙 #d98841 / 3 黄 #d9a441 / 4 绿 #4d9960 / 5 蓝 #7aa2f7 /
- * 6 紫 #bb9af7 / 7 灰 #8a8a8a（1 最高优先级，7 最低）。
- */
-export const PRIORITY_BADGE_COLORS = [
-  '#d9534f',
-  '#d98841',
-  '#d9a441',
-  '#4d9960',
-  '#7aa2f7',
-  '#bb9af7',
-  '#8a8a8a',
-] as const;
-
-/**
- * icon 组 slug → 符号映射（M7a-T1 三组制，10 个；与 core ICON_VALUES 一一对应）：
- * done ✓ / cancel ✗ / important ★ / flag ⚑ / question ? / alert ! / idea 💡 /
- * like ♥ / link 🔗 / clock ⏰。emoji 组例外：值本身即字形，此处仅登记组名以纳入
- * 固定组序与存在性判定。
- */
-export const ICON_GLYPHS: Record<string, string> = {
-  done: '✓',
-  cancel: '✗',
-  important: '★',
-  flag: '⚑',
-  question: '?',
-  alert: '!',
-  idea: '💡',
-  like: '♥',
-  link: '🔗',
-  clock: '⏰',
-};
-
-/** 优先级方块几何（确定性常量）：14×14 圆角方块，槽宽 iconSlotWidth 内居中。 */
-const PRIORITY_BADGE_SIZE = 14;
-const PRIORITY_BADGE_RX = 3;
-const PRIORITY_BADGE_FONT_SIZE = 10;
 
 /** 折叠徽标几何（确定性常量）。 */
 const BADGE_W = 28;
@@ -123,11 +88,10 @@ export interface NodeEntry {
   g: SVGGElement;
   rect: SVGRectElement;
   text: SVGTextElement;
-  /** 优先级彩色数字方块（M7a-T1；g 内含 rect+text，无优先级时为 null）。 */
-  priorityBadge: SVGGElement | null;
-  priorityRect: SVGRectElement | null;
-  priorityText: SVGTextElement | null;
-  icons: SVGTextElement | null;
+  /** 标记行容器（M7b-W1 八组制；内含逐值 <g class="gm-marker-badge">，无标记时 null）。 */
+  markers: SVGGElement | null;
+  /** 上次渲染的标记行签名（不变则徽标元素引用保持）。 */
+  lastMarkersSig: string;
   noteBadge: SVGTextElement | null;
   linkBadge: SVGTextElement | null;
   commentBadge: SVGTextElement | null;
@@ -233,24 +197,20 @@ function syncOptional<T extends SVGElement>(
   return null;
 }
 
-/** 优先级值 '1'-'7' → 方块渲染序号（null = 值不在目录，防御忽略——槽位仍保留给布局）。 */
-function priorityLevelOf(value: unknown): number | null {
-  const s = typeof value === 'string' ? value : null;
-  return s !== null && /^[1-7]$/.test(s) ? Number(s) : null;
-}
-
-/** 标记区 glyph 文本（M7a-T1）：icon 组 slug→符号 + emoji 值本身，固定组序
- *  icon→emoji（priority 由独立方块渲染，不占 glyph 文本）；未知组忽略。
- *  返回 [字形串, 是否有优先级方块]。 */
-function markerGlyphs(icons: Record<string, unknown> | undefined): [string, boolean] {
-  if (!icons) return ['', false];
-  const hasPriority = priorityLevelOf(icons.priority) !== null;
-  let out = '';
+/** 标记区徽标绘制（M7b-W1）：按固定组序展开各组值数组，逐值经 MARKER_CATALOG
+ *  绘制彩色徽标；目录外值（未收敛窗口期）确定性忽略。 */
+function markerDefsOf(icons: Record<string, unknown> | undefined): MarkerGlyphDef[] {
+  if (!icons) return [];
+  const defs: MarkerGlyphDef[] = [];
   for (const group of MARKER_ROW_ORDER) {
-    if (group === 'priority') continue;
-    if (group in icons) out += group === 'emoji' ? String(icons[group]) : ICON_GLYPHS[String(icons[group])] ?? '';
+    const values = icons[group];
+    const list = Array.isArray(values) ? values : typeof values === 'string' && values !== '' ? [values] : [];
+    for (const value of list) {
+      const def = markerDefOf(group, String(value));
+      if (def) defs.push(def);
+    }
   }
-  return [out, hasPriority];
+  return defs;
 }
 
 /** 折叠徽标位移：right→盒右、left→盒左、down→盒下（由 box.side 确定性决定）。 */
@@ -293,10 +253,8 @@ function applyNode(
       g,
       rect,
       text,
-      priorityBadge: null,
-      priorityRect: null,
-      priorityText: null,
-      icons: null,
+      markers: null,
+      lastMarkersSig: '',
       noteBadge: null,
       linkBadge: null,
       commentBadge: null,
@@ -321,7 +279,7 @@ function applyNode(
   rect.setAttribute('stroke-width', fmt(theme.nodeBorderWidth));
 
   const fontSize = style.textStyle.fontSize;
-  const iconCount = visual.icons ? Object.keys(visual.icons).length : 0;
+  const iconCount = markerCountOf(visual.icons);
   const textX = theme.nodePaddingX + iconCount * theme.iconSlotWidth;
   text.setAttribute('x', fmt(textX));
   text.setAttribute('fill', style.textColor);
@@ -348,62 +306,33 @@ function applyNode(
     (spans[i] as SVGTSpanElement).setAttribute('y', fmt(baseline(i)));
   }
 
-  // 标记区（M7a-T1 三组制，固定组序 priority→icon→emoji，位置不变：文字左侧）。
-  const [glyphs, hasPriority] = markerGlyphs(visual.icons);
-  const level = priorityLevelOf(visual.icons?.priority);
-
-  // 优先级彩色数字方块：占标记区第 1 槽（iconSlotWidth 内 14×14 居中）。
-  entry.priorityBadge = syncOptional(entry.priorityBadge, level !== null, g, () => {
-    const badge = el('g', { class: 'gm-priority-badge' });
-    badge.appendChild(el('rect', { rx: PRIORITY_BADGE_RX }));
-    badge.appendChild(
-      el('text', {
-        'text-anchor': 'middle',
-        'font-size': PRIORITY_BADGE_FONT_SIZE,
-        'font-weight': 600,
-        fill: '#ffffff',
-      }),
-    );
-    return badge;
-  });
-  if (entry.priorityBadge && level !== null) {
-    entry.priorityRect = entry.priorityBadge.children[0] as SVGRectElement;
-    entry.priorityText = entry.priorityBadge.children[1] as SVGTextElement;
-    const bx = theme.nodePaddingX + (theme.iconSlotWidth - PRIORITY_BADGE_SIZE) / 2;
-    const by = b.h / 2 - PRIORITY_BADGE_SIZE / 2;
-    entry.priorityRect.setAttribute('x', fmt(bx));
-    entry.priorityRect.setAttribute('y', fmt(by));
-    entry.priorityRect.setAttribute('width', String(PRIORITY_BADGE_SIZE));
-    entry.priorityRect.setAttribute('height', String(PRIORITY_BADGE_SIZE));
-    entry.priorityRect.setAttribute('fill', PRIORITY_BADGE_COLORS[level - 1] as string);
-    entry.priorityText.setAttribute('x', fmt(bx + PRIORITY_BADGE_SIZE / 2));
-    entry.priorityText.setAttribute('y', fmt(b.h / 2 + PRIORITY_BADGE_FONT_SIZE * 0.36));
-    if (entry.priorityText.textContent !== String(level)) {
-      entry.priorityText.textContent = String(level);
-    }
-  } else {
-    entry.priorityRect = null;
-    entry.priorityText = null;
-  }
-
-  // icon/emoji 字形文本：有字符才存在；priority 方块占位时右移一个槽。
-  const glyphsX = theme.nodePaddingX + (hasPriority ? theme.iconSlotWidth : 0);
-  entry.icons = syncOptional(entry.icons, glyphs !== '', g, () =>
-    el('text', {
-      class: 'gm-icons',
-      x: fmt(glyphsX),
-      y: fmt(b.h / 2 + fontSize * 0.35),
-      'font-size': fmt(fontSize),
-      fill: style.textColor,
-    }),
+  // 标记区（M7b-W1 八组制多值，固定组序，位置不变：文字左侧）。签名差分：签名
+  // 不变则徽标元素引用保持；变化时整行重建（徽标为无状态绘制，重建代价极小）。
+  const markersSig = markerSignatureOf(visual.icons);
+  entry.markers = syncOptional(entry.markers, markersSig !== '', g, () =>
+    el('g', { class: 'gm-markers' }),
   );
-  if (entry.icons) {
-    entry.icons.textContent = glyphs;
-    // 属性回填（创建后每次更新）：跨深度复用节点时字号/文字色随 styleOf 变化。
-    entry.icons.setAttribute('y', fmt(b.h / 2 + fontSize * 0.35));
-    entry.icons.setAttribute('x', fmt(glyphsX));
-    entry.icons.setAttribute('font-size', fmt(fontSize));
-    entry.icons.setAttribute('fill', style.textColor);
+  if (entry.markers && entry.lastMarkersSig !== markersSig) {
+    const defs = markerDefsOf(visual.icons);
+    const children: SVGGElement[] = [];
+    defs.forEach((def, i) => {
+      const badge = drawMarkerBadge(def);
+      if (!badge) return; // 未知值：确定性忽略（槽位仍由布局按值数预留）
+      const bx = theme.nodePaddingX + i * theme.iconSlotWidth + (theme.iconSlotWidth - MARKER_BADGE_SIZE) / 2;
+      badge.setAttribute('transform', `translate(${fmt(bx)}, ${fmt(b.h / 2 - MARKER_BADGE_SIZE / 2)})`);
+      children.push(badge);
+    });
+    entry.markers.replaceChildren(...children);
+    entry.lastMarkersSig = markersSig;
+  }
+  if (entry.markers) {
+    // 属性回填（创建后每次更新）：盒高/槽宽变化时徽标随行位移。
+    entry.markers
+      .querySelectorAll('g.gm-marker-badge')
+      .forEach((badge, i) => {
+        const bx = theme.nodePaddingX + i * theme.iconSlotWidth + (theme.iconSlotWidth - MARKER_BADGE_SIZE) / 2;
+        badge.setAttribute('transform', `translate(${fmt(bx)}, ${fmt(b.h / 2 - MARKER_BADGE_SIZE / 2)})`);
+      });
   }
 
   // note / link 角标：note 非空渲染 'N'，href 非空渲染 🔗；同时存在时水平错位。

@@ -168,8 +168,14 @@ export function sortValue(nodes: DeriveNode[], n: DeriveNode, key: string): stri
 export type TaskPatch = Partial<DeriveTask>;
 
 /**
- * 状态联动：改为已完成时自动写完成日期并把进度拉满；移出已完成时清除完成日期。
- * 手动传入 doneDate 时不覆盖用户的显式选择。before 无 task 时按缺省（todo/无完成日期）处理。
+ * 状态联动（M7a-T2 移植 + M7b-W1 进度回退修订，需求方 2026-09-29 裁定）：
+ * - 进入 done：自动写完成日期并把进度拉满（联动分支 progress 恒置 100，patch 显式
+ *   给的 progress 也被覆盖）；手动传入 doneDate 时不覆盖用户的显式选择。
+ * - 离开 done（uniform，适用于 done→任意目标；只以 before 状态为门）：清空完成日期
+ *   **且进度回退为 0**（「改回待开始进度改为 0%」，显式给的 progress 同样被回退覆盖；
+ *   显式给 doneDate 的恢复全字段 patch 不触发本分支——restore 口径）。手改 doneDate
+ *   不反写 status。
+ * before 无 task 时按缺省（todo/无完成日期）处理。
  */
 export function applyStatusRules(before: DeriveNode, patch: TaskPatch): TaskPatch {
   const finalPatch: TaskPatch = { ...patch };
@@ -179,8 +185,9 @@ export function applyStatusRules(before: DeriveNode, patch: TaskPatch): TaskPatc
     if (patch.status === 'done' && !beforeDoneDate && patch.doneDate === undefined) {
       finalPatch.doneDate = todayStr();
       finalPatch.progress = 100;
-    } else if (patch.status !== 'done' && beforeDoneDate && patch.doneDate === undefined) {
+    } else if (patch.status !== 'done' && beforeStatus === 'done' && patch.doneDate === undefined) {
       finalPatch.doneDate = null;
+      finalPatch.progress = 0;
     }
   }
   return finalPatch;

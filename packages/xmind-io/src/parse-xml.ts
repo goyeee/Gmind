@@ -58,7 +58,7 @@ function walkXmlTopic(el: Element, d: DegradedCollector): XmindNode {
     }
     const mapped = markersToIcons(ids);
     d.add('style', mapped.dropped); // 仅无对应的 marker 计降级（映射成功不丢）
-    if (mapped.icons.priority !== undefined || mapped.icons.icon !== undefined || mapped.icons.emoji !== undefined) {
+    if (Object.keys(mapped.icons).length > 0) {
       icons = mapped.icons;
     }
   }

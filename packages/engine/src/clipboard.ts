@@ -24,6 +24,8 @@
 
 import {
   ICON_GROUPS,
+  MARKER_GROUP_MODE,
+  MARKER_MULTI_MAX,
   MAX_TEXT_LENGTH,
   iconValuesOf,
   outlineToSpec,
@@ -45,7 +47,8 @@ export interface PayloadNode {
   note: string;
   href: string;
   image: { key: string; w: number; h: number } | null;
-  icons: Record<string, string>;
+  /** 图标组值数组（M7b-W1 多值；组键 ∈ core ICON_GROUPS）。 */
+  icons: Record<string, string[]>;
   style: Record<string, string>;
   children: PayloadNode[];
 }
@@ -135,12 +138,18 @@ function payloadFromSnapshot(reader: DocReader, snap: NodeSnapshotLike): Payload
   };
 }
 
-/** 内部：icons 收敛为 Record<string,string>（DocReader 里放宽为 unknown）。 */
-function copyIcons(icons: Record<string, unknown> | undefined): Record<string, string> {
-  const out: Record<string, string> = {};
+/** 内部：icons 收敛为 Record<string,string[]>（DocReader 里放宽为 unknown；M7b-W1
+ *  多值——Y.Array/数组值取字符串元素，旧单值字符串包装为单元素数组）。 */
+function copyIcons(icons: Record<string, unknown> | undefined): Record<string, string[]> {
+  const out: Record<string, string[]> = {};
   if (!icons) return out;
   for (const [group, value] of Object.entries(icons)) {
-    if (typeof value === 'string') out[group] = value;
+    if (Array.isArray(value)) {
+      const arr = value.filter((v): v is string => typeof v === 'string');
+      if (arr.length > 0) out[group] = arr;
+    } else if (typeof value === 'string' && value !== '') {
+      out[group] = [value];
+    }
   }
   return out;
 }
@@ -213,15 +222,23 @@ function assertPayloadNodeValid(node: PayloadNode): void {
   for (const child of node.children) assertPayloadNodeValid(child);
 }
 
-/** 内部（M7a-T1）：icon 写入口目录校验——值目录单源自 @gmind/core 的 iconValuesOf
- *  （M7a-R1 2.5：与 core setIcon 同一目录来源，不再本地三元链镜像分发）。payload
- *  里的旧五组值（跨版本部署的系统剪贴板遗留）不写、静默降级，避免 paste 半途抛错
- *  造成部分粘贴（pasteNodes 无法回滚已建节点）。合法值正常写入。 */
-function isWritableIcon(group: string, value: string): boolean {
-  return (
-    (ICON_GROUPS as readonly string[]).includes(group) &&
-    iconValuesOf(group as IconGroup).includes(value)
-  );
+/**
+ * 内部（M7b-W1）：icon 写通道目录校验 + 组上限——值目录单源自 @gmind/core 的
+ * iconValuesOf（M7a-R1 2.5：与 core setIcon 同一目录来源，不再本地镜像分发）。
+ * payload 里目录外值（跨版本部署的系统剪贴板遗留）不写、静默降级；multi 组
+ * （MARKER_GROUP_MODE）超 MARKER_MULTI_MAX 的尾部的值静默丢弃——避免 paste 半途
+ * 抛错造成部分粘贴（pasteNodes 无法回滚已建节点）。合法值正常写入。
+ */
+function writableIconValues(group: string, values: string[] | undefined): string[] {
+  if (!values || !(ICON_GROUPS as readonly string[]).includes(group)) return [];
+  const catalog = iconValuesOf(group as IconGroup);
+  const out: string[] = [];
+  for (const value of values) {
+    if (typeof value !== 'string' || !catalog.includes(value)) continue;
+    if (!out.includes(value)) out.push(value);
+    if (out.length >= MARKER_MULTI_MAX) break;
+  }
+  return out;
 }
 
 /** 内部：递归重建一个 payload 子树，ids 按先序收集。 */
@@ -254,8 +271,17 @@ async function pastePayloadNode(
     }
     doc.setImage(id, { key, w: node.image.w, h: node.image.h }, origin);
   }
-  for (const [group, value] of Object.entries(node.icons)) {
-    if (isWritableIcon(group, value)) doc.setIcon(id, group, value, origin);
+  for (const [group, values] of Object.entries(node.icons)) {
+    // M7b-W1 多值写回：先按目录+上限收敛（writableIconValues），single 组写首枚
+    // （组内替换）、multi 组先清组再逐枚 toggle 追加（等价整组覆写，幂等于目标现状）。
+    const writable = writableIconValues(group, values);
+    if (writable.length === 0) continue;
+    if (MARKER_GROUP_MODE[group as IconGroup] === 'single') {
+      doc.setIcon(id, group, writable[0] as string, origin);
+    } else {
+      doc.setIcon(id, group, null, origin);
+      for (const value of writable) doc.setIcon(id, group, value, origin);
+    }
   }
   if (Object.keys(node.style).length > 0) doc.setStyle(id, node.style, origin);
   for (const child of node.children) {

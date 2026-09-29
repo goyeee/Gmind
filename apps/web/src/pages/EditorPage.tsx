@@ -11,6 +11,7 @@ import {
   getMeta,
   getNode,
   ICON_GROUPS,
+  MARKER_GROUP_MODE,
   markLastEditor,
   moveNode,
   ORIGIN_USER,
@@ -170,12 +171,12 @@ const ZOOM_PRESETS = [50, 75, 100, 150, 200];
 type NodeVia = 'keyboard' | 'context' | 'drag' | 'paste';
 
 /** 格式刷模式态（M6 Task 7，企微对标）：源节点 id + 格式快照（style 逐键 + icons
- *  逐组，NodeSnapshot 读取侧纯数据）+ 是否粘滞（双击进入：连续应用到逐个点击的
- *  节点，Esc / 再点按钮退出；单击 = 单发：应用一次即退出）。 */
+ *  逐组值数组（M7b-W1 多值），NodeSnapshot 读取侧纯数据）+ 是否粘滞（双击进入：
+ *  连续应用到逐个点击的节点，Esc / 再点按钮退出；单击 = 单发：应用一次即退出）。 */
 type PainterMode = {
   sourceId: string;
   style: Record<string, string>;
-  icons: Partial<Record<IconGroup, string>>;
+  icons: Record<string, string[]>;
   sticky: boolean;
 };
 
@@ -657,21 +658,32 @@ export function EditorPage() {
         for (const attr of Object.keys(target.style)) {
           if (!(attr in mode.style)) patch[attr] = null;
         }
-        const iconOps: { group: IconGroup; value: string | null }[] = [];
+        // M7b-W1 多值：逐组对比值数组；single 组差异写值/null，multi 组差异清组后
+        // 逐枚 toggle 追加（等价整组覆写）。目录校验由 setIcon 兜底（快照恒目录内）。
+        const iconOps: { group: IconGroup; values: string[] | null }[] = [];
         for (const group of ICON_GROUPS) {
-          const value = mode.icons[group];
-          const current = target.icons[group];
-          if (value === undefined) {
-            if (current !== undefined) iconOps.push({ group, value: null });
-          } else if (current !== value) {
-            iconOps.push({ group, value });
-          }
+          const values = mode.icons[group];
+          const current = target.icons[group] ?? [];
+          const same =
+            values !== undefined &&
+            values.length === current.length &&
+            values.every((v, i) => v === current[i]);
+          if (!same) iconOps.push({ group, values: values ?? null });
         }
         if (Object.keys(patch).length > 0 || iconOps.length > 0) {
           try {
             withTransaction(doc, ORIGIN_USER, () => {
               if (Object.keys(patch).length > 0) setStyle(doc, targetId, patch);
-              for (const op of iconOps) setIcon(doc, targetId, op.group, op.value);
+              for (const op of iconOps) {
+                if (op.values === null) {
+                  setIcon(doc, targetId, op.group, null);
+                } else if (MARKER_GROUP_MODE[op.group] === 'single') {
+                  setIcon(doc, targetId, op.group, op.values[0] ?? null);
+                } else {
+                  setIcon(doc, targetId, op.group, null);
+                  for (const value of op.values) setIcon(doc, targetId, op.group, value);
+                }
+              }
             });
             afterUserWrite();
           } catch (e) {

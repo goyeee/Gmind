@@ -161,3 +161,19 @@
   background: #f0f5ff;
   outline: 1px solid #3370ff;
 }
+
+/* ── M7b-W1 企微全量目录 chip（MarkerChip 内联配色；此处只管排布基线）──────── */
+.marker-chip-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 600;
+}
+.marker-chip-round {
+  display: inline-block;
+  border-radius: 50%;
+}
+.marker-chip-glyph {
+  display: inline-block;
+  line-height: 1;
+}
