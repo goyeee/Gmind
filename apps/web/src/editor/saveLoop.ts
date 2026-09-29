@@ -32,6 +32,8 @@ import { track } from '../api/events';
  */
 
 const DEBOUNCE_MS = 2000;
+// 「保存中」看门狗时长：超过该时长仍无事务且 provider 无未同步变更 → 回落「已保存」
+const SAVING_WATCH_MS = 6000;
 const RETRY_DELAYS_MS = [1000, 2000, 4000] as const;
 /** 403 配额终态文案（区别于网络类失败的重试文案，可直接行动）；上限数值与 server 共用 @gmind/shared。 */
 export const QUOTA_STATUS = `文档节点数超过上限（${MAX_DOC_NODES}），请删除部分节点后保存`;
@@ -95,6 +97,9 @@ export interface CollabBridge {
   shouldPutNow(): boolean;
   /** WS 不可达时的离线文案；null = WS 在线（PUT 失败维持 M1 重试文案语义）。 */
   offlineHint(): string | null;
+  /** M7b-K1 看门狗用：provider 是否仍有未同步变更（false = 服务端已持久化，
+   *  无变更不会再广播 persisted ack——「保存中」应回落「已保存」）。 */
+  hasUnsyncedChanges(): boolean;
 }
 
 export interface SaveLoopOptions {
@@ -138,13 +143,19 @@ function putBody(
 
 export type SaveStatusSetter = (status: string) => void;
 
-/** 启动自动保存循环，返回停止函数（卸载时调用）。 */
+/** startSaveLoop 返回值：stop 卸载 + armSavingWatch（外部置「保存中」时复用看门狗）。 */
+export interface SaveLoopHandle {
+  stop(): void;
+  armSavingWatch(): void;
+}
+
+/** 启动自动保存循环，返回句柄（卸载时调 stop；collab 置「保存中」时调 armSavingWatch）。 */
 export function startSaveLoop(
   doc: Y.Doc,
   fileId: string,
   setStatus: SaveStatusSetter,
   options?: SaveLoopOptions,
-): () => void {
+): SaveLoopHandle {
   const shouldPutNow = options?.collab?.shouldPutNow ?? (() => true);
   const offlineHint = options?.collab?.offlineHint ?? (() => null);
   let timer: ReturnType<typeof setTimeout> | null = null;
@@ -248,6 +259,22 @@ export function startSaveLoop(
     }, delay);
   }
 
+  // M7b-K1「保存中」看门狗：无编辑文档被置「保存中」后（初始化 pending 结构或
+  // ack 丢失场景），若看门狗到期时 provider 已无未同步变更（hasUnsyncedChanges=false
+  // ——服务端已持久化但无变更不再广播 persisted ack），回落「已保存 HH:MM」；
+  // 期间任何新事务重置看门狗。根治「新开文档恒显保存中…」（kimi K2 三次复现）。
+  let savingWatch: ReturnType<typeof setTimeout> | null = null;
+  const armSavingWatch = (): void => {
+    if (savingWatch !== null) clearTimeout(savingWatch);
+    savingWatch = setTimeout(() => {
+      savingWatch = null;
+      if (!shouldPutNow() && !options?.collab?.hasUnsyncedChanges()) {
+        setStatus(`已保存 ${clockNow()}`);
+      }
+    }, SAVING_WATCH_MS);
+  };
+
+
   const onAfterTransaction = (tr: { origin?: unknown }): void => {
     dirty = true;
     retries = 0; // 下一次事务重置重试计数
@@ -257,13 +284,19 @@ export function startSaveLoop(
       // M7b-W2 #8（需求方反馈「新开文档没敲字就显示保存中」）：system origin 事务
       // （装载期 normalizeTree 收敛 / 远端收敛）不是本地编辑，不置「保存中」——
       // dirty 计数保留（这些变更确需落库），状态仍由「尚未编辑」起始、ack 收尾。
-      if (tr.origin !== 'system') setStatus('保存中…');
+      if (tr.origin !== 'system') {
+        setStatus('保存中…');
+        armSavingWatch();
+      }
     }
     schedule(DEBOUNCE_MS);
   };
 
   doc.on('afterTransaction', onAfterTransaction);
-  return () => {
+  return {
+    /** 「保存中」看门狗：外部（collab onStatus 置保存中）也复用同一计时回落。 */
+    armSavingWatch,
+    stop: () => {
     stopped = true;
     clearTimer();
     doc.off('afterTransaction', onAfterTransaction);
@@ -278,5 +311,10 @@ export function startSaveLoop(
         body: putBody(doc, options?.getBaseUpdatedAt?.() ?? null),
       }).catch(() => undefined);
     }
+    if (savingWatch !== null) {
+      clearTimeout(savingWatch);
+      savingWatch = null;
+    }
+    },
   };
 }

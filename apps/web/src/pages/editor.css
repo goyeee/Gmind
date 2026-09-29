@@ -76,6 +76,10 @@
   height: 16px;
   background: #e5e6eb;
 }
+/* M7b-K5：窄视口工具栏横向可滑（保底防溢出裁切；后续可做「更多」收纳） */
+.editor-toolbar {
+  overflow-x: auto;
+}
 /* 分组容器；标题组弹性占满中段（标题输入伸展、右侧组贴右） */
 .toolbar-group {
   flex: none;
@@ -102,7 +106,7 @@
   color: #4e5969;
   cursor: pointer;
 }
-.editor-toolbar .toolbar-btn:hover:not(:disabled) {
+.editor-toolbar .toolbar-btn:hover:not(:disabled):not(.active) {
   background: #f2f3f5;
 }
 .editor-toolbar .toolbar-btn:disabled {
@@ -746,4 +750,10 @@ body.painter-active .editor-canvas svg {
 .popover-close:hover {
   background: #f2f3f5;
   color: #1f2329;
+}
+
+/* M7b-K4：右列包壳（editor-comments-pane）已带「评论」标题行，CommentPanel 内部
+   标题行重复——包壳场景下隐藏（面板独立复用处不受影响）。 */
+.editor-comments-pane .comment-panel-head {
+  display: none;
 }

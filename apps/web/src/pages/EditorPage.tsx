@@ -874,18 +874,22 @@ export function EditorPage() {
     parentId: string,
     index: number | undefined,
     anchorBox: NodeBox | null,
-    relation: 'child' | 'sibling',
+    relation: 'child' | 'sibling' | 'parent',
     via: NodeVia = 'keyboard',
+    nodeToOutdent?: string, // relation='parent' 时必填：被插入新父级的当前节点
   ): void => {
     if (addBlockedByQuota()) return; // 配额拦截（Tab 插子级/Enter 插同级/右键菜单共用本入口）
     const vp = viewportRef.current;
     const svgEl = svgRef.current;
     if (!vp || !svgEl || !doc) return;
     // ① 立即建空节点（ORIGIN_USER 可撤销；measure 的 minNodeWidth 下限保证空盒可见）
+    // relation='parent'（M7b-K2）：Shift+Tab 语义——空节点插在 parent 的 index 处后，
+    // 立即把 nodeToOutdent（当前选中）换父到空节点下（P→N→C），再进入同一行内编辑流。
     let createdId = '';
     try {
       withTransaction(doc, ORIGIN_USER, () => {
         createdId = addChild(doc, parentId, index === undefined ? {} : { index });
+        if (relation === 'parent' && nodeToOutdent) moveNode(doc, nodeToOutdent, createdId);
       });
     } catch (e) {
       showToast(e instanceof Error ? e.message : '新建失败');
@@ -993,27 +997,6 @@ export function EditorPage() {
     );
   };
 
-  /**
-   * Shift+Tab（PRD FR-EDT-001，fix round 1 修正）：在与父节点之间插入新父 = P→N→C——
-   * 新节点插入**当前节点父**的 children 中当前节点原 index 处，随后当前节点换父到新节点
-   * （原子树跟随）。旧实现插到祖父层会让 P 平白失去子节点，N 与 P 并排为空节点，违反 PRD。
-   */
-  const createOutdent = (parentId: string, index: number, currentId: string): void => {
-    if (!doc) return;
-    if (addBlockedByQuota()) return; // Shift+Tab 会新增节点，同受配额拦截
-    try {
-      withTransaction(doc, ORIGIN_USER, () => {
-        const newId = addChild(doc, parentId, { index });
-        moveNode(doc, currentId, newId); // 缺省 index：追加为新节点末子级
-      });
-      afterUserWrite();
-      track('node_add', { via: 'keyboard', nodeCount: countAliveReachable(doc) }, fileId);
-      fitPendingRef.current = true;
-    } catch (e) {
-      showToast(e instanceof Error ? e.message : '操作失败');
-    }
-  };
-
   const handleTab = (shift: boolean): void => {
     if (!doc) return;
     const current = primaryId();
@@ -1036,7 +1019,16 @@ export function EditorPage() {
     if (!parent || parent.deleted) return;
     // 父为 root（一级主题）与其余层级同一公式：新节点插在 parent children 中
     // 当前节点原 index 处（root 受保护只体现在「root 不可换父」，此处合法）。
-    createOutdent(parent.id, parent.childIds.indexOf(current), current);
+    // M7b-K2：与 子主题/同级主题 对齐——建节点即进入行内编辑（空提交回收），
+    // 不再走无反馈的 createOutdent（kimi K2 走查：插入后焦点滞留按钮、空白节点无提示）。
+    openNewNodeEditor(
+      parent.id,
+      parent.childIds.indexOf(current),
+      boxesRef.current.find((b) => b.id === current) ?? null,
+      'parent',
+      'keyboard',
+      current,
+    );
   };
 
   /** 删除选中（键盘 Delete/Backspace 与右键菜单共用；via 为 node_delete 埋点的
@@ -1888,6 +1880,8 @@ export function EditorPage() {
         // WS 不可达 → PUT 失败按离线文案呈现（恢复联网后自动同步），维持 M1 重试文案
         // 仅在「provider 自认在线但 REST 失败」的错位窗口出现
         offlineHint: () => (collabRef.current.wsConnected ? null : OFFLINE_STATUS),
+        // M7b-K1 看门狗：provider 未同步变更查询（collab 稍后装配，经 ref 延迟取）
+        hasUnsyncedChanges: () => collabHandleRef.current?.provider.hasUnsyncedChanges ?? false,
       },
       // 写序 base（M3a 准入 7.1）：PUT 携带 baseUpdatedAt，服务端据此拒绝陈旧整快照
       getBaseUpdatedAt: () => baseUpdatedAtRef.current,
@@ -1901,7 +1895,10 @@ export function EditorPage() {
           collabRef.current.wsEverConnected = true;
           // 重连无待同步变更时不会有 persisted ack，主动清掉离线指示；
           // 有待同步变更则等 ack 收尾（先落到「保存中」）
-          if (collab.provider.hasUnsyncedChanges) setStatus('保存中…');
+          if (collab.provider.hasUnsyncedChanges) {
+            setStatus('保存中…');
+            stopSave.armSavingWatch(); // M7b-K1：无 ack 场景（无变更不广播）由看门狗回落
+          }
           else
             setStatus((prev) =>
               prev.startsWith('离线') || prev.startsWith('保存失败') ? `已保存 ${clockNow()}` : prev,
@@ -2022,7 +2019,7 @@ export function EditorPage() {
       svgEl.removeEventListener('wheel', onWheelSync);
       document.removeEventListener('paste', onDocPaste);
       d.off('update', onDocUpdate);
-      stopSave();
+      stopSave.stop();
       collabHandleRef.current = null;
       quotaBlockedRef.current = false; // 文件切换不继承上一文件的配额拦截
       collab.destroy(); // provider + IndexedDB 本地副本一并收尾（顺序：先冲刷 saveLoop 决策再断链）

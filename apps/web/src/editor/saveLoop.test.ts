@@ -103,8 +103,8 @@ async function withMockedSave(
   vi.stubGlobal('localStorage', { getItem: () => 'token', setItem: () => undefined, removeItem: () => undefined });
   const doc = new Y.Doc();
   const statuses: string[] = [];
-  const stop = startSaveLoop(doc, 'file-1', (s) => statuses.push(s), options);
-  return { doc, statuses, stop };
+  const handle = startSaveLoop(doc, 'file-1', (s) => statuses.push(s), options);
+  return { doc, statuses, stop: () => handle.stop() };
 }
 
 afterEach(() => {
