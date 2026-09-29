@@ -3,8 +3,8 @@
  *
  * 在 core 的剪贴板数据层（subtreeToOutlineText / outlineToSpec / insertSpec）之上，
  * 提供浏览器侧的复制 / 粘贴 / 剪切与系统剪贴板读写：
- * - 内部格式：结构化 payload（v:1 森林，含 text/note/href/image/icons/style 富内容），
- *   同应用粘贴重建全部富字段，id 全部新建。
+ * - 内部格式：结构化 payload（v:1 森林，含 text/note/description(M7c-C1)/href/image/
+ *   icons/style 富内容），同应用粘贴重建全部富字段，id 全部新建。
  * - 文本格式：Tab 缩进大纲纯文本（跨应用；粘贴走 outlineToSpec → addChild 镜像
  *   core insertSpec 的 cursor 语义与 ≤500 预校验）。
  *
@@ -45,6 +45,8 @@ export interface PayloadNode {
   id: string;
   text: string;
   note: string;
+  /** 任务一句话描述（M7c-C1；与 note 并存的独立字段，复制/粘贴对齐 note 现状）。 */
+  description: string;
   href: string;
   image: { key: string; w: number; h: number } | null;
   /** 图标组值数组（M7b-W1 多值；组键 ∈ core ICON_GROUPS）。 */
@@ -62,6 +64,7 @@ export interface IDocHandle extends DocReader {
   addChild(parentId: string, opts?: { index?: number; text?: string }, origin?: string): string;
   setText(id: string, text: string, origin?: string): void;
   setNote(id: string, note: string, origin?: string): void;
+  setDescription(id: string, text: string, origin?: string): void;
   setHref(id: string, href: string, origin?: string): void;
   setImage(id: string, image: { key: string; w: number; h: number } | null, origin?: string): void;
   setIcon(id: string, group: string, value: string | null, origin?: string): void;
@@ -130,6 +133,7 @@ function payloadFromSnapshot(reader: DocReader, snap: NodeSnapshotLike): Payload
     id: snap.id,
     text: snap.text,
     note: snap.note ?? '',
+    description: snap.description ?? '',
     href: snap.href ?? '',
     image: snap.image ? { key: snap.image.key, w: snap.image.w, h: snap.image.h } : null,
     icons: copyIcons(snap.icons),
@@ -254,6 +258,10 @@ async function pastePayloadNode(
   const id = doc.addChild(parentId, index === undefined ? { text: node.text } : { index, text: node.text }, origin);
   ids.push(id);
   if (node.note !== '') doc.setNote(id, node.note, origin);
+  // 描述写回（M7c-C1）：对齐 note 现状——非空才写、无预校验；旧版本 payload 缺键
+  // （undefined）按 '' 防御，不写不抛。
+  const description = typeof node.description === 'string' ? node.description : '';
+  if (description !== '') doc.setDescription(id, description, origin);
   if (node.href !== '') doc.setHref(id, node.href, origin);
   if (node.image) {
     let key: string;

@@ -31,6 +31,7 @@ describe('getNode', () => {
       text: 'T',
       parentId: '',
       note: '',
+      description: '',
       href: '',
       image: null,
       icons: {},
@@ -62,6 +63,7 @@ describe('getNode', () => {
       n.set('parentId', ROOT_NODE_ID);
       rootChildren.push(['n1']);
       n.set('note', '备注内容');
+      n.set('description', '一句话任务描述');
       n.set('href', 'https://x.dev');
       n.set('image', { key: 'files/f1/x.png', w: 120, h: 80 });
       const icons = new Y.Map();
@@ -76,11 +78,29 @@ describe('getNode', () => {
     });
     const snap = getNode(doc, 'n1')!;
     expect(snap.note).toBe('备注内容');
+    expect(snap.description).toBe('一句话任务描述');
     expect(snap.href).toBe('https://x.dev');
     expect(snap.image).toEqual({ key: 'files/f1/x.png', w: 120, h: 80 });
     expect(snap.icons).toEqual({ flag: ['flag'], emoji: ['😄'] });
     expect(snap.style).toEqual({ fill: '#ffffff' });
     expect(snap.collapsed).toBe(true);
+  });
+
+  it('description 读取防御：远端坏数据（非 string）归一为空串，不抛错', () => {
+    const doc = new Y.Doc();
+    doc.transact(() => {
+      const nodes = doc.getMap('nodes');
+      const root = new Y.Map();
+      nodes.set(ROOT_NODE_ID, root);
+      root.set('text', 'R');
+      root.set('parentId', '');
+      const n = new Y.Map();
+      nodes.set('n1', n);
+      n.set('text', 'hello');
+      n.set('parentId', ROOT_NODE_ID);
+      n.set('description', 42); // crafted/远端坏数据
+    });
+    expect(getNode(doc, 'n1')!.description).toBe('');
   });
 
   it('task 字段读取：显式 Y.Map 完整读回；远端坏数据归一化（不抛错）', () => {

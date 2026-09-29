@@ -39,6 +39,9 @@ export function docToXmindTree(doc: Y.Doc): XmindNode {
     return {
       title: snap.text,
       ...(snap.note ? { note: snap.note } : {}),
+      // 描述（M7c-C1）：非空才产出自定义键（buildXmind 真值判定，与 note 同款口径；
+      // XML 侧无对应登记不映射，见 @gmind/xmind-io types.ts XmindNode 头注）。
+      ...(snap.description ? { description: snap.description } : {}),
       ...(Object.keys(icons).length > 0 ? { icons } : {}),
       children,
     };

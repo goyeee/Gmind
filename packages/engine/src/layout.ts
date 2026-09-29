@@ -51,6 +51,8 @@ interface LayoutNode {
   children: LayoutNode[];
   /** 仅折叠节点有：被隐藏的存活后代数（可为 0）。 */
   collapsedCount?: number;
+  /** 描述行（M7c-C1）：测量截断后的单行（无描述缺省，几何零参与）。 */
+  descLine?: string;
   /** 子树带高：max(自身高, Σ子带高 + V_GAP×(n-1))。 */
   subtreeH: number;
   /** 子树带宽：max(自身宽, Σ子带宽 + H_GAP×(n-1))。 */
@@ -117,12 +119,15 @@ function collectTree(
       }
     }
     const taskRow = taskRowSlotsOf(snap.task, children.length > 0);
+    // 描述（M7c-C1，只增不改）：快照 description 透传测量（非空时第二行 + 高度自适应，
+    // 截断产物 box.descLine 随盒输出）。缺省时选项与旧版逐项一致（金样锁定）。
     const box = measureNodeBox(snap.text, styleOf(id, depth), theme, {
       adapter: measure,
       iconCount,
       imageH: image ? image.h : undefined,
       imageW: image ? image.w : undefined,
       taskRow,
+      description: snap.description,
     });
     const node: LayoutNode = {
       id,
@@ -135,6 +140,7 @@ function collectTree(
       children,
       subtreeH: box.h,
       subtreeW: box.w,
+      ...(box.descLine !== undefined ? { descLine: box.descLine } : {}),
     };
     if (collapsedCount !== undefined) node.collapsedCount = collapsedCount;
     return node;
@@ -321,7 +327,18 @@ function flatten(
   boxes: NodeBox[],
   collapsed: Map<string, number>,
 ): void {
-  boxes.push({ id: node.id, x: node.x, y: node.y, w: node.w, h: node.h, side: node.side, depth, parentId });
+  boxes.push({
+    id: node.id,
+    x: node.x,
+    y: node.y,
+    w: node.w,
+    h: node.h,
+    side: node.side,
+    depth,
+    parentId,
+    // 描述行（M7c-C1，只增不改）：无描述时字段不出现（金样逐字节不变）。
+    ...(node.descLine !== undefined ? { descLine: node.descLine } : {}),
+  });
   if (node.collapsedCount !== undefined) collapsed.set(node.id, node.collapsedCount);
   for (const child of node.children) flatten(child, depth + 1, node.id, boxes, collapsed);
 }

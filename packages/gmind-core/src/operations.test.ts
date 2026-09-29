@@ -13,6 +13,7 @@ import {
   setIcon,
   setNodeTask,
   setNote,
+  setDescription,
   setHref,
   setCollapsed,
   setStyle,
@@ -23,7 +24,7 @@ import {
   ORIGIN_USER,
 } from './operations';
 import { createUndoManager, redo, undo } from './undo';
-import { MARKER_MULTI_MAX, MAX_NOTE_LENGTH, OTHER_VALUES, type IconGroup } from './constants';
+import { MARKER_MULTI_MAX, MAX_DESCRIPTION_LENGTH, MAX_NOTE_LENGTH, OTHER_VALUES, type IconGroup } from './constants';
 
 /** 按文本查节点 id（测试辅助；模板生成的 ULID 不可预知）。 */
 function findIdByText(doc: Y.Doc, text: string): string {
@@ -449,6 +450,43 @@ describe('setNote', () => {
       expect((e as GmindCoreError).message).toBe('备注长度已达上限');
     }
     expect(fullSnapshot(doc)).toBe(before);
+  });
+});
+
+describe('setDescription（M7c-C1）', () => {
+  it(`恰好 ${MAX_DESCRIPTION_LENGTH} 字写入成功并经 getNode 读回；空串清除`, () => {
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
+    const id = childrenIds(doc, ROOT_NODE_ID)[0]!;
+    const desc = '描'.repeat(MAX_DESCRIPTION_LENGTH);
+    setDescription(doc, id, desc);
+    expect(getNode(doc, id)!.description).toBe(desc);
+    setDescription(doc, id, '');
+    expect(getNode(doc, id)!.description).toBe('');
+  });
+
+  it(`${MAX_DESCRIPTION_LENGTH + 1} 字抛 DESCRIPTION_TOO_LONG（两段式文案）且文档零变更`, () => {
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
+    const id = childrenIds(doc, ROOT_NODE_ID)[0]!;
+    const before = fullSnapshot(doc);
+    try {
+      setDescription(doc, id, '描'.repeat(MAX_DESCRIPTION_LENGTH + 1));
+      expect.unreachable();
+    } catch (e) {
+      expect(e).toBeInstanceOf(GmindCoreError);
+      expect((e as GmindCoreError).code).toBe('DESCRIPTION_TOO_LONG');
+      expect((e as GmindCoreError).message).toBe(`描述长度已达上限（最多 ${MAX_DESCRIPTION_LENGTH} 字），请精简后再保存`);
+    }
+    expect(fullSnapshot(doc)).toBe(before);
+  });
+
+  it('ORIGIN_USER 写入可撤销（undo 回到写入前空串；同 setIcon undo 用例的单写模式，避免 captureTimeout 合并歧义）', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
+    const id = childrenIds(doc, ROOT_NODE_ID)[0]!;
+    const um = createUndoManager(doc);
+    setDescription(doc, id, '一句话描述');
+    expect(getNode(doc, id)!.description).toBe('一句话描述');
+    undo(um);
+    expect(getNode(doc, id)!.description).toBe('');
   });
 });
 

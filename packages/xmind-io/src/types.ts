@@ -17,10 +17,15 @@ export interface XmindIcons {
   emoji?: string[];
 }
 
-/** 解析后的统一树节点：只保留层级/文本/备注/标记。title 允许空串（xmind 源文件可缺 title）。 */
+/** 解析后的统一树节点：只保留层级/文本/备注/标记。title 允许空串（xmind 源文件可缺 title）。
+ *  description（M7c-C1）：节点任务一句话描述，非 XMind 官方字段——2020+ JSON 侧以
+ *  自定义 `description` 键导出/读回（宽容 JSON，未知键不致损坏），XML（XMind 8
+ *  content.xml）侧无对应标签，登记不映射（导入丢描述、导出不产出）。 */
 export interface XmindNode {
   title: string;
   note?: string;
+  /** 任务一句话描述（M7c-C1，自定义键；见接口头注的双侧映射裁定）。 */
+  description?: string;
   /** XMind 标记（导入映射产物 / 导出输入），见 markers.ts 的双向映射口径。 */
   icons?: XmindIcons;
   children: XmindNode[];
@@ -60,6 +65,8 @@ export interface JsonNotes {
 export interface JsonTopic {
   class?: unknown;
   title?: unknown;
+  /** 非官方扩展键（M7c-C1）：Gmind 导出的任务描述，读回时 string 且非空才携带。 */
+  description?: unknown;
   notes?: JsonNotes;
   markers?: unknown[];
   labels?: unknown[];

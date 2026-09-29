@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type * as Y from 'yjs';
-import { addChild, childrenIds, createTemplateDoc, ROOT_NODE_ID } from '@gmind/core';
+import { addChild, childrenIds, createTemplateDoc, ROOT_NODE_ID, setDescription } from '@gmind/core';
 import { docToXmindTree } from './xmind-export';
 
 /** docToXmindTree 环防护（M4 挂账清偿）：walk 的 visited 集合——childIds 环
@@ -37,5 +37,17 @@ describe('docToXmindTree（环防护，防御性）', () => {
     expect(tree.title).toBe('根');
     expect(tree.children.map((c) => c.title)).toEqual(['a']);
     expect(tree.children[0]?.children.map((c) => c.title)).toEqual(['a1']);
+  });
+
+  it('描述映射（M7c-C1）：非空随节点携带，空/缺失不产出键', () => {
+    const doc = createTemplateDoc({ title: '根', children: [] });
+    const a = addChild(doc, ROOT_NODE_ID, { text: 'a' });
+    addChild(doc, a, { text: 'a1' });
+    setDescription(doc, a, '子任务一句话描述');
+
+    const tree = docToXmindTree(doc);
+    expect(tree.description).toBeUndefined(); // root 无描述：不产出键
+    expect(tree.children[0]?.description).toBe('子任务一句话描述');
+    expect(tree.children[0]?.children[0]?.description).toBeUndefined();
   });
 });

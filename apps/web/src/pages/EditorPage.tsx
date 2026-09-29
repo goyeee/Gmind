@@ -20,6 +20,7 @@ import {
   removeSummary,
   ROOT_NODE_ID,
   setDocMeta,
+  setDescription,
   setHref,
   setImage,
   setIcon,
@@ -2968,6 +2969,7 @@ function handleOf(d: Y.Doc): IDocHandle {
     addChild: (parentId, opts, origin) => addChild(d, parentId, opts, origin ?? ORIGIN_USER),
     setText: (id, text, origin) => setText(d, id, text, origin ?? ORIGIN_USER),
     setNote: (id, note, origin) => setNote(d, id, note, origin ?? ORIGIN_USER),
+    setDescription: (id, text, origin) => setDescription(d, id, text, origin ?? ORIGIN_USER),
     setHref: (id, href, origin) => setHref(d, id, href, origin ?? ORIGIN_USER),
     setImage: (id, image, origin) => setImage(d, id, image, origin ?? ORIGIN_USER),
     setIcon: (id, group, value, origin) =>

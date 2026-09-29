@@ -691,3 +691,56 @@ describe('renderScene：任务视觉（M7c-C2）', () => {
     expect(nodeG('b')?.querySelectorAll('tspan')[0]?.getAttribute('y')).toBe('15.1'); // 两行首行回位
   });
 });
+
+// ---------------------------------------------------------------------------
+// 描述行（M7c-C1，spec 2026-09-29-m7c §R1）：text 下方第二行——12px 灰 #86909c、
+// 单行省略（截断在测量期完成，直绘 box.descLine）、占底部条带（任务行上方）；
+// 无描述零变化（DOM 与现状一致）。
+// ---------------------------------------------------------------------------
+
+describe('renderScene：描述行（M7c-C1）', () => {
+  it('有 descLine 渲染第二行：灰 #86909c、12px、内容直绘、x 与主文本对齐；主文本基线上移', () => {
+    const scene = createScene(svg);
+    const nodes = baseLayout().nodes.map((n) => (n.id === 'c' ? { ...n, h: 40, descLine: '一句话描述' } : n));
+    renderScene(scene, makeInput({ ...baseLayout(), nodes }, baseData()));
+    const desc = nodeG('c')?.querySelector('text.gm-desc') as SVGTextElement;
+    expect(desc).not.toBeNull();
+    expect(desc.textContent).toBe('一句话描述');
+    expect(desc.getAttribute('fill')).toBe('#86909c');
+    expect(desc.getAttribute('font-size')).toBe('12');
+    expect(desc.getAttribute('font-weight')).toBe('400');
+    expect(desc.getAttribute('x')).toBe('12'); // textX = nodePaddingX（c 无图标）
+    // c 盒 h=40：描述行独占底部条带 → 中心 30，基线 = 30 + 12×0.35 = 34.2
+    expect(desc.getAttribute('y')).toBe('34.2');
+    // 主文本（单行，level2 字号 14）居中于余下区域：contentCenter=(40-20)/2=10 → y=14.9
+    expect(nodeG('c')?.querySelector('tspan')?.getAttribute('y')).toBe('14.9');
+  });
+
+  it('无 descLine 不渲染描述行（零变化）；描述移除后元素回收', () => {
+    const scene = createScene(svg);
+    renderScene(scene, makeInput(baseLayout(), baseData()));
+    expect(svg.querySelector('.gm-desc')).toBeNull();
+    // 描述出现 → 渲染；再移除 → 元素移除（协调差分）
+    const nodes = baseLayout().nodes.map((n) => (n.id === 'c' ? { ...n, h: 40, descLine: 'D' } : n));
+    renderScene(scene, makeInput({ ...baseLayout(), nodes }, baseData()));
+    expect(nodeG('c')?.querySelector('text.gm-desc')).not.toBeNull();
+    renderScene(scene, makeInput(baseLayout(), baseData()));
+    expect(nodeG('c')?.querySelector('text.gm-desc')).toBeNull();
+  });
+
+  it('描述与任务行并存：描述行在任务行上方（基线各占一条带），主文本居中于剩余区域', () => {
+    const scene = createScene(svg);
+    const data = baseData();
+    data.set('c', { text: 'x', task: { status: 'doing', progress: 40 } });
+    const nodes = baseLayout().nodes.map((n) => (n.id === 'c' ? { ...n, h: 60, descLine: 'D' } : n));
+    // taskInput 是 M7c-C2 describe 的局部助手，此处同款内联（today 供逾期判定）
+    renderScene(scene, { layout: { ...baseLayout(), nodes }, theme, styleOf, nodeData: data, today: '2026-09-28' });
+    // 描述行中心 = h - TASK_ROW_H（任务行）- TASK_ROW_H/2 = 60-20-10 = 30 → y = 34.2
+    const desc = nodeG('c')?.querySelector('text.gm-desc') as SVGTextElement;
+    expect(desc.getAttribute('y')).toBe('34.2');
+    // 主文本：contentCenter = (60-20-20)/2 = 10 → y = 10 + 14×0.35 = 14.9
+    expect(nodeG('c')?.querySelector('tspan')?.getAttribute('y')).toBe('14.9');
+    // 任务行元素在（C2 口径，rowY = h - TASK_ROW_H/2 = 50）
+    expect(nodeG('c')?.querySelector('.gm-task-row')).not.toBeNull();
+  });
+});

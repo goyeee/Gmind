@@ -2,6 +2,8 @@
 // 备注写为 notes.plain.content；标记（M7b-W1）各数组逐枚出有 XMind 原生 marker-id
 // 对应的值（iconsToMarkerIds：priority-N / flag-red / star-red；mood/number/arrow/
 // progress/emoji 与其余 other slug 无原生对应，不导出——映射口径见 markers.ts 头注）。
+// 描述（M7c-C1）：description 非空出自定义键 `description`（2020+ JSON 宽容未知键；
+// XML 侧无对应标签，登记不映射——见 types.ts XmindNode 头注）。
 import { strToU8, zipSync } from 'fflate';
 import { iconsToMarkerIds } from './markers';
 import type { JsonTopic, XmindNode } from './types';
@@ -15,6 +17,7 @@ export function buildXmind(root: XmindNode): Uint8Array {
       title: n.title,
       ...(markerIds.length > 0 ? { markers: markerIds.map((markerId) => ({ markerId })) } : {}),
       ...(n.note ? { notes: { plain: { content: n.note } } } : {}),
+      ...(n.description ? { description: n.description } : {}),
       ...(n.children.length ? { children: { attached: n.children.map(topic) } } : {}),
     };
   };

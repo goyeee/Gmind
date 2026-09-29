@@ -29,6 +29,9 @@
  *   + <text class="gm-task-due">（MM-DD；逾期（isOverdue 口径）红底白字否则灰底）。
  *   任务行占盒底 TASK_ROW_H 条带，主文本/标记行在其余区域垂直居中——无任务行时
  *   contentCenter 恒等于 b.h/2，既有几何逐字节不变）、
+ *   <text class="gm-desc">（M7c-C1 节点描述第二行：text 下方 12px 灰 #86909c、
+ *   单行省略——截断在测量期完成，直绘 box.descLine；占底部条带（任务行上方），
+ *   无描述不渲染，DOM 与现状一致）、
  *   折叠徽标 <g class="gm-collapse-badge" data-for-id>（「+N」，N=collapsedCounts；
  *   位置按 box.side 确定：right→盒右、left→盒左、down→盒下）。
  * - 边 <path data-edge-id>：bezier 为 `M from C c1 c2 to`（controls 恒 2 个，缺省退化）；
@@ -45,6 +48,7 @@ import type {
   ThemeTokens,
 } from './types';
 import { colorForUser } from './cursors';
+import { DESC_FONT_SIZE } from './measure';
 import {
   TASK_AVATAR_D,
   TASK_AVATAR_PLUS_W,
@@ -102,6 +106,9 @@ const CORNER_BADGE_PAD = 6;
 /** link/note/comment 角标的水平错位步长（同时存在时不重叠，自右缘依次让位）。 */
 const CORNER_BADGE_STEP = 18;
 
+/** 描述行字色（M7c-C1，企微灰；字号/字族走 DESC_FONT_SIZE + 节点字族）。 */
+const DESC_COLOR = '#86909c';
+
 /** 数值 → 属性串：统一保留两位小数并去掉尾零（坐标/尺寸全走此格式，输出确定）。 */
 function fmt(n: number): string {
   return String(Math.round(n * 100) / 100);
@@ -139,6 +146,8 @@ export interface NodeEntry {
   taskRow: SVGGElement | null;
   /** 上次渲染的任务签名（签名+几何；变化才重建行内元素，引用保持策略同标记行）。 */
   lastTaskSig: string;
+  /** 描述行（M7c-C1；盒无 descLine 时 null）。 */
+  descText: SVGTextElement | null;
   badge: SVGGElement | null;
   badgeText: SVGTextElement | null;
   /** 上次渲染的文本（tspan 仅在变化时重建）。 */
@@ -324,6 +333,7 @@ function applyNode(
       taskBar: null,
       taskRow: null,
       lastTaskSig: '',
+      descText: null,
       badge: null,
       badgeText: null,
       lastText: '',
@@ -346,10 +356,13 @@ function applyNode(
   const fontSize = style.textStyle.fontSize;
   const iconCount = markerCountOf(visual.icons);
   const textX = theme.nodePaddingX + iconCount * theme.iconSlotWidth;
-  // 任务信息行（M7c-C2）占盒底 TASK_ROW_H 条带：主文本/标记行在其余区域垂直居中。
-  // 无任务行时 contentCenter === b.h/2，基线/标记位与旧版逐字节一致（只增不改）。
+  // 底部条带（M7c-C2 任务行 + M7c-C1 描述行）各占 TASK_ROW_H：主文本/标记行在其余
+  // 区域垂直居中；任务行恒最底，描述行在其上（两者并存时）或独占底部条带（仅描述）。
+  // 无任务行且无描述时 contentCenter === b.h/2，基线/标记位与旧版逐字节一致（只增不改）。
   const taskSlots = taskRowSlotsOf(visual.task, taskCtx.parent);
-  const contentCenter = taskSlots ? (b.h - TASK_ROW_H) / 2 : b.h / 2;
+  const descLine = b.descLine ?? '';
+  const contentCenter =
+    (b.h - (taskSlots ? TASK_ROW_H : 0) - (descLine !== '' ? TASK_ROW_H : 0)) / 2;
   text.setAttribute('x', fmt(textX));
   text.setAttribute('fill', style.textColor);
   text.setAttribute('font-size', fmt(fontSize));
@@ -373,6 +386,25 @@ function applyNode(
   const spans = text.children;
   for (let i = 0; i < spans.length; i += 1) {
     (spans[i] as SVGTSpanElement).setAttribute('y', fmt(baseline(i)));
+  }
+
+  // 描述行（M7c-C1）：text 下方第二行——12px 灰（企微 #86909c）、单行省略（截断在
+  // 测量期完成，b.descLine 即可安全直绘）。位置 = 底部条带：任务行上方或独占底部。
+  // syncOptional 增删 + 每帧回填 x/y/font-family（盒变化随行位移），引用保持。
+  entry.descText = syncOptional(entry.descText, descLine !== '', g, () =>
+    el('text', {
+      class: 'gm-desc',
+      'font-size': fmt(DESC_FONT_SIZE),
+      'font-weight': '400',
+      fill: DESC_COLOR,
+    }),
+  );
+  if (entry.descText) {
+    entry.descText.textContent = descLine;
+    entry.descText.setAttribute('x', fmt(textX));
+    entry.descText.setAttribute('font-family', style.textStyle.fontFamily);
+    const descCenter = taskSlots ? b.h - TASK_ROW_H - TASK_ROW_H / 2 : b.h - TASK_ROW_H / 2;
+    entry.descText.setAttribute('y', fmt(descCenter + DESC_FONT_SIZE * 0.35));
   }
 
   // 标记区（M7b-W1 八组制多值，固定组序，位置不变：文字左侧）。签名差分：签名

@@ -49,6 +49,9 @@ export interface NodeSnapshot {
   parentId: string;
   childIds: string[];
   note: string;
+  /** 节点描述（M7c-C1）：任务的一句话描述（区别于 note 的企微备注角标语义，二者并存）；
+   *  缺省 ''，写入走 setDescription（≤ MAX_DESCRIPTION_LENGTH）。 */
+  description: string;
   href: string;
   image: NodeImage | null;
   /** 图标组值数组（M7b-W1 多值模型）：每组恒为数组（缺省空数组=组不存在；单选组
@@ -159,6 +162,7 @@ export function getNode(doc: Y.Doc, id: string): NodeSnapshot | null {
     parentId: asString(node.get('parentId')),
     childIds: children ? children.toArray() : [],
     note: asString(node.get('note')),
+    description: asString(node.get('description')),
     href: asString(node.get('href')),
     image: image ?? null,
     icons: readIcons(node.get('icons')),

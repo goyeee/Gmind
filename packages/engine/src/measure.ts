@@ -23,24 +23,40 @@ export interface MeasureNodeBoxOptions {
    * 既有节点几何逐字节不变（金样锁定）。
    */
   taskRow?: TaskRowSlots;
+  /**
+   * 节点描述（M7c-C1，只增不改）：任务的一句话描述（区别于 note 备注）。非空时
+   * 盒高加一行（TASK_ROW_H，与任务行同条带高度、任务行上方）；超出
+   * theme.maxTextWidth 按测量逐字符截断并追加省略号（单行省略，截断结果经
+   * NodeBoxMeasure.descLine 交渲染直绘）。缺省/空串完全不参与——既有节点几何
+   * 逐字节不变（金样锁定）。
+   */
+  description?: string;
 }
 
 export interface NodeBoxMeasure {
   w: number;
   h: number;
   lines: string[];
+  /** 描述行（M7c-C1）：测量截断后的单行文本；无描述时缺省（字段不出现，金样锁定）。 */
+  descLine?: string;
 }
+
+/** 描述行字号（M7c-C1，企微灰字第二行；测量截断与 render 绘制同源单值）。 */
+export const DESC_FONT_SIZE = 12;
+/** 描述行省略号字符（截断时追加，与截断字符一并计入测量宽度）。 */
+const DESC_ELLIPSIS = '…';
 
 /**
  * 计算节点盒尺寸与最终文本行：
  * - 按 '\n' 分行；单行超 theme.maxTextWidth 时逐字符贪心断行（中英文通用），
  *   在即将溢出的字符前断开，绝不产生空尾行（空文本除外）。
  * - 行高 = fontSize × theme.lineHeightRatio，文本高 = 行数 × 行高。
- * - h = max(文本高 + 任务行高, imageH ?? 0)（任务行仅在有任务信息时计入；
+ * - h = max(文本高 + 任务行高 + 描述行高, imageH ?? 0)（各行仅在对应信息存在时计入；
  *   T6 carry-in 裁决：盒高计入图片高度）。
  * - w = max(最宽行宽 + 2×nodePaddingX + iconCount×iconSlotWidth,
  *   imageW !== undefined ? imageW + 2×nodePaddingX : 0,
- *   taskRowContentWidth(taskRow)（有任务信息时）, minNodeWidth)。
+ *   taskRowContentWidth(taskRow)（有任务信息时）,
+ *   截断描述行宽 + 2×nodePaddingX + iconCount×iconSlotWidth（有描述时）, minNodeWidth)。
  * 纯函数、确定性：同一输入恒得同一输出。
  */
 export function measureNodeBox(
@@ -55,8 +71,14 @@ export function measureNodeBox(
   const lines = physicalLines.flatMap((line) => wrapLine(line, adapter, style, theme.maxTextWidth));
   const lineHeight = style.fontSize * theme.lineHeightRatio;
   const textH = lines.length * lineHeight;
+  // 描述行（M7c-C1）：单行省略——超宽先按测量截断（追加省略号一并计宽），截断
+  // 结果随 descLine 输出（渲染直绘，不再自行测量）。无描述零参与。
+  const descRaw = options.description ?? '';
+  const descStyle: TextStyle = { fontSize: DESC_FONT_SIZE, fontWeight: 400, fontFamily: style.fontFamily };
+  const descLine = descRaw !== '' ? truncateWithEllipsis(descRaw, descStyle, adapter, theme.maxTextWidth) : undefined;
   const taskRowH = options.taskRow ? TASK_ROW_H : 0;
-  const h = Math.max(textH + taskRowH, options.imageH ?? 0);
+  const descRowH = descLine !== undefined ? TASK_ROW_H : 0;
+  const h = Math.max(textH + taskRowH + descRowH, options.imageH ?? 0);
 
   let maxLineW = 0;
   for (const line of lines) {
@@ -65,13 +87,35 @@ export function measureNodeBox(
   }
   const imageW = options.imageW !== undefined ? options.imageW + theme.nodePaddingX * 2 : 0;
   const taskRowW = options.taskRow ? taskRowContentWidth(options.taskRow) : 0;
+  const descW =
+    descLine !== undefined
+      ? adapter.measureTextLine(descLine, descStyle) + theme.nodePaddingX * 2 + iconCount * theme.iconSlotWidth
+      : 0;
   const w = Math.max(
     maxLineW + theme.nodePaddingX * 2 + iconCount * theme.iconSlotWidth,
     imageW,
     taskRowW,
+    descW,
     theme.minNodeWidth,
   );
-  return { w, h, lines };
+  return descLine !== undefined ? { w, h, lines, descLine } : { w, h, lines };
+}
+
+/** 单行截断（M7c-C1）：超 maxW 时逐码点贪心保留可容纳前缀并追加省略号（省略号
+ *  计入测量，保证截断结果 ≤ maxW；与 wrapLine 同款码点迭代，emoji 不拆断）。 */
+function truncateWithEllipsis(
+  text: string,
+  style: TextStyle,
+  adapter: MeasureAdapter,
+  maxW: number,
+): string {
+  if (adapter.measureTextLine(text, style) <= maxW) return text;
+  let out = '';
+  for (const ch of text) {
+    if (adapter.measureTextLine(out + ch + DESC_ELLIPSIS, style) > maxW) break;
+    out += ch;
+  }
+  return out + DESC_ELLIPSIS;
 }
 
 /** 单行 → 若超 maxTextWidth 则逐字符贪心断行；空行原样保留为一行。 */

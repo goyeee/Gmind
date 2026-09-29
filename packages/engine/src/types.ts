@@ -153,6 +153,12 @@ export interface NodeBox {
   depth: number;
   /** 父节点 id（根节点无此字段）；Task 8 siblingEnd 同级首末判定用（只增不改）。 */
   parentId?: string;
+  /**
+   * 描述行（M7c-C1 只增不改）：测量截断后的单行描述文本（见 measure.ts description
+   * 选项）——渲染直绘，占盒底条带（任务行上方）。无描述时缺省（字段不出现，
+   * 金样逐字节不变）。
+   */
+  descLine?: string;
 }
 
 /** 边路由：两端锚点 + 线型。 */
@@ -221,6 +227,12 @@ export interface NodeSnapshotLike {
   //    布局/测量不读它们。icons 值放宽为 unknown，剪贴板层复制时收敛为 string）——
   /** 节点备注。 */
   note?: string;
+  /**
+   * 节点描述（M7c-C1 只增不改）：任务的一句话描述（区别于 note 备注，core
+   * NodeSnapshot 结构兼容）。布局读它测量第二行（单行省略）；缺省零参与，
+   * 几何与现状一致。
+   */
+  description?: string;
   /** 超链接。 */
   href?: string;
   /** 图片资源（对象存储 key + 原始宽高）。 */

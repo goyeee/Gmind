@@ -1,5 +1,8 @@
 export const MAX_TEXT_LENGTH = 500;
 export const MAX_NOTE_LENGTH = 5000;
+/** 节点描述上限（M7c-C1，对齐 mindgrid TaskNode.description）：一句话任务描述，
+ *  与 note（企微备注角标语义）并存、语义不同——上限与 mindgrid 同为 200 字。 */
+export const MAX_DESCRIPTION_LENGTH = 200;
 
 /**
  * 标记八组制（M7b-W1，2026-09-29 需求方裁定「企微全量对标」）：M7a 三组制

@@ -251,6 +251,30 @@ table.tt-table {
   outline: none;
 }
 
+/* 两行式行内编辑容器（M7c-C1）：标题框在上、描述框在下（mindgrid QuickEditor 形态） */
+.tt-quick-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* 描述输入框：与标题框同宽同高，灰系弱化（描述是辅助信息） */
+.tt-desc-input {
+  width: 100%;
+  min-width: 200px;
+  height: 24px;
+  padding: 0 6px;
+  border: 1px solid #c9cdd4;
+  border-radius: 4px;
+  font-size: 12px;
+  color: #4e5969;
+  outline: none;
+}
+
+.tt-desc-input:focus {
+  border-color: #3370ff;
+}
+
 /* —— 负责人列 —— */
 .tt-owners-btn {
   display: inline-flex;

@@ -34,6 +34,7 @@ interface StubNode {
   parentId: string;
   children: string[];
   note: string;
+  description: string;
   href: string;
   image: { key: string; w: number; h: number } | null;
   icons: Record<string, string[]>;
@@ -55,6 +56,7 @@ class StubDoc implements IDocHandle {
       parentId: 'root',
       children: [],
       note: '',
+      description: '',
       href: '',
       image: null,
       icons: {},
@@ -95,6 +97,7 @@ class StubDoc implements IDocHandle {
       collapsed: n.collapsed,
       deleted: n.deleted,
       note: n.note,
+      description: n.description,
       href: n.href,
       image: n.image ? { ...n.image } : null,
       icons: { ...n.icons },
@@ -115,6 +118,7 @@ class StubDoc implements IDocHandle {
       parentId,
       children: [],
       note: '',
+      description: '',
       href: '',
       image: null,
       icons: {},
@@ -136,6 +140,12 @@ class StubDoc implements IDocHandle {
     this.calls.push({ op: 'setNote', args: [id, note, origin] });
     const n = this.nodes.get(id);
     if (n) n.note = note;
+  }
+
+  setDescription(id: string, description: string, origin?: string): void {
+    this.calls.push({ op: 'setDescription', args: [id, description, origin] });
+    const n = this.nodes.get(id);
+    if (n) n.description = description;
   }
 
   setHref(id: string, href: string, origin?: string): void {
@@ -191,7 +201,7 @@ class StubDoc implements IDocHandle {
 }
 
 function emptyNode(id: string, text: string): ClipboardPayload['roots'][number] {
-  return { id, text, note: '', href: '', image: null, icons: {}, style: {}, children: [] };
+  return { id, text, note: '', description: '', href: '', image: null, icons: {}, style: {}, children: [] };
 }
 
 afterEach(() => {
@@ -208,6 +218,7 @@ describe('copyNodes（内部结构化 + 文本大纲双格式）', () => {
       parentId: 'root',
       text: 'A',
       note: '备注A',
+      description: '描述A',
       href: 'https://a.example',
       image: { key: 'img-a', w: 100, h: 80 },
       icons: { priority: ['high'] },
@@ -225,6 +236,7 @@ describe('copyNodes（内部结构化 + 文本大纲双格式）', () => {
     expect(a.id).toBe('a');
     expect(a.text).toBe('A');
     expect(a.note).toBe('备注A');
+    expect(a.description).toBe('描述A');
     expect(a.href).toBe('https://a.example');
     expect(a.image).toEqual({ key: 'img-a', w: 100, h: 80 });
     expect(a.icons).toEqual({ priority: ['high'] });
@@ -260,6 +272,7 @@ describe('pasteNodes（内部 payload 粘贴）', () => {
         id: 'src1',
         text: 'R1',
         note: 'n1',
+        description: '描述R1',
         href: 'https://h.example',
         image: { key: 'old-key', w: 12, h: 34 },
         icons: { priority: ['p2'], other: ['done'] },
@@ -295,6 +308,7 @@ describe('pasteNodes（内部 payload 粘贴）', () => {
     expect(doc.ops()).toEqual([
       'addChild', // R1
       'setNote',
+      'setDescription',
       'setHref',
       'setImage',
       'setIcon', // priority（single 组写首枚）
@@ -309,6 +323,7 @@ describe('pasteNodes（内部 payload 粘贴）', () => {
     const r1 = doc.nodes.get(ids[0])!;
     expect(r1.text).toBe('R1');
     expect(r1.note).toBe('n1');
+    expect(r1.description).toBe('描述R1');
     expect(r1.href).toBe('https://h.example');
     expect(r1.image).toEqual({ key: 'new-old-key', w: 12, h: 34 });
     expect(r1.icons).toEqual({ priority: ['p2'], other: ['done'] });
@@ -333,6 +348,7 @@ describe('pasteNodes（内部 payload 粘贴）', () => {
           id: 's',
           text: 'S',
           note: '',
+          description: '',
           href: '',
           image: { key: 'keep', w: 1, h: 2 },
           icons: {},
@@ -368,6 +384,7 @@ describe('pasteNodes（内部 payload 粘贴）', () => {
           id: 'legacy',
           text: 'L',
           note: '',
+          description: '',
           href: '',
           image: null,
           // 跨版本遗留：旧五组字符串值 + 组值数组里的越界值/目录外 emoji + 未知组
@@ -380,6 +397,26 @@ describe('pasteNodes（内部 payload 粘贴）', () => {
     const ids = await pasteNodes(doc, 'p', 0, payload);
     expect(doc.nodes.get(ids[0])!.icons).toEqual({ other: ['done'] }); // 只有目录内 (other,'done') 落写
     expect(doc.ops()).toEqual(['addChild', 'setIcon', 'setIcon']); // multi 组：清组 + 逐枚 toggle（'done' 落写，'junk' 被收敛剔除）
+  });
+
+  it('M7c-C1：旧版本 payload 缺 description 键 → 按 \'\' 防御不写不抛；非空描述经 setDescription 落盘', async () => {
+    const doc = new StubDoc();
+    doc.addNode({ id: 'root' });
+    doc.addNode({ id: 'p', parentId: 'root', text: 'P' });
+    const legacy = {
+      v: 1,
+      roots: [{ id: 's', text: 'S', note: '', href: '', image: null, icons: {}, style: {}, children: [] }],
+    } as unknown as ClipboardPayload; // 旧版本 payload：无 description 键
+    const ids = await pasteNodes(doc, 'p', 0, legacy);
+    expect(doc.ops()).toEqual(['addChild']); // 缺键不产生 setDescription
+    expect(doc.nodes.get(ids[0])!.description).toBe('');
+
+    const fresh = await pasteNodes(doc, 'p', 0, {
+      v: 1,
+      roots: [{ id: 's2', text: 'S2', note: '', description: '任务描述', href: '', image: null, icons: {}, style: {}, children: [] }],
+    });
+    expect(doc.ops().slice(-2)).toEqual(['addChild', 'setDescription']);
+    expect(doc.nodes.get(fresh[0])!.description).toBe('任务描述');
   });
 });
 

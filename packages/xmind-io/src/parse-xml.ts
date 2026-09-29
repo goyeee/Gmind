@@ -2,6 +2,8 @@
 // 层级在 <topic> > <children> > <topics type="attached"> > <topic> 下嵌套；备注取 <notes> > <plain> 文本。
 // 标记（M7a-T1）：<marker-refs> > <marker-ref marker-id> 经 markersToIcons 映射三组制；
 // 无对应的 marker 计入 style 降级（映射成功的不再计降级）。
+// 描述（M7c-C1）：XML 侧无对应标签（XMind 8 格式无 description 概念），登记不映射——
+// 导入不产出、导出（buildXmind 只走 JSON 侧）不写入（口径见 types.ts XmindNode 头注）。
 import type { DegradedItem, XmindIcons, XmindNode } from './types';
 import { XmindParseError } from './types';
 import { DegradedCollector } from './parse-json';

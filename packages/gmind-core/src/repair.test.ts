@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import * as Y from 'yjs';
 import type { Transaction } from 'yjs';
 import { ROOT_NODE_ID, createTemplateDoc, docFromState, docToState } from './doc';
-import { ORIGIN_SYSTEM, ORIGIN_USER, addChild, deleteNodes, moveNode, setText, withTransaction } from './operations';
+import { ORIGIN_SYSTEM, ORIGIN_USER, addChild, deleteNodes, moveNode, setDescription, setText, withTransaction } from './operations';
 import { childrenIds, getNode, subtreeIds } from './read';
 import type { NodeSnapshot } from './read';
 import { normalizeTree } from './repair';
@@ -624,5 +624,46 @@ describe('图标八组制收敛（M7b-W1，随 normalizeTree 全量执行）', (
     expect(normalizeTree(doc)).toBe(1); // 墓碑 icons 收敛
     expect(getNode(doc, id)!.icons).toEqual({ flag: ['flag'] });
     expect(getNode(doc, id)!.deleted).toBe(true); // 墓碑状态不变
+  });
+});
+
+// ══ 描述字段归一（M7c-C1，随 normalizeTree 全量执行）════════════════════════
+describe('描述 description 归一（M7c-C1，随 normalizeTree 全量执行）', () => {
+  /** 裸写 description 键（绕过 setDescription 校验，模拟 crafted doc_state/远端坏数据）。 */
+  function nodeWithRawDescription(doc: Y.Doc, parentId: string, text: string, raw: unknown): string {
+    const id = addChild(doc, parentId, { text });
+    doc.transact(() => {
+      rawNode(doc, id).set('description', raw);
+    });
+    return id;
+  }
+
+  it('非 string 归一为空串；超 200 字截断前 200 字（修复数各计 1）', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [] });
+    const bad = nodeWithRawDescription(doc, ROOT_NODE_ID, 'A', 42);
+    const long = nodeWithRawDescription(doc, ROOT_NODE_ID, 'B', '描'.repeat(201));
+    expect(normalizeTree(doc)).toBe(2);
+    expect(getNode(doc, bad)!.description).toBe('');
+    expect(getNode(doc, long)!.description).toBe('描'.repeat(200));
+    expect(normalizeTree(doc)).toBe(0); // 幂等
+  });
+
+  it('干净文档零修复：缺 description 键不补写，normalize 返回 0、字节级不变', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
+    const state = docToState(doc);
+    expect(normalizeTree(doc)).toBe(0);
+    expect(Buffer.from(docToState(doc)).equals(Buffer.from(state))).toBe(true);
+  });
+
+  it('合法 description（≤200）零修复；墓碑节点同样收敛（children 冻结不变量不受影响）', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [] });
+    setDescription(doc, ROOT_NODE_ID, 'root', '合法描述');
+    expect(normalizeTree(doc)).toBe(0);
+    const id = nodeWithRawDescription(doc, ROOT_NODE_ID, 'X', '坏'.repeat(201));
+    deleteNodes(doc, [id]);
+    expect(getNode(doc, id)!.deleted).toBe(true);
+    expect(normalizeTree(doc)).toBe(1); // 墓碑 description 收敛
+    expect(getNode(doc, id)!.description).toBe('坏'.repeat(200));
+    expect(getNode(doc, id)!.deleted).toBe(true);
   });
 });

@@ -5,6 +5,7 @@ import {
   ICON_GROUPS,
   MARKER_GROUP_MODE,
   MARKER_MULTI_MAX,
+  MAX_DESCRIPTION_LENGTH,
   MAX_NOTE_LENGTH,
   MAX_TASK_OWNERS,
   MAX_TEXT_LENGTH,
@@ -268,6 +269,31 @@ export function setNote(
   const node = requireAliveNode(doc, id);
   withTransaction(doc, origin, () => {
     node.set('note', note);
+  });
+}
+
+/**
+ * 设置节点描述（M7c-C1）：description = 任务的一句话描述（对齐 mindgrid
+ * TaskNode.description），与 setNote 的企微备注角标语义并存、互不替代。
+ * 校验（先于 transact，拒绝即零变更）：存活；长度 ≤ MAX_DESCRIPTION_LENGTH(200，
+ * 与 mindgrid 同口径)，否则 DESCRIPTION_TOO_LONG（文案两段式=原因+下一步）。
+ * 默认 ORIGIN_USER（可撤销，经页面侧 afterUserWrite 裁剪撤销栈，与相邻 op 同路径）。
+ */
+export function setDescription(
+  doc: Y.Doc,
+  id: string,
+  text: string,
+  origin: WriteOrigin = ORIGIN_USER,
+): void {
+  if (text.length > MAX_DESCRIPTION_LENGTH) {
+    throw new GmindCoreError(
+      'DESCRIPTION_TOO_LONG',
+      `描述长度已达上限（最多 ${MAX_DESCRIPTION_LENGTH} 字），请精简后再保存`,
+    );
+  }
+  const node = requireAliveNode(doc, id);
+  withTransaction(doc, origin, () => {
+    node.set('description', text);
   });
 }
 

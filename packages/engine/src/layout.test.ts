@@ -29,6 +29,7 @@ interface PlainNode {
   icons?: Record<string, unknown>;
   image?: { key: string; w: number; h: number } | null;
   task?: NodeTaskVisual;
+  description?: string;
 }
 
 function makeReader(defs: Record<string, PlainNode>, summaries?: SummaryLike[]): DocReader {
@@ -45,6 +46,7 @@ function makeReader(defs: Record<string, PlainNode>, summaries?: SummaryLike[]):
       icons: def.icons,
       image: def.image,
       task: def.task,
+      description: def.description,
     };
   };
   const reader: DocReader = {
@@ -643,5 +645,26 @@ describe('layout 确定性与金样', () => {
     expect(boxOf(result, 'q').h).toBe(20);
     expect(boxOf(result, 'q').w).toBe(Math.max(10 + theme.nodePaddingX * 2, theme.minNodeWidth));
     expect(boxOf(result, 'root').h).toBe(20);
+  });
+
+  // M7c-C1 描述行（只增不改）：有描述节点盒高加一行、descLine 随盒输出（单行省略）；
+  // 无描述节点几何与输出字段与旧版一致（金样树无 description，diff 必须为空）。
+  it('描述节点：盒高加描述行、descLine 输出；无描述节点几何不变', () => {
+    const result = layout(
+      makeReader({
+        root: { text: '根', children: ['d', 'n'] },
+        // 桩适配器每码点 10px、maxTextWidth=240：24 字描述（240px）恰不截断
+        d: { text: '带描述', description: '描'.repeat(24) },
+        n: { text: '无描述' },
+      }),
+      { structure: 'mindmap', theme, measure: stubAdapter, styleOf },
+    );
+    const d = boxOf(result, 'd');
+    expect(d.h).toBe(20 + TASK_ROW_H); // 描述行与任务行同条带高度
+    expect(d.descLine).toBe('描'.repeat(24)); // 未超宽：原样输出
+    expect(d.w).toBeGreaterThanOrEqual(240 + theme.nodePaddingX * 2); // 描述主导宽度
+    const n = boxOf(result, 'n');
+    expect(n.h).toBe(20);
+    expect('descLine' in n).toBe(false); // 无描述：字段不出现
   });
 });

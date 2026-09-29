@@ -97,4 +97,31 @@ describe('measureNodeBox', () => {
     expect(wide.w).toBe(2 * 10 + 2 * 8);
     expect(wide.h).toBe(14 * 1.5 + TASK_ROW_H);
   });
+
+  // M7c-C1 描述行（只增不改）：无 description 选项时几何与旧版逐字节一致（金样锁定）；
+  // 有描述时盒高加一行（TASK_ROW_H，与任务行同条带高度）、盒宽容纳截断后的单行。
+  it('描述行：无 description 几何不变；有描述高加一行、宽度容纳单行（未超宽原样）', () => {
+    const plain = measureNodeBox('ab', style, theme, { adapter: stubAdapter });
+    expect('descLine' in plain).toBe(false); // 无描述：字段不出现
+    expect(plain.h).toBe(14 * 1.5);
+    const withDesc = measureNodeBox('ab', style, theme, { adapter: stubAdapter, description: '描述' });
+    expect(withDesc.descLine).toBe('描述'); // 2 字 × 12px 字号桩（每码点 1px）= 2px ≤ 50 不截断
+    expect(withDesc.h).toBe(14 * 1.5 + TASK_ROW_H);
+    // 描述宽 2 + 2×8 = 18 < 文本主导宽 36：宽度仍由文本主导
+    expect(withDesc.w).toBe(2 * 10 + 2 * 8);
+    // 空串 = 无描述（零参与）
+    const empty = measureNodeBox('ab', style, theme, { adapter: stubAdapter, description: '' });
+    expect('descLine' in empty).toBe(false);
+    expect(empty.h).toBe(14 * 1.5);
+  });
+
+  it('描述行单行省略：超 maxTextWidth 逐码点截断并追加省略号，截断结果计宽不超上限', () => {
+    // 桩适配器每码点 10px、maxTextWidth=50：5 字描述（50px）恰不超；6 字触发截断
+    const fits = measureNodeBox('ab', style, theme, { adapter: stubAdapter, description: '描'.repeat(5) });
+    expect(fits.descLine).toBe('描'.repeat(5));
+    const truncated = measureNodeBox('ab', style, theme, { adapter: stubAdapter, description: '描'.repeat(6) });
+    expect(truncated.descLine).toBe('描'.repeat(4) + '…'); // 4 字 + 省略号 = 5 码点 = 50px 恰好容纳
+    // 描述主导节点宽度：50 + 2×8 = 66（本例文本宽 36）
+    expect(truncated.w).toBe(50 + 2 * 8);
+  });
 });

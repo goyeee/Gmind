@@ -5,6 +5,7 @@ import {
   ICON_GROUPS,
   ICON_LEGACY_MAP,
   MARKER_MULTI_MAX,
+  MAX_DESCRIPTION_LENGTH,
   PRIORITY_LEGACY_MAP,
   iconValuesOf,
   progressStageOf,
@@ -242,6 +243,11 @@ export function normalizeTree(doc: Y.Doc, origin: string = ORIGIN_SYSTEM): numbe
   const iconPlan = planIconRepair(doc);
   repairs += iconPlan.length;
 
+  // ── 描述字段归一（M7c-C1）：非 string 归 ''、超 200 截断（口径见
+  //    planDescriptionRepair 头注）。与树修复/概要/图标同一事务应用。
+  const descPlan = planDescriptionRepair(doc);
+  repairs += descPlan.length;
+
   // ── 事务纪律：无修复不开事务、零写入；有修复则在单个 origin 事务内统一应用。
   if (repairs === 0) return 0;
   doc.transact(() => {
@@ -292,6 +298,7 @@ export function normalizeTree(doc: Y.Doc, origin: string = ORIGIN_SYSTEM): numbe
     }
     applySummaryRepair(doc, summaryPlan); // 概要收敛（M6 T6）：同事务统一应用
     applyIconRepair(doc, iconPlan); // 图标三组制收敛（M7a-T1）：同事务统一应用
+    applyDescriptionRepair(doc, descPlan); // 描述归一（M7c-C1）：同事务统一应用
   }, origin);
   return repairs;
 }
@@ -692,6 +699,42 @@ export function applyIconRepair(doc: Y.Doc, plan: IconRepairEntry[]): void {
     for (const [group, values] of Object.entries(entry.icons)) {
       if (values.length > 0) iconsRaw.set(group, Y.Array.from(values));
     }
+  }
+}
+
+// ══ 描述字段归一（M7c-C1，随全量 normalizeTree 执行）════════════════════════
+
+/**
+ * 规划描述（description）收敛（文档状态纯函数，replica 一致，幂等）：description
+ * 键存在但值非 string → 归 ''；string 超 MAX_DESCRIPTION_LENGTH(200) → 截断前 200 字
+ * （口径与「超长截断」的自愈语义一致； setDescription 写入侧校验拒绝超长，此处只兜
+ * crafted doc_state / 远端坏数据）。键缺失不补写——干净文档零修复、零写入、字节级不变
+ * （「干净文档 normalize 返回 0」的既有契约不破）。
+ *
+ * 覆盖范围：全部节点（含墓碑——撤销/快照还原可复活，children 冻结不变量不涉及
+ * description；与 planIconRepair 相同的覆盖裁定）。
+ * 仅接入全量 normalizeTree：产品流新写经 setDescription 长度校验不再制造坏值，
+ * 增量路径（normalizeTreeFor）脏区推导不含非结构键（deriveNormalizeDirty），与
+ * 图标收敛同一「外部状态直入入口（docFromState / 第 64 写摊销清扫 / 安全阀）」口径。
+ */
+export function planDescriptionRepair(doc: Y.Doc): Array<{ nodeId: string; value: string }> {
+  const nodes = nodesMap(doc);
+  const plan: Array<{ nodeId: string; value: string }> = [];
+  for (const [nodeId, node] of nodes.entries()) {
+    const raw = node.get('description');
+    if (raw === undefined) continue; // 键缺失：不补写（零修复契约）
+    if (typeof raw !== 'string') plan.push({ nodeId, value: '' });
+    else if (raw.length > MAX_DESCRIPTION_LENGTH) plan.push({ nodeId, value: raw.slice(0, MAX_DESCRIPTION_LENGTH) });
+  }
+  return plan;
+}
+
+/** 应用描述收敛计划（必须在调用方已开启的事务内执行）：整值覆写（'' 也写回——
+ *  计划内的节点本就有该键，覆写只改值不新增键面）。 */
+export function applyDescriptionRepair(doc: Y.Doc, plan: Array<{ nodeId: string; value: string }>): void {
+  const nodes = nodesMap(doc);
+  for (const entry of plan) {
+    nodes.get(entry.nodeId)?.set('description', entry.value);
   }
 }
 

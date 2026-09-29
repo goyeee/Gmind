@@ -85,10 +85,15 @@ function walkTopic(t: JsonTopic, d: DegradedCollector): XmindNode {
   const note =
     typeof plain === 'string' ? plain : typeof html === 'string' ? stripHtml(html) : undefined;
 
+  // 描述（M7c-C1）：Gmind 自定义键读回（string 且非空才携带）；他方文件无此键零影响，
+  // 也不计降级（本包自产自销的往返字段，见 types.ts XmindNode 头注）。
+  const description = typeof t.description === 'string' && t.description !== '' ? t.description : undefined;
+
   const attached = t.children?.attached;
   return {
     title: typeof t.title === 'string' ? t.title : '',
     ...(note !== undefined ? { note } : {}),
+    ...(description !== undefined ? { description } : {}),
     ...(icons !== undefined ? { icons } : {}),
     children: (Array.isArray(attached) ? attached : []).filter(isTopicLike).map((c) => walkTopic(c, d)),
   };

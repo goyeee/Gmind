@@ -37,6 +37,28 @@ describe('buildXmind → parseXmind 往返', () => {
     expect(parsed.degraded).toEqual([]); // 导出的 marker 均有对应，零降级
   });
 
+  it('M7c-C1 描述往返：description 经自定义键往返保真；空/缺失不产生键', () => {
+    const tree: XmindNode = {
+      title: '根',
+      description: '一句话任务描述',
+      children: [
+        { title: 'A', description: '子任务描述', children: [] },
+        { title: 'B', children: [] }, // 无 description：导入侧同样不产出键
+      ],
+    };
+    const bytes = buildXmind(tree);
+    const sheets = JSON.parse(new TextDecoder().decode(unzipSync(bytes)['content.json'])) as Array<{
+      rootTopic: Record<string, unknown>;
+    }>;
+    const attached = (sheets[0].rootTopic.children as { attached: Array<Record<string, unknown>> }).attached;
+    expect(sheets[0].rootTopic.description).toBe('一句话任务描述');
+    expect(attached[0].description).toBe('子任务描述');
+    expect('description' in attached[1]).toBe(false);
+    const parsed = parseXmind(bytes);
+    expect(parsed.root).toEqual(tree); // 深度相等：读回逐字节还原（含 B 无 description）
+    expect(parsed.degraded).toEqual([]);
+  });
+
   it('构建产物可被 unzipSync 读回 content.json', () => {
     const bytes = buildXmind({ title: '根', children: [{ title: 'A', children: [] }] });
     const files = unzipSync(bytes);

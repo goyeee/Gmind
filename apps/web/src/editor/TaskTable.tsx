@@ -10,6 +10,7 @@ import {
   ORIGIN_USER,
   ROOT_NODE_ID,
   setCollapsed,
+  setDescription,
   setNodeTask,
   setText,
   subtreeIds,
@@ -96,9 +97,11 @@ const EMPTY_FILTERS: Filters = {
   unassignedOnly: false,
 };
 
-/** 表格行节点：DeriveNode（shared 派生规则输入）+ 标记（标题列展示，M7b-W1 多值数组）。 */
+/** 表格行节点：DeriveNode（shared 派生规则输入）+ 标记（标题列展示，M7b-W1 多值数组）
+ *  + 描述（M7c-C1：双击标题的两行式行内编辑初值；不进派生规则）。 */
 interface RowNode extends DeriveNode {
   icons: Record<string, string[]>;
+  description: string;
 }
 
 interface Row {
@@ -233,6 +236,7 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
         updatedAt: updated.get(id) ?? 0,
         task: { ...snap.task, owners: [...snap.task.owners] },
         icons: { ...snap.icons },
+        description: snap.description,
       });
     }
     return out;
@@ -468,6 +472,19 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
     }
   };
 
+  /** 描述提交（M7c-C1）：空串=清除；未变更零写入；超长由输入 maxLength=200 前置约束，
+   *  兜底走 core DESCRIPTION_TOO_LONG 两段式 toast。 */
+  const commitDescription = (id: string, description: string): void => {
+    const next = description.trim();
+    if ((getNode(doc, id)?.description ?? '') === next) return; // 未变更零写入
+    try {
+      setDescription(doc, id, next, ORIGIN_USER);
+      afterUserWrite();
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : '描述保存失败，请精简后重试');
+    }
+  };
+
   const today = todayStr();
 
   return (
@@ -668,9 +685,20 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
                     {cellEdit?.id === node.id ? (
                       <TitleCellEditor
                         initial={node.title}
-                        onCommit={(text) => {
+                        initialDescription={node.description}
+                        onCommit={(text, description) => {
                           setCellEdit(null);
+                          if (cellEdit.isNew && text.trim() === '') {
+                            if (description.trim() === '') {
+                              commitTitle(node.id, '', true); // 新建且全空：回收节点，不写描述
+                              return;
+                            }
+                            // 新建但已填描述：节点保留（标题空=显示「未命名」），只落盘描述
+                            commitDescription(node.id, description);
+                            return;
+                          }
                           commitTitle(node.id, text, cellEdit.isNew);
+                          commitDescription(node.id, description);
                         }}
                         onCancel={() => {
                           setCellEdit(null);
@@ -1117,51 +1145,99 @@ function MiniBar({ value, danger, auto }: { value: number; danger?: boolean; aut
   );
 }
 
-/** 任务名行内编辑（QuickEditor 风格）：Enter/失焦提交，Esc 取消；不冒泡行折叠。 */
+/**
+ * 任务名+描述两行式行内编辑（M7c-C1，升级自单行 TitleCellEditor，对齐 mindgrid
+ * QuickEditor：https://语义同源——标题框 Tab 切到描述框、描述框 Tab=提交）；
+ * Enter 提交、Esc 取消、容器失焦提交（焦点在两框间移动不触发）。
+ * 描述经 setDescription 落盘（≤200 由输入 maxLength 前置约束）；不冒泡行折叠/双击。
+ */
 function TitleCellEditor({
   initial,
+  initialDescription,
   onCommit,
   onCancel,
 }: {
   initial: string;
-  onCommit: (text: string) => void;
+  initialDescription: string;
+  onCommit: (text: string, description: string) => void;
   onCancel: () => void;
 }) {
   const [value, setValue] = useState(initial);
-  const ref = useRef<HTMLInputElement>(null);
+  const [desc, setDesc] = useState(initialDescription);
+  const titleRef = useRef<HTMLInputElement>(null);
+  const descRef = useRef<HTMLInputElement>(null);
   const doneRef = useRef(false);
+  // 提交读草稿走 ref：finish 由 onBlur 等闭包调用时取最新输入值（与 state 解耦）。
+  const valueRef = useRef(value);
+  const descValueRef = useRef(desc);
+  valueRef.current = value;
+  descValueRef.current = desc;
   useEffect(() => {
-    ref.current?.focus();
-    ref.current?.select();
+    titleRef.current?.focus();
+    titleRef.current?.select();
   }, []);
   const finish = (commit: boolean): void => {
     if (doneRef.current) return;
     doneRef.current = true;
-    if (commit) onCommit(value);
+    if (commit) onCommit(valueRef.current, descValueRef.current);
     else onCancel();
   };
   return (
-    <input
-      ref={ref}
-      className="tt-title-input"
-      value={value}
-      aria-label="任务标题"
-      placeholder="任务标题…"
-      onChange={(e) => setValue(e.target.value)}
+    <div
+      className="tt-quick-editor"
       onClick={(e) => e.stopPropagation()}
       onDoubleClick={(e) => e.stopPropagation()}
-      onKeyDown={(e) => {
-        e.stopPropagation();
-        if (e.key === 'Enter') {
-          e.preventDefault();
-          finish(true);
-        } else if (e.key === 'Escape') {
-          e.preventDefault();
-          finish(false);
-        }
+      onBlur={(e) => {
+        // 焦点在标题/描述两框间移动（relatedTarget 仍在容器内）不提交；离开容器才提交。
+        if (!e.currentTarget.contains(e.relatedTarget as Node)) finish(true);
       }}
-      onBlur={() => finish(true)}
-    />
+    >
+      <input
+        ref={titleRef}
+        className="tt-title-input"
+        data-testid="table-title-input"
+        value={value}
+        aria-label="任务标题"
+        placeholder="任务标题…"
+        onChange={(e) => setValue(e.target.value)}
+        onKeyDown={(e) => {
+          e.stopPropagation();
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            finish(true);
+          } else if (e.key === 'Escape') {
+            e.preventDefault();
+            finish(false);
+          } else if (e.key === 'Tab') {
+            e.preventDefault();
+            descRef.current?.focus();
+          }
+        }}
+      />
+      <input
+        ref={descRef}
+        className="tt-desc-input"
+        data-testid="table-desc-input"
+        value={desc}
+        maxLength={200}
+        aria-label="任务描述"
+        placeholder="描述（Tab 切换，可留空）"
+        onChange={(e) => setDesc(e.target.value)}
+        onKeyDown={(e) => {
+          e.stopPropagation();
+          if (e.key === 'Enter' || (e.key === 'Tab' && !e.shiftKey)) {
+            e.preventDefault();
+            finish(true);
+          } else if (e.key === 'Escape') {
+            e.preventDefault();
+            finish(false);
+          } else if (e.key === 'Tab') {
+            e.preventDefault(); // Shift+Tab 回标题框
+            titleRef.current?.focus();
+          }
+        }}
+      />
+    </div>
   );
 }
 
