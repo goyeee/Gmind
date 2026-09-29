@@ -19,6 +19,16 @@
  *   FR-CMT-002；与 note/link 同一右上角错位方案，自右缘起 link→note→comment 让位）、
  *   <image class="gm-image">（href=/api/images/{key}，宽高用
  *   image.w/h——页面侧负责 ≤200px 等比钳制；盒高计入图片高度（图与文本的节点内堆叠视觉仍后置））、
+ *   任务视觉（M7c-C2，只增不改；无任务信息=hasTaskInfo false 时全部不渲染，
+ *   DOM 与现状一致）：<rect class="gm-task-bar">（左缘 3px 竖条，fill 按
+ *   task.status 走 TASK_STATUS_COLORS 企微四色）、<g class="gm-task-row">
+ *   （卡片第二行任务信息行：负责人色点头像 <circle class="gm-task-owner">
+ *   （首人 colorForUser 色，多人加 <text class="gm-task-owner-plus">「+n」）、
+ *   有效进度 <text class="gm-task-progress">（叶=自身、父=Σ 直属子级均值，
+ *   口径=@gmind/shared effectiveProgress）、预期日期徽标 <rect class="gm-task-due-bg">
+ *   + <text class="gm-task-due">（MM-DD；逾期（isOverdue 口径）红底白字否则灰底）。
+ *   任务行占盒底 TASK_ROW_H 条带，主文本/标记行在其余区域垂直居中——无任务行时
+ *   contentCenter 恒等于 b.h/2，既有几何逐字节不变）、
  *   折叠徽标 <g class="gm-collapse-badge" data-for-id>（「+N」，N=collapsedCounts；
  *   位置按 box.side 确定：right→盒右、left→盒左、down→盒下）。
  * - 边 <path data-edge-id>：bezier 为 `M from C c1 c2 to`（controls 恒 2 个，缺省退化）；
@@ -34,6 +44,32 @@ import type {
   SummaryBox,
   ThemeTokens,
 } from './types';
+import { colorForUser } from './cursors';
+import {
+  TASK_AVATAR_D,
+  TASK_AVATAR_PLUS_W,
+  TASK_BAR_W,
+  TASK_DUE_BG,
+  TASK_DUE_FG,
+  TASK_DUE_FONT_SIZE,
+  TASK_DUE_H,
+  TASK_DUE_OVERDUE_BG,
+  TASK_DUE_W,
+  TASK_GAP,
+  TASK_META_FG,
+  TASK_META_FONT_SIZE,
+  TASK_PROGRESS_W,
+  TASK_ROW_H,
+  TASK_ROW_PAD,
+  hasTaskInfo,
+  taskOverdueIds,
+  taskParentIds,
+  taskProgressMap,
+  taskRowSlotsOf,
+  taskStatusColor,
+  type NodeTaskVisual,
+} from './taskvisual';
+import { todayStr } from '@gmind/shared';
 import {
   MARKER_BADGE_SIZE,
   MARKER_ROW_ORDER,
@@ -97,6 +133,12 @@ export interface NodeEntry {
   linkBadge: SVGTextElement | null;
   commentBadge: SVGTextElement | null;
   image: SVGImageElement | null;
+  /** 状态色左边条（M7c-C2；无任务信息时 null）。 */
+  taskBar: SVGRectElement | null;
+  /** 任务信息行容器（头像/进度/日期徽标；M7c-C2；无任务信息时 null）。 */
+  taskRow: SVGGElement | null;
+  /** 上次渲染的任务签名（签名+几何；变化才重建行内元素，引用保持策略同标记行）。 */
+  lastTaskSig: string;
   badge: SVGGElement | null;
   badgeText: SVGTextElement | null;
   /** 上次渲染的文本（tspan 仅在变化时重建）。 */
@@ -140,6 +182,11 @@ export interface NodeVisual {
   image?: { key: string; w: number; h: number } | null;
   /** 未解决评论数（FR-CMT-002）：>0 渲染右上角计数角标；仅存活节点携带。 */
   commentCount?: number;
+  /**
+   * 任务字段（M7c-C2，只增不改）：宿主自 NodeSnapshot.task 透传（结构兼容子集）。
+   * 无任务信息（hasTaskInfo=false）= 纯脑图节点，零任务视觉、几何不变。
+   */
+  task?: NodeTaskVisual;
 }
 
 /** 渲染输入：布局结果 + 主题 + 样式解析 + 文档视觉数据。 */
@@ -149,6 +196,11 @@ export interface SceneInput {
   /** 节点最终样式（主题分级 + nodeStyle 覆盖已在页面侧闭合）。 */
   styleOf: (id: string) => ResolvedNodeStyle;
   nodeData: Map<string, NodeVisual>;
+  /**
+   * 逾期判定的「今天」（YYYY-MM-DD，M7c-C2）：缺省取本地今天；测试/导出传
+   * 固定值保确定性（当天到期不算逾期，isOverdue 口径）。
+   */
+  today?: string;
 }
 
 /**
@@ -234,6 +286,13 @@ function commentBadgeX(b: NodeBox, hasLink: boolean, hasNote: boolean): number {
   );
 }
 
+/** 单节点任务上下文（renderScene 预计算，M7c-C2）：有效进度 / 是否父节点 / 是否逾期。 */
+interface NodeTaskContext {
+  progress: number;
+  parent: boolean;
+  overdue: boolean;
+}
+
 /** 单节点协调：不存在则创建，存在则就地改属性（g/rect/text 引用恒定）。 */
 function applyNode(
   scene: SceneRoot,
@@ -242,6 +301,7 @@ function applyNode(
   visual: NodeVisual,
   theme: ThemeTokens,
   collapsedCount: number,
+  taskCtx: NodeTaskContext,
 ): void {
   let entry = scene.nodeEntries.get(b.id);
   if (!entry) {
@@ -261,6 +321,9 @@ function applyNode(
       linkBadge: null,
       commentBadge: null,
       image: null,
+      taskBar: null,
+      taskRow: null,
+      lastTaskSig: '',
       badge: null,
       badgeText: null,
       lastText: '',
@@ -283,6 +346,10 @@ function applyNode(
   const fontSize = style.textStyle.fontSize;
   const iconCount = markerCountOf(visual.icons);
   const textX = theme.nodePaddingX + iconCount * theme.iconSlotWidth;
+  // 任务信息行（M7c-C2）占盒底 TASK_ROW_H 条带：主文本/标记行在其余区域垂直居中。
+  // 无任务行时 contentCenter === b.h/2，基线/标记位与旧版逐字节一致（只增不改）。
+  const taskSlots = taskRowSlotsOf(visual.task, taskCtx.parent);
+  const contentCenter = taskSlots ? (b.h - TASK_ROW_H) / 2 : b.h / 2;
   text.setAttribute('x', fmt(textX));
   text.setAttribute('fill', style.textColor);
   text.setAttribute('font-size', fmt(fontSize));
@@ -302,7 +369,7 @@ function applyNode(
   // 文本未变也需回填基线（盒高/字号变化时 y 位移；只改属性，不重建 tspan）。
   const lineHeight = fontSize * theme.lineHeightRatio;
   const baseline = (i: number): number =>
-    b.h / 2 + (i - (lines.length - 1) / 2) * lineHeight + fontSize * 0.35;
+    contentCenter + (i - (lines.length - 1) / 2) * lineHeight + fontSize * 0.35;
   const spans = text.children;
   for (let i = 0; i < spans.length; i += 1) {
     (spans[i] as SVGTSpanElement).setAttribute('y', fmt(baseline(i)));
@@ -321,7 +388,7 @@ function applyNode(
       const badge = drawMarkerBadge(def);
       if (!badge) return; // 未知值：确定性忽略（槽位仍由布局按值数预留）
       const bx = theme.nodePaddingX + i * theme.iconSlotWidth + (theme.iconSlotWidth - MARKER_BADGE_SIZE) / 2;
-      badge.setAttribute('transform', `translate(${fmt(bx)}, ${fmt(b.h / 2 - MARKER_BADGE_SIZE / 2)})`);
+      badge.setAttribute('transform', `translate(${fmt(bx)}, ${fmt(contentCenter - MARKER_BADGE_SIZE / 2)})`);
       // 点击换组命中锚点（M7b-W3）：组/值随签名重建写入，签名不变则引用保持、
       // 属性亦不变，无需每帧回填。
       badge.setAttribute('data-marker-group', group);
@@ -337,7 +404,7 @@ function applyNode(
       .querySelectorAll('g.gm-marker-badge')
       .forEach((badge, i) => {
         const bx = theme.nodePaddingX + i * theme.iconSlotWidth + (theme.iconSlotWidth - MARKER_BADGE_SIZE) / 2;
-        badge.setAttribute('transform', `translate(${fmt(bx)}, ${fmt(b.h / 2 - MARKER_BADGE_SIZE / 2)})`);
+        badge.setAttribute('transform', `translate(${fmt(bx)}, ${fmt(contentCenter - MARKER_BADGE_SIZE / 2)})`);
       });
   }
 
@@ -427,6 +494,102 @@ function applyNode(
     entry.image.setAttribute('href', `/api/images/${img.key}`);
     entry.image.setAttribute('width', fmt(img.w));
     entry.image.setAttribute('height', fmt(img.h));
+  }
+
+  // —— 任务视觉（M7c-C2，只增不改）——
+  // 状态色左边条：左缘 TASK_BAR_W 竖条、全盒高，fill 按 task.status 四色；
+  // 无任务信息（hasTaskInfo false）不创建（syncOptional 同步移除）。
+  const task = visual.task;
+  const hasTask = hasTaskInfo(task);
+  entry.taskBar = syncOptional(entry.taskBar, hasTask, g, () => el('rect', { class: 'gm-task-bar' }));
+  if (entry.taskBar) {
+    entry.taskBar.setAttribute('x', '0');
+    entry.taskBar.setAttribute('y', '0');
+    entry.taskBar.setAttribute('width', fmt(TASK_BAR_W));
+    entry.taskBar.setAttribute('height', fmt(b.h));
+    entry.taskBar.setAttribute('fill', taskStatusColor(task?.status));
+  }
+
+  // 任务信息行：盒底 TASK_ROW_H 条带，行内容自右缘向左排（日期徽标→进度→负责人，
+  // mindgrid 卡片行序的右对齐镜像）。签名（任务数据+盒几何）不变则整行元素引用
+  // 保持（重建为无状态绘制，代价极小——同标记行策略）。
+  const taskRowSig = hasTask
+    ? `${task?.status ?? 'todo'}|${(task?.owners ?? []).join(',')}|${taskCtx.progress}|${task?.dueDate ?? ''}|${taskCtx.overdue ? 1 : 0}|${fmt(b.w)}x${fmt(b.h)}`
+    : '';
+  entry.taskRow = syncOptional(entry.taskRow, hasTask, g, () => el('g', { class: 'gm-task-row' }));
+  if (entry.taskRow && entry.lastTaskSig !== taskRowSig) {
+    entry.lastTaskSig = taskRowSig;
+    const rowY = b.h - TASK_ROW_H / 2;
+    const owners = (task?.owners ?? []).filter((o) => o !== '');
+    const parts: SVGElement[] = [];
+    let cursor = b.w - TASK_ROW_PAD;
+    // 预期日期徽标（最右）：MM-DD；逾期红底白字，否则灰底灰字。
+    if ((task?.dueDate ?? '') !== '') {
+      cursor -= TASK_DUE_W;
+      parts.push(
+        el('rect', {
+          class: 'gm-task-due-bg',
+          x: fmt(cursor),
+          y: fmt(rowY - TASK_DUE_H / 2),
+          width: fmt(TASK_DUE_W),
+          height: fmt(TASK_DUE_H),
+          rx: fmt(TASK_DUE_H / 2),
+          fill: taskCtx.overdue ? TASK_DUE_OVERDUE_BG : TASK_DUE_BG,
+        }),
+      );
+      const dueText = el('text', {
+        class: 'gm-task-due',
+        x: fmt(cursor + TASK_DUE_W / 2),
+        y: fmt(rowY + TASK_DUE_FONT_SIZE * 0.35),
+        'text-anchor': 'middle',
+        'font-size': fmt(TASK_DUE_FONT_SIZE),
+        fill: taskCtx.overdue ? '#ffffff' : TASK_DUE_FG,
+      });
+      dueText.textContent = (task?.dueDate ?? '').slice(5); // YYYY-MM-DD → MM-DD（同 mindgrid）
+      parts.push(dueText);
+      cursor -= TASK_GAP;
+    }
+    // 有效进度：叶=自身、父=Σ 直属子级均值（taskCtx.progress 已按 shared 口径聚合）。
+    if (taskSlots?.showProgress) {
+      cursor -= TASK_PROGRESS_W;
+      const progressText = el('text', {
+        class: 'gm-task-progress',
+        x: fmt(cursor + TASK_PROGRESS_W),
+        y: fmt(rowY + TASK_META_FONT_SIZE * 0.35),
+        'text-anchor': 'end',
+        'font-size': fmt(TASK_META_FONT_SIZE),
+        fill: TASK_META_FG,
+      });
+      progressText.textContent = `${taskCtx.progress}%`;
+      parts.push(progressText);
+      cursor -= TASK_GAP;
+    }
+    // 负责人头像（最左）：首人 colorForUser 色点；多人加「+n」小字（右对齐行尾）。
+    if (owners.length > 0) {
+      const ownersW = TASK_AVATAR_D + (owners.length > 1 ? TASK_GAP + TASK_AVATAR_PLUS_W : 0);
+      parts.push(
+        el('circle', {
+          class: 'gm-task-owner',
+          cx: fmt(cursor - ownersW + TASK_AVATAR_D / 2),
+          cy: fmt(rowY),
+          r: fmt(TASK_AVATAR_D / 2),
+          fill: colorForUser(owners[0] as string),
+        }),
+      );
+      if (owners.length > 1) {
+        const plus = el('text', {
+          class: 'gm-task-owner-plus',
+          x: fmt(cursor),
+          y: fmt(rowY + TASK_META_FONT_SIZE * 0.35),
+          'text-anchor': 'end',
+          'font-size': fmt(TASK_META_FONT_SIZE),
+          fill: TASK_META_FG,
+        });
+        plus.textContent = `+${owners.length - 1}`;
+        parts.push(plus);
+      }
+    }
+    entry.taskRow.replaceChildren(...parts);
   }
 
   // 折叠徽标：+N，仅 count>0；元素随有无增删（旧徽标元素移除，不保留引用）。
@@ -539,6 +702,13 @@ function applySummary(scene: SceneRoot, s: SummaryBox, theme: ThemeTokens): void
  */
 export function renderScene(scene: SceneRoot, input: SceneInput): void {
   const { layout, theme, styleOf, nodeData } = input;
+  // 任务上下文预计算（M7c-C2）：有效进度（叶=自身、父=Σ 直属子级均值，shared
+  // effectiveProgress 口径）、逾期集（isOverdue 口径，today 可由宿主固定）、
+  // 父节点集（layout.nodes parentId 反查，与布局侧槽位判定同源同树）。
+  const today = input.today ?? todayStr();
+  const progressById = taskProgressMap(nodeData, layout.nodes);
+  const overdueIds = taskOverdueIds(nodeData, layout.nodes, today);
+  const parentIds = taskParentIds(layout.nodes);
 
   const seenNodes = new Set<string>();
   for (const b of layout.nodes) {
@@ -550,6 +720,11 @@ export function renderScene(scene: SceneRoot, input: SceneInput): void {
       nodeData.get(b.id) ?? { text: '' },
       theme,
       layout.collapsedCounts.get(b.id) ?? 0,
+      {
+        progress: progressById.get(b.id) ?? 0,
+        parent: parentIds.has(b.id),
+        overdue: overdueIds.has(b.id),
+      },
     );
   }
   for (const [id, entry] of scene.nodeEntries) {

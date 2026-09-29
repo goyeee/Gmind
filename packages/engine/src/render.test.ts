@@ -3,6 +3,7 @@ import { createScene, renderScene } from './render';
 import { MARKER_CATALOG } from './markers';
 import type { NodeVisual, SceneInput } from './render';
 import { resolveNodeStyle, THEMES } from './themes';
+import { colorForUser } from './cursors';
 import type { EdgeRoute, LayoutResult, NodeBox, ResolvedNodeStyle, ThemeTokens } from './types';
 
 // ---------------------------------------------------------------------------
@@ -540,5 +541,153 @@ describe('renderScene：概要 bracket（M6 Task 6）', () => {
     renderScene(scene, makeInput(summaryLayout([]), baseData()));
     expect(svg.querySelector('[data-node-id="b"]')).toBe(gB);
     expect(svg.querySelector('[data-edge-id="a->b"]')).toBe(edgePath);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 任务视觉（M7c-C2，spec 2026-09-29-m7c §R4）：状态色左边条 / 负责人头像 /
+// 有效进度 / 预期日期徽标 / 无任务信息零变化。语义源：mindgrid 节点卡 +
+// @gmind/shared derive（effectiveProgress/isOverdue 口径）；色值企微底色四态。
+// ---------------------------------------------------------------------------
+
+describe('renderScene：任务视觉（M7c-C2）', () => {
+  const TODAY = '2026-09-28';
+
+  function taskInput(data: Map<string, NodeVisual>, nodes?: NodeBox[]): SceneInput {
+    const layout = baseLayout();
+    if (nodes) layout.nodes = nodes;
+    return { layout, theme, styleOf, nodeData: data, today: TODAY };
+  }
+
+  it('状态条四色：todo 灰/doing 蓝/done 绿/blocked 橙（左缘 3px 全盒高竖条；todo 有任务信息也出灰条）', () => {
+    const data = baseData();
+    data.set('b', { text: 'x', task: { status: 'doing' } });
+    data.set('c', { text: 'y', task: { status: 'done' } });
+    data.set('d', { text: 'z', task: { owners: ['u1'] } }); // status 缺省 todo + 负责人 → 灰条
+    const layout = baseLayout();
+    layout.nodes.push(box('d', 60, 60, 100, 40));
+    const scene = createScene(svg);
+    renderScene(scene, taskInput(data, layout.nodes));
+    const barOf = (id: string): SVGRectElement | null =>
+      nodeG(id)?.querySelector('rect.gm-task-bar') ?? null;
+    expect(barOf('b')?.getAttribute('fill')).toBe('#3370ff');
+    expect(barOf('b')?.getAttribute('x')).toBe('0');
+    expect(barOf('b')?.getAttribute('width')).toBe('3');
+    expect(barOf('b')?.getAttribute('height')).toBe('40'); // 全盒高
+    expect(barOf('c')?.getAttribute('fill')).toBe('#34c724');
+    expect(barOf('d')?.getAttribute('fill')).toBe('#86909c');
+    // 协调更新：doing → blocked 就地换色
+    data.set('b', { text: 'x', task: { status: 'blocked' } });
+    renderScene(scene, taskInput(data, layout.nodes));
+    expect(barOf('b')?.getAttribute('fill')).toBe('#ff8800');
+  });
+
+  it('负责人头像：首人 colorForUser 色点；多人尾随「+n」小字', () => {
+    const data = baseData();
+    data.set('b', { text: 'x', task: { owners: ['u1'] } });
+    data.set('c', { text: 'y', task: { owners: ['u1', 'u2', 'u3'] } });
+    renderScene(createScene(svg), taskInput(data));
+    const dotB = nodeG('b')?.querySelector('circle.gm-task-owner');
+    expect(dotB).not.toBeNull();
+    expect(dotB?.getAttribute('fill')).toBe(colorForUser('u1')); // Gmind 成员色单源
+    expect(dotB?.getAttribute('r')).toBe('5');
+    expect(nodeG('b')?.querySelector('.gm-task-owner-plus')).toBeNull();
+    const dotC = nodeG('c')?.querySelector('circle.gm-task-owner');
+    expect(dotC?.getAttribute('fill')).toBe(colorForUser('u1')); // 首人色
+    expect(nodeG('c')?.querySelector('.gm-task-owner-plus')?.textContent).toBe('+2');
+  });
+
+  it('有效进度：叶=自身百分比（progress>0 才显示）；父=Σ 直属子级均值；灰字', () => {
+    const data = baseData();
+    data.set('b', { text: 'x', task: { progress: 40 } }); // 叶
+    data.set('c', { text: 'y', task: { owners: ['u1'], progress: 0 } }); // 叶 0 → 不显示
+    // 父 d（有任务信息）子 e/f 各 30/50 → Σ = round(80/2) = 40
+    data.set('d', { text: 'D', task: { owners: ['u9'] } });
+    data.set('e', { text: 'E', task: { progress: 30 } });
+    data.set('f', { text: 'F', task: { progress: 50 } });
+    const nodes = [
+      box('a', -60, -10, 120, 20, 'right', 0),
+      box('b', 60, -20, 100, 40),
+      box('c', 60, 20, 80, 40),
+      box('d', 60, 60, 120, 40),
+      { ...box('e', 220, 40, 80, 40), parentId: 'd' },
+      { ...box('f', 220, 80, 80, 40), parentId: 'd' },
+    ];
+    renderScene(createScene(svg), taskInput(data, nodes));
+    const progOf = (id: string): SVGTextElement | null =>
+      nodeG(id)?.querySelector('text.gm-task-progress') ?? null;
+    expect(progOf('b')?.textContent).toBe('40%'); // 叶自身
+    expect(progOf('b')?.getAttribute('fill')).toBe('#86909c');
+    expect(progOf('c')).toBeNull(); // progress=0 不显示
+    expect(progOf('d')?.textContent).toBe('40%'); // 父 Σ 汇总（直属子级均值）
+  });
+
+  it('日期徽标：MM-DD 灰底；逾期红底白字（dueDate<今天且进度<100 且非 done）', () => {
+    const data = baseData();
+    data.set('b', { text: 'x', task: { dueDate: '2026-09-01' } }); // 逾期（进度 0 < 100）
+    data.set('c', { text: 'y', task: { dueDate: '2026-10-01' } }); // 未到期
+    renderScene(createScene(svg), taskInput(data));
+    const bgOf = (id: string): SVGRectElement | null =>
+      nodeG(id)?.querySelector('rect.gm-task-due-bg') ?? null;
+    const dueOf = (id: string): SVGTextElement | null =>
+      nodeG(id)?.querySelector('text.gm-task-due') ?? null;
+    expect(dueOf('b')?.textContent).toBe('09-01'); // YYYY-MM-DD → MM-DD（同 mindgrid）
+    expect(bgOf('b')?.getAttribute('fill')).toBe('#f53f3f'); // 逾期红底
+    expect(dueOf('b')?.getAttribute('fill')).toBe('#ffffff'); // 白字
+    expect(bgOf('c')?.getAttribute('fill')).toBe('#f2f3f5'); // 常态灰底
+    expect(dueOf('c')?.getAttribute('fill')).toBe('#86909c');
+
+    const scene = createScene(svg);
+    // done 状态：过期日期也不判逾期（isOverdue 口径）
+    data.set('b', { text: 'x', task: { status: 'done', dueDate: '2026-09-01' } });
+    renderScene(scene, taskInput(data));
+    expect(bgOf('b')?.getAttribute('fill')).toBe('#f2f3f5');
+    // 叶有效进度 100：过期日期不判逾期
+    data.set('b', { text: 'x', task: { progress: 100, dueDate: '2026-09-01' } });
+    renderScene(scene, taskInput(data));
+    expect(bgOf('b')?.getAttribute('fill')).toBe('#f2f3f5');
+    // 父 Σ ≥ 100：过期日期不判逾期（子甲 100 / 子乙 100）
+    const nodes = [
+      box('a', -60, -10, 120, 20, 'right', 0),
+      box('b', 60, -20, 140, 40),
+      { ...box('e', 240, -40, 80, 40), parentId: 'b' },
+      { ...box('f', 240, 0, 80, 40), parentId: 'b' },
+    ];
+    data.set('b', { text: 'x', task: { owners: ['u1'], dueDate: '2026-09-01' } });
+    data.set('e', { text: 'E', task: { progress: 100 } });
+    data.set('f', { text: 'F', task: { progress: 100 } });
+    renderScene(scene, taskInput(data, nodes));
+    expect(bgOf('b')?.getAttribute('fill')).toBe('#f2f3f5');
+  });
+
+  it('无任务信息零变化：todo 全缺省与无 task 的节点 DOM 与纯脑图节点逐字节一致', () => {
+    const svg1 = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    const svg2 = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    document.body.appendChild(svg1);
+    document.body.appendChild(svg2);
+    const plain = baseData();
+    plain.set('b', { text: 'x' });
+    // 基线：全无 task 数据
+    renderScene(createScene(svg1), makeInput(baseLayout(), plain));
+    // 对照：b 带 todo 全缺省 task（owners 空/进度 0/无日期）——纯脑图节点保持现状
+    const data = baseData();
+    data.set('b', { text: 'x', task: { status: 'todo' } });
+    renderScene(createScene(svg2), makeInput(baseLayout(), data));
+    expect(svg2.innerHTML).toBe(svg1.innerHTML);
+    expect(svg2.querySelectorAll('.gm-task-bar, .gm-task-row')).toHaveLength(0);
+  });
+
+  it('任务行占位：主文本/标记行在任务行上方区域居中（基线上移）；任务清空恢复原基线', () => {
+    const scene = createScene(svg);
+    const data = baseData();
+    data.set('b', { text: 'x', task: { status: 'doing' } }); // b 盒 h=40 → contentCenter=(40-20)/2=10
+    renderScene(scene, taskInput(data));
+    // 基线 = contentCenter + fontSize×0.35 = 10 + 4.9（无任务时 20 + 4.9 = 24.9）
+    expect(nodeG('b')?.querySelector('tspan')?.getAttribute('y')).toBe('14.9');
+    // 任务清空 → 无任何任务元素、几何回位（现状口径；行高 = fontSize×1.4 = 19.6）
+    renderScene(scene, makeInput(baseLayout(), baseData()));
+    expect(nodeG('b')?.querySelector('.gm-task-bar')).toBeNull();
+    expect(nodeG('b')?.querySelector('.gm-task-row')).toBeNull();
+    expect(nodeG('b')?.querySelectorAll('tspan')[0]?.getAttribute('y')).toBe('15.1'); // 两行首行回位
   });
 });

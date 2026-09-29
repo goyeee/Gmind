@@ -1,3 +1,4 @@
+import { TASK_ROW_H, taskRowContentWidth, type TaskRowSlots } from './taskvisual';
 import type { MeasureAdapter, TextStyle, ThemeTokens } from './types';
 
 export interface MeasureNodeBoxOptions {
@@ -15,6 +16,13 @@ export interface MeasureNodeBoxOptions {
    * 缺省（无图）不参与。
    */
   imageW?: number;
+  /**
+   * 任务信息行槽位（M7c-C2，只增不改）：有任务信息时盒高加一行（TASK_ROW_H，
+   * 第二行区域——与 R1 description 行同槽位，布局不写死单行）、盒宽下限容纳
+   * 任务行内容（taskRowContentWidth）。缺省（无任务信息）完全不参与——
+   * 既有节点几何逐字节不变（金样锁定）。
+   */
+  taskRow?: TaskRowSlots;
 }
 
 export interface NodeBoxMeasure {
@@ -28,9 +36,11 @@ export interface NodeBoxMeasure {
  * - 按 '\n' 分行；单行超 theme.maxTextWidth 时逐字符贪心断行（中英文通用），
  *   在即将溢出的字符前断开，绝不产生空尾行（空文本除外）。
  * - 行高 = fontSize × theme.lineHeightRatio，文本高 = 行数 × 行高。
- * - h = max(文本高, imageH ?? 0)（T6 carry-in 裁决：盒高计入图片高度）。
+ * - h = max(文本高 + 任务行高, imageH ?? 0)（任务行仅在有任务信息时计入；
+ *   T6 carry-in 裁决：盒高计入图片高度）。
  * - w = max(最宽行宽 + 2×nodePaddingX + iconCount×iconSlotWidth,
- *   imageW !== undefined ? imageW + 2×nodePaddingX : 0, minNodeWidth)。
+ *   imageW !== undefined ? imageW + 2×nodePaddingX : 0,
+ *   taskRowContentWidth(taskRow)（有任务信息时）, minNodeWidth)。
  * 纯函数、确定性：同一输入恒得同一输出。
  */
 export function measureNodeBox(
@@ -45,7 +55,8 @@ export function measureNodeBox(
   const lines = physicalLines.flatMap((line) => wrapLine(line, adapter, style, theme.maxTextWidth));
   const lineHeight = style.fontSize * theme.lineHeightRatio;
   const textH = lines.length * lineHeight;
-  const h = Math.max(textH, options.imageH ?? 0);
+  const taskRowH = options.taskRow ? TASK_ROW_H : 0;
+  const h = Math.max(textH + taskRowH, options.imageH ?? 0);
 
   let maxLineW = 0;
   for (const line of lines) {
@@ -53,9 +64,11 @@ export function measureNodeBox(
     if (w > maxLineW) maxLineW = w;
   }
   const imageW = options.imageW !== undefined ? options.imageW + theme.nodePaddingX * 2 : 0;
+  const taskRowW = options.taskRow ? taskRowContentWidth(options.taskRow) : 0;
   const w = Math.max(
     maxLineW + theme.nodePaddingX * 2 + iconCount * theme.iconSlotWidth,
     imageW,
+    taskRowW,
     theme.minNodeWidth,
   );
   return { w, h, lines };

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { measureNodeBox } from './measure';
 import { THEMES } from './themes';
+import { TASK_ROW_H, taskRowContentWidth } from './taskvisual';
 import type { MeasureAdapter, TextStyle, ThemeTokens } from './types';
 
 // 桩测量适配器：每个字符固定 10px 宽（行高由引擎按 theme 自算，不经过适配器）。
@@ -75,5 +76,25 @@ describe('measureNodeBox', () => {
     expect(measureNodeBox('aaaaaaaaaa', style, theme, { adapter: stubAdapter, imageW: 10 }).w).toBe(
       5 * 10 + 2 * 8,
     );
+  });
+
+  // M7c-C2 任务信息行槽位（只增不改）：无 taskRow 选项时几何与旧版逐字节一致；
+  // 有 taskRow 时盒高加一行（TASK_ROW_H）、盒宽下限容纳任务行内容。
+  it('任务行槽位：无 taskRow 几何不变；有 taskRow 高度加一行、宽度保底任务行内容', () => {
+    const slots = { owners: 2, showProgress: true, hasDue: true };
+    // 缺省（无任务信息）：完全不参与
+    const plain = measureNodeBox('ab', style, theme, { adapter: stubAdapter });
+    expect(plain.h).toBe(14 * 1.5);
+    expect(plain.w).toBe(2 * 10 + 2 * 8);
+    // 有任务信息：h = 文本高 + TASK_ROW_H；w 下限 = 任务行内容宽（126 > 文本宽 36）
+    const withRow = measureNodeBox('ab', style, theme, { adapter: stubAdapter, taskRow: slots });
+    expect(withRow.h).toBe(14 * 1.5 + TASK_ROW_H);
+    expect(withRow.w).toBe(taskRowContentWidth(slots));
+    // 任务行内容更窄时文本主导宽度，任务行仍计高（本套主题 maxTextWidth=50 会断行，
+    // 文本主导上限 5×10+16=66，故取窄槽位 owners=1）
+    const narrow = { owners: 1, showProgress: false, hasDue: false };
+    const wide = measureNodeBox('ab', style, theme, { adapter: stubAdapter, taskRow: narrow });
+    expect(wide.w).toBe(2 * 10 + 2 * 8);
+    expect(wide.h).toBe(14 * 1.5 + TASK_ROW_H);
   });
 });

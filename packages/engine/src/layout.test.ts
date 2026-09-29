@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { layout } from './layout';
 import { THEMES } from './themes';
+import { TASK_ROW_H, taskRowContentWidth, type NodeTaskVisual } from './taskvisual';
 import type {
   DocReader,
   LayoutResult,
@@ -27,6 +28,7 @@ interface PlainNode {
   deleted?: boolean;
   icons?: Record<string, unknown>;
   image?: { key: string; w: number; h: number } | null;
+  task?: NodeTaskVisual;
 }
 
 function makeReader(defs: Record<string, PlainNode>, summaries?: SummaryLike[]): DocReader {
@@ -42,6 +44,7 @@ function makeReader(defs: Record<string, PlainNode>, summaries?: SummaryLike[]):
       deleted: def.deleted ?? false,
       icons: def.icons,
       image: def.image,
+      task: def.task,
     };
   };
   const reader: DocReader = {
@@ -614,5 +617,31 @@ describe('layout 确定性与金样', () => {
     // 无图文本节点不受影响（文本高主导）
     const plain = boxOf(result, 'root');
     expect(plain.h).toBe(20);
+  });
+
+  // M7c-C2 任务信息行槽位（只增不改）：有任务信息的节点盒高加任务行、宽保底任务行
+  // 内容；无任务信息节点（含 todo 全缺省）几何与旧版逐字节一致（金样树无 task 数据）。
+  it('任务节点：盒高加任务行、宽保底任务行；无任务信息节点几何不变', () => {
+    const result = layout(
+      makeReader({
+        root: { text: '根', children: ['t', 'p', 'q'] },
+        t: { text: '叶', task: { status: 'doing', progress: 40 } },
+        p: { text: '父', children: ['c1', 'c2'], task: { owners: ['u1', 'u2'] } },
+        c1: { text: '甲', task: { progress: 30 } },
+        c2: { text: '乙', task: { progress: 50 } },
+        q: { text: '纯', task: { status: 'todo' } }, // 全缺省 = 无任务信息
+      }),
+      { structure: 'mindmap', theme, measure: stubAdapter, styleOf },
+    );
+    // 叶（有任务信息）：h = 20 + TASK_ROW_H
+    expect(boxOf(result, 't').h).toBe(20 + TASK_ROW_H);
+    // 父（有任务信息）：恒预留 Σ 进度槽 → 宽保底 owners 2 + 进度（无日期）
+    const pRow = { owners: 2, showProgress: true, hasDue: false };
+    expect(boxOf(result, 'p').h).toBe(20 + TASK_ROW_H);
+    expect(boxOf(result, 'p').w).toBeGreaterThanOrEqual(taskRowContentWidth(pRow));
+    // todo 全缺省：零槽位，几何不变（'纯' 10px + 2×12 = 34，被 minNodeWidth 40 抬底）
+    expect(boxOf(result, 'q').h).toBe(20);
+    expect(boxOf(result, 'q').w).toBe(Math.max(10 + theme.nodePaddingX * 2, theme.minNodeWidth));
+    expect(boxOf(result, 'root').h).toBe(20);
   });
 });

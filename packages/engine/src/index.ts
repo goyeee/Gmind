@@ -11,10 +11,12 @@
  * M1b Task 10：浏览器剪贴板层——内部结构化 + 文本大纲双格式（clipboard）。
  * M2 Task 4：远端光标层——彩色选区与昵称标签（cursors）。
  * M4 Task 9：离屏渲染与 SVG 序列化（export，FR-IO-003）。
+ * M7c-C2：节点卡片任务视觉——语义/几何单源（taskvisual）+ 状态条/负责人/进度/日期徽标渲染。
  */
 
 export * from './types';
 export * from './measure';
+export * from './taskvisual';
 export * from './layout';
 export * from './themes';
 export * from './markers';

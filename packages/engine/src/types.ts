@@ -6,6 +6,7 @@
  * 读取文档快照，由 apps/web 侧的适配函数从 @gmind/core 桥接。
  */
 export type { StructureType } from '@gmind/shared';
+import type { NodeTaskVisual } from './taskvisual';
 
 /** 文本样式（与 DOM/Canvas 字体三元组一一对应）。 */
 export interface TextStyle {
@@ -226,6 +227,12 @@ export interface NodeSnapshotLike {
   image?: { key: string; w: number; h: number } | null;
   /** 节点级样式覆盖（键值对）。 */
   style?: Record<string, string>;
+  /**
+   * 任务字段（M7c-C2 只增不改）：core NodeSnapshot.task 的结构兼容子集
+   * （NodeTaskVisual 定义在 taskvisual.ts——语义/几何单源）。布局只读它判定
+   * 任务行槽位；缺省（纯脑图节点）零槽位，几何与现状一致。
+   */
+  task?: NodeTaskVisual;
 }
 
 /**

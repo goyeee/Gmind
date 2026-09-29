@@ -24,6 +24,7 @@
  */
 import { markerCountOf } from './markers';
 import { measureNodeBox } from './measure';
+import { taskRowSlotsOf } from './taskvisual';
 import { themeTextStyleOf } from './themes';
 import type {
   DocReader,
@@ -100,11 +101,28 @@ function collectTree(
     // T6 carry-in 裁决（Task 12 落地）：盒高计入图片高度。图片尺寸就在树遍历已取的
     // snap 上（reader.getNode），无需新增布局入参——直接作为测量选项下传。
     const image = snap.image ?? null;
+    // M7c-C2 任务信息行（只增不改）：槽位判定需要「有无存活子节点」（父节点恒
+    // 预留 Σ 进度槽），故先递归建子树再测量。测量与递归无数据耦合，顺序调换
+    // 不影响既有输出——无任务信息时 taskRow 为 undefined，measureNodeBox 选项
+    // 与旧版逐项一致（金样锁定）。折叠节点按叶子口径（隐藏子树不参与）。
+    const children: LayoutNode[] = [];
+    let collapsedCount: number | undefined;
+    if (snap.collapsed) {
+      // 折叠节点按叶子：不下钻，仅统计隐藏后代。
+      collapsedCount = countHiddenDescendants(reader, id);
+    } else {
+      for (const childId of reader.childrenIds(id)) {
+        const child = build(childId, depth + 1);
+        if (child) children.push(child);
+      }
+    }
+    const taskRow = taskRowSlotsOf(snap.task, children.length > 0);
     const box = measureNodeBox(snap.text, styleOf(id, depth), theme, {
       adapter: measure,
       iconCount,
       imageH: image ? image.h : undefined,
       imageW: image ? image.w : undefined,
+      taskRow,
     });
     const node: LayoutNode = {
       id,
@@ -114,19 +132,11 @@ function collectTree(
       x: 0,
       y: 0,
       side: 'right',
-      children: [],
+      children,
       subtreeH: box.h,
       subtreeW: box.w,
     };
-    if (snap.collapsed) {
-      // 折叠节点按叶子：不下钻，仅统计隐藏后代。
-      node.collapsedCount = countHiddenDescendants(reader, id);
-      return node;
-    }
-    for (const childId of reader.childrenIds(id)) {
-      const child = build(childId, depth + 1);
-      if (child) node.children.push(child);
-    }
+    if (collapsedCount !== undefined) node.collapsedCount = collapsedCount;
     return node;
   };
   return build('root', 0);

@@ -72,6 +72,8 @@ export function exportSceneSvg(
         note: snap.note,
         href: snap.href,
         image: snap.image ?? null,
+        // 任务视觉（M7c-C2 只增不改）：无任务信息节点不产任何元素，导出产物不变。
+        task: snap.task,
       });
     }
   }
