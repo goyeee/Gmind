@@ -159,6 +159,12 @@ export interface NodeBox {
    * 金样逐字节不变）。
    */
   descLine?: string;
+  /**
+   * 断行行集（长文本溢出修复，只增不改）：measureNodeBox 贪心断行后的行
+   * （见 measure.ts wrapLine）——渲染 tspan 直绘，行结构单源 = 测量；未断行
+   * （行集与按 '\n' 显式分行一致）时缺省（字段不出现，金样逐字节不变）。
+   */
+  lines?: string[];
 }
 
 /** 边路由：两端锚点 + 线型。 */

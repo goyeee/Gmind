@@ -11,10 +11,14 @@
  * - padding 随缩放（400% 下固定 2px 与放大后的节点文字错位）：2px × scale 四舍五入、
  *   下限 1px；left/top 的 PAD_PX=4 补偿保持不变——那是盒原点对位，不是视觉内边距。
  * - 宽度随内容自适应（新建空节点 scene 宽仅 40px 却被 max(w,60) 下限撑得过宽的
- *   配对改进）：input 时按 scrollWidth + 左右 padding 和 + 边框补偿估宽，下限恒为
- *   **初始宽度**（锚盒宽或 60，就地编辑的对位基准，删字收窄也不得突破），上限 =
+ *   配对改进）：input 时先把落宽收回**初始宽度**（锚盒宽或 60，就地编辑的对位基准）
+ *   强制重排，再按 scrollWidth + 左右 padding 和 + 边框补偿估宽——CSS 保证
+ *   scrollWidth ≥ clientWidth，不先收回则内容变窄时 scrollWidth 钉在当前宽上，
+ *   删字越删越宽（2026-09-28 Kimi 复验实测 225→261 单调 +6）；收回后 scrollWidth
+ *   仍不高于 clientWidth（内容窄于初始宽 / 换行不横向溢出）→ 直接保持初始宽，
+ *   不做补偿估宽（那会把 clientWidth 误当内容宽，恒虚高 pad×2+边框）。上限 =
  *   视口宽 − 浮层 left − 右边距 16px（防长文本撑出视口）。纯视觉调整，不动值/
- *   截断/提交/IME 语义；白空间换行时 scrollWidth 不增长属正常，宽度保持即可。
+ *   截断/提交/IME 语义。
  * - IME 安全：compositionstart → composing=true，期间 input 只落本地值（不截断、
  *   不提交、Esc 不取消——组字中的按键归 IME）；compositionend → composing=false
  *   并立即做截断评估。keydown 同时看 e.isComposing（浏览器组字派发的事件自带）。
@@ -174,17 +178,26 @@ export class TextEditorOverlay {
   }
 
   /**
-   * 宽度随内容自适应（纯视觉，不动值/提交/IME 语义）：估宽 = scrollWidth + 左右
-   * padding 和 + 边框补偿。下限恒为初始宽度——锚定盒宽或 60 是「就地编辑」与节点
-   * 的对位基准，删字收窄也不得窄于它；上限 = 视口宽 − 浮层 left − 右边距（防撑出
-   * 视口；可用上限比初始宽度还小时保持初始宽度，与打开时一致不回归）。
+   * 宽度随内容自适应（纯视觉，不动值/提交/IME 语义）：先把落宽收回初始宽度强制
+   * 重排，再读 scrollWidth 估宽——CSS 保证 scrollWidth ≥ clientWidth（内容变窄时
+   * scrollWidth 钉在当前 clientWidth 上），不收回就测量则 desired 恒大于当前宽，
+   * 删字每敲一次反涨 pad×2+边框（Kimi 复验：225→231→…→261 越删越宽）。收回后
+   * scrollWidth 已真实反映内容：仍不高于 clientWidth ⇔ 内容未超出初始宽（含换行
+   * 不横向溢出）→ 保持初始宽，不再 +padding/边框补偿（补偿只对真溢出的内容宽
+   * 有意义）。下限恒为初始宽度——锚定盒宽或 60 是「就地编辑」与节点的对位基准，
+   * 删字收窄也不得窄于它；上限 = 视口宽 − 浮层 left − 右边距（防撑出视口；可用
+   * 上限比初始宽度还小时保持初始宽度，与打开时一致不回归）。
    */
   private syncWidth(): void {
     const ta = this.ta;
     const opts = this.opts;
     if (!ta || !opts) return;
     const pad = scaledPaddingPx(opts.scale);
-    const desired = ta.scrollWidth + pad * 2 + BORDER_COMP_PX;
+    ta.style.width = `${this.baseWidthPx}px`; // 收回下限宽强制重排：scrollWidth 摆脱当前宽钳制
+    const desired =
+      ta.scrollWidth > ta.clientWidth
+        ? ta.scrollWidth + pad * 2 + BORDER_COMP_PX
+        : this.baseWidthPx;
     const maxW = window.innerWidth - this.layerLeftPx - WIDTH_MARGIN_PX;
     ta.style.width = `${Math.max(this.baseWidthPx, Math.min(desired, maxW))}px`;
   }

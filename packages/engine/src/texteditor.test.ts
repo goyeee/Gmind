@@ -245,6 +245,45 @@ describe('TextEditorOverlay 宽度随内容自适应', () => {
     expect(ta.style.width).toBe('120px'); // 收窄回初始宽度为止
   });
 
+  it('逐字删除：宽度单调回落至初始宽度，绝不反向膨胀（CSS scrollWidth≥clientWidth 语义钉定）', () => {
+    setViewportWidth(2000);
+    const ta = open({ anchorRect: { x: 100, y: 50, w: 120, h: 24 }, scale: 1 });
+    // 真实浏览器语义：scrollWidth = max(内容宽, clientWidth)——内容变窄时钉在当前
+    // clientWidth 上。jsdom 无布局引擎，clientWidth 按已落宽模拟（border-box：
+    // 应用宽 − 2×1px 边框）。
+    let contentW = 0;
+    const clientWidthOf = (): number => Number.parseFloat(ta.style.width) - 2;
+    Object.defineProperty(ta, 'clientWidth', { get: clientWidthOf, configurable: true });
+    Object.defineProperty(ta, 'scrollWidth', {
+      get: () => Math.max(contentW, clientWidthOf()),
+      configurable: true,
+    });
+    // 逐字输入（内容 30→400px）：宽度随内容增长
+    const grown: number[] = [];
+    for (let n = 3; n <= 40; n += 1) {
+      contentW = n * 10;
+      input(ta);
+      grown.push(Number.parseFloat(ta.style.width));
+    }
+    for (let i = 1; i < grown.length; i += 1) {
+      expect(grown[i]).toBeGreaterThanOrEqual(grown[i - 1]);
+    }
+    expect(grown[grown.length - 1]).toBeGreaterThan(120); // 长内容确实撑宽过
+    // 逐字删除（内容 390→0px）：宽度必须单调回落至初始宽。不先收回落宽就测量时
+    // scrollWidth 钉在当前 clientWidth，desired 恒大于当前宽——每删一字反涨
+    // pad×2+边框（Kimi 复验 225→231→…→261），旧实现下本断言必红。
+    const shrunk: number[] = [];
+    for (let n = 39; n >= 0; n -= 1) {
+      contentW = n * 10;
+      input(ta);
+      shrunk.push(Number.parseFloat(ta.style.width));
+    }
+    for (let i = 1; i < shrunk.length; i += 1) {
+      expect(shrunk[i]).toBeLessThanOrEqual(shrunk[i - 1]);
+    }
+    expect(shrunk[shrunk.length - 1]).toBe(120); // 清空后回到初始宽度
+  });
+
   it('上限 = 视口宽 − 浮层 left − 16px 右边距：长文本不撑出视口', () => {
     setViewportWidth(1024);
     // left = 600 − 4 = 596；上限 = 1024 − 596 − 16 = 412

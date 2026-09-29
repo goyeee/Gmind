@@ -37,6 +37,8 @@ import {
   type IconGroup,
 } from '@gmind/core';
 import {
+  computeFit,
+  contentBounds,
   copyNodes,
   createScene,
   createCursorLayer,
@@ -489,10 +491,15 @@ export function EditorPage() {
 
   // —— 迷你选盘（节点标记点击换组）Esc/外点关闭（面板同机制；M7c-D2 改 pointerdown
   // —— mousedown 被画布 onSvgPointerDown 的 preventDefault 抑制，空白点击收不起）——
+  // 徽章豁免（kimi 复验 P3）：徽章画在 SVG 里（engine markers 的 .gm-marker-badge），
+  // 不在 .marker-picker 内——不豁免的话选盘开着点徽章时 pointerdown 先收盘、紧随的
+  // 徽章 click 又无条件重开 → 闪关重弹永远关不掉；开合交给徽章 click 的 toggle。
   useEffect(() => {
     if (!markerPicker) return;
     const onDocPointerDown = (e: PointerEvent): void => {
-      if (!(e.target as Element | null)?.closest?.('.marker-picker')) setMarkerPicker(null);
+      if (!(e.target as Element | null)?.closest?.('.marker-picker, .gm-marker-badge')) {
+        setMarkerPicker(null);
+      }
     };
     const onKeyDown = (e: KeyboardEvent): void => {
       if (e.key === 'Escape') setMarkerPicker(null);
@@ -629,9 +636,11 @@ export function EditorPage() {
     panNodeIntoView([...selection.selected][0]);
   }, [formatOpen, taskPanelOpen, commentsOpen, view, readOnly]);
 
-  // `,`（逗号）快捷键（M7c-C3）：选中节点弹出任务快速卡。独立监听（不入
-  // keyboardMap——帮助清单契约不动）；让路纪律与 Ctrl+F 同款：覆盖层/输入控件/
-  // 表格视图不触发；恰单选才弹（多选无单一目标、空选无目标）。
+  // `,`（逗号）快捷键（M7c-C3）：选中节点弹出任务快速卡；再按 = toggle 关闭
+  // （kimi 复验 P4：原实现无开合态判断，卡片开着再按重复 openQuickCard 重锚，永远
+  // 关不掉——现已改为同节点收盘，换节点才重开重锚）。独立监听（不入 keyboardMap
+  // ——帮助清单契约不动）；让路纪律与 Ctrl+F 同款：覆盖层/输入控件/表格视图不触发；
+  // 恰单选才生效（多选无单一目标、空选无目标）。quickCard 入依赖：闭包读当帧开合态。
   useEffect(() => {
     if (readOnly) return;
     const onKeyDown = (e: KeyboardEvent): void => {
@@ -641,11 +650,16 @@ export function EditorPage() {
       const selection = selectionRef.current;
       if (!selection || selection.selected.size !== 1) return;
       e.preventDefault();
-      openQuickCard([...selection.selected][0]);
+      const nodeId = [...selection.selected][0];
+      if (quickCard && quickCard.nodeId === nodeId) {
+        setQuickCard(null); // 已开且锚的就是当前单选节点：toggle 收盘
+        return;
+      }
+      openQuickCard(nodeId);
     };
     document.addEventListener('keydown', onKeyDown, false);
     return () => document.removeEventListener('keydown', onKeyDown, false);
-  }, [readOnly]);
+  }, [readOnly, quickCard]);
 
 
   /**
@@ -850,7 +864,12 @@ export function EditorPage() {
     if (formatOpen || taskPanelOpen || commentsOpen) {
       const selection = selectionRef.current;
       if (selection && selection.selected.size === 1) {
-        panNodeIntoView([...selection.selected][0]);
+        const nodeId = [...selection.selected][0];
+        // 写后布局异步（update→scheduleRerender→rAF 重渲染→boxesRef 才更新）：同步
+        // 读到的是变宽前的旧盒 → no-op → 下一帧卡片变宽冲出画布被面板裁切（kimi
+        // 复验 P3，描述提交后卡片 309→873px、右缘 1700 vs 画布 1160）。延一帧等盒
+        // 子重排后再平移；对完整可见节点仍 no-op，不扰视口。
+        requestAnimationFrame(() => panNodeIntoView(nodeId));
       }
     }
   };
@@ -968,15 +987,33 @@ export function EditorPage() {
       .catch((e: unknown) => showToast(e instanceof Error ? e.message : '导出失败'));
   };
 
-  const fitCanvas = (): void => {
+  /**
+   * 适应画布。maxScale 可选（kimi 复验 P5）：传入即「只缩不放」——fit 算出的 scale
+   * 超过 maxScale 就钳到 maxScale，平移仍按 computeFit 同式居中。背景：全新文档
+   * 内容小，fit 一路放大到 MAX_SCALE=4 钳制上限（400%），root 巨大、子主题一步出
+   * 屏；企微/XMind 新文档默认 100%。仅首帧装配传 1；工具栏「适应画布」不传，保持
+   * 无钳制原行为。
+   */
+  const fitCanvas = (maxScale?: number): void => {
     const vp = viewportRef.current;
     const svgEl = svgRef.current;
     const lay = layoutRef.current;
     if (!vp || !svgEl) return;
-    vp.fit(
-      lay ?? { nodes: [], width: 0, height: 0 },
-      { w: svgEl.clientWidth, h: svgEl.clientHeight },
-    );
+    const layout = lay ?? { nodes: [], width: 0, height: 0 };
+    if (maxScale !== undefined) {
+      const box = contentBounds(layout);
+      const scale = Math.min(computeFit(box, svgEl.clientWidth, svgEl.clientHeight).scale, maxScale);
+      // zoomTo 只设 scale 不动平移：按 computeFit 居中式在目标 scale 下补齐 tx/ty
+      //（degenerate 空布局时同式退化为 scale=1、居中原点，与 vp.fit 一致）。
+      vp.zoomTo(scale);
+      vp.panBy(
+        (svgEl.clientWidth - box.width * scale) / 2 - box.minX * scale - vp.tx,
+        (svgEl.clientHeight - box.height * scale) / 2 - box.minY * scale - vp.ty,
+      );
+      syncZoom();
+      return;
+    }
+    vp.fit(layout, { w: svgEl.clientWidth, h: svgEl.clientHeight });
     syncZoom();
   };
 
@@ -1176,6 +1213,12 @@ export function EditorPage() {
     afterUserWrite();
     track('node_add', { via, nodeCount: countAliveReachable(doc) }, fileId);
     selectionRef.current?.selectOnly(createdId);
+    // 新建节点视口跟随（kimi 复验 P2）：惰性创建只 selectOnly 不平移，高缩放下新
+    // 节点可整个落在视口外（实测 1440×900、400% 初始缩放连续 Tab 第 2/3 个节点
+    // 可见 0%）。新建当帧盒子还没进 boxesRef（布局要等 update→scheduleRerender 的
+    // rAF 重渲染），rAF 一帧后布局已落再平移；panNodeIntoView 对完整可见节点
+    // no-op。不开编辑框，惰性语义不动。
+    requestAnimationFrame(() => panNodeIntoView(createdId));
     // 回收闭包（自原 openOnNode 原样上提）：Esc/空提交时删掉新建节点；
     // relation='parent' 先把换父的原节点放回原位再删空新节点（同事务，见内注）。
     const removeIfAlive = (): void => {
@@ -1667,6 +1710,12 @@ export function EditorPage() {
       const group = markerBadge.getAttribute('data-marker-group');
       if (nodeId && group && ICON_GROUPS.includes(group as IconGroup)) {
         setContextMenu(null);
+        // 再点同组徽章 = toggle 收盘（kimi 复验 P3）：外点关闭已豁免徽章（见选盘
+        // effect），此处仍无条件重开就会闪关重弹关不掉；换组/换节点才重开重锚。
+        if (markerPicker && markerPicker.nodeId === nodeId && markerPicker.group === group) {
+          setMarkerPicker(null);
+          return;
+        }
         setMarkerPicker({ nodeId, group: group as IconGroup, x: e.clientX, y: e.clientY });
         return;
       }
@@ -2381,7 +2430,9 @@ export function EditorPage() {
 
     rerender();
     selection.selectOnly(ROOT_NODE_ID); // 默认选中中心主题（「选中 root 按 Tab」起点）
-    requestAnimationFrame(() => fitCanvas());
+    // 首帧 fit 只缩不放（fitCanvas(1)，kimi 复验 P5）：新文档不被放大到 400%，默认
+    // 100% 居中；平移仍居中，工具栏「适应画布」路径不传 maxScale 不受影响。
+    requestAnimationFrame(() => fitCanvas(1));
     // perf_metric 埋点（M5 Task 4，PRD 6.4 首屏时间）：装配完成（首帧渲染 + 默认选中 +
     // 视口适应排队）即编辑器可交互；performance.now() 自导航起点计毫秒，无需另记起点。
     // 一次装载恰一行（perfTrackedRef 按 fileId 去重，防 StrictMode dev 双跑重复上报）。
@@ -3268,7 +3319,8 @@ export function EditorPage() {
       {/* 底栏（画布专属：适应画布/缩放）：表格视图隐藏（M7a-T4） */}
       {view === 'mind' && (
         <footer className="editor-bottombar">
-        <button data-testid="fit-btn" onClick={fitCanvas}>
+        {/* 显式无参调用：onClick 直传会把 click 事件当 maxScale（number 形参） */}
+        <button data-testid="fit-btn" onClick={() => fitCanvas()}>
           适应画布
         </button>
         <select

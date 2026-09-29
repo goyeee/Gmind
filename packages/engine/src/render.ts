@@ -6,9 +6,10 @@
  *   创建前清空 svg 既有内容（幂等重建）。
  * - renderScene 按 id 集合差分协调：id 消失 → 元素移除；id 新增 → 创建；id 保持 →
  *   就地改属性，**既有 DOM 元素引用恒定**（焦点/事件委托稳定性）。
- *   文本 tspan 仅在文本变化时重建（未变文本的 tspan 元素引用也不变）。
+ *   文本 tspan 仅在行内容变化时重建（未变文本的 tspan 元素引用也不变）。
  * - 节点 <g data-node-id> 子元素：rect（圆角=theme.nodeBorderRadius、填充/描边/
- *   描边宽 = styleOf 解析结果 + theme）、<text class="gm-text">（按 '\n' 分 tspan，
+ *   描边宽 = styleOf 解析结果 + theme）、<text class="gm-text">（行结构单源 = 测量
+ *   断行：visual.lines（renderScene 自 box.lines 合并），无则按 '\n' 显式分行兜底；
  *   fill/字体取解析样式）、标记区（M7b-W1 八组制多值，固定组序
  *   mood→priority→number→arrow→flag→progress→other→emoji，位置不变——节点框内
  *   文字左侧）：<g class="gm-markers"> 内逐值绘制彩色徽标 <g class="gm-marker-badge"
@@ -150,7 +151,7 @@ export interface NodeEntry {
   descText: SVGTextElement | null;
   badge: SVGGElement | null;
   badgeText: SVGTextElement | null;
-  /** 上次渲染的文本（tspan 仅在变化时重建）。 */
+  /** 上次渲染的行内容签名（行集 join('\u0000')；tspan 仅在变化时重建）。 */
   lastText: string;
 }
 
@@ -185,6 +186,11 @@ export interface SceneRoot {
 /** 节点视觉数据（布局盒子之外的渲染输入；collapsed 计数走 layout.collapsedCounts）。 */
 export interface NodeVisual {
   text: string;
+  /**
+   * 测量断行行集（长文本溢出修复）：renderScene 自 box.lines 合并（宿主无需自填，
+   * 自填值会被盒数据覆盖）；缺省按 '\n' 显式分行兜底（手工构造布局/旧宿主兼容）。
+   */
+  lines?: string[];
   icons?: Record<string, unknown>;
   note?: string;
   href?: string;
@@ -369,22 +375,30 @@ function applyNode(
   text.setAttribute('font-weight', fmt(style.textStyle.fontWeight));
   text.setAttribute('font-family', style.textStyle.fontFamily);
 
-  const lines = visual.text.split('\n');
-  if (entry.lastText !== visual.text) {
+  // 行结构单源 = 测量断行（visual.lines 由 renderScene 自 box.lines 合并）：长文本
+  // 盒已按贪心断行定宽高，直绘同一行集才不溢出盒右缘；无断行数据时按 '\n' 显式
+  // 分行兜底（手工构造布局/旧宿主，行为与旧版一致）。
+  const lines = visual.lines ?? visual.text.split('\n');
+  // tspan 重建键纳入行内容签名：同 text 不同断行（如字号变化触发重排）也触发重建。
+  const linesSig = lines.join('\u0000');
+  if (entry.lastText !== linesSig) {
     text.replaceChildren();
     for (const line of lines) {
       const tspan = el('tspan');
       tspan.textContent = line;
       text.appendChild(tspan);
     }
-    entry.lastText = visual.text;
+    entry.lastText = linesSig;
   }
   // 文本未变也需回填基线（盒高/字号变化时 y 位移；只改属性，不重建 tspan）。
+  // tspan 必须显式回填 x：无 x 的 tspan 紧接前一行内联续排（SVG 文本流语义），
+  // 第二行会从上一行末尾起步横向溢出节点盒——带 y 只重定位纵向、不带 x 不开新行。
   const lineHeight = fontSize * theme.lineHeightRatio;
   const baseline = (i: number): number =>
     contentCenter + (i - (lines.length - 1) / 2) * lineHeight + fontSize * 0.35;
   const spans = text.children;
   for (let i = 0; i < spans.length; i += 1) {
+    (spans[i] as SVGTSpanElement).setAttribute('x', fmt(textX));
     (spans[i] as SVGTSpanElement).setAttribute('y', fmt(baseline(i)));
   }
 
@@ -730,7 +744,8 @@ function applySummary(scene: SceneRoot, s: SummaryBox, theme: ThemeTokens): void
 
 /**
  * 按布局结果协调场景：节点/边按 id 集合差分——新增创建、消失移除、保持就地更新。
- * 既有元素引用恒定（文本 tspan 仅在文本变化时重建）。
+ * 既有元素引用恒定（文本 tspan 仅在行内容变化时重建）；盒带测量断行（box.lines）
+ * 时合并进节点视觉数据，渲染行结构与定盒口径同源（长文本不溢出节点盒）。
  */
 export function renderScene(scene: SceneRoot, input: SceneInput): void {
   const { layout, theme, styleOf, nodeData } = input;
@@ -745,11 +760,13 @@ export function renderScene(scene: SceneRoot, input: SceneInput): void {
   const seenNodes = new Set<string>();
   for (const b of layout.nodes) {
     seenNodes.add(b.id);
+    const data = nodeData.get(b.id) ?? { text: '' };
     applyNode(
       scene,
       b,
       styleOf(b.id),
-      nodeData.get(b.id) ?? { text: '' },
+      // 断行行集随盒合并（只增不改）：盒不带 lines 时透传原视觉对象，零额外展开。
+      b.lines !== undefined ? { ...data, lines: b.lines } : data,
       theme,
       layout.collapsedCounts.get(b.id) ?? 0,
       {

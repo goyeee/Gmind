@@ -667,4 +667,26 @@ describe('layout 确定性与金样', () => {
     expect(n.h).toBe(20);
     expect('descLine' in n).toBe(false); // 无描述：字段不出现
   });
+
+  // 长文本溢出修复（Kimi 复验）：测量贪心断行随盒透传（box.lines），渲染行结构
+  // 与定盒口径同源；未断行字段不出现（金样逐字节不变）。
+  it('断行行集透传：超 maxTextWidth 节点盒带 lines（与定盒同源）；未断行字段不出现', () => {
+    const result = layout(
+      makeReader({
+        root: { text: '根', children: ['long', 'short'] },
+        // 桩适配器每码点 10px、maxTextWidth=240：30 字（300px）断成 24+6 两行
+        long: { text: '长'.repeat(30) },
+        short: { text: '短文本' },
+      }),
+      { structure: 'mindmap', theme, measure: stubAdapter, styleOf },
+    );
+    const long = boxOf(result, 'long');
+    expect(long.lines).toEqual(['长'.repeat(24), '长'.repeat(6)]);
+    // 盒几何与断行同源：w = 240 + 2×12（最宽行主导）、h = 2 行 × 20
+    expect(long.w).toBe(240 + theme.nodePaddingX * 2);
+    expect(long.h).toBe(40);
+    // 未断行（含显式 '\n' 未超宽）：字段不出现（与 descLine 同款纪律）
+    expect('lines' in boxOf(result, 'root')).toBe(false);
+    expect('lines' in boxOf(result, 'short')).toBe(false);
+  });
 });

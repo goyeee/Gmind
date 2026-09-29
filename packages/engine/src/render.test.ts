@@ -744,3 +744,49 @@ describe('renderScene：描述行（M7c-C1）', () => {
     expect(nodeG('c')?.querySelector('.gm-task-row')).not.toBeNull();
   });
 });
+
+// ---------------------------------------------------------------------------
+// 长文本断行（Kimi 复验溢出修复）：行结构单源 = 测量贪心断行（box.lines 经
+// renderScene 合并进 visual.lines），长文本不再画成一行溢出节点盒右缘。
+// ---------------------------------------------------------------------------
+
+describe('renderScene：长文本断行（box.lines 直绘）', () => {
+  it('盒带 lines：按测量断行绘多 tspan（兜底 split 不再生效），基线与显式 \\n 两行同式', () => {
+    const data = baseData();
+    data.set('b', { text: '长'.repeat(30) }); // 视觉文本仍是一整段（无显式换行）
+    const layout2 = baseLayout();
+    layout2.nodes = [
+      layout2.nodes[0] as NodeBox,
+      { ...box('b', 60, -20, 264, 40), lines: ['长'.repeat(24), '长'.repeat(6)] },
+      layout2.nodes[2] as NodeBox,
+    ];
+    renderScene(createScene(svg), makeInput(layout2, data));
+    const tspans = nodeG('b')?.querySelectorAll('tspan');
+    expect(tspans).toHaveLength(2); // 按断行两行，而非 30 字单行溢出盒右缘
+    expect(tspans?.[0]?.textContent).toBe('长'.repeat(24));
+    expect(tspans?.[1]?.textContent).toBe('长'.repeat(6));
+    // 基线同式：contentCenter = 40/2 = 20，行高 14×1.4 = 19.6，fontSize×0.35 = 4.9
+    expect(tspans?.[0]?.getAttribute('y')).toBe('15.1'); // 20 − 9.8 + 4.9
+    expect(tspans?.[1]?.getAttribute('y')).toBe('34.7'); // 20 + 9.8 + 4.9
+  });
+
+  it('同 text 不同断行：tspan 随行内容签名重建（lastText 缓存键纳入行集，防御）', () => {
+    const scene = createScene(svg);
+    const data = baseData();
+    data.set('b', { text: '一二三四五' });
+    renderScene(scene, makeInput(baseLayout(), data));
+    expect(nodeG('b')?.querySelectorAll('tspan')).toHaveLength(1);
+    // 视觉文本不变，盒新带断行结果（如字号变化触发重排）→ 行内容变化须重建 tspan
+    const layout2 = baseLayout();
+    layout2.nodes = [
+      layout2.nodes[0] as NodeBox,
+      { ...box('b', 60, -20, 100, 40), lines: ['一二三四', '五'] },
+      layout2.nodes[2] as NodeBox,
+    ];
+    renderScene(scene, makeInput(layout2, data));
+    const tspans = nodeG('b')?.querySelectorAll('tspan');
+    expect(tspans).toHaveLength(2);
+    expect(tspans?.[0]?.textContent).toBe('一二三四');
+    expect(tspans?.[1]?.textContent).toBe('五');
+  });
+});

@@ -53,6 +53,8 @@ interface LayoutNode {
   collapsedCount?: number;
   /** 描述行（M7c-C1）：测量截断后的单行（无描述缺省，几何零参与）。 */
   descLine?: string;
+  /** 断行行集（长文本溢出修复）：测量贪心断行结果（未断行缺省），随盒透传渲染。 */
+  lines?: string[];
   /** 子树带高：max(自身高, Σ子带高 + V_GAP×(n-1))。 */
   subtreeH: number;
   /** 子树带宽：max(自身宽, Σ子带宽 + H_GAP×(n-1))。 */
@@ -129,6 +131,12 @@ function collectTree(
       taskRow,
       description: snap.description,
     });
+    // 断行行集（长文本溢出修复，只增不改）：测量行集与显式 '\n' 分行不一致（发生
+    // 贪心断行）才随盒透传——渲染 tspan 行结构单源 = 测量；未断行字段不出现，
+    // 既有盒输出逐字节不变（金样锁定）。
+    const rawLines = snap.text.split('\n');
+    const wrapped =
+      box.lines.length !== rawLines.length || box.lines.some((line, i) => line !== rawLines[i]);
     const node: LayoutNode = {
       id,
       depth,
@@ -141,6 +149,7 @@ function collectTree(
       subtreeH: box.h,
       subtreeW: box.w,
       ...(box.descLine !== undefined ? { descLine: box.descLine } : {}),
+      ...(wrapped ? { lines: box.lines } : {}),
     };
     if (collapsedCount !== undefined) node.collapsedCount = collapsedCount;
     return node;
@@ -338,6 +347,9 @@ function flatten(
     parentId,
     // 描述行（M7c-C1，只增不改）：无描述时字段不出现（金样逐字节不变）。
     ...(node.descLine !== undefined ? { descLine: node.descLine } : {}),
+    // 断行行集（长文本溢出修复，只增不改）：发生贪心断行才随盒输出（渲染直绘，
+    // 行结构单源 = 测量）；未断行字段不出现（金样逐字节不变）。
+    ...(node.lines !== undefined ? { lines: node.lines } : {}),
   });
   if (node.collapsedCount !== undefined) collapsed.set(node.id, node.collapsedCount);
   for (const child of node.children) flatten(child, depth + 1, node.id, boxes, collapsed);
