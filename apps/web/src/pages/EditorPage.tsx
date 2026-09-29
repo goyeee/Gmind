@@ -933,14 +933,16 @@ export function EditorPage() {
             // 换回原父原位，再删空新节点（同事务）。
             withTransaction(doc, ORIGIN_USER, () => {
               if (relation === 'parent' && nodeToOutdent) {
-                const moved = getNode(doc, nodeToOutdent);
-                const origParent = moved && !moved.deleted ? moved.parentId : parentId;
-                const origIndex =
-                  moved && !moved.deleted && origParent
-                    ? (getNode(doc, origParent)?.childIds.indexOf(nodeToOutdent) ?? -1)
+                // 原位=新节点 N 在其父（=原父）children 中的 index 处；原节点还原到
+                // N 的父下 N 原本的位置（不能取原节点的现父——那是 N 自身，会还原进 N）
+                const np = getNode(doc, createdId);
+                const restoreParent = np && !np.deleted ? np.parentId : parentId;
+                const restoreIndex =
+                  restoreParent && restoreParent !== createdId
+                    ? (getNode(doc, restoreParent)?.childIds.indexOf(createdId) ?? -1)
                     : -1;
-                if (origParent && origIndex >= 0) {
-                  moveNode(doc, nodeToOutdent, origParent, origIndex);
+                if (restoreParent && restoreIndex >= 0) {
+                  moveNode(doc, nodeToOutdent, restoreParent, restoreIndex);
                 }
               }
               deleteNodes(doc, [createdId]);
