@@ -62,6 +62,56 @@ export function MarkerChip({ def, size = 18 }: { def: MarkerGlyphDef; size?: num
       </span>
     );
   }
+  if (def.kind === 'mood') {
+    // 心情 chip（M7b-K2 补）：橙圆 + 白色眼/嘴，与 engine drawMarkerBadge mood 同族简化。
+    const v = def.variant ?? 0;
+    return (
+      <span
+        className="marker-chip-badge"
+        style={{ width: size, height: size, background: def.color, borderRadius: '50%', position: 'relative', overflow: 'hidden' }}
+        aria-hidden
+      >
+        <svg width={size} height={size} viewBox="0 0 14 14">
+          {v === 0 || v === 3 ? (
+            <>
+              {v === 0 ? (
+                <>
+                  <circle cx="4.7" cy="5.4" r="0.95" fill="#fff" />
+                  <circle cx="9.3" cy="5.4" r="0.95" fill="#fff" />
+                </>
+              ) : (
+                <>
+                  <path d="M 3.9 5.1 C 3.9 4.3 4.9 4.2 5.1 4.9 C 5.3 4.2 6.3 4.3 6.3 5.1 C 6.3 5.8 5.1 6.6 5.1 6.6 C 5.1 6.6 3.9 5.8 3.9 5.1 Z" fill="#fff" />
+                  <path d="M 7.9 5.1 C 7.9 4.3 8.9 4.2 9.1 4.9 C 9.3 4.2 10.3 4.3 10.3 5.1 C 10.3 5.8 9.1 6.6 9.1 6.6 C 9.1 6.6 7.9 5.8 7.9 5.1 Z" fill="#fff" />
+                </>
+              )}
+              <path d="M 4.4 8.4 Q 7 10.9 9.6 8.4" stroke="#fff" strokeWidth="1.1" strokeLinecap="round" fill="none" />
+            </>
+          ) : v === 1 ? (
+            <>
+              <circle cx="4.7" cy="5.6" r="0.95" fill="#fff" />
+              <circle cx="9.3" cy="5.6" r="0.95" fill="#fff" />
+              <path d="M 4.6 10.4 Q 7 8.2 9.4 10.4" stroke="#fff" strokeWidth="1.1" strokeLinecap="round" fill="none" />
+            </>
+          ) : v === 2 ? (
+            <>
+              <path d="M 4.5 3.9 L 4.5 6.1" stroke="#fff" strokeWidth="1.1" strokeLinecap="round" />
+              <path d="M 9.5 3.9 L 9.5 6.1" stroke="#fff" strokeWidth="1.1" strokeLinecap="round" />
+              <path d="M 5.8 10.2 L 8.2 10.2" stroke="#fff" strokeWidth="1.1" strokeLinecap="round" />
+            </>
+          ) : (
+            <>
+              <circle cx="4.7" cy="5.6" r="0.95" fill="#fff" />
+              <circle cx="9.3" cy="5.6" r="0.95" fill="#fff" />
+              <path d="M 4.6 5.2 Q 5.1 5.9 5.6 5.2" stroke="#fff" strokeWidth="0.9" strokeLinecap="round" fill="none" />
+              <path d="M 8.4 5.2 Q 8.9 5.9 9.4 5.2" stroke="#fff" strokeWidth="0.9" strokeLinecap="round" fill="none" />
+              <circle cx="7" cy="9.2" r="1.6" fill="#fff" />
+            </>
+          )}
+        </svg>
+      </span>
+    );
+  }
   if (def.kind === 'pie') {
     return (
       <span
