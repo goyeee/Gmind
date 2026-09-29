@@ -132,6 +132,10 @@ table.tt-table {
   font-variant-numeric: tabular-nums;
   user-select: none;
 }
+/* 行号表头与其余表头同为 12px（M7a-K1 #6）；列内行号保持 11px 不动 */
+.tt-table thead th.tt-rownum {
+  font-size: 12px;
+}
 
 /* —— 任务列（折叠钮 + 状态点 + 标记 + 标题） —— */
 .tt-title-line {
@@ -226,6 +230,14 @@ table.tt-table {
 .tt-add-child:hover {
   color: #3370ff;
 }
+/* 键盘焦点可见（M7a-K1 #3）：平时 opacity:0 的隐藏钮，键盘聚焦时显形 + 蓝色描边，
+   消除「Tab 落点不可见、Enter 误建行」的暗门 */
+.tt-add-child:focus-visible {
+  opacity: 1;
+  outline: 2px solid #3370ff;
+  outline-offset: -1px;
+  border-radius: 4px;
+}
 /* 标题行内编辑（QuickEditor 风格） */
 .tt-title-input {
   width: 100%;
@@ -285,18 +297,27 @@ table.tt-table {
 }
 
 /* —— 状态列 —— */
+/* 原生 select 收起系统箭头（appearance:none），自绘中性 #86909c chevron——
+   箭头不再继承文字状态色（M7a-K1 #5，「已完成」绿箭头远看像对勾）；hover 只换
+   background-color，保住 chevron 贴图。右内边距为箭头让位。 */
 .tt-status {
+  appearance: none;
+  -webkit-appearance: none;
   border: 1px solid transparent;
-  background: transparent;
   border-radius: 6px;
-  padding: 2px 4px;
+  padding: 2px 18px 2px 4px;
   font-size: 12px;
   cursor: pointer;
   outline: none;
+  background-color: transparent;
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 10 10'%3E%3Cpath d='M2 3.5 L5 6.5 L8 3.5' fill='none' stroke='%2386909c' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 5px center;
+  background-size: 10px 10px;
 }
 .tt-status:hover {
   border-color: #e5e6eb;
-  background: #fff;
+  background-color: #fff;
 }
 .tt-status-label {
   display: inline-flex;
@@ -414,6 +435,21 @@ table.tt-table {
   text-align: center;
   color: #86909c;
   padding: 48px 0 !important;
+}
+/* 空文档（无筛选、0 任务）引导（M7a-K1 #2）：文案 + 主按钮「+ 添加子任务」，
+   按钮复用 addChildTo(root)（配额闸/错误 toast 同源） */
+.tt-empty-add {
+  margin-top: 14px;
+  padding: 5px 14px;
+  border: none;
+  border-radius: 6px;
+  background: #3370ff;
+  color: #fff;
+  font-size: 12px;
+  cursor: pointer;
+}
+.tt-empty-add:hover {
+  background: #2b5fd9;
 }
 
 /* 右键行菜单（复用全局 .context-menu 容器）内的分隔线 */

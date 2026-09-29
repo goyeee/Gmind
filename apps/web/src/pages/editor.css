@@ -157,6 +157,19 @@ body.painter-active .editor-canvas svg {
   font-size: 12px;
   white-space: nowrap;
 }
+/* 窄视口收缩（M7a-K1 #1，≤1080px）：标题输入 min-width:120px 使标题组内容无法随
+   min-width:0 收缩而外溢，压住视图 Tab/星标/保存状态。窄断点内隐藏标题组保存状态
+   文案、放开标题最小宽并以省略号截断；≥1080px 维持现状。只命中编辑态标题组
+   （.toolbar-group-title 内），移动只读分支直接挂在工具栏下的 save-status 不动。 */
+@media (max-width: 1080px) {
+  .toolbar-group-title .save-status {
+    display: none;
+  }
+  .editor-toolbar .title-input {
+    min-width: 0;
+    text-overflow: ellipsis;
+  }
+}
 /* 工具栏星标切换（M3b 清偿包，FR-FIL-004）：未加星空心灰、加星金色 */
 .star-toggle {
   border: none;

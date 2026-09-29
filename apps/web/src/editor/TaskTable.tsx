@@ -891,9 +891,28 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
             {rows.length === 0 && (
               <tr>
                 <td colSpan={9} className="tt-empty">
-                  {rootCollapsed
-                    ? '中心主题已折叠，展开后显示任务'
-                    : '没有匹配的任务 —— 调整筛选条件试试'}
+                  {rootCollapsed ? (
+                    '中心主题已折叠，展开后显示任务'
+                  ) : filtering ? (
+                    '没有匹配的任务 —— 调整筛选条件试试'
+                  ) : (
+                    <>
+                      {/* 空文档（无筛选、0 任务）：不再误报「调整筛选条件」，给首个任务的
+                          直接入口——复用行菜单/悬浮「+」同款 addChildTo(root)（含配额闸与
+                          toast 错误处理，M7a-K1 #2）；新建后立即进入行内标题编辑。 */}
+                      <div>暂无任务 —— 点击下方按钮或切到脑图按 Tab 创建</div>
+                      {!readOnly && (
+                        <button
+                          type="button"
+                          className="tt-empty-add"
+                          data-testid="table-empty-add"
+                          onClick={() => addChildTo(ROOT_NODE_ID)}
+                        >
+                          + 添加子任务
+                        </button>
+                      )}
+                    </>
+                  )}
                 </td>
               </tr>
             )}
