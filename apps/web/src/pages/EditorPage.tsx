@@ -11,7 +11,6 @@ import {
   getMeta,
   getNode,
   ICON_GROUPS,
-  MARKER_GROUP_MODE,
   markLastEditor,
   moveNode,
   ORIGIN_USER,
@@ -69,7 +68,7 @@ import {
 } from '@gmind/engine';
 import { attachKeyboardMap, isEditableTarget } from '../editor/keyboardMap';
 import { ActivityPanel } from '../editor/ActivityPanel';
-import { ThemePanel, THEME_LABELS, THEME_ORDER } from '../editor/ThemePanel';
+import { ThemePanel } from '../editor/ThemePanel';
 import {
   ActivityIcon,
   BackIcon,
@@ -154,12 +153,6 @@ const STRUCTURE_OPTIONS: { value: string; label: string }[] = [
   { value: 'org', label: '组织架构图' },
 ];
 
-/** 主题下拉选项（M6 Task 4 扩容 12 套）：与 ThemePanel 缩略图网格同源同序，
- *  select 路径保留（零回归裁决——既有 toolbar/mobile-readonly 用例仍走 selectOption）。 */
-const THEME_OPTIONS: { value: ThemeId; label: string }[] = THEME_ORDER.map((id) => ({
-  value: id,
-  label: THEME_LABELS[id],
-}));
 
 /** 缩放快捷档位（Task 15 FR-EDT-027，PRD 50%~200%）。 */
 const ZOOM_PRESETS = [50, 75, 100, 150, 200];
@@ -176,7 +169,6 @@ type NodeVia = 'keyboard' | 'context' | 'drag' | 'paste';
 type PainterMode = {
   sourceId: string;
   style: Record<string, string>;
-  icons: Record<string, string[]>;
   sticky: boolean;
 };
 
@@ -615,9 +607,8 @@ export function EditorPage() {
     setPainterSync({
       sourceId: single,
       style: { ...snap.style },
-      icons: { ...snap.icons },
       sticky,
-    });
+    }); // M7b-W2 #10：格式刷只刷样式，不复制标记/表情（需求方裁定）
   };
 
   /** 单击：未激活 = 复制快照进单发模式；已激活（单发/粘滞）= 退出（再点按钮退出）。 */
@@ -658,32 +649,10 @@ export function EditorPage() {
         for (const attr of Object.keys(target.style)) {
           if (!(attr in mode.style)) patch[attr] = null;
         }
-        // M7b-W1 多值：逐组对比值数组；single 组差异写值/null，multi 组差异清组后
-        // 逐枚 toggle 追加（等价整组覆写）。目录校验由 setIcon 兜底（快照恒目录内）。
-        const iconOps: { group: IconGroup; values: string[] | null }[] = [];
-        for (const group of ICON_GROUPS) {
-          const values = mode.icons[group];
-          const current = target.icons[group] ?? [];
-          const same =
-            values !== undefined &&
-            values.length === current.length &&
-            values.every((v, i) => v === current[i]);
-          if (!same) iconOps.push({ group, values: values ?? null });
-        }
-        if (Object.keys(patch).length > 0 || iconOps.length > 0) {
+        if (Object.keys(patch).length > 0) {
           try {
             withTransaction(doc, ORIGIN_USER, () => {
-              if (Object.keys(patch).length > 0) setStyle(doc, targetId, patch);
-              for (const op of iconOps) {
-                if (op.values === null) {
-                  setIcon(doc, targetId, op.group, null);
-                } else if (MARKER_GROUP_MODE[op.group] === 'single') {
-                  setIcon(doc, targetId, op.group, op.values[0] ?? null);
-                } else {
-                  setIcon(doc, targetId, op.group, null);
-                  for (const value of op.values) setIcon(doc, targetId, op.group, value);
-                }
-              }
+              setStyle(doc, targetId, patch);
             });
             afterUserWrite();
           } catch (e) {
@@ -2085,61 +2054,6 @@ export function EditorPage() {
           </button>
         </div>
         <span className="toolbar-sep" />
-        {/* 视图组：结构 / 主题（保持 <select> 功能件，图标前置）。
-            「格式」样式面板现为右列常驻面板（M3b 裁决），不设工具栏按钮、此位留空。 */}
-        <div className="toolbar-group">
-          <div className="toolbar-field" title="结构">
-            <StructureIcon />
-            <select
-              data-testid="structure-select"
-              aria-label="结构"
-              value={meta?.structureType ?? 'mindmap'}
-              onChange={(e) => {
-                if (!doc) return;
-                setDocMeta(doc, { structureType: e.target.value as 'mindmap' | 'logic' | 'org' }, ORIGIN_USER);
-                afterUserWrite();
-              }}
-            >
-              {STRUCTURE_OPTIONS.map((o) => (
-                <option key={o.value} value={o.value}>
-                  {o.label}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="toolbar-field" title="主题">
-            <ThemeIcon />
-            <select
-              data-testid="theme-select"
-              aria-label="主题"
-              value={themeId}
-              onChange={(e) => {
-                if (!doc) return;
-                setDocMeta(doc, { themeId: e.target.value }, ORIGIN_USER);
-                afterUserWrite();
-              }}
-            >
-              {THEME_OPTIONS.map((o) => (
-                <option key={o.value} value={o.value}>
-                  {o.label}
-                </option>
-              ))}
-            </select>
-          </div>
-          {/* 主题缩略图选择面板入口（M6 Task 4）：select 旁新增图标按钮打开抽屉；
-              select 本体保留走既有 selectOption 路径（零回归） */}
-          <button
-            data-testid="theme-panel-toggle"
-            className="toolbar-btn"
-            title="主题面板"
-            aria-label="主题面板"
-            aria-expanded={themePanelOpen}
-            onClick={() => setThemePanelOpen((v) => !v)}
-          >
-            <ThemeIcon />
-          </button>
-        </div>
-        <span className="toolbar-sep" />
         {/* 插入组（2026-09-28 二次改版，需求方裁定）：下拉两并列项「图标」「表情」
             打开右侧固定抽屉 MarkerPanel（对齐格式/主题面板形态，抽屉内可切换图标/
             表情页签）；备注/链接/图片聚焦 RichPanel 对应控件。不再使用菜单右侧
@@ -2156,6 +2070,7 @@ export function EditorPage() {
               onClick={() => (insertOpen ? closeInsertLayer() : setInsertOpen(true))}
             >
               <InsertIcon />
+              <span className="toolbar-btn-label">插入</span>
             </button>
             {insertOpen && (
               <div className="insert-dropdown" role="menu" aria-label="插入">
@@ -2214,6 +2129,42 @@ export function EditorPage() {
           </div>
         </div>
         <span className="toolbar-sep" />
+        {/* 视图组：结构 / 主题（保持 <select> 功能件，图标前置）。
+            「格式」样式面板现为右列常驻面板（M3b 裁决），不设工具栏按钮、此位留空。 */}
+        <div className="toolbar-group">
+          <div className="toolbar-field" title="结构">
+            <StructureIcon />
+            <select
+              data-testid="structure-select"
+              aria-label="结构"
+              value={meta?.structureType ?? 'mindmap'}
+              onChange={(e) => {
+                if (!doc) return;
+                setDocMeta(doc, { structureType: e.target.value as 'mindmap' | 'logic' | 'org' }, ORIGIN_USER);
+                afterUserWrite();
+              }}
+            >
+              {STRUCTURE_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          {/* 主题入口（M7b-W2 #6 需求方裁定）：只留面板按钮（右侧缩略图画廊），
+              原 theme-select 下拉移除——双入口重复； THEME_OPTIONS/ThemePanel 不动 */}
+          <button
+            data-testid="theme-panel-toggle"
+            className="toolbar-btn"
+            title="主题"
+            aria-label="主题"
+            aria-expanded={themePanelOpen}
+            onClick={() => setThemePanelOpen((v) => !v)}
+          >
+            <ThemeIcon />
+            <span className="toolbar-btn-label">主题</span>
+          </button>
+        </div>
         {/* 导出组（M4 Task 5，FR-IO-004）：XMind + PNG/JPG（Task 9 就地追加，
             不改动既有 XMind 项）。文件名与 header 标题同源 getMeta(doc).title。 */}
         <div className="toolbar-group">

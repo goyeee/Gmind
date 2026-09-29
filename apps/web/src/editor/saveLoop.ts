@@ -248,13 +248,16 @@ export function startSaveLoop(
     }, delay);
   }
 
-  const onAfterTransaction = (): void => {
+  const onAfterTransaction = (tr: { origin?: unknown }): void => {
     dirty = true;
     retries = 0; // 下一次事务重置重试计数
     if (!shouldPutNow()) {
       // WS 模式：本地写后且未收到 persisted ack 前，立即置「保存中」（binding 状态
-      // 语义）；若为远端同步触发的空变更，ack 收尾前同态，语义一致
-      setStatus('保存中…');
+      // 语义）；若为远端同步触发的空变更，ack 收尾前同态，语义一致。
+      // M7b-W2 #8（需求方反馈「新开文档没敲字就显示保存中」）：system origin 事务
+      // （装载期 normalizeTree 收敛 / 远端收敛）不是本地编辑，不置「保存中」——
+      // dirty 计数保留（这些变更确需落库），状态仍由「尚未编辑」起始、ack 收尾。
+      if (tr.origin !== 'system') setStatus('保存中…');
     }
     schedule(DEBOUNCE_MS);
   };

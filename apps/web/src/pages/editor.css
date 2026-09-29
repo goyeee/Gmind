@@ -64,6 +64,11 @@
   background: #fff;
   font-size: 13px;
 }
+/* 图标+文字标签按钮（M7b-W2 #9 企微式「大方」）：图标与文字 4px 间距 */
+.toolbar-btn-label {
+  margin-left: 4px;
+  white-space: nowrap;
+}
 /* 组间 1px 竖线分隔符 */
 .toolbar-sep {
   flex: none;
@@ -137,8 +142,10 @@ body.painter-active .editor-canvas svg {
   cursor: pointer;
 }
 .editor-toolbar .title-input {
-  flex: 1;
-  min-width: 120px;
+  flex: 0 1 auto;
+  width: 200px;
+  max-width: 320px;
+  min-width: 80px;
   padding: 5px 8px;
   border: none;
   border-radius: 6px;
