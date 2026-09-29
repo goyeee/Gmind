@@ -324,6 +324,19 @@ body.painter-active .editor-canvas svg {
   z-index: 1100;
 }
 
+/* M7c-D2（需求方反馈2）：Tab/Enter 行内编辑浮层视觉对齐节点卡片——企微语义是
+   「节点就地变编辑态」，独立白底框体感即「和企微不一样」。底色改半透明白（透出
+   画布底）、边框对齐选中描边 #3370ff、圆角随主题节点圆角（--gm-node-radius 由
+   EditorPage rerender 写在 :root，浮层挂 body 靠继承取值）、无阴影。engine
+   texteditor 以内联样式落白底/蓝边（packages/engine texteditor.ts），内联优先级
+   高于普通声明，故 !important。 */
+.gm-text-editor {
+  background: rgba(255, 255, 255, 0.88) !important;
+  border: 2px solid #3370ff !important;
+  border-radius: var(--gm-node-radius, 8px) !important;
+  box-shadow: none !important;
+}
+
 .editor-bottombar {
   flex: none;
   display: flex;

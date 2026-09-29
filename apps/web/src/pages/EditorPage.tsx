@@ -41,6 +41,7 @@ import {
   createScene,
   createCursorLayer,
   cutNodes,
+  EDITOR_BASE_FONT_SIZE,
   type CursorLayer,
   DragController,
   type DocReader,
@@ -422,21 +423,24 @@ export function EditorPage() {
     toastTimer.current = setTimeout(() => setToast(''), 2500);
   };
 
-  // 导出菜单外点关闭（菜单打开期间挂 document mousedown，命中按钮/菜单之外即收起）
+  // 导出菜单外点关闭（M7c-D2：监听改 pointerdown——onSvgPointerDown 的
+  // preventDefault 会抑制兼容性 mousedown，画布空白点击此前收不起菜单；
+  // 打开期间命中按钮/菜单之外即收起）
   useEffect(() => {
     if (!exportOpen) return;
-    const onDocMouseDown = (e: MouseEvent): void => {
+    const onDocPointerDown = (e: PointerEvent): void => {
       if (exportWrapRef.current && !exportWrapRef.current.contains(e.target as Node)) {
         setExportOpen(false);
       }
     };
-    document.addEventListener('mousedown', onDocMouseDown);
-    return () => document.removeEventListener('mousedown', onDocMouseDown);
+    document.addEventListener('pointerdown', onDocPointerDown);
+    return () => document.removeEventListener('pointerdown', onDocPointerDown);
   }, [exportOpen]);
 
   // —— 插入菜单 + 标记面板弹层（M7b-W3：面板同挂 insert-wrap，Esc/外点关闭沿用
   // insert-layer 机制）——菜单与面板互斥（开面板收菜单、开菜单收面板）；打开期间
-  // document mousedown 命中 insert-wrap 之外即收、Esc 即收；只读降级即收。
+  // document pointerdown 命中 insert-wrap 之外即收（M7c-D2：mousedown 会被画布
+  // preventDefault 抑制）、Esc 即收；只读降级即收。
   const closeInsertLayer = (): void => {
     setInsertOpen(false);
     setMarkerPanel((p) => (p.open ? { ...p, open: false } : p));
@@ -453,7 +457,7 @@ export function EditorPage() {
   };
   useEffect(() => {
     if (!(insertOpen || markerPanel.open)) return;
-    const onDocMouseDown = (e: MouseEvent): void => {
+    const onDocPointerDown = (e: PointerEvent): void => {
       if (insertWrapRef.current && !insertWrapRef.current.contains(e.target as Node)) {
         closeInsertLayer();
       }
@@ -461,10 +465,10 @@ export function EditorPage() {
     const onKeyDown = (e: KeyboardEvent): void => {
       if (e.key === 'Escape') closeInsertLayer();
     };
-    document.addEventListener('mousedown', onDocMouseDown);
+    document.addEventListener('pointerdown', onDocPointerDown);
     document.addEventListener('keydown', onKeyDown);
     return () => {
-      document.removeEventListener('mousedown', onDocMouseDown);
+      document.removeEventListener('pointerdown', onDocPointerDown);
       document.removeEventListener('keydown', onKeyDown);
     };
   }, [insertOpen, markerPanel.open]);
@@ -474,19 +478,20 @@ export function EditorPage() {
     }
   }, [readOnly, insertOpen, markerPanel.open]);
 
-  // —— 迷你选盘（节点标记点击换组）Esc/外点关闭（面板同机制）——
+  // —— 迷你选盘（节点标记点击换组）Esc/外点关闭（面板同机制；M7c-D2 改 pointerdown
+  // —— mousedown 被画布 onSvgPointerDown 的 preventDefault 抑制，空白点击收不起）——
   useEffect(() => {
     if (!markerPicker) return;
-    const onDocMouseDown = (e: MouseEvent): void => {
+    const onDocPointerDown = (e: PointerEvent): void => {
       if (!(e.target as Element | null)?.closest?.('.marker-picker')) setMarkerPicker(null);
     };
     const onKeyDown = (e: KeyboardEvent): void => {
       if (e.key === 'Escape') setMarkerPicker(null);
     };
-    document.addEventListener('mousedown', onDocMouseDown);
+    document.addEventListener('pointerdown', onDocPointerDown);
     document.addEventListener('keydown', onKeyDown);
     return () => {
-      document.removeEventListener('mousedown', onDocMouseDown);
+      document.removeEventListener('pointerdown', onDocPointerDown);
       document.removeEventListener('keydown', onKeyDown);
     };
   }, [markerPicker]);
@@ -514,19 +519,20 @@ export function EditorPage() {
     setQuickCard({ nodeId, x: ax ?? 120, y: ay ?? 120 });
   };
 
-  // 快速卡 Esc/外点关闭（markerPicker 同款：document mousedown 命中卡片之外即收）
+  // 快速卡 Esc/外点关闭（markerPicker 同款：document pointerdown 命中卡片之外即收；
+  // M7c-D2 改 pointerdown——mousedown 被画布 preventDefault 抑制，空白点击收不起）
   useEffect(() => {
     if (!quickCard) return;
-    const onDocMouseDown = (e: MouseEvent): void => {
+    const onDocPointerDown = (e: PointerEvent): void => {
       if (!(e.target as Element | null)?.closest?.('.task-quickcard')) setQuickCard(null);
     };
     const onKeyDown = (e: KeyboardEvent): void => {
       if (e.key === 'Escape') setQuickCard(null);
     };
-    document.addEventListener('mousedown', onDocMouseDown);
+    document.addEventListener('pointerdown', onDocPointerDown);
     document.addEventListener('keydown', onKeyDown);
     return () => {
-      document.removeEventListener('mousedown', onDocMouseDown);
+      document.removeEventListener('pointerdown', onDocPointerDown);
       document.removeEventListener('keydown', onKeyDown);
     };
   }, [quickCard]);
@@ -539,6 +545,20 @@ export function EditorPage() {
   useEffect(() => {
     if (view === 'table') setQuickCard(null);
   }, [view]);
+
+  // —— 右列面板开启的可见性兜底（M7c-D2 kimi P2 右列遮挡）——
+  // editor-right 为 flex 占位列：开启瞬间画布收窄 280px，但视口变换不变 → 原贴
+  // 右缘的选中节点被新列宽裁出可视区（感知上「被面板挡住、不可点」）。开面板即
+  // 把当前单选节点平移进可视区（panNodeIntoView 对完整可见节点 no-op，不扰视口）。
+  // 依赖仅开合态：panNodeIntoView 读 ref 每次渲染重建，不入依赖（同 locateNode
+  // 通知深链 effect 的裁定）。
+  useEffect(() => {
+    if (readOnly || view === 'table') return;
+    if (!(formatOpen || taskPanelOpen || commentsOpen)) return;
+    const selection = selectionRef.current;
+    if (!selection || selection.selected.size !== 1) return;
+    panNodeIntoView([...selection.selected][0]);
+  }, [formatOpen, taskPanelOpen, commentsOpen, view, readOnly]);
 
   // `,`（逗号）快捷键（M7c-C3）：选中节点弹出任务快速卡。独立监听（不入
   // keyboardMap——帮助清单契约不动）；让路纪律与 Ctrl+F 同款：覆盖层/输入控件/
@@ -905,6 +925,61 @@ export function EditorPage() {
     return ROOT_NODE_ID;
   };
 
+  /**
+   * 节点平移进可视区（M7c-D2 需求方反馈2）：开编辑瞬间若节点未完整可见（高缩放
+   * 越界/被右列收窄裁掉），按企微「节点就地变编辑态」语义先把节点 panBy 进视口
+   * 再锚定编辑框——视口变换直写场景根（同滚轮平移通道），无需重排。完整可见时
+   * no-op；单轴比视口还宽/高时直接居中该轴。
+   */
+  const panNodeIntoView = (nodeId: string): void => {
+    const vp = viewportRef.current;
+    const svgEl = svgRef.current;
+    if (!vp || !svgEl) return;
+    const box = boxesRef.current.find((b) => b.id === nodeId);
+    if (!box) return;
+    const rect = svgEl.getBoundingClientRect();
+    const p1 = vp.toScreen(box.x, box.y);
+    const p2 = vp.toScreen(box.x + box.w, box.y + box.h);
+    const MARGIN = 24; // 视口内边距：贴边也留呼吸空间
+    const oversizeDelta = (a: number, b: number, size: number): number =>
+      b - a >= size - 2 * MARGIN ? size / 2 - (a + b) / 2 : 0;
+    const edgeDelta = (a: number, b: number, size: number): number => {
+      if (a < MARGIN) return MARGIN - a;
+      if (b > size - MARGIN) return size - MARGIN - b;
+      return 0;
+    };
+    const dx = oversizeDelta(p1.x, p2.x, rect.width) || edgeDelta(p1.x, p2.x, rect.width);
+    const dy = oversizeDelta(p1.y, p2.y, rect.height) || edgeDelta(p1.y, p2.y, rect.height);
+    if (dx || dy) vp.panBy(dx, dy);
+  };
+
+  /**
+   * anchorRect 视口钳制（M7c-D2 需求方反馈2 / kimi 400% 右缘裁切复核）：engine
+   * texteditor 以 anchorRect-PAD 落 textarea（宽高取 max(anchor, 下限/行高)），高
+   * 缩放下节点盒可宽过视口，编辑框右缘/下缘随节点整体越界被裁。此处按 engine 同
+   * 一尺寸公式预估编辑框大小，把原点（还原 4px 补偿后）钳进可视区。60/20 为
+   * engine texteditor 私有常量 MIN_WIDTH_PX/MIN_HEIGHT_PX 同值（未导出，注释锚定）。
+   */
+  const clampAnchorRect = (
+    rect: { x: number; y: number; w: number; h: number },
+    scale: number,
+  ): { x: number; y: number; w: number; h: number } => {
+    const fontSize = Math.max(1, Math.round(EDITOR_BASE_FONT_SIZE * scale));
+    const w = Math.max(rect.w, 60);
+    const h = Math.max(rect.h, 20, Math.ceil(fontSize * 1.4));
+    const EDGE = 8; // 可视区内边距
+    const minX = window.scrollX + EDGE;
+    const maxX = Math.max(minX, window.scrollX + window.innerWidth - EDGE - w);
+    const minY = window.scrollY + EDGE;
+    const maxY = Math.max(minY, window.scrollY + window.innerHeight - EDGE - h);
+    return {
+      x: Math.min(Math.max(rect.x - 4, minX), maxX) + 4, // 4 = engine PAD_PX（锚点补偿）
+      y: Math.min(Math.max(rect.y - 4, minY), maxY) + 4,
+      w,
+      h,
+    };
+  };
+
   /** 打开既有节点编辑覆盖层（双击/后续交互入口）。 */
   const openNodeEditor = (id: string): void => {
     if (!doc) return;
@@ -914,15 +989,19 @@ export function EditorPage() {
     if (!vp || !svgEl || !box) return;
     const snap = getNode(doc, id);
     if (!snap || snap.deleted) return;
+    panNodeIntoView(id); // 节点未完整可见先平移进视口（M7c-D2），随后锚定随新视口
     const rect = svgEl.getBoundingClientRect();
     const p = vp.toScreen(box.x, box.y);
     overlay.open({
-      anchorRect: {
-        x: rect.left + window.scrollX + p.x,
-        y: rect.top + window.scrollY + p.y,
-        w: box.w * vp.scale,
-        h: box.h * vp.scale,
-      },
+      anchorRect: clampAnchorRect(
+        {
+          x: rect.left + window.scrollX + p.x,
+          y: rect.top + window.scrollY + p.y,
+          w: box.w * vp.scale,
+          h: box.h * vp.scale,
+        },
+        vp.scale,
+      ),
       scale: vp.scale,
       value: snap.text,
       onCommit: (text) => {
@@ -1000,6 +1079,9 @@ export function EditorPage() {
       const liveSvg = svgRef.current;
       if (!liveVp || !liveSvg) return;
       const box = boxesRef.current.find((b) => b.id === createdId) ?? fallbackBox();
+      // M7c-D2：新节点（尤其高缩放下落在视口外/贴边）先平移进视口再取锚点，
+      // 编辑框随新视口落位——「节点就地变编辑态」的锚定前提。
+      panNodeIntoView(createdId);
       const rect = liveSvg.getBoundingClientRect();
       const p = liveVp.toScreen(box.x, box.y);
       const removeIfAlive = (): void => {
@@ -1035,12 +1117,15 @@ export function EditorPage() {
         selectionRef.current?.selectOnly(relation === 'parent' && nodeToOutdent ? nodeToOutdent : parentId);
       };
       overlay.open({
-        anchorRect: {
-          x: rect.left + window.scrollX + p.x,
-          y: rect.top + window.scrollY + p.y,
-          w: Math.max(box.w, 140) * liveVp.scale,
-          h: box.h * liveVp.scale,
-        },
+        anchorRect: clampAnchorRect(
+          {
+            x: rect.left + window.scrollX + p.x,
+            y: rect.top + window.scrollY + p.y,
+            w: Math.max(box.w, 140) * liveVp.scale,
+            h: box.h * liveVp.scale,
+          },
+          liveVp.scale,
+        ),
         scale: liveVp.scale,
         value: '',
         onCommit: (text) => {
@@ -1825,6 +1910,11 @@ export function EditorPage() {
       wrapper.appendChild(scene.edgesLayer);
       wrapper.appendChild(scene.summariesLayer); // 概要层随视口（M6 T6，边与节点之间）
       wrapper.appendChild(scene.nodesLayer);
+      // 拖拽悬浮层（M7c-D1）：nodesLayer 之上、场景坐标——插入指示线宿主
+      // （DragController 只增删其内部临时 line，层本身随场景重建）。
+      const dragOverlay = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+      dragOverlay.setAttribute('class', 'gm-drag-overlay');
+      wrapper.appendChild(dragOverlay);
       svgEl.appendChild(wrapper);
       const vp = new Viewport(svgEl, wrapper);
       if (prev) {
@@ -1847,13 +1937,21 @@ export function EditorPage() {
         viewport: vp,
         getBoxes: () => boxesRef.current,
         isDescendant: (id, candidateId) => subtreeIds(d, id).includes(candidateId),
-        onDrop: (id, targetId) => {
+        // 文档子级序（M7c-D1）：sibling 落点 index 结算输入（engine 纯计算在事务外）。
+        childrenIdsOf: (id) => childrenIds(d, id),
+        overlayLayer: dragOverlay,
+        onDrop: (id, target) => {
           justDraggedRef.current = true;
           setTimeout(() => {
             justDraggedRef.current = false;
           }, 0);
           try {
-            moveNode(d, id, targetId ?? ROOT_NODE_ID); // 缺省 index：追加末尾（carry-in 裁决 7）
+            // M7c-D1 落点三分：child=追加目标子级末尾（现状语义）；sibling=按引擎
+            // 结算的文档序 index 插入（同父移除修正已在 engine 完成）；null=空白 →
+            // 根子级末尾（现状保留）。
+            if (target === null) moveNode(d, id, ROOT_NODE_ID);
+            else if (target.kind === 'child') moveNode(d, id, target.nodeId);
+            else moveNode(d, id, target.parentId, target.index);
             afterUserWrite();
             fitPendingRef.current = true;
           } catch (e) {
@@ -1875,6 +1973,10 @@ export function EditorPage() {
       const scene = sceneRef.current;
       if (!scene) return; // 不可达（rebuildScene 必建场景）：类型收窄
       svgEl.style.background = theme.canvasBackground;
+      // M7c-D2：主题节点圆角暴露为 CSS 变量，行内编辑浮层（.gm-text-editor）圆角
+      // 随主题与节点卡片一致（12 套主题 nodeBorderRadius 4~12 不等）。浮层挂 body
+      // （非 svg 后代），变量须落 :root 才能被继承。
+      document.documentElement.style.setProperty('--gm-node-radius', `${theme.nodeBorderRadius}px`);
 
       const result = layout(reader, {
         structure: m.structureType,
