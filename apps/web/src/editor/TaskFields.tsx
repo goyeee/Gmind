@@ -252,15 +252,22 @@ export function SmartDateInput({
 }) {
   const [local, setLocal] = useState(value ?? '');
   const provisional = useRef<string | null>(null);
+  // 外部值同步守卫只豁免**自身**（Kimi P2 回归修复）：旧实现按
+  // [data-smart-date] 全局判焦——面板里提交日期后焦点滞留在任一日期框，会让同页
+  // 所有 SmartDateInput 的同步被跳过，且此后 value 不再变化、effect 永不再触发
+  // （当帧起永久陈旧）。改为与 inputRef 比对：仅本输入框聚焦（正在编辑本格）才
+  // 跳过，他处焦点（含另一实例）照常同步。
+  const inputRef = useRef<HTMLInputElement | null>(null);
   useEffect(() => {
-    // 外部值变化同步（远端协同/撤销），聚焦编辑中不打断
-    if (document.activeElement?.getAttribute('data-smart-date') !== '1') {
+    // 外部值变化同步（远端协同/撤销）：焦点不在本输入框时落值，编辑中不打断
+    if (document.activeElement !== inputRef.current) {
       setLocal(value ?? '');
     }
   }, [value]);
   const color = overdue ? '#f53f3f' : today ? '#ff8800' : done ? '#34c724' : undefined;
   return (
     <input
+      ref={inputRef}
       type="date"
       data-smart-date="1"
       data-testid={testId}

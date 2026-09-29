@@ -1,4 +1,8 @@
+// @vitest-environment jsdom
 import { describe, expect, it } from 'vitest';
+import { createElement } from 'react';
+import { createRoot } from 'react-dom/client';
+import { act } from 'react-dom/test-utils';
 import type * as Y from 'yjs';
 import {
   addChild,
@@ -11,12 +15,13 @@ import {
   withTransaction,
 } from '@gmind/core';
 import { effectiveProgress } from '@gmind/shared';
-import { deriveNodesOfDoc } from './TaskFields';
+import { deriveNodesOfDoc, SmartDateInput } from './TaskFields';
 
 /**
  * 任务字段公共控件（M7c-C3/C4 抽公共）纯函数单测：deriveNodesOfDoc 的快照映射
  * （root 不入列 / parentId 空串归 null / task 深拷贝）与 shared 派生规则的衔接
  * （父级进度 Σ=直属子级均值——业务口径唯一实现在 @gmind/shared，此处只锁接线）。
+ * 另含 SmartDateInput 外部值同步守卫的行为回归（jsdom + react-dom 渲染，Kimi P2）。
  */
 
 function buildDoc(): Y.Doc {
@@ -74,5 +79,54 @@ describe('deriveNodesOfDoc（M7c-C3/C4 抽公共）', () => {
     expect(a?.task?.owners).toEqual([]);
     // 父「任务A」自身进度 0：Σ = 直属子级 (40+80)/2 = 60（effectiveProgress 单一实现）
     expect(effectiveProgress(nodes, a?.id ?? '')).toBe(60);
+  });
+});
+
+describe('SmartDateInput 外部值同步守卫（Kimi P2 回归）', () => {
+  it('焦点在另一个 SmartDateInput 时本实例仍同步外部值；自身聚焦中不打断', () => {
+    // React 18 createRoot 手动渲染要求显式声明 act 环境（无 @testing-library，直挂 react-dom）
+    (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    const dateInputs = (): HTMLInputElement[] =>
+      [...container.querySelectorAll<HTMLInputElement>('input[data-smart-date]')];
+    const renderBoth = (v1: string | null, v2: string | null): void => {
+      act(() => {
+        root.render(
+          createElement(
+            'div',
+            null,
+            createElement(SmartDateInput, { value: v1, onCommit: () => undefined }),
+            createElement(SmartDateInput, { value: v2, onCommit: () => undefined }),
+          ),
+        );
+      });
+    };
+    try {
+      renderBoth('2026-01-01', null);
+      const [first, second] = dateInputs();
+      expect(first.value).toBe('2026-01-01');
+      // 焦点滞留在**另一个**日期框（快速面板提交日期后的真实场景）：
+      // 旧守卫按 [data-smart-date] 全局判焦会连坐跳过本实例同步且永不再触发
+      // （focus 会触发空值实例的 onFocus 预填，属状态更新，包进 act）
+      act(() => {
+        second.focus();
+      });
+      expect(document.activeElement).toBe(second);
+      renderBoth('2026-03-15', null);
+      expect(first.value).toBe('2026-03-15'); // 他处焦点不连坐，外部值照常落格
+      // 自身聚焦中（正在编辑本格）：同步跳过，本地编辑值不被远端值打断
+      act(() => {
+        first.focus();
+      });
+      renderBoth('2026-04-01', null);
+      expect(first.value).toBe('2026-03-15');
+    } finally {
+      act(() => {
+        root.unmount();
+      });
+      container.remove();
+    }
   });
 });

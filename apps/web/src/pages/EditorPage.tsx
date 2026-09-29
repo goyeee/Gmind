@@ -262,6 +262,15 @@ export function EditorPage() {
   const justDraggedRef = useRef(false);
   const themeRef = useRef<string>('');
   const fitPendingRef = useRef(false);
+  // Tab/Enter 惰性编辑（2026-09-28 需求方走查，企微语义）：pendingEdit = 刚创建
+  // 待编辑的节点 id（敲首个可打印字符才开编辑框，见 openPendingEditor / keydown
+  // effect）；pendingCancel = 该节点的回收闭包（Esc / 空提交复用，含 parent 关系
+  // 还原）。ref 而非 state：keydown 监听同步读，不等 React 提交。
+  const pendingEditRef = useRef<string | null>(null);
+  const pendingCancelRef = useRef<(() => void) | null>(null);
+  // 当前挂 gm-editing 类的节点 id（任务 4 编辑重影根治）：编辑覆盖层单例，换节点
+  // 编辑时先摘旧再挂新（helper setEditingClass 统一收口）。
+  const editingNodeIdRef = useRef<string | null>(null);
   // perf_metric 埋点的一次性闸（M5 Task 4）：装载完成恰一行——值 = 已上报的 fileId
   // （StrictMode dev 双跑与依赖重触发以此去重；切换文件后重新计一次）
   const perfTrackedRef = useRef<string | null>(null);
@@ -546,6 +555,61 @@ export function EditorPage() {
     if (view === 'table') setQuickCard(null);
   }, [view]);
 
+  // —— 工具栏弹层统一外点关闭（2026-09-28 需求方走查：插入/主题/成员/版本/动态/
+  // 快捷键/查找/格式/任务/评论点其他地方必须自动消失）——导出/插入/标记已有各自
+  // wrapRef 外点监听（上方 4 处 effect，不动），此处收拢其余面板：任一开启即挂
+  // document pointerdown，命中豁免区（面板容器 / 带 data-popover-toggle 的切换
+  // 按钮——按钮豁免让 pointerdown 不抢先关闭、onClick toggle 正常收起）之外全部
+  // 收起。容器口径：右列 .editor-right 整体豁免（评论 pane 关闭按钮与面板内部
+  // 交互不受影响）；浮层面板按各自根类名（member-panel/version-panel/theme-panel/
+  // activity-panel/help-panel/find-bar）。
+  useEffect(() => {
+    const anyOpen =
+      membersOpen ||
+      versionsOpen ||
+      activityOpen ||
+      helpOpen ||
+      findOpen ||
+      themePanelOpen ||
+      formatOpen ||
+      taskPanelOpen ||
+      commentsOpen;
+    if (!anyOpen) return;
+    const onDocPointerDown = (e: PointerEvent): void => {
+      const el = e.target as Element | null;
+      if (!el?.closest) return;
+      if (
+        el.closest('[data-popover-toggle]') ||
+        el.closest(
+          '.editor-right, .editor-mobile-comments, .theme-panel, .activity-panel, .help-panel, .find-bar, .member-panel, .version-panel',
+        )
+      ) {
+        return;
+      }
+      setMembersOpen(false);
+      setVersionsOpen(false);
+      setActivityOpen(false);
+      setHelpOpen(false);
+      setFindOpen(false);
+      setThemePanelOpen(false);
+      setFormatOpen(false);
+      setTaskPanelOpen(false);
+      setCommentsOpen(false);
+    };
+    document.addEventListener('pointerdown', onDocPointerDown);
+    return () => document.removeEventListener('pointerdown', onDocPointerDown);
+  }, [
+    membersOpen,
+    versionsOpen,
+    activityOpen,
+    helpOpen,
+    findOpen,
+    themePanelOpen,
+    formatOpen,
+    taskPanelOpen,
+    commentsOpen,
+  ]);
+
   // —— 右列面板开启的可见性兜底（M7c-D2 kimi P2 右列遮挡）——
   // editor-right 为 flex 占位列：开启瞬间画布收窄 280px，但视口变换不变 → 原贴
   // 右缘的选中节点被新列宽裁出可视区（感知上「被面板挡住、不可点」）。开面板即
@@ -763,6 +827,16 @@ export function EditorPage() {
     if (um) capUndoStack(um);
     // 「正在编辑」广播（FR-COL-005）：本地写置 true，60s 无写回落（裁定见 collab.ts）
     collabHandleRef.current?.markEditing();
+    // 右列面板开启期间节点文本重排可能变宽（编辑提交/批量标记等写路径），贴右缘
+    // 的选中节点会被面板列裁掉（M7c-D2 kimi P3 同源）——单选恰一节点时平移进
+    // 可视区兜底（panNodeIntoView 对完整可见节点 no-op，不扰视口）。state 直接读
+    // 闭包：afterUserWrite 每渲染重建，拿到的 formatOpen 等恒为当帧值。
+    if (formatOpen || taskPanelOpen || commentsOpen) {
+      const selection = selectionRef.current;
+      if (selection && selection.selected.size === 1) {
+        panNodeIntoView([...selection.selected][0]);
+      }
+    }
   };
 
   const syncZoom = (): void => {
@@ -980,6 +1054,29 @@ export function EditorPage() {
     };
   };
 
+  /**
+   * 编辑态视觉标记（2026-09-28 走查，编辑重影根治）：编辑覆盖层打开期间给节点 g
+   * 挂 'gm-editing'（editor.css 据此隐掉节点底层文字，只留编辑框一层——「甲甲
+   * 双影」），关闭即摘。覆盖层单例、场上至多一个编辑位：换节点编辑时（overlay
+   * .open 对旧编辑器按 blur 语义先 commit）先摘旧 id 再挂新。两个入口（openNode
+   * Editor / openPendingEditor）统一走本 helper，卸载兜底 overlay.close(false) 的
+   * onCancel 亦经此摘除。
+   */
+  const setEditingClass = (nodeId: string | null): void => {
+    const svgEl = svgRef.current;
+    const prev = editingNodeIdRef.current;
+    editingNodeIdRef.current = nodeId;
+    if (!svgEl) return;
+    if (prev && prev !== nodeId) {
+      svgEl.querySelector(`g[data-node-id="${CSS.escape(prev)}"]`)?.classList.remove('gm-editing');
+    }
+    if (nodeId) {
+      svgEl.querySelector(`g[data-node-id="${CSS.escape(nodeId)}"]`)?.classList.add('gm-editing');
+    } else if (prev) {
+      svgEl.querySelector(`g[data-node-id="${CSS.escape(prev)}"]`)?.classList.remove('gm-editing');
+    }
+  };
+
   /** 打开既有节点编辑覆盖层（双击/后续交互入口）。 */
   const openNodeEditor = (id: string): void => {
     if (!doc) return;
@@ -989,6 +1086,10 @@ export function EditorPage() {
     if (!vp || !svgEl || !box) return;
     const snap = getNode(doc, id);
     if (!snap || snap.deleted) return;
+    // 显式编辑入口（F2/双击）消费掉惰性待编辑：否则 F2 编辑提交后，pending 校验
+    // （单选恰为该节点）仍通过，下一个可打印字符会意外重开编辑框。
+    pendingEditRef.current = null;
+    pendingCancelRef.current = null;
     panNodeIntoView(id); // 节点未完整可见先平移进视口（M7c-D2），随后锚定随新视口
     const rect = svgEl.getBoundingClientRect();
     const p = vp.toScreen(box.x, box.y);
@@ -1005,6 +1106,7 @@ export function EditorPage() {
       scale: vp.scale,
       value: snap.text,
       onCommit: (text) => {
+        setEditingClass(null);
         try {
           setText(doc, id, text, ORIGIN_USER);
           afterUserWrite();
@@ -1012,40 +1114,43 @@ export function EditorPage() {
           showToast(e instanceof Error ? e.message : '保存失败');
         }
       },
-      onCancel: () => undefined,
+      onCancel: () => setEditingClass(null),
       onTruncated: () => showToast('节点文本长度已达上限'),
     });
     selectionRef.current?.selectOnly(id);
+    setEditingClass(id);
   };
 
   /**
-   * 新建节点进编辑态（Tab/Enter/右键插入）：**先建空节点落位**（布局即时重排、
-   * 画布可见），输入框锚定该节点真实盒子；提交写文本，取消/空提交删除节点。
-   * （2026-09-27 GUI 走查修复：旧实现提交前不建节点，输入框悬浮在启发式偏移处，
-   * 用户看不出节点会加到哪里。）撤销语义随事务拆分：一次 Ctrl+Z 清文本、两次
-   * 删节点（编辑器惯例；用例 4 断言「新节点文本消失」仍成立）。
+   * 新建节点（Tab/Enter/Shift+Tab/右键插入）：**惰性编辑**（2026-09-28 需求方
+   * 走查，企微语义对齐）——按键立刻创建节点并选中，**不开编辑框**；默认文本
+   * 「新主题」同事务写入，节点落位即可见有语义。等用户敲下第一个可打印字符时
+   * 才由 keydown effect 补开编辑框（openPendingEditor），该字符/IME 组字直接落
+   * 进编辑框。取消语义：Esc 直接回收（pendingCancelRef → removeIfAlive）；「新
+   * 建后敲字又全删」的空提交同走回收（openPendingEditor onCommit）。撤销语义：
+   * 建节点（含默认文本）一笔事务、敲字提交再一笔——一次 Ctrl+Z 撤回「新主题」、
+   * 两次删节点（编辑器惯例；用例 4 断言「新节点文本消失」仍成立）。
    * via（M5 Task 4）：node_add 埋点的操作方式——创建即上报（节点确实加进了
    * 文档；取消路径回收节点但不回滚事件，注释口径）。
    */
   const openNewNodeEditor = (
     parentId: string,
     index: number | undefined,
-    anchorBox: NodeBox | null,
     relation: 'child' | 'sibling' | 'parent',
     via: NodeVia = 'keyboard',
     nodeToOutdent?: string, // relation='parent' 时必填：被插入新父级的当前节点
   ): void => {
     if (addBlockedByQuota()) return; // 配额拦截（Tab 插子级/Enter 插同级/右键菜单共用本入口）
-    const vp = viewportRef.current;
-    const svgEl = svgRef.current;
-    if (!vp || !svgEl || !doc) return;
-    // ① 立即建空节点（ORIGIN_USER 可撤销；measure 的 minNodeWidth 下限保证空盒可见）
-    // relation='parent'（M7b-K2）：Shift+Tab 语义——空节点插在 parent 的 index 处后，
-    // 立即把 nodeToOutdent（当前选中）换父到空节点下（P→N→C），再进入同一行内编辑流。
+    if (!doc) return;
+    // 立即建节点（ORIGIN_USER 可撤销；measure 的 minNodeWidth 下限保证可见），
+    // 默认文本同事务写入——不落「空壳」，未敲字也有语义可读。
+    // relation='parent'（M7b-K2）：Shift+Tab 语义——新节点插在 parent 的 index
+    // 处后，立即把 nodeToOutdent（当前选中）换父到新节点下（P→N→C）。
     let createdId = '';
     try {
       withTransaction(doc, ORIGIN_USER, () => {
         createdId = addChild(doc, parentId, index === undefined ? {} : { index });
+        setText(doc, createdId, '新主题', ORIGIN_USER);
         if (relation === 'parent' && nodeToOutdent) moveNode(doc, nodeToOutdent, createdId);
       });
     } catch (e) {
@@ -1055,104 +1160,164 @@ export function EditorPage() {
     afterUserWrite();
     track('node_add', { via, nodeCount: countAliveReachable(doc) }, fileId);
     selectionRef.current?.selectOnly(createdId);
-    // ② 输入框锚定新节点真实盒子；布局流水若未同步到（首帧前）下一帧重试
-    const fallbackBox = (): NodeBox => {
-      const base = anchorBox ?? {
-        id: '',
-        x: 0,
-        y: 0,
-        w: 120,
-        h: 36,
-        side: 'right' as const,
-        depth: 1,
-      };
-      return {
-        ...base,
-        x: base.x + (relation === 'child' ? base.w * 0.4 + 24 : 0),
-        y: base.y + base.h + 8,
-        w: 140,
-        h: 36,
-      };
-    };
-    const openOnNode = (): void => {
-      const liveVp = viewportRef.current;
-      const liveSvg = svgRef.current;
-      if (!liveVp || !liveSvg) return;
-      const box = boxesRef.current.find((b) => b.id === createdId) ?? fallbackBox();
-      // M7c-D2：新节点（尤其高缩放下落在视口外/贴边）先平移进视口再取锚点，
-      // 编辑框随新视口落位——「节点就地变编辑态」的锚定前提。
-      panNodeIntoView(createdId);
-      const rect = liveSvg.getBoundingClientRect();
-      const p = liveVp.toScreen(box.x, box.y);
-      const removeIfAlive = (): void => {
-        const snap = getNode(doc, createdId);
-        if (snap && !snap.deleted) {
-          try {
-            // M7b-K2-blocker（kimi 复核发现）：relation='parent' 时原节点已换父到新节点下，
-            // deleteNodes 级联墓碑会连原节点一起删（数据丢失）——取消路径先把原节点
-            // 换回原父原位，再删空新节点（同事务）。
-            withTransaction(doc, ORIGIN_USER, () => {
-              if (relation === 'parent' && nodeToOutdent) {
-                // 原位=新节点 N 在其父（=原父）children 中的 index 处；原节点还原到
-                // N 的父下 N 原本的位置（不能取原节点的现父——那是 N 自身，会还原进 N）
-                const np = getNode(doc, createdId);
-                const restoreParent = np && !np.deleted ? np.parentId : parentId;
-                const restoreIndex =
-                  restoreParent && restoreParent !== createdId
-                    ? (getNode(doc, restoreParent)?.childIds.indexOf(createdId) ?? -1)
-                    : -1;
-                if (restoreParent && restoreIndex >= 0) {
-                  moveNode(doc, nodeToOutdent, restoreParent, restoreIndex);
-                }
+    // 回收闭包（自原 openOnNode 原样上提）：Esc/空提交时删掉新建节点；
+    // relation='parent' 先把换父的原节点放回原位再删空新节点（同事务，见内注）。
+    const removeIfAlive = (): void => {
+      const snap = getNode(doc, createdId);
+      if (snap && !snap.deleted) {
+        try {
+          // M7b-K2-blocker（kimi 复核发现）：relation='parent' 时原节点已换父到新节点下，
+          // deleteNodes 级联墓碑会连原节点一起删（数据丢失）——取消路径先把原节点
+          // 换回原父原位，再删空新节点（同事务）。
+          withTransaction(doc, ORIGIN_USER, () => {
+            if (relation === 'parent' && nodeToOutdent) {
+              // 原位=新节点 N 在其父（=原父）children 中的 index 处；原节点还原到
+              // N 的父下 N 原本的位置（不能取原节点的现父——那是 N 自身，会还原进 N）
+              const np = getNode(doc, createdId);
+              const restoreParent = np && !np.deleted ? np.parentId : parentId;
+              const restoreIndex =
+                restoreParent && restoreParent !== createdId
+                  ? (getNode(doc, restoreParent)?.childIds.indexOf(createdId) ?? -1)
+                  : -1;
+              if (restoreParent && restoreIndex >= 0) {
+                moveNode(doc, nodeToOutdent, restoreParent, restoreIndex);
               }
-              deleteNodes(doc, [createdId]);
-            });
-            afterUserWrite();
-          } catch {
-            // 尽力而为：删除失败仅残留一个空节点，可手动删除
-          }
+            }
+            deleteNodes(doc, [createdId]);
+          });
+          afterUserWrite();
+        } catch {
+          // 尽力而为：删除失败仅残留一个空节点，可手动删除
         }
-        // 取消后选中态若仍停在已删节点，后续 Tab/Enter 会静默 no-op——恢复到父节点
-        // （parent 关系恢复选中到原节点本身：它已被放回原位）
-        selectionRef.current?.selectOnly(relation === 'parent' && nodeToOutdent ? nodeToOutdent : parentId);
-      };
-      overlay.open({
-        anchorRect: clampAnchorRect(
-          {
-            x: rect.left + window.scrollX + p.x,
-            y: rect.top + window.scrollY + p.y,
-            w: Math.max(box.w, 140) * liveVp.scale,
-            h: box.h * liveVp.scale,
-          },
-          liveVp.scale,
-        ),
-        scale: liveVp.scale,
-        value: '',
-        onCommit: (text) => {
-          if (!doc) return;
-          if (text.trim() === '') {
-            removeIfAlive(); // 空提交 = 取消（旧实现会落一个空文本节点，顺带修正）
-            return;
-          }
-          try {
-            setText(doc, createdId, text, ORIGIN_USER);
-            afterUserWrite();
-            selectionRef.current?.selectOnly(createdId);
-            fitPendingRef.current = true; // 提交后重排可能扩边界，适应画布兜底可见
-          } catch (e) {
-            showToast(e instanceof Error ? e.message : '新建失败');
-          }
-        },
-        onCancel: () => removeIfAlive(),
-        onTruncated: () => showToast('节点文本长度已达上限'),
-      });
+      }
+      // 取消后选中态若仍停在已删节点，后续 Tab/Enter 会静默 no-op——恢复到父节点
+      // （parent 关系恢复选中到原节点本身：它已被放回原位）
+      selectionRef.current?.selectOnly(relation === 'parent' && nodeToOutdent ? nodeToOutdent : parentId);
     };
-    if (boxesRef.current.some((b) => b.id === createdId)) {
-      openOnNode();
-    } else {
-      requestAnimationFrame(openOnNode);
-    }
+    // 惰性：不开编辑框，登记待编辑节点即返回。连续 Enter/Tab 基于 primaryId()
+    // （=本节点）继续新建，pending 被新节点覆盖、旧节点保留「新主题」文本（企
+    // 微同款）；Backspace/Delete 走 onDelete→handleDelete 删掉本节点（handle
+    // Delete 成功后顺手清 pending，防悬空）。
+    pendingEditRef.current = createdId;
+    pendingCancelRef.current = removeIfAlive;
   };
+
+  /**
+   * 补开惰性待编辑节点（keydown effect 命中可打印字符时）：锚定装配仿 openNode
+   * Editor（panNodeIntoView + 真实盒 + clampAnchorRect），差异在提交语义——
+   * onCommit 空文本 → pendingCancelRef 回收（「新建后敲字又全删」→ 删节点，与
+   * 旧「空提交=取消」语义一致）；非空 → setText + afterUserWrite。onCancel 不回
+   * 收：取消时文本未变（有改动走 blur=commit 到不了 onCancel），保留「新主题」
+   * 现状；回收闭包在关闭路径一律作废（提交后节点已是常驻节点，不可再被回收）。
+   *
+   * **时序契约**：由 document keydown **同步**调用且不 preventDefault——overlay
+   * .open 内部同步 appendChild+focus+selectAll，随后的浏览器默认文本插入/IME 组
+   * 字才会落进 textarea（异步打开或拦截默认行为都会吞掉首字符）。
+   * 返回是否真正打开：创建同帧内极速按键时布局盒子可能还没进 boxesRef——此时
+   * 返回 false，keydown 侧保留 pending 待下一键重试（对齐旧实现的 rAF 重试语义）。
+   */
+  const openPendingEditor = (nodeId: string): boolean => {
+    if (!doc) return false;
+    const vp = viewportRef.current;
+    const svgEl = svgRef.current;
+    const box = boxesRef.current.find((b) => b.id === nodeId);
+    if (!vp || !svgEl || !box) return false;
+    const snap = getNode(doc, nodeId);
+    if (!snap || snap.deleted) return false;
+    panNodeIntoView(nodeId); // 新节点可能落在视口外/贴边，先平移进视口再锚定
+    const rect = svgEl.getBoundingClientRect();
+    const p = vp.toScreen(box.x, box.y);
+    overlay.open({
+      anchorRect: clampAnchorRect(
+        {
+          x: rect.left + window.scrollX + p.x,
+          y: rect.top + window.scrollY + p.y,
+          w: box.w * vp.scale,
+          h: box.h * vp.scale,
+        },
+        vp.scale,
+      ),
+      scale: vp.scale,
+      value: snap.text,
+      onCommit: (text) => {
+        setEditingClass(null);
+        const cancel = pendingCancelRef.current; // 回收闭包一次性：无论提交为何都作废
+        pendingCancelRef.current = null;
+        if (!doc) return;
+        if (text.trim() === '') {
+          cancel?.(); // 空提交 = 回收新建节点（敲了字又全删）
+          return;
+        }
+        try {
+          setText(doc, nodeId, text, ORIGIN_USER);
+          afterUserWrite();
+        } catch (e) {
+          showToast(e instanceof Error ? e.message : '保存失败');
+        }
+      },
+      onCancel: () => {
+        // 取消不回收：文本没变（保留「新主题」），仅作废回收闭包
+        pendingCancelRef.current = null;
+        setEditingClass(null);
+      },
+      onTruncated: () => showToast('节点文本长度已达上限'),
+    });
+    selectionRef.current?.selectOnly(nodeId);
+    setEditingClass(nodeId);
+    return true;
+  };
+
+  // —— 惰性编辑补开监听（Tab/Enter 新建后的首个可打印字符进入编辑，企微语义）——
+  // 让路纪律与 `,` 快捷键 / Ctrl+F 同款：编辑覆盖层已开、焦点在输入控件、表格
+  // 视图不触发；且当前单选必须恰为 pending 节点。依赖含 doc：文件切换即重挂，
+  // 并把旧 doc 的 pending（含回收闭包）作废。只读（移动端）不装配。
+  useEffect(() => {
+    if (readOnly || !doc) return;
+    pendingEditRef.current = null;
+    pendingCancelRef.current = null;
+    const onKeyDown = (e: KeyboardEvent): void => {
+      const pending = pendingEditRef.current;
+      if (!pending) return;
+      const selection = selectionRef.current;
+      // 校验失败（选中已不是 pending 节点：被删/被切换/多选）→ 待编辑作废
+      if (!selection || selection.selected.size !== 1 || !selection.selected.has(pending)) {
+        pendingEditRef.current = null;
+        pendingCancelRef.current = null;
+        return;
+      }
+      if (e.key === 'Escape') {
+        // Esc 取消创建：回收空节点（parent 关系连带还原 nodeToOutdent）
+        e.preventDefault();
+        const cancel = pendingCancelRef.current;
+        pendingEditRef.current = null;
+        pendingCancelRef.current = null;
+        cancel?.();
+        return;
+      }
+      // 可打印字符 → 同步补开编辑框且**不 preventDefault**（overlay.open 同步
+      // focus+selectAll 后，浏览器默认插入/IME 组字落进 textarea——见 openPending
+      // Editor 时序契约）。方向键/功能键等其余按键不动 pending（保持待编辑态）。
+      if (
+        e.key.length === 1 &&
+        !e.ctrlKey &&
+        !e.metaKey &&
+        !e.altKey &&
+        !overlay.isOpen &&
+        !isEditableTarget(e.target) &&
+        viewRef.current !== 'table'
+      ) {
+        // 打开成功才消费 pending（回收闭包留待提交路径用）；盒子未就绪（创建同
+        // 帧极速按键）保留待编辑，下一键重试
+        if (openPendingEditor(pending)) {
+          pendingEditRef.current = null;
+        }
+      }
+    };
+    document.addEventListener('keydown', onKeyDown, false);
+    return () => document.removeEventListener('keydown', onKeyDown, false);
+    // openPendingEditor 每渲染重建但只读 ref/closure（同 locateNode 通知深链裁定），
+    // 不入依赖。
+  }, [readOnly, doc]);
 
   const handleEnter = (): void => {
     if (!doc) return;
@@ -1161,22 +1326,12 @@ export function EditorPage() {
     if (!snap || snap.deleted) return;
     if (current === ROOT_NODE_ID) {
       // root 无同级：降级为新建子级
-      openNewNodeEditor(
-        ROOT_NODE_ID,
-        undefined,
-        boxesRef.current.find((b) => b.id === ROOT_NODE_ID) ?? null,
-        'child',
-      );
+      openNewNodeEditor(ROOT_NODE_ID, undefined, 'child');
       return;
     }
     const parent = getNode(doc, snap.parentId);
     if (!parent || parent.deleted) return;
-    openNewNodeEditor(
-      parent.id,
-      parent.childIds.indexOf(current) + 1,
-      boxesRef.current.find((b) => b.id === current) ?? null,
-      'sibling',
-    );
+    openNewNodeEditor(parent.id, parent.childIds.indexOf(current) + 1, 'sibling');
   };
 
   const handleTab = (shift: boolean): void => {
@@ -1185,12 +1340,7 @@ export function EditorPage() {
     const snap = getNode(doc, current);
     if (!snap || snap.deleted) return;
     if (!shift) {
-      openNewNodeEditor(
-        current,
-        undefined,
-        boxesRef.current.find((b) => b.id === current) ?? null,
-        'child',
-      );
+      openNewNodeEditor(current, undefined, 'child');
       return;
     }
     if (current === ROOT_NODE_ID) {
@@ -1201,12 +1351,11 @@ export function EditorPage() {
     if (!parent || parent.deleted) return;
     // 父为 root（一级主题）与其余层级同一公式：新节点插在 parent children 中
     // 当前节点原 index 处（root 受保护只体现在「root 不可换父」，此处合法）。
-    // M7b-K2：与 子主题/同级主题 对齐——建节点即进入行内编辑（空提交回收），
-    // 不再走无反馈的 createOutdent（kimi K2 走查：插入后焦点滞留按钮、空白节点无提示）。
+    // M7b-K2：与 子主题/同级主题 对齐——建节点即选中（惰性编辑：敲字才进编辑，
+    // Esc/空提交回收），不再走无反馈的 createOutdent（kimi K2 走查遗留裁定）。
     openNewNodeEditor(
       parent.id,
       parent.childIds.indexOf(current),
-      boxesRef.current.find((b) => b.id === current) ?? null,
       'parent',
       'keyboard',
       current,
@@ -1224,6 +1373,10 @@ export function EditorPage() {
     try {
       deleteNodes(doc, ids, ORIGIN_USER); // root 含其中时降级为清空子级
       afterUserWrite();
+      // 惰性待编辑节点可能就在删除集里：回收闭包随之作废（keydown 侧的「选中恰
+      // 为 pending 节点」校验兜底，此处显式清更干净、不留悬空闭包）
+      pendingEditRef.current = null;
+      pendingCancelRef.current = null;
       track('node_delete', { via, nodeCount: countAliveReachable(doc) }, fileId);
       // 配额拦截的解除通道（M1b 终审裁定）：删除节点即解除新增拦截。若删除后仍
       // 超限，服务端边缘触发器在回落限内前不会重复广播（advisory 残余窗口，登记
@@ -1559,6 +1712,10 @@ export function EditorPage() {
    */
   const onSvgPointerDown = (e: React.PointerEvent<SVGSVGElement>): void => {
     if (e.button !== 0) return;
+    // 画布左键按下（空白/节点）即提交编辑器（2026-09-28 走查：空白路径下方的
+    // preventDefault 会抑制 textarea 的 blur，编辑框此前关不掉）。close(true) 走
+    // onCommit→setText，无变化提交由 core setText 同值守卫消化（空转零写入）。
+    if (overlay.isOpen) overlay.close(true);
     pointerPressRef.current = { x: e.clientX, y: e.clientY }; // 空白点击位移判定（M6 Task 2）
     // 修饰键组合不进框选（Ctrl/Cmd=加减选、Shift=加选占位）；空格按住 = Viewport
     // 平移手势（spacePressed），框选让位。
@@ -1686,30 +1843,23 @@ export function EditorPage() {
       return;
     }
     const nodeId = menu.nodeId as string;
-    const nodeBox = boxesRef.current.find((b) => b.id === nodeId) ?? null;
     switch (action) {
       case 'task-quick':
         // 任务设置（M7c-C3）：快速卡锚定右键点击点（menu.x/y），置顶项
         openQuickCard(nodeId, menu.x, menu.y);
         break;
       case 'insert-child':
-        openNewNodeEditor(nodeId, undefined, nodeBox, 'child', 'context');
+        openNewNodeEditor(nodeId, undefined, 'child', 'context');
         break;
       case 'insert-sibling': {
         if (nodeId === ROOT_NODE_ID) {
-          openNewNodeEditor(ROOT_NODE_ID, undefined, nodeBox, 'child', 'context');
+          openNewNodeEditor(ROOT_NODE_ID, undefined, 'child', 'context');
           break;
         }
         const snap = getNode(doc, nodeId);
         const parent = snap ? getNode(doc, snap.parentId) : null;
         if (!snap || !parent || parent.deleted) break;
-        openNewNodeEditor(
-          parent.id,
-          parent.childIds.indexOf(nodeId) + 1,
-          nodeBox,
-          'sibling',
-          'context',
-        );
+        openNewNodeEditor(parent.id, parent.childIds.indexOf(nodeId) + 1, 'sibling', 'context');
         break;
       }
       case 'delete':
@@ -2240,6 +2390,7 @@ export function EditorPage() {
       setMembers([]);
       setAvatarSeen(new Map()); // 头像栏会话缓存随文件切换重置（M6 Task 9）
       detachKeys?.();
+      setEditingClass(null); // 编辑重影类兜底摘除（不依赖 close(false)→onCancel 顺带清理）
       overlay.close(false);
       dragRef.current?.destroy();
       dragRef.current = null;
@@ -2311,6 +2462,7 @@ export function EditorPage() {
             </span>
             <button
               data-testid="comment-toggle"
+              data-popover-toggle="comment-toggle"
               title="评论"
               onClick={() => setCommentsOpen((v) => !v)}
             >
@@ -2559,6 +2711,7 @@ export function EditorPage() {
         <div className="toolbar-group">
           <button
             data-testid="format-toggle"
+            data-popover-toggle="format-toggle"
             className={formatOpen ? 'toolbar-btn toolbar-btn-text active' : 'toolbar-btn toolbar-btn-text'}
             title="格式"
             aria-label="格式"
@@ -2573,6 +2726,7 @@ export function EditorPage() {
           </button>
           <button
             data-testid="task-toggle"
+            data-popover-toggle="task-toggle"
             className={taskPanelOpen ? 'toolbar-btn toolbar-btn-text active' : 'toolbar-btn toolbar-btn-text'}
             title="任务"
             aria-label="任务"
@@ -2613,6 +2767,7 @@ export function EditorPage() {
               原 theme-select 下拉移除——双入口重复； THEME_OPTIONS/ThemePanel 不动 */}
           <button
             data-testid="theme-panel-toggle"
+            data-popover-toggle="theme-panel-toggle"
             className="toolbar-btn"
             title="主题"
             aria-label="主题"
@@ -2705,6 +2860,7 @@ export function EditorPage() {
         <div className="toolbar-group">
           <button
             data-testid="members-btn"
+            data-popover-toggle="members-btn"
             className="toolbar-btn"
             title="在线成员"
             aria-label="在线成员"
@@ -2721,6 +2877,7 @@ export function EditorPage() {
           {/* 版本历史（M4 Task 8，FR-VER-004 UI）：时间轴/只读预览/一键恢复入口 */}
           <button
             data-testid="versions-toggle"
+            data-popover-toggle="versions-toggle"
             className="toolbar-btn"
             title="版本历史"
             onClick={() => setVersionsOpen((v) => !v)}
@@ -2730,6 +2887,7 @@ export function EditorPage() {
           {/* 文档动态（M6 Task 8，企微对标）：events 只读流（评论/导出/版本恢复等） */}
           <button
             data-testid="activity-toggle"
+            data-popover-toggle="activity-toggle"
             className="toolbar-btn"
             title="动态"
             aria-label="文档动态"
@@ -2740,6 +2898,7 @@ export function EditorPage() {
           {/* 快捷键帮助（M5 Task 2，FR-EDT-007）：工具栏入口，Ctrl/Cmd+? 同一开关 */}
           <button
             data-testid="help-toggle"
+            data-popover-toggle="help-toggle"
             className="toolbar-btn"
             title="快捷键帮助 (Ctrl+?)"
             onClick={() => setHelpOpen((v) => !v)}
@@ -2748,6 +2907,7 @@ export function EditorPage() {
           </button>
           <button
             data-testid="find-toggle"
+            data-popover-toggle="find-toggle"
             className="toolbar-btn"
             title="查找 (Ctrl+F)"
             aria-label="查找"

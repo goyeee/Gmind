@@ -810,3 +810,22 @@ body.painter-active .editor-canvas svg {
 .editor-comments-pane .comment-panel-head:not(:has(button)) {
   display: none;
 }
+
+/* —— 2026-09-28 需求方走查修复（类由引擎/页面侧写入，此处只落样式）—— */
+
+/* 拖动反馈：engine drag 在拖拽中的节点 g 挂 gm-dragging——整体半透明露出落点，
+   盒矩形给 grabbing 光标（> rect:first-of-type 只中节点盒，不含任务条等后续
+   rect，同 drop-target 口径）。 */
+.editor-canvas svg g.gm-dragging {
+  opacity: 0.45;
+}
+.editor-canvas svg g.gm-dragging > rect:first-of-type {
+  cursor: grabbing;
+}
+
+/* 编辑重影根治（Kimi 走查「甲甲双影」）：编辑覆盖层打开期间页面在节点 g 挂
+   gm-editing（EditorPage setEditingClass）——隐掉节点底层文字，画布上只剩编辑
+   框一层文字；关闭即摘类恢复。 */
+.editor-canvas svg g.gm-editing > .gm-text {
+  opacity: 0;
+}
