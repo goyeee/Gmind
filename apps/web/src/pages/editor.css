@@ -76,9 +76,12 @@
   height: 16px;
   background: #e5e6eb;
 }
-/* M7b-K5：窄视口工具栏横向可滑（保底防溢出裁切；后续可做「更多」收纳） */
+/* M7b-K5 修订（kimi 复核 P1）：overflow-x:auto 会让 overflow-y 计算为 auto，
+   工具栏变成双轴裁剪容器，内部 absolute 弹层（插入/标记/导出）全部被裁进 63px
+   窄缝——弹层对真实用户不可用。改用 flex-wrap 换行（弹层照常 absolute 展开），
+   窄断点配合隐藏低频组与文字标签控制高度。 */
 .editor-toolbar {
-  overflow-x: auto;
+  flex-wrap: wrap;
 }
 /* 分组容器；标题组弹性占满中段（标题输入伸展、右侧组贴右） */
 .toolbar-group {
@@ -187,6 +190,17 @@ body.painter-active .editor-canvas svg {
   }
   /* K1-R 回归：900px 残留 .star-toggle × view-tab 相交一处，窄断点一并隐藏星标 */
   .editor-toolbar .star-toggle {
+    display: none;
+  }
+  /* M7b-K5 修订：窄断点文字标签隐藏（按钮回 28px 图标态），压缩工具栏总宽 */
+  .editor-toolbar .toolbar-btn-label {
+    display: none;
+  }
+  .editor-toolbar .toolbar-btn.toolbar-btn-text {
+    width: 28px;
+    padding: 0;
+  }
+  .editor-toolbar .toolbar-btn.toolbar-btn-text .toolbar-btn-label {
     display: none;
   }
 }
@@ -751,7 +765,12 @@ body.painter-active .editor-canvas svg {
 }
 
 /* M7b-K4：右列包壳（editor-comments-pane）已带「评论」标题行，CommentPanel 内部
-   标题行重复——包壳场景下隐藏（面板独立复用处不受影响）。 */
-.editor-comments-pane .comment-panel-head {
+   标题重复——只藏 h3 标题本身；「查看全部」按钮（过滤态唯一退出入口）必须保留
+   （M7b-K2R 复核 P2：整个 head 藏掉会连退出入口一起陪葬）。无过滤时该行只剩
+   按钮，用 :has 收起空行（不支持 :has 的浏览器仅多一空行，可接受）。 */
+.editor-comments-pane .comment-panel-head h3 {
+  display: none;
+}
+.editor-comments-pane .comment-panel-head:not(:has(button)) {
   display: none;
 }
