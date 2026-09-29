@@ -109,6 +109,13 @@
   color: #c9cdd4;
   cursor: default;
 }
+/* 文字标签按钮（M7b-R4 企微式：上级主题/子主题/同级主题/格式）——auto 宽 */
+.editor-toolbar .toolbar-btn.toolbar-btn-text {
+  width: auto;
+  min-width: 28px;
+  padding: 0 10px;
+  gap: 4px;
+}
 /* 激活态图标按钮（格式刷模式等，企微范式：浅蓝底 + 蓝字） */
 .editor-toolbar .toolbar-btn.active {
   background: #e8f3ff;

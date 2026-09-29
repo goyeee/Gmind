@@ -347,6 +347,8 @@ export function EditorPage() {
   // PNG 透明背景勾选（M4 Task 9，FR-IO-003）：默认勾选；JPG 无 alpha 恒白底。
   const [exportTransparent, setExportTransparent] = useState(true);
   const exportWrapRef = useRef<HTMLDivElement | null>(null);
+  // 格式面板开合（M7b-R2 需求方裁定）：样式右列默认不显示，收进工具栏「格式」按钮。
+  const [formatOpen, setFormatOpen] = useState(false);
   // 插入菜单（2026-09-28 二次改版）+ 标记面板（M7b-W3 企微式竖层重做）：
   // 面板为**锚定弹出层**——挂在 .insert-wrap 下（absolute），状态 {open, tab, anchor}
   // 扩展 anchor = 插入按钮 getBoundingClientRect（面板顶贴按钮下沿、左缘对齐；
@@ -1566,6 +1568,8 @@ export function EditorPage() {
     selectionNow && selectionNow.selected.size === 1
       ? ([...selectionNow.selected][0] ?? null)
       : null;
+  // 有任意选中（单选/多选）即可用工具栏增删按钮（多选时操作主选中节点）
+  const hasSelection = (selectionNow?.selected.size ?? 0) > 0;
   // 选中节点快照（M6 Task 2 企微对标）：RichPanel 样式区回显数据源；无选中（空选
   // 区/多选/已删）为 null → 样式区置灰 + 提示。tick 驱动重渲染，切换节点即时刷新。
   const selectedSnapshot = doc && selectedNodeId ? getNode(doc, selectedNodeId) : null;
@@ -2246,16 +2250,6 @@ export function EditorPage() {
                   表情
                 </button>
                 <button
-                  data-testid="insert-note"
-                  role="menuitem"
-                  onClick={() => {
-                    closeInsertLayer();
-                    focusRichControl('textarea[aria-label="节点备注"]', '选中节点后编辑备注');
-                  }}
-                >
-                  备注
-                </button>
-                <button
                   data-testid="insert-link"
                   role="menuitem"
                   onClick={() => {
@@ -2292,6 +2286,57 @@ export function EditorPage() {
               />
             )}
           </div>
+        </div>
+        <span className="toolbar-sep" />
+        {/* 主题三按钮（M7b-R4 需求方裁定，企微工具栏对标）：添加上级主题/添加子主题/
+            添加同级主题——复用 Shift+Tab/Tab/Enter 键位的同一处理路径（handleTab/
+            handleEnter），语义与快捷键一一对应；无选中节点置灰。 */}
+        <div className="toolbar-group">
+          <button
+            data-testid="toolbar-add-parent"
+            className="toolbar-btn toolbar-btn-text"
+            title="添加上级主题（Shift+Tab）"
+            aria-label="添加上级主题"
+            disabled={!hasSelection}
+            onClick={() => handleTab(true)}
+          >
+            <span className="toolbar-btn-label">上级主题</span>
+          </button>
+          <button
+            data-testid="toolbar-add-child"
+            className="toolbar-btn toolbar-btn-text"
+            title="添加子主题（Tab）"
+            aria-label="添加子主题"
+            disabled={!hasSelection}
+            onClick={() => handleTab(false)}
+          >
+            <span className="toolbar-btn-label">子主题</span>
+          </button>
+          <button
+            data-testid="toolbar-add-sibling"
+            className="toolbar-btn toolbar-btn-text"
+            title="添加同级主题（Enter）"
+            aria-label="添加同级主题"
+            disabled={!hasSelection}
+            onClick={() => handleEnter()}
+          >
+            <span className="toolbar-btn-label">同级主题</span>
+          </button>
+        </div>
+        <span className="toolbar-sep" />
+        {/* 格式按钮（M7b-R2 需求方裁定）：样式右列默认隐藏，点此开/关（右列弹出）。 */}
+        <div className="toolbar-group">
+          <button
+            data-testid="format-toggle"
+            className={formatOpen ? 'toolbar-btn toolbar-btn-text active' : 'toolbar-btn toolbar-btn-text'}
+            title="格式"
+            aria-label="格式"
+            aria-pressed={formatOpen}
+            onClick={() => setFormatOpen((v) => !v)}
+          >
+            <PainterIcon />
+            <span className="toolbar-btn-label">格式</span>
+          </button>
         </div>
         <span className="toolbar-sep" />
         {/* 视图组：结构 / 主题（保持 <select> 功能件，图标前置）。
@@ -2612,7 +2657,7 @@ export function EditorPage() {
           <div className="editor-right">
             {/* M6 Task 2：面板常驻（不再随 selectedNodeId 卸载）——无选中时样式区
                 置灰 + 提示，选中节点后回显该节点样式。 */}
-            {doc && um && (
+            {formatOpen && doc && um && (
               <RichPanel
                 doc={doc}
                 fileId={fileId}
