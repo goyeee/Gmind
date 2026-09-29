@@ -5,9 +5,16 @@
  * - open() 在 document.body 上创建绝对定位 <textarea class="gm-text-editor">，覆盖
  *   节点盒的屏幕矩形（anchorRect：页面用 viewport.toScreen 换算；anchorRect 为
  *   **页面坐标**（client + 滚动偏移），position:absolute 直接落位）：
- *   left/top = anchorRect 原点各减 4px 内边距补偿，width = max(w, 60)，
- *   height = max(h, 行高下限)，fontSize = EDITOR_BASE_FONT_SIZE × scale，
- *   1px 边框 + 白底 + 高 zIndex。创建即聚焦并全选（覆盖式输入）。
+ *   left/top = anchorRect 原点各减 4px 内边距补偿（盒原点对位，不随 scale），
+ *   width = max(w, 60)，height = max(h, 行高下限)，fontSize = EDITOR_BASE_FONT_SIZE
+ *   × scale，1px 边框 + 白底 + 高 zIndex。创建即聚焦并全选（覆盖式输入）。
+ * - padding 随缩放（400% 下固定 2px 与放大后的节点文字错位）：2px × scale 四舍五入、
+ *   下限 1px；left/top 的 PAD_PX=4 补偿保持不变——那是盒原点对位，不是视觉内边距。
+ * - 宽度随内容自适应（新建空节点 scene 宽仅 40px 却被 max(w,60) 下限撑得过宽的
+ *   配对改进）：input 时按 scrollWidth + 左右 padding 和 + 边框补偿估宽，下限恒为
+ *   **初始宽度**（锚盒宽或 60，就地编辑的对位基准，删字收窄也不得突破），上限 =
+ *   视口宽 − 浮层 left − 右边距 16px（防长文本撑出视口）。纯视觉调整，不动值/
+ *   截断/提交/IME 语义；白空间换行时 scrollWidth 不增长属正常，宽度保持即可。
  * - IME 安全：compositionstart → composing=true，期间 input 只落本地值（不截断、
  *   不提交、Esc 不取消——组字中的按键归 IME）；compositionend → composing=false
  *   并立即做截断评估。keydown 同时看 e.isComposing（浏览器组字派发的事件自带）。
@@ -34,6 +41,15 @@ const MIN_WIDTH_PX = 60;
 const MIN_HEIGHT_PX = Math.ceil(EDITOR_BASE_FONT_SIZE * 1.4);
 /** 覆盖层层级（高于页面一切常规层）。 */
 const EDITOR_Z_INDEX = 1000;
+/** 宽度自适应的边框补偿：scrollWidth 不含左右边框，border-box 定宽需补回（1px×2）。 */
+const BORDER_COMP_PX = 2;
+/** 宽度自适应的视口右边距（防长文本把浮层撑出视口右缘）。 */
+const WIDTH_MARGIN_PX = 16;
+
+/** 编辑器自身内边距：随视口缩放同步缩放（400% 固定 2px 会与放大后的节点文字错位），下限 1px 保可用。 */
+function scaledPaddingPx(scale: number): number {
+  return Math.max(1, Math.round(2 * scale));
+}
 
 /** open() 参数：anchorRect 为节点盒的屏幕（页面）坐标矩形。 */
 export interface TextEditorOptions {
@@ -55,6 +71,10 @@ export class TextEditorOverlay {
   private composing = false;
   private closing = false;
   private opts: TextEditorOptions | null = null;
+  /** 打开时的初始宽度（max(锚盒宽, 60)）：宽度自适应的不可突破下限。 */
+  private baseWidthPx = MIN_WIDTH_PX;
+  /** 浮层 left（页面坐标）：宽度自适应的可用上限 = 视口宽 − left − 右边距。 */
+  private layerLeftPx = 0;
 
   /** 当前是否有打开的编辑器。 */
   get isOpen(): boolean {
@@ -69,19 +89,23 @@ export class TextEditorOverlay {
     this.closing = false;
 
     const fontSize = Math.max(1, Math.round(EDITOR_BASE_FONT_SIZE * opts.scale));
+    const pad = scaledPaddingPx(opts.scale);
     const ta = document.createElement('textarea');
     ta.className = 'gm-text-editor';
     ta.value = opts.value;
     ta.spellcheck = false;
+    // 记下初始宽度与 left：前者是宽度自适应的硬下限，后者是可用上限的锚点（syncWidth）。
+    this.baseWidthPx = Math.max(opts.anchorRect.w, MIN_WIDTH_PX);
+    this.layerLeftPx = opts.anchorRect.x - PAD_PX;
     const style = ta.style;
     style.position = 'absolute';
-    style.left = `${opts.anchorRect.x - PAD_PX}px`;
+    style.left = `${this.layerLeftPx}px`;
     style.top = `${opts.anchorRect.y - PAD_PX}px`;
-    style.width = `${Math.max(opts.anchorRect.w, MIN_WIDTH_PX)}px`;
+    style.width = `${this.baseWidthPx}px`;
     style.height = `${Math.max(opts.anchorRect.h, MIN_HEIGHT_PX, Math.ceil(fontSize * 1.4))}px`;
     style.fontSize = `${fontSize}px`;
     style.border = '1px solid #4a90d9';
-    style.padding = '2px';
+    style.padding = `${pad}px`;
     style.margin = '0';
     style.background = 'white';
     style.color = '#1f2328';
@@ -149,9 +173,25 @@ export class TextEditorOverlay {
     }
   }
 
+  /**
+   * 宽度随内容自适应（纯视觉，不动值/提交/IME 语义）：估宽 = scrollWidth + 左右
+   * padding 和 + 边框补偿。下限恒为初始宽度——锚定盒宽或 60 是「就地编辑」与节点
+   * 的对位基准，删字收窄也不得窄于它；上限 = 视口宽 − 浮层 left − 右边距（防撑出
+   * 视口；可用上限比初始宽度还小时保持初始宽度，与打开时一致不回归）。
+   */
+  private syncWidth(): void {
+    const ta = this.ta;
+    const opts = this.opts;
+    if (!ta || !opts) return;
+    const pad = scaledPaddingPx(opts.scale);
+    const desired = ta.scrollWidth + pad * 2 + BORDER_COMP_PX;
+    const maxW = window.innerWidth - this.layerLeftPx - WIDTH_MARGIN_PX;
+    ta.style.width = `${Math.max(this.baseWidthPx, Math.min(desired, maxW))}px`;
+  }
+
   private onInput = (): void => {
-    if (this.composing) return; // IME 组字中：仅本地态
-    this.enforceLimit();
+    if (!this.composing) this.enforceLimit(); // IME 组字中：仅本地态，不截断
+    this.syncWidth(); // 宽度随内容：组字中也随动（视觉层调整，不动值）
   };
 
   private onCompositionStart = (): void => {
@@ -161,6 +201,7 @@ export class TextEditorOverlay {
   private onCompositionEnd = (): void => {
     this.composing = false;
     this.enforceLimit(); // 组字落定后立即评估截断
+    this.syncWidth(); // 组字落定的文本宽度可能变化，兜底随动一次（常规路径 input 已同步）
   };
 
   private onKeyDown = (e: KeyboardEvent): void => {

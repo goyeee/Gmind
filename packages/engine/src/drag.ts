@@ -20,6 +20,13 @@
  * 几何落点直判后「点亮 ⟹ 按落点生效、未点亮释放 ⟹ 同样按落点生效」，二者永不满
  * 背离（fix round 1「高亮与释放配对」问题的根治）。
  *
+ * 被拖节点视觉反馈（需求方「拖动节点时被拖节点零反馈」）：激活瞬间（activate，
+ * 过 4px 阈值那一步）给被拖节点 g 挂 `gm-dragging` 类，半透明/cursor 视觉由页面
+ * CSS 落地；所有结束路径（释放成功、禁止目标静默取消、pointercancel、svg 外
+ * pointerup 兜底、destroy）统一经 clearHighlights 摘除——挂/摘以 draggingVisualId
+ * 字段配对，不依赖 this.drag 的清空时序，任何路径不残留类。落点分类与结算语义
+ * （classifyAt/resolveTarget/指示线）不受影响。
+ *
  * 原生文字拖选根治（需求方「点击节点拖动时竟然把文字选中了」）：web 侧
  * user-select:none（editor.css .editor-canvas）之外，engine 在候选 pointerdown 与
  * 激活 move 上 e.preventDefault()——按 Pointer Events 规范，取消 pointerdown 抑制
@@ -123,6 +130,8 @@ export class DragController {
   private hoverTimer: ReturnType<typeof setTimeout> | null = null;
   /** 当前被标 drop-forbidden 的节点 id（自身或后代）。 */
   private hoverForbidden: string | null = null;
+  /** 被拖节点当前挂 gm-dragging 的 id（激活挂上、clearHighlights 摘除，保证配对）。 */
+  private draggingVisualId: string | null = null;
   /** 插入指示线（悬浮层内临时 line；离开落点/结束即移除）。 */
   private indicator: SVGLineElement | null = null;
   /** 候选/拖拽期间挂着的 window 级兜底监听标记。 */
@@ -252,6 +261,10 @@ export class DragController {
       offsetY: box ? scene.y - box.y : 0,
     };
     this.candidate = null;
+    // 被拖节点视觉反馈（半透明/cursor 由页面 CSS 落地）；摘除统一走 clearHighlights，
+    // finish/destroy/svg 外 pointerup 兜底全部汇入该收尾，任何路径不残留。
+    this.draggingVisualId = cand.id;
+    this.setClass(cand.id, 'gm-dragging', true);
     if (typeof deps.svg.setPointerCapture === 'function') {
       try {
         deps.svg.setPointerCapture(e.pointerId);
@@ -457,6 +470,9 @@ export class DragController {
     this.clearTargetFeedback();
     this.setClass(this.hoverForbidden, 'drop-forbidden', false);
     this.hoverForbidden = null;
+    // 被拖节点反馈兜底摘除：finish/destroy 全走这里（激活与收尾配对，见头注）。
+    this.setClass(this.draggingVisualId, 'gm-dragging', false);
+    this.draggingVisualId = null;
     this.removeIndicator(); // 兜底：任何结束路径指示线必摘（destroy 中途打断等）
   }
 

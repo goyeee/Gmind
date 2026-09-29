@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TextEditorOverlay, EDITOR_BASE_FONT_SIZE } from './texteditor';
 
 let onCommit: ReturnType<typeof vi.fn>;
@@ -173,5 +173,106 @@ describe('TextEditorOverlay 生命周期', () => {
     open('second');
     expect(onCommit).toHaveBeenCalledWith('first');
     expect(document.querySelectorAll('.gm-text-editor').length).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// padding 随视口缩放（400% 固定 2px 与节点文字错位）
+// ---------------------------------------------------------------------------
+
+describe('TextEditorOverlay padding 随缩放', () => {
+  it('400% 缩放 → padding 8px（2 × scale）；left/top 的 4px 锚定补偿不变', () => {
+    const ta = open({ anchorRect: { x: 100, y: 50, w: 40, h: 24 }, scale: 4 });
+    expect(ta.style.padding).toBe('8px');
+    expect(ta.style.left).toBe('96px'); // PAD_PX=4 盒原点对位，不随 scale
+    expect(ta.style.top).toBe('46px');
+  });
+
+  it('100% 缩放 → padding 2px（与旧行为一致）', () => {
+    expect(open({ scale: 1 }).style.padding).toBe('2px');
+  });
+
+  it('缩放 < 0.5 → padding 有 1px 下限', () => {
+    expect(open({ scale: 0.4 }).style.padding).toBe('1px');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 宽度随内容自适应（初始宽度 = max(锚盒宽, 60) 为硬下限）
+// ---------------------------------------------------------------------------
+
+describe('TextEditorOverlay 宽度随内容自适应', () => {
+  const DEFAULT_INNER_WIDTH = 1024; // jsdom 默认视口宽
+
+  afterEach(() => {
+    Object.defineProperty(window, 'innerWidth', {
+      value: DEFAULT_INNER_WIDTH,
+      configurable: true,
+    });
+  });
+
+  /** jsdom 无布局引擎（scrollWidth 恒 0）：按值打桩模拟内容宽度。 */
+  function mockScrollWidth(ta: HTMLTextAreaElement, value: number): void {
+    Object.defineProperty(ta, 'scrollWidth', { value, configurable: true });
+  }
+
+  function setViewportWidth(w: number): void {
+    Object.defineProperty(window, 'innerWidth', { value: w, configurable: true });
+  }
+
+  function input(ta: HTMLTextAreaElement): void {
+    ta.dispatchEvent(new Event('input'));
+  }
+
+  it('内容超初始宽 → 增宽为 scrollWidth + padding 和 + 2px 边框补偿', () => {
+    setViewportWidth(2000);
+    const ta = open({ anchorRect: { x: 100, y: 50, w: 120, h: 24 }, scale: 1 });
+    expect(ta.style.width).toBe('120px'); // 初始 = max(锚盒宽, 60)
+    mockScrollWidth(ta, 400);
+    input(ta);
+    // 400 + 2×2(padding) + 2(边框) = 406，未触上限
+    expect(ta.style.width).toBe('406px');
+  });
+
+  it('删字后收窄，但不得窄于初始宽度（锚定盒宽是就地编辑的对位基准）', () => {
+    setViewportWidth(2000);
+    const ta = open({ anchorRect: { x: 100, y: 50, w: 120, h: 24 }, scale: 1 });
+    mockScrollWidth(ta, 400);
+    input(ta);
+    expect(ta.style.width).toBe('406px');
+    mockScrollWidth(ta, 30);
+    input(ta);
+    expect(ta.style.width).toBe('120px'); // 收窄回初始宽度为止
+  });
+
+  it('上限 = 视口宽 − 浮层 left − 16px 右边距：长文本不撑出视口', () => {
+    setViewportWidth(1024);
+    // left = 600 − 4 = 596；上限 = 1024 − 596 − 16 = 412
+    const ta = open({ anchorRect: { x: 600, y: 50, w: 120, h: 24 }, scale: 1 });
+    mockScrollWidth(ta, 5000);
+    input(ta);
+    expect(ta.style.width).toBe('412px');
+  });
+
+  it('新建空节点（锚盒 40px，初始 60px）：窄内容不收窄、保持初始宽度', () => {
+    setViewportWidth(2000);
+    const ta = open({ anchorRect: { x: 0, y: 0, w: 40, h: 24 }, scale: 1 });
+    expect(ta.style.width).toBe('60px');
+    mockScrollWidth(ta, 30);
+    input(ta);
+    expect(ta.style.width).toBe('60px');
+  });
+
+  it('IME 组字中宽度亦随动（纯视觉：不动值、不截断、不提交）', () => {
+    setViewportWidth(2000);
+    const ta = open({ anchorRect: { x: 100, y: 50, w: 120, h: 24 }, scale: 1 });
+    ta.dispatchEvent(new CompositionEvent('compositionstart'));
+    ta.value = 'x'.repeat(501); // 组字中不截断（既有语义）
+    mockScrollWidth(ta, 400);
+    input(ta);
+    expect(ta.style.width).toBe('406px');
+    expect(ta.value).toBe('x'.repeat(501));
+    expect(onTruncated).not.toHaveBeenCalled();
+    expect(onCommit).not.toHaveBeenCalled();
   });
 });

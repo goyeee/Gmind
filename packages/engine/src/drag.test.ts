@@ -368,6 +368,79 @@ describe('DragController 反馈时机（100ms）', () => {
 });
 
 // ---------------------------------------------------------------------------
+// 被拖节点视觉反馈（gm-dragging）
+// ---------------------------------------------------------------------------
+
+describe('DragController 被拖节点视觉反馈（gm-dragging）', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  /** 激活拖拽：down 于 a 中心 → 一步 move 到 b 中心（过阈值即 activate）。 */
+  function activateDrag(pointerId: number): void {
+    nodeEl('a').dispatchEvent(
+      pe('pointerdown', { button: 0, clientX: CENTER.a.x, clientY: CENTER.a.y, pointerId }),
+    );
+    svg.dispatchEvent(pe('pointermove', { clientX: CENTER.b.x, clientY: CENTER.b.y, pointerId }));
+  }
+
+  it('候选期（未过 4px 阈值）不挂类；过阈值激活即给被拖节点挂 gm-dragging', () => {
+    nodeEl('a').dispatchEvent(
+      pe('pointerdown', { button: 0, clientX: CENTER.a.x, clientY: CENTER.a.y, pointerId: 1 }),
+    );
+    svg.dispatchEvent(pe('pointermove', { clientX: 52, clientY: 21, pointerId: 1 })); // ≈2.2px
+    expect(nodeEl('a').classList.contains('gm-dragging')).toBe(false);
+    svg.dispatchEvent(pe('pointermove', { clientX: CENTER.b.x, clientY: CENTER.b.y, pointerId: 1 }));
+    expect(nodeEl('a').classList.contains('gm-dragging')).toBe(true);
+  });
+
+  it('正常释放 → 摘除 gm-dragging，且任何节点不残留', () => {
+    activateDrag(1);
+    svg.dispatchEvent(pe('pointerup', { clientX: CENTER.b.x, clientY: CENTER.b.y, pointerId: 1 }));
+    expect(onDrop).toHaveBeenCalledTimes(1);
+    for (const b of BOXES) {
+      expect(nodeEl(b.id).classList.contains('gm-dragging')).toBe(false);
+    }
+  });
+
+  it('禁止落点静默取消 / pointercancel / svg 外释放（window 兜底）→ 均摘除', () => {
+    // 自身盒 = 禁止目标：释放走静默取消路径
+    activateDrag(1);
+    svg.dispatchEvent(pe('pointermove', { clientX: 80, clientY: 30, pointerId: 1 })); // a 盒内
+    svg.dispatchEvent(pe('pointerup', { clientX: 80, clientY: 30, pointerId: 1 }));
+    expect(onDrop).not.toHaveBeenCalled();
+    expect(nodeEl('a').classList.contains('gm-dragging')).toBe(false);
+    // pointercancel 路径
+    activateDrag(2);
+    svg.dispatchEvent(pe('pointercancel', { pointerId: 2 }));
+    expect(nodeEl('a').classList.contains('gm-dragging')).toBe(false);
+    // svg 外释放（window pointerup 兜底）路径
+    activateDrag(3);
+    window.dispatchEvent(pe('pointerup', { clientX: 5000, clientY: -20, pointerId: 3 }));
+    expect(nodeEl('a').classList.contains('gm-dragging')).toBe(false);
+  });
+
+  it('destroy 中途打断 → gm-dragging 摘除（不回调 onDrop）', () => {
+    activateDrag(1);
+    expect(nodeEl('a').classList.contains('gm-dragging')).toBe(true);
+    controller.destroy();
+    expect(nodeEl('a').classList.contains('gm-dragging')).toBe(false);
+    expect(onDrop).not.toHaveBeenCalled();
+  });
+
+  it('gm-dragging 与落点反馈（drop-target/drop-forbidden）互不干扰、可共存', () => {
+    activateDrag(1);
+    vi.advanceTimersByTime(100); // b 本体悬停满 100ms 点亮
+    expect(nodeEl('a').classList.contains('gm-dragging')).toBe(true);
+    expect(nodeEl('a').classList.contains('drop-target')).toBe(false);
+    expect(nodeEl('b').classList.contains('drop-target')).toBe(true);
+    svg.dispatchEvent(pe('pointerup', { clientX: CENTER.b.x, clientY: CENTER.b.y, pointerId: 1 }));
+    expect(nodeEl('b').classList.contains('drop-target')).toBe(false);
+    expect(nodeEl('a').classList.contains('gm-dragging')).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // 原生文字拖选抑制（M7c-D1）
 // ---------------------------------------------------------------------------
 
