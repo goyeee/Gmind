@@ -25,10 +25,38 @@
  *   resolveDropSlot/insertCenterY 同公式，同点必同槽）；moveNode 先移除后插入，引擎不再
  *   做二次位次修正。child 区命中与列条带命中统一产出 sibling 写参数 {parentId, index}；
  *   DropTarget 的 child 成员仅为页面既有分支保留，引擎不再产出。
+ * - **根级侧别 = 持久侧别直取（逆时针定侧，需求方 2026-09-30；旧「复刻半分逻辑
+ *   修正 index」仿真退役）**：持久 side（core addChild 自动定侧 / setNodeSide 写入）
+ *   下布局不再翻面，落点解析改为「目标侧 = 芯片所在侧（classify 的 sideHint，指针
+ *   相对根盒中线）」，index = 该侧现有二级主题（按 NodeBox 当前 side 过滤）按 y 的
+ *   最近插入位映射回文档序（sideInsertDocIndex）。门控：根级尚无左列二级主题（logic
+ *   全右 / 新文档右列起步）时恒结算右列——logic 结构不受影响；classifyDropAt 与
+ *   resolveDropSlot 用同一门控公式（同点必同侧）。目标 side 随 DropTarget.side 输出，
+ *   页面据此调 core setNodeSide（页面接线注意：仅 mindmap 结构消费该字段）。
  * - **去掉 100ms 点亮门槛**（DROP_HOVER_MS 移除）：预览随指针即时更新（每次 move 直接
  *   结算并画，落点切换即摘旧反馈），释放仍取最后一帧缓存——所见即所提不变。
- * - root 直接子级侧别仿真、logic/org 门控（org 镜像区/列见上）、ghost 芯片右下偏移、
- *   禁止红描边+芯片变红、释放同参——全部保留不动。
+ * - logic/org 门控（org 镜像区/列见上）、ghost 芯片右下偏移、禁止红描边+芯片变红、
+ *   释放同参——全部保留不动。
+ *
+ * 【组拖动（2026-09-30 需求方「多个节点选中后要能同时拖动到其他节点」）】
+ * - **拾起**：deps 新增可选回调 getDragGroup(grabbedId)——按下节点命中当前多选
+ *   （size>1 且含 grabbedId）时页面返回整组 id（按布局序 box.y→box.x 升序排序、
+ *   排除 root）；否则 [grabbedId] 单节点。控制器内部 drag.ids: string[] 取代单 id
+ *   （单节点=长度 1，全路径兼容），组内序 = 拾起时布局序，释放时原样交给 onDrop。
+ * - **判定**：classifyDropAt 排除集从「被拖子树」扩为「全组各自子树」并集（组内
+ *   任一节点是命中目标本体/祖先 → 禁止）；区域命中与槽位计算不变（组作为整体插入
+ *   一个 parent+index）；「移除被拖节点后」的子级堆口径扩为「移除全组后」。
+ * - **预览**：ghost 改组芯片——最多 2 层堆叠（第一、二个节点各自盒尺寸文字，第二层
+ *   偏移 +6,+6 垫底、第一层盖顶），size>1 时第一层右上角画计数徽章（圆形企微蓝底
+ *   白字 ×N，类/testid gm-drag-ghost-badge）；禁止态芯片变红沿用（两层 rect 均为
+ *   ghost 直接子元素，页面 CSS `> rect` 同时命中）。edge+槽单套不变（组落同一槽，
+ *   槽盒取主拖节点尺寸）。
+ * - **根级侧别**：目标侧跟芯片所在侧（组内序不影响侧别判定；主拖节点盒算芯片），
+ *   target.side 随组落点一并输出——页面把整组 setNodeSide 到目标侧。
+ * - **释放**：onDrop 改传 ids: string[]（单节点长度 1）；页面整组**单事务**原子移动
+ *   ——moveNode(id, parentId, index + i) 递增插入保证组内序 = 拾起时布局序（引擎
+ *   index 已按「移除全组后」的子级堆结算，序列与结算口径严格自洽），一次 Ctrl+Z
+ *   整组回滚。组不含 root（拾起排除）；空白/取消/svg 外语义沿用。
  *
  * 【M7c-D1/D3/F 历史裁决（M7c-G 起带模型/点亮门槛退役，其余仍有效）】
  * M7c-D1 落点三分语义（需求方原话「拖动的功能简直糟糕透了，我都没看懂逻辑是啥」；
@@ -48,13 +76,12 @@
  *   （computeResolved），逐帧缓存于 pending；释放点 = 最后悬停点（常态）时直接复用
  *   缓存提交，绝不二次计算造成预览与落点分叉；释放点 ≠ 最后悬停点（svg 外兜底
  *   释放等）才用**同一函数**现算——同点必同果。
- * - **根级侧别仿真（「松手跳左侧」根治）**：layout 的 assignMindmapSides 把 root
- *   直接子级按文档序做「累计子树带高过半即翻左」的前缀切分，拖放插入改变文档序后
- *   重排，被拖节点可能被分到对侧。resolveDropSlot 纯函数（从盒子集合计算，不 import
- *   layout.ts——不动布局与金样）复刻该半分逻辑：几何 index 仿真到对侧时，在同侧
- *   兄弟中按 y 找最接近芯片 y 的插入位修正 index，释放与槽共用修正结果。仅 root
- *   直接子级且现有兄弟含 left 侧（mindmap 双侧文档）启用——logic 全右/单侧文档无
- *   翻转证据，几何 index 即最终 index（org 另有横排分支）。
+ * - **根级侧别仿真（「松手跳左侧」根治）→ 逆时针定侧起退役**：layout 的
+ *   assignMindmapSides 旧按「累计子树带高过半即翻左」前缀切分，拖放插入改变文档序
+ *   后重排，被拖节点可能被分到对侧——resolveDropSlot 曾复刻该半分逻辑做仿真修正。
+ *   持久侧别（core node.side，需求方 2026-09-30）下布局不再翻面：侧别 = 落点芯片
+ *   所在侧（门控见上方「根级侧别 = 持久侧别直取」），仿真不复存在，index 即最终
+ *   index（本节保留原文备查）。
  *
  * M7c-F 复验修复（Kimi K3 复验 commit e484dcc 报四问题）：
  * 1. **上缘带槽位错位**：insertCenterY 首位插入去掉「不高于父盒中线」下钳制——首
@@ -80,7 +107,7 @@
  * 被拖节点视觉反馈（需求方「拖动节点时被拖节点零反馈」）：激活瞬间（activate，
  * 过 4px 阈值那一步）给被拖节点 g 挂 `gm-dragging` + `gm-drag-origin` 类，视觉由
  * 页面 CSS 落地；所有结束路径（释放成功、禁止目标静默取消、pointercancel、svg 外
- * pointerup 兜底、destroy）统一经 clearHighlights 摘除——挂/摘以 draggingVisualId
+ * pointerup 兜底、destroy）统一经 clearHighlights 摘除——挂/摘以 draggingVisualIds
  * 字段配对，不依赖 this.drag 的清空时序，任何路径不残留类。
  *
  * 原生文字拖选根治（需求方「点击节点拖动时竟然把文字选中了」）：web 侧
@@ -127,13 +154,20 @@ const V_GAP_FALLBACK = 20;
 const H_GAP_FALLBACK = 60;
 /** 芯片相对光标的右下偏移（screen px 恒定；scene 偏移 = 此值 / 当前 scale）。 */
 const GHOST_CURSOR_OFFSET_PX = 14;
+/** 组芯片堆叠层偏移（场景 px，第二层相对第一层 +x,+y；组拖动需求方定值 6）。 */
+const GHOST_STACK_OFFSET_PX = 6;
+/** 组芯片计数徽章字号（场景 px）。 */
+const GHOST_BADGE_FONT_SIZE = 11;
+/** 组芯片计数徽章半径（场景 px）。 */
+const GHOST_BADGE_RADIUS = 9;
 
 /**
  * 悬停中的几何落点（M7c-G 列吸附连续模型）。index 恒为「移除被拖节点后」的文档序
  * 插入位（最近间隙位，classify 纯几何结算，moveNode 先移除后插入——引擎不再二次修正）；
- * sideHint 仅 root 级命中时携带侧别意图（根列左右分侧，芯片几何中心带右下偏移与节点
- * 半宽，不靠它推导）。kind:'blank' = 空白（M7c-F 复验问题4：悬停即解析为 root 对应侧
- * 末尾并画预览）；注意与「禁止目标」的 placement null 区分——后者不参与反馈点亮。
+ * sideHint = root 级命中时的**目标侧别**（逆时针定侧：芯片所在侧，经左列门控——
+ * 见 rootLeftEnabled；仅根级携带，非 root 级/同侧列命中无此字段）。kind:'blank' =
+ * 空白（M7c-F 复验问题4：悬停即解析为 root 对应侧末尾并画预览）；注意与「禁止目标」
+ * 的 placement null 区分——后者不参与反馈点亮。
  */
 export type DropPlacement =
   /** 子级吸附区命中：变 nodeId 子级、插第 index 位（无子级 index=0 同追加）。 */
@@ -145,9 +179,12 @@ export type DropPlacement =
 /**
  * 释放落点（onDrop 第二参，M7c-G 列吸附连续模型）：
  * - `{kind:'sibling'}` = 插为 parentId 的第 index 个子级（core moveNode 直用；index 为
- *   「移除被拖节点后」的文档序位次——classify 按指针最近间隙位结算、root 级再经
- *   resolveDropSlot 侧别仿真修正，预览与释放共用同一值。子级吸附区命中也产出本形态
- *   （parentId=吸附目标 N、index=P.y 序位，「松开就吸附上去」），引擎不再产出 child）；
+ *   「移除被拖节点后」的文档序位次——classify 按指针最近间隙位结算，预览与释放共用
+ *   同一值。子级吸附区命中也产出本形态（parentId=吸附目标 N、index=P.y 序位，「松开
+ *   就吸附上去」），引擎不再产出 child）。**side**（逆时针定侧，需求方 2026-09-30）=
+ *   根级落点的目标侧别（'left'|'right'；经左列门控，非根级落点无此字段）——页面在
+ *   moveNode 后用它调 core setNodeSide(id, target.side)，实现「拖到哪侧就持久到哪侧」
+ *   的手动换侧；仅 mindmap 结构应消费该字段（logic/org 布局不读 side）；
  * - `{kind:'child'}` = 变 nodeId 子级（追加末尾）——仅为页面既有分支保留的类型成员，
  *   引擎现不再产出；
  * - `null` = 禁止目标（释放静默取消）或空白解析失败（root 盒缺失等窗口期）——页面
@@ -161,6 +198,8 @@ export type DropTarget =
       index: number;
       anchorId: string;
       position: 'before' | 'after';
+      /** 根级落点的目标侧别（页面据此调 setNodeSide；非根级/解析失败窗口期缺省）。 */
+      side?: 'left' | 'right';
     }
   | null;
 
@@ -176,7 +215,7 @@ export interface DropSlotPreview {
   edge: { from: Point; to: Point; kind: 'bezier' | 'elbow'; controls?: Point[] };
 }
 
-/** 落位槽结算：槽几何 + 最终文档序 index（侧别仿真可能修正几何 index）。 */
+/** 落位槽结算：槽几何 + 最终文档序 index（持久侧别下 classify 的 index 即最终值）。 */
 export interface DropSlotResolution {
   slot: DropSlotPreview;
   index: number;
@@ -184,19 +223,15 @@ export interface DropSlotResolution {
 
 /**
  * 落位预览结算（M7c-D3 纯函数，从 boxes 计算、不 import layout.ts——不动布局与金样）：
- * 输入 sibling 目标的几何 index，输出落位槽与最终 index；父盒/被拖盒缺失（协同删除
+ * 输入 sibling 目标的文档序 index，输出落位槽与最终 index；父盒/被拖盒缺失（协同删除
  * 窗口期）返回 null（无预览，释放仍按原 target 结算）。
  *
- * 根级侧别仿真（「松手跳左侧」根治，详见文件头注）：
- * - 子树垂直带 = 子盒 + 全部可见后代盒的 min y..max y（与布局 subtreeH 同源，折叠
- *   子树不在盒集）；带间距自相邻文档序带实测（= 布局 V_GAP），兜底 20；
- * - 半分逻辑逐字复刻 assignMindmapSides：累计带高 + 当前带高过半（>）即自该子树起
- *   全部翻左，首个恒右——因此右侧恒为文档序前缀，同侧插入位 p 可直接映射文档序
- *   index（芯片在右：index=p；在左：index=右侧数+p）；
- * - 几何 index 仿真到对侧 → 在同侧（side === 芯片侧）兄弟中按 y 找最接近芯片 y 的
- *   插入位，并复核仿真——仍到不了芯片侧时如实按仿真侧画槽（所见即所得优先）；
- * - 门控：仅 root 直接子级且现有兄弟含 left 侧（mindmap 双侧文档）仿真；logic 全右
- *   /单侧文档无翻转证据，槽侧恒跟结构实际侧 right（M7c-F 复验问题4）。非 root 父级：
+ * 根级侧别（逆时针定侧，需求方 2026-09-30；旧「半分逻辑仿真修正 index」退役）：
+ * - 目标侧 = sideHint（classify 按芯片所在侧结算的最终侧）?? 芯片盒中心相对根盒中线；
+ * - 门控（rootLeftEnabled）：根级尚无左列二级主题（logic 全右 / 新文档右列起步）时
+ *   恒结算右列——logic 结构不受影响；与 classifyDropAt 同一公式，同点必同侧；
+ * - 持久 side 下布局不再翻面：index 不做任何修正（classify 的侧别感知映射
+ *   sideInsertDocIndex 已产出最终文档序位），槽侧 = 目标侧。非 root 父级：
  *   side=父级侧、index 按几何（placeHorizontal 后代继承父侧，无重排）。
  *
  * 槽几何：x = 父盒同侧列（水平间距 = 父盒与首个同侧子级的 x 差，兜底 60）；y = 按
@@ -211,21 +246,28 @@ export function resolveDropSlot(args: {
   childrenIds: string[];
   draggedId: string;
   parentId: string;
-  /** resolveTarget 结算的几何 index（同父移除修正后的文档序位次）。 */
+  /** resolveTarget 结算的文档序 index（classify 侧别感知映射后的最终位次）。 */
   index: number;
   /** 芯片盒（场景坐标左上角 + 被拖盒 w/h）——侧别与最近插入位判定输入。 */
   chipBox: { x: number; y: number; w: number; h: number };
   /**
-   * 可选：侧别意图覆写（M7c-F 复验问题4 空白落点）。缺省按芯片盒中心相对父盒中线
-   * 推导；空白落点的芯片中心带节点半宽偏移，侧别意图应取指针侧——由调用方传入。
+   * 可选：目标侧别覆写（classify/空白解析产出的最终侧）。缺省按芯片盒中心相对父盒
+   * 中线推导；空白落点的芯片中心带节点半宽偏移，侧别应取指针侧——由调用方传入。
    */
   sideHint?: 'left' | 'right';
+  /**
+   * 可选：组拖动（2026-09-30）全组 id（含 draggedId）。缺省 = [draggedId] 单节点。
+   * 影响：兄弟堆过滤扩为「移除全组」。槽几何（w/h/列位）仍取主拖节点盒——组落同一槽。
+   */
+  draggedGroupIds?: string[];
 }): DropSlotResolution | null {
   const { boxes, childrenIds, draggedId, parentId, index, chipBox, sideHint } = args;
   const byId = new Map(boxes.map((b) => [b.id, b]));
   const parentBox = byId.get(parentId);
   const draggedBox = byId.get(draggedId);
   if (!parentBox || !draggedBox) return null;
+  const groupIds =
+    args.draggedGroupIds && args.draggedGroupIds.length > 0 ? args.draggedGroupIds : [draggedId];
 
   // parent→children 邻接（盒自带 parentId，反建映射即可算子树带；盒子来自 layout，无环）。
   const kidsOf = new Map<string, NodeBox[]>();
@@ -251,14 +293,11 @@ export function resolveDropSlot(args: {
     walk(id);
     return { top, bottom };
   };
-  const bandH = (id: string): number => {
-    const band = bandOf(id);
-    return band.bottom - band.top;
-  };
 
-  // 文档序兄弟堆（去被拖节点；盒缺失跳过）。横向布局下文档序即 y 序（布局单带堆叠）。
+  // 文档序兄弟堆（去全组——组内任一成员现为该父子级的都移走；盒缺失跳过）。
+  // 横向布局下文档序即 y 序（布局单带堆叠）。
   const stack = childrenIds
-    .filter((id) => id !== draggedId)
+    .filter((id) => !groupIds.includes(id))
     .map((id) => byId.get(id))
     .filter((b): b is NodeBox => b !== undefined);
   const docPos = new Map(stack.map((b, i) => [b.id, i] as const));
@@ -311,8 +350,18 @@ export function resolveDropSlot(args: {
   // —— 横向（mindmap/logic）：兄弟纵排，槽在父同侧列 ——
   const chipCx = chipBox.x + chipBox.w / 2;
   const parentCx = parentBox.x + parentBox.w / 2;
-  const chipSide: 'left' | 'right' = sideHint ?? (chipCx >= parentCx ? 'right' : 'left');
   const isRootLevel = parentBox.parentId === undefined;
+  const chipSide: 'left' | 'right' = sideHint ?? (chipCx >= parentCx ? 'right' : 'left');
+  // 持久侧别（逆时针定侧）：根级目标侧 = 芯片所在侧，左列未启用时恒右（门控公式与
+  // classifyDropAt 一致，同点必同侧）；非 root 继承父侧（placeHorizontal 后代同侧）。
+  const side: 'left' | 'right' = isRootLevel
+    ? chipSide === 'left' && !rootLeftEnabled(boxes, parentBox)
+      ? 'right'
+      : chipSide
+    : parentBox.side === 'left'
+      ? 'left'
+      : 'right';
+  const finalIndex = gi; // 持久侧别下不再翻面：index 无需仿真修正
 
   /** 带间距：相邻文档序兄弟带实测（= 布局 V_GAP；不可得兜底 20）。 */
   const vGap =
@@ -325,58 +374,7 @@ export function resolveDropSlot(args: {
         )
       : V_GAP_FALLBACK;
 
-  /** 复刻 assignMindmapSides 的半分切分，返回被拖节点插入后的侧别。 */
-  const simulateDraggedSide = (insertAt: number): 'left' | 'right' => {
-    const ids = stack.map((b) => b.id);
-    ids.splice(insertAt, 0, draggedId);
-    const heights = ids.map(bandH);
-    const total = heights.reduce((s, h) => s + h, 0) + vGap * (ids.length - 1);
-    const half = total / 2;
-    let cum = 0;
-    let flipped = false;
-    const sides: Array<'left' | 'right'> = [];
-    for (let i = 0; i < ids.length; i += 1) {
-      if (!flipped && i > 0 && cum + heights[i]! > half) flipped = true;
-      sides.push(flipped ? 'left' : 'right');
-      if (!flipped) cum += heights[i]!;
-    }
-    return sides[ids.indexOf(draggedId)] ?? 'right';
-  };
-
-  let finalIndex = gi;
-  let side: 'left' | 'right';
-  if (isRootLevel && stack.some((b) => b.side === 'left')) {
-    let sim = simulateDraggedSide(gi);
-    if (sim !== chipSide) {
-      // 同侧兄弟按 y 找最接近芯片 y 的插入位（同侧兄弟恒为文档序前缀/后缀：
-      // 右侧位 p ↔ index p；左侧位 p ↔ index 右侧数 + p）。
-      const sideSibs = stack.filter((b) => b.side === chipSide);
-      const chipCy = chipBox.y + chipBox.h / 2;
-      let bestP = 0;
-      let bestDist = Infinity;
-      for (let p = 0; p <= sideSibs.length; p += 1) {
-        const cy = insertCenterY(sideSibs, p, draggedBox.h, vGap, parentBox);
-        const dist = Math.abs(cy - chipCy);
-        if (dist < bestDist) {
-          bestDist = dist;
-          bestP = p;
-        }
-      }
-      finalIndex = chipSide === 'right' ? bestP : rightCountOf(stack) + bestP;
-      sim = simulateDraggedSide(finalIndex); // 复核：仍到不了芯片侧则如实按仿真侧
-    }
-    side = sim;
-  } else if (isRootLevel) {
-    // 单侧根级（logic 全右 / 全右 mindmap / 空兄弟）：布局首个恒右、无左翻证据——
-    // 槽侧恒跟结构实际侧（right），不跟芯片/指针侧（空白悬停在左半画左槽会与重排
-    // 结果相悖，M7c-F 复验问题4「可预期」）。既有 sibling 带落点芯片必在盒 x 域内
-    // （右列盒整体在父中线右），此取值与旧「芯片侧」等价。
-    side = 'right';
-  } else {
-    side = parentBox.side === 'left' ? 'left' : 'right'; // 非 root：继承父侧
-  }
-
-  // 槽所在侧的兄弟列（同父兄弟同侧；根级仿真后 = 最终侧兄弟）。
+  // 槽所在侧的兄弟列（同父兄弟同侧；根级 = 目标侧兄弟）。
   const sideSibs = stack.filter((b) => b.side === side);
   const p = sideSibs.filter((b) => (docPos.get(b.id) ?? 0) < finalIndex).length;
   const centerY = insertCenterY(sideSibs, p, draggedBox.h, vGap, parentBox);
@@ -406,9 +404,35 @@ export function resolveDropSlot(args: {
   };
 }
 
-/** 右侧兄弟数（根级左插位的文档序映射基数：右侧恒为文档序前缀）。 */
-function rightCountOf(stack: NodeBox[]): number {
-  return stack.filter((b) => b.side === 'right').length;
+/**
+ * 根级左列门控（逆时针定侧）：根级尚无任何左列二级主题（按当前布局盒判定，含被拖
+ * 组成员——拖动中盒集仍是落点前状态）恒结算右列。logic 全右文档永不开启；mindmap
+ * 新文档（前 3 个右）也先居右，首个左侧节点出现（含第 4 个自动落左）后开放按芯片
+ * 所在侧换侧。classifyDropAt 与 resolveDropSlot 共用同一公式（输入同一盒集 ⇒ 同点
+ * 必同侧），保证预览、释放与 target.side 三者一致。
+ */
+function rootLeftEnabled(boxes: NodeBox[], rootBox: NodeBox): boolean {
+  return boxes.some((b) => b.parentId === rootBox.id && b.side === 'left');
+}
+
+/**
+ * 同侧 y 位次 → 文档序插入位映射（逆时针定侧；classifyDropAt 索引结算用）：
+ * 布局把 root 直接子级按文档序排在单一竖带上（y 序 = 文档序），「该侧第 p 个插入位」
+ * 映射为文档序中该侧相邻兄弟之间的位次——p=0 取首兄弟文档位（插其前），p>0 取前一同
+ * 侧兄弟文档位 +1（插其后），使落点带位恰为该侧兄弟间的最近 y 间隙；尾插（p ≥ 该侧
+ * 兄弟数）取末兄弟文档位 +1。该侧无兄弟时：right → 0（右列自带顶生长）、left → 堆尾
+ * （与空白解析「右顶/左尾」语义一致，logic/全右文档的左半落点由此恒落文档序末尾）。
+ */
+function sideInsertDocIndex(stack: NodeBox[], side: 'left' | 'right', p: number): number {
+  const posOf = new Map(stack.map((b, i) => [b.id, i] as const));
+  const sideSibs = stack.filter((b) => b.side === side);
+  if (sideSibs.length === 0) return side === 'right' ? 0 : stack.length;
+  if (p <= 0) return posOf.get(sideSibs[0]!.id) ?? 0;
+  if (p >= sideSibs.length) {
+    const last = sideSibs[sideSibs.length - 1]!;
+    return (posOf.get(last.id) ?? stack.length - 1) + 1;
+  }
+  return (posOf.get(sideSibs[p - 1]!.id) ?? 0) + 1;
 }
 
 /** 第 p 个插入位的槽中心 y（同侧兄弟堆；见 resolveDropSlot 槽几何规则）。 */
@@ -702,19 +726,28 @@ function nearestOrgInsertIndex(
 /**
  * 落点解析纯函数（M7c-G 列吸附连续模型主入口；classifyAt 薄委托，导出供单测直测）。
  * 输入盒子几何 + 文档子级序 + 禁止判定，输出悬停落点：
- * 0. 盒直击被拖节点/其后代 → forbiddenId（整盒禁止，不参与区域解析）；
+ * 0. 盒直击被拖组任一成员/其后代 → forbiddenId（整盒禁止，不参与区域解析）；
  * 1. 子级吸附区（depth 降序）→ {kind:'child', nodeId, index, sideHint?}；
  * 2. 同级插入列（depth 降序）→ {kind:'sibling', parentId, index, sideHint?}；
  * 3. 都未命中 → {kind:'blank'}（computeResolved 再解析为 root 对应侧末尾）。
- * index = 「移除被拖节点后」子级堆上按指针 y（org 按 x）的最近间隙位——与
- * resolveDropSlot 的槽几何同公式，预览与释放天然一致；root 级命中携带 sideHint
- * （根列左右分侧的侧别意图）供槽结算的侧别仿真入口。
+ * index = 「移除全组后」子级堆上按指针 y（org 按 x）的最近间隙位——与
+ * resolveDropSlot 的槽几何同公式，预览与释放天然一致；root 级命中携带 sideHint =
+ * **目标侧别**（逆时针定侧：指针所在侧，经 rootLeftEnabled 左列门控——logic 全右/
+ * 新文档恒 right；sideInsertDocIndex 映射回文档序位次，resolveDropSlot 直接消费、
+ * 不再仿真修正）。
  */
 export function classifyDropAt(args: {
   boxes: NodeBox[];
   childrenIdsOf(nodeId: string): string[];
   isDescendant(id: string, candidateId: string): boolean;
   draggedId: string;
+  /**
+   * 可选：组拖动（2026-09-30）全组 id（含主拖节点 draggedId）。缺省 = [draggedId]
+   * 单节点。排除集 = 全组各自子树的并集（组内任一节点是命中目标本体/祖先 → 禁止）；
+   * 「移除被拖节点后」的子级堆口径同步扩为「移除全组后」。区域命中与槽位计算
+   * 不变（dragW/H 仍取主拖节点盒——组作为整体插入一个 parent+index）。
+   */
+  draggedIds?: string[];
   point: Point;
 }): { placement: DropPlacement | null; forbiddenId: string | null } {
   const { boxes, childrenIdsOf, isDescendant, draggedId, point } = args;
@@ -722,7 +755,12 @@ export function classifyDropAt(args: {
   const draggedBox = byId.get(draggedId);
   const dragW = draggedBox?.w ?? 0;
   const dragH = draggedBox?.h ?? 0;
-  const forbidden = (id: string): boolean => id === draggedId || isDescendant(draggedId, id);
+  const groupIds =
+    args.draggedIds && args.draggedIds.length > 0 ? args.draggedIds : [draggedId];
+  // 排除集 = 全组各自子树的并集：id 为组成员本体、或为组内任一节点的后代 → 禁止
+  // （单组退化为旧「被拖子树」口径）。
+  const forbidden = (id: string): boolean =>
+    groupIds.some((gid) => id === gid || isDescendant(gid, id));
 
   // 0) 盒直击：被拖/后代本体一律禁止（含旧「整盒含边缘带」语义的范围）——先于一切区域。
   for (const b of boxes) {
@@ -733,14 +771,18 @@ export function classifyDropAt(args: {
 
   const kidsOf = kidsOfBoxes(boxes);
   const bandOf = (id: string): { top: number; bottom: number } => subtreeBand(id, byId, kidsOf);
-  /** 移除被拖节点后的文档序子级堆（盒缺失跳过——折叠/协同删除窗口期）。 */
+  /**
+   * 移除全组后的文档序子级堆（盒缺失跳过——折叠/协同删除窗口期）：组作为整体
+   * 插入一个 parent+index，堆里现属组内的任一成员都先移走（与释放端 moveNode
+   * 先移除后插入的序列口径一致）。
+   */
   const stackOf = (parentId: string): NodeBox[] =>
     childrenIdsOf(parentId)
-      .filter((cid) => cid !== draggedId)
+      .filter((cid) => !groupIds.includes(cid))
       .map((cid) => byId.get(cid))
       .filter((b): b is NodeBox => b !== undefined);
 
-  /** 命中侧的插入 index 结算：org 按 P.x；root 按同侧堆结算再映射文档序（右侧恒前缀）。 */
+  /** 命中侧的插入 index 结算：org 按 P.x；root 按目标侧堆结算再映射文档序（逆时针定侧）。 */
   const indexOfStack = (
     parent: NodeBox,
     side: 'left' | 'right' | 'down',
@@ -757,7 +799,12 @@ export function classifyDropAt(args: {
       return { index: nearestOrgInsertIndex(stack, point.x, dragW, gapX, parent) };
     }
     if (parent.parentId === undefined) {
-      const sideSibs = stack.filter((b) => b.side === side);
+      // 根级（逆时针定侧）：目标侧 = 指针侧（zoneSideAt/stripSideAt 的侧别），经左列
+      // 门控（rootLeftEnabled，与 resolveDropSlot 同公式——logic 全右/新文档恒右）；
+      // index = 该侧二级主题（按 NodeBox 当前 side 过滤）按 y 的最近插入位映射回文档序。
+      const targetSide: 'left' | 'right' =
+        side === 'left' && !rootLeftEnabled(boxes, parent) ? 'right' : side;
+      const sideSibs = stack.filter((b) => b.side === targetSide);
       const p = nearestInsertIndex(
         sideSibs,
         point.y,
@@ -765,7 +812,7 @@ export function classifyDropAt(args: {
         stackBandGap(sideSibs, bandOf),
         parent,
       );
-      return { index: side === 'right' ? p : rightCountOf(stack) + p, sideHint: side };
+      return { index: sideInsertDocIndex(stack, targetSide, p), sideHint: targetSide };
     }
     return {
       index: nearestInsertIndex(stack, point.y, dragH, stackBandGap(stack, bandOf), parent),
@@ -801,11 +848,20 @@ export interface DragControllerDeps {
   /** 当前布局节点盒（场景坐标；每次命中检测实时取，拖拽中可被重布局刷新）。 */
   getBoxes(): NodeBox[];
   /**
-   * 释放回调：target 见 {@link DropTarget}（M7c-G 起恒为 sibling/兜底 null——child 区
-   * 命中也产出带 index 的 sibling；空白已在引擎
-   * 解析为 root 对应侧末尾 sibling——null 仅在 root 盒缺失等窗口期出现）。
+   * 释放回调：ids = 被拖组（2026-09-30 批量拖动起为 id 数组——单节点长度 1，组内
+   * 序 = 拾起时布局序，页面整组单事务按 index+i 递增提交）。target 见
+   * {@link DropTarget}（M7c-G 起恒为 sibling/兜底 null——child 区命中也产出带
+   * index 的 sibling；空白已在引擎解析为 root 对应侧末尾 sibling——null 仅在 root
+   * 盒缺失等窗口期出现）。
    */
-  onDrop(id: string, target: DropTarget): void;
+  onDrop(ids: string[], target: DropTarget): void;
+  /**
+   * 组拾起回调（2026-09-30 需求方批量拖动，可选）：按下节点 grabbedId 命中当前
+   * 多选（size>1 且含 grabbedId）时返回整组 id——页面按布局序（box.y→box.x 升序）
+   * 排序、排除 root；否则返回 [grabbedId] 单节点。缺省（未提供）= 单节点拖拽；
+   * 返回不含 grabbedId（异常/防回归护栏）时控制器降级单节点。
+   */
+  getDragGroup?(grabbedId: string): string[];
   /** candidateId 是否为 id 的后代（含间接）——后代不可作为落点锚（禁止目标）。 */
   isDescendant(id: string, candidateId: string): boolean;
   /** 文档子级序（页面适配 core childrenIds）：sibling 落点 index 结算输入（事务外纯计算）。 */
@@ -817,7 +873,8 @@ export interface DragControllerDeps {
 }
 
 /**
- * 拖拽进行中的公开快照。offsetX/Y = 抓取偏移（按下点场景坐标 − 被拖盒左上角）；
+ * 拖拽进行中的公开快照。id = 主拖节点（2026-09-30 组拖动起=按下节点；组内其余
+ * 成员不在此快照暴露）；offsetX/Y = 抓取偏移（按下点场景坐标 − 被拖盒左上角）；
  * M7c-F 复验问题3① 起芯片定位改用「指针 + 右下偏移」，本快照仅作公开状态留存。
  */
 export interface DragSnapshot {
@@ -888,14 +945,26 @@ export class DragController {
   private attached = false;
   /** 阈值前候选：已按下但未激活。 */
   private candidate: { id: string; x: number; y: number; pointerId: number } | null = null;
-  /** 激活中的拖拽。 */
-  private drag: { id: string; pointerId: number; offsetX: number; offsetY: number } | null = null;
+  /**
+   * 激活中的拖拽。ids = 被拖组（2026-09-30 批量拖动：单节点长度 1，组内序 = 拾起时
+   * 布局序；id 恒为主拖节点=按下节点，供芯片盒/槽尺寸等单节点口径复用）。
+   */
+  private drag: {
+    id: string;
+    ids: string[];
+    pointerId: number;
+    offsetX: number;
+    offsetY: number;
+  } | null = null;
   /** 当前悬停落点（比较键见 placementKey）；空白/禁止为 null。 */
   private hoverPlacement: DropPlacement | null = null;
-  /** 当前被标 drop-forbidden 的节点 id（自身或后代）。 */
+  /** 当前被标 drop-forbidden 的节点 id（组成员本体或其任一后代）。 */
   private hoverForbidden: string | null = null;
-  /** 被拖节点当前挂 gm-dragging/gm-drag-origin 的 id（激活挂上、clearHighlights 摘除）。 */
-  private draggingVisualId: string | null = null;
+  /**
+   * 挂 gm-dragging/gm-drag-origin 的节点 id 集（2026-09-30 组拖动起为全组成员；
+   * 单节点长度 1。激活挂上、clearHighlights 摘除，配对不依赖 this.drag 清空时序）。
+   */
+  private draggingVisualIds: string[] = [];
   /**
    * 最后一帧落点结算缓存（classify→resolve→槽一次算成）：预览元素由此绘制，释放
    * 直接复用（释放点 = 缓存点时）——预览与落点永不分叉（M7c-D3 一致性裁决）。
@@ -1005,20 +1074,20 @@ export class DragController {
       this.finish();
       return;
     }
-    const id = this.drag.id;
+    const ids = this.drag.ids; // finish() 清态前捕获（onDrop 在 finish 之后回调）
     const scene = deps.viewport.toSceneFromEvent(e);
     // 释放结算（M7c-D3 一致性）：常态（释放点 = 最后悬停点）直接复用最后一帧缓存
     // ——所见即所提；仅释放点 ≠ 缓存点（svg 外兜底释放等）才用同一函数现算。
     const resolved =
       this.pending !== null && this.pending.at.x === scene.x && this.pending.at.y === scene.y
         ? this.pending.resolved
-        : this.computeResolved(scene, this.classifyAt(scene.x, scene.y, id));
+        : this.computeResolved(scene, this.classifyAt(scene.x, scene.y));
     if (resolved.forbiddenId !== null) {
       this.finish();
-      return; // 自身/自身后代：静默取消（fix round 1 裁决沿用）
+      return; // 组成员本体/组成员后代：静默取消（fix round 1 裁决沿用）
     }
     this.finish();
-    deps.onDrop(id, resolved.target); // 空白 null / child / sibling（含快速释放——见头注）
+    deps.onDrop(ids, resolved.target); // 整组（单节点长度 1）/空白 null（含快速释放——见头注）
   };
 
   private onPointerCancel = (): void => {
@@ -1046,20 +1115,28 @@ export class DragController {
     // 激活 move 点——慢起手时二者可差很远。
     const rect = deps.svg.getBoundingClientRect();
     const downScene = deps.viewport.toScene(cand.x - rect.left, cand.y - rect.top);
+    // 组拾起（2026-09-30 需求方批量拖动）：按下节点命中当前多选 → 整组（页面按布局
+    // 序排序）；回调缺省或返回不含按下节点（异常护栏）→ 降级单节点。组内序自此
+    // 冻结为拾起时布局序，释放时原样交给 onDrop。
+    const group = deps.getDragGroup ? deps.getDragGroup(cand.id) : [cand.id];
+    const ids = group.includes(cand.id) && group.length > 0 ? [...group] : [cand.id];
     this.drag = {
       id: cand.id,
+      ids,
       pointerId: cand.pointerId,
       offsetX: box ? downScene.x - box.x : 0,
       offsetY: box ? downScene.y - box.y : 0,
     };
     this.candidate = null;
-    // 被拖节点视觉反馈（企微「提起」）：gm-dragging（半透明/cursor）+ gm-drag-origin
-    // （虚线占位）并挂，视觉由页面 CSS 落地；摘除统一走 clearHighlights，任何路径
-    // 不残留。芯片逐帧定位（指针 − 抓取偏移，芯片不跳变）。
-    this.draggingVisualId = cand.id;
-    this.setClass(cand.id, 'gm-dragging', true);
-    this.setClass(cand.id, 'gm-drag-origin', true);
-    this.createGhost(cand.id);
+    // 被拖组视觉反馈（企微「提起」）：全组成员并挂 gm-dragging（半透明/cursor）+
+    // gm-drag-origin（虚线占位），视觉由页面 CSS 落地；摘除统一走 clearHighlights，
+    // 任何路径不残留。芯片逐帧定位（指针 + 右下偏移）。
+    this.draggingVisualIds = [...ids];
+    for (const gid of ids) {
+      this.setClass(gid, 'gm-dragging', true);
+      this.setClass(gid, 'gm-drag-origin', true);
+    }
+    this.createGhost(ids);
     this.updateGhost(scene);
     if (typeof deps.svg.setPointerCapture === 'function') {
       try {
@@ -1116,20 +1193,22 @@ export class DragController {
   /**
    * 场景点落点分类（M7c-G 列吸附连续模型）：薄委托到纯函数 classifyDropAt（几何判定
    * 全部在纯函数——盒直击禁止 > 子级吸附区 > 同级插入列 > 空白，depth 降序取更深；
-   * 语义与区域定义见 classifyDropAt / zoneSideAt / stripSideAt 头注）。
+   * 语义与区域定义见 classifyDropAt / zoneSideAt / stripSideAt 头注）。排除集传全组
+   * （2026-09-30 组拖动）：组成员本体/组内任一节点的后代一律禁止。
    */
   private classifyAt(
     sceneX: number,
     sceneY: number,
-    draggedId: string,
   ): { placement: DropPlacement | null; forbiddenId: string | null } {
     const deps = this.deps;
-    if (!deps) return { placement: null, forbiddenId: null };
+    const drag = this.drag;
+    if (!deps || !drag) return { placement: null, forbiddenId: null };
     return classifyDropAt({
       boxes: deps.getBoxes(),
       childrenIdsOf: (id) => deps.childrenIdsOf(id),
       isDescendant: (id, candidateId) => deps.isDescendant(id, candidateId),
-      draggedId,
+      draggedId: drag.id,
+      draggedIds: drag.ids,
       point: { x: sceneX, y: sceneY },
     });
   }
@@ -1143,33 +1222,47 @@ export class DragController {
    * position 仅作落点意图调试信息（页面按 parentId+index 提交）：index 位前一个子级 =
    * after 锚，index 0 = 首子级 before 锚，空堆 = 父自身。
    */
-  private resolveTarget(draggedId: string, placement: DropPlacement): DropTarget {
+  private resolveTarget(ids: string[], placement: DropPlacement): DropTarget {
     const deps = this.deps;
     // placement null = 禁止目标（target 恒 null，释放先行取消）；blank 由
     // computeResolved 走 resolveBlankTarget，不经此路径。
     if (!deps || placement === null || placement.kind === 'blank') return null;
     const parentId = placement.kind === 'child' ? placement.nodeId : placement.parentId;
+    // 锚点调试信息按「移除全组后」的子级堆结算（组拖动 2026-09-30：组内任一成员
+    // 现为该父子级的都先移走，与 classify/释放序列口径一致）。
     const stack = deps
       .childrenIdsOf(parentId)
-      .filter((cid) => cid !== draggedId)
+      .filter((cid) => !ids.includes(cid))
       .map((cid) => deps.getBoxes().find((b) => b.id === cid))
       .filter((b): b is NodeBox => b !== undefined);
     const anchorId = (stack[placement.index - 1] ?? stack[0])?.id ?? parentId;
     // 空堆（追加/变子级）= after 父自身；非空 index 0 = before 首子级。
     const position: 'before' | 'after' =
       placement.index === 0 && stack.length > 0 ? 'before' : 'after';
-    return { kind: 'sibling', parentId, index: placement.index, anchorId, position };
+    // 逆时针定侧：根级命中携带目标侧别（classify 经左列门控产出）→ DropTarget.side，
+    // 页面在 moveNode 后据此调 core setNodeSide 完成持久换侧；非根级无 sideHint、
+    // 不带 side（持久侧别仅 root 直接子级有语义）。
+    return {
+      kind: 'sibling',
+      parentId,
+      index: placement.index,
+      anchorId,
+      position,
+      ...(placement.sideHint !== undefined ? { side: placement.sideHint } : {}),
+    };
   }
 
   /**
-   * 空白落点解析（M7c-F 复验问题4）：企微语义「空白=挂 root」但要可预期——侧别取
-   * 指针相对 root 盒中线（右半→right、左半→left），index 取该侧现有子级（扣除被拖
-   * 节点）的文档序末尾：右侧 = 文档序前缀的长度（assignMindmapSides 首个恒右 + 前缀
-   * 切分），左侧/单侧（logic 全右、org 全 down）= 文档序末尾。index 随后照常过
-   * resolveDropSlot 侧别仿真（sideHint 传指针侧）——预览与释放同一结算，槽画在哪
-   * 松手就落在哪，不再「零预览、释放跳对侧」。从节点起拖进入空白才走此路；空白
-   * **按下**的框选/平移手势在候选登记（仅节点命中）处即已分流。root 盒缺失（协同
-   * 删除窗口期）返回 null → 释放回退页面层 moveNode(id,'root') 兜底。
+   * 空白落点解析（M7c-F 复验问题4）：企微语义「空白=挂 root」但要可预期——目标侧取
+   * 指针相对 root 盒中线（右半→right、左半→left），经左列门控（rootLeftEnabled，与
+   * classifyDropAt/resolveDropSlot 同公式：logic 全右/新文档恒右）；index 取该侧现有
+   * 二级主题（扣除被拖组、按 NodeBox 当前 side 过滤）的文档序末尾（sideInsertDocIndex
+   * 尾插映射——右侧文档序前段之后/左侧文档序末尾，交叠侧别时跟随该侧末兄弟）。org
+   * （root 盒 side 'down'）维持旧口径：恒文档序末尾、侧别仅作 sideHint 透传（org 槽
+   * 分支不消费）。target.side 随解析产出（页面据此调 setNodeSide）——预览与释放同一
+   * 结算，槽画在哪松手就落在哪。从节点起拖进入空白才走此路；空白**按下**的框选/
+   * 平移手势在候选登记（仅节点命中）处即已分流。root 盒缺失（协同删除窗口期）返回
+   * null → 释放回退页面层 moveNode(id,'root') 兜底。
    */
   private resolveBlankTarget(
     scene: Point,
@@ -1177,25 +1270,39 @@ export class DragController {
     const deps = this.deps;
     const drag = this.drag;
     if (!deps || !drag) return null;
-    const rootBox = deps.getBoxes().find((b) => b.parentId === undefined);
+    const boxes = deps.getBoxes();
+    const rootBox = boxes.find((b) => b.parentId === undefined);
     if (!rootBox) return null;
-    const side: 'left' | 'right' = scene.x >= rootBox.x + rootBox.w / 2 ? 'right' : 'left';
-    const children = deps.childrenIdsOf(rootBox.id).filter((cid) => cid !== drag.id);
-    const sideOf = (id: string): string | undefined =>
-      deps.getBoxes().find((b) => b.id === id)?.side;
-    const index =
-      side === 'left' ? children.length : children.filter((cid) => sideOf(cid) !== 'left').length;
-    // 锚点仅作 DropTarget 调试信息（页面按 parentId+index 提交）：该侧最后一个子级。
-    const anchorId = children[index - 1] ?? rootBox.id;
+    const pointerSide: 'left' | 'right' = scene.x >= rootBox.x + rootBox.w / 2 ? 'right' : 'left';
+    const isDown = rootBox.side === 'down';
+    // 目标侧：横向按指针侧 + 左列门控；org 恒透传指针侧（org 分支不消费侧别）。
+    const side: 'left' | 'right' = isDown
+      ? pointerSide
+      : pointerSide === 'left' && !rootLeftEnabled(boxes, rootBox)
+        ? 'right'
+        : pointerSide;
+    // 组拖动（2026-09-30）：index 按「移除全组后」的 root 子级结算——组成员现为
+    // root 子级的都先移走，与释放端 moveNode 先移除后插入序列自洽。盒缺失跳过。
+    const stack = deps
+      .childrenIdsOf(rootBox.id)
+      .filter((cid) => !drag.ids.includes(cid))
+      .map((cid) => boxes.find((b) => b.id === cid))
+      .filter((b): b is NodeBox => b !== undefined);
+    // 该侧末尾（尾插）映射文档序；org（'down'）恒文档序末尾。
+    const index = isDown
+      ? stack.length
+      : sideInsertDocIndex(stack, side, stack.filter((b) => b.side === side).length);
+    // 锚点仅作 DropTarget 调试信息（页面按 parentId+index 提交）：文档序前一个子级。
+    const anchorId = stack[index - 1]?.id ?? rootBox.id;
     return {
-      target: { kind: 'sibling', parentId: rootBox.id, index, anchorId, position: 'after' },
+      target: { kind: 'sibling', parentId: rootBox.id, index, anchorId, position: 'after', side },
       side,
     };
   }
 
   /**
    * 单一结算路径（M7c-D3）：classify 结果 → resolveTarget / resolveBlankTarget →
-   * 落位槽（含根级侧别仿真修正）。预览绘制与释放提交都只消费本函数产物——同点必
+   * 落位槽（含根级目标侧结算）。预览绘制与释放提交都只消费本函数产物——同点必
    * 同果。
    */
   private computeResolved(
@@ -1209,8 +1316,9 @@ export class DragController {
     }
     // 落点 → 写参数（纪律#2：纯计算，事务之外）。空白解析为 root 对应侧末尾（问题4）；
     // 禁止目标 placement 为 null，target 恒 null（释放路径先行取消，不会提交）。
-    // sideHint：空白按指针侧；child/sibling 命中按 classify 携带的侧别意图（仅 root 级
-    // 左右分列时有值——芯片几何中心带右下偏移与半宽，不靠它推导）。
+    // sideHint：空白按指针侧（resolveBlankTarget 已门控）；child/sibling 命中按
+    // classify 携带的目标侧别（仅根级有值，已过左列门控）。target.side 随 target
+    // 一并产出（根级落点 → 页面调 setNodeSide 的持久侧）。
     let target: DropTarget = null;
     let sideHint: 'left' | 'right' | undefined;
     if (hit.placement?.kind === 'blank') {
@@ -1220,31 +1328,35 @@ export class DragController {
         sideHint = blank.side;
       }
     } else if (hit.placement !== null) {
-      target = this.resolveTarget(drag.id, hit.placement);
+      target = this.resolveTarget(drag.ids, hit.placement);
       sideHint = hit.placement.sideHint;
     }
     let slot: DropSlotPreview | null = null;
     if (target !== null && target.kind === 'sibling') {
       const boxes = deps.getBoxes();
+      // 槽盒取主拖节点（按下节点）——组落同一槽（单套预览），组内其余成员随
+      // index+i 递增排布，不在预览中逐个画槽。
       const draggedBox = boxes.find((b) => b.id === drag.id);
       if (draggedBox) {
         const resolution = resolveDropSlot({
           boxes,
           childrenIds: deps.childrenIdsOf(target.parentId),
           draggedId: drag.id,
+          draggedGroupIds: drag.ids,
           parentId: target.parentId,
           index: target.index,
           // 芯片盒与芯片视觉同源（问题3①：指针 + 右下偏移），侧别/最近插入位判定
           // 跟随所见芯片。
           chipBox: ghostChipBox(scene, draggedBox, deps.viewport.scale),
-          // 侧别意图覆写（空白=指针侧；root 级区域命中=命中列侧）。
+          // 目标侧覆写（空白=指针侧+门控；根级区域命中=classify 结算的最终侧）。
           sideHint,
         });
         if (resolution === null) {
           slot = null; // 父盒/被拖盒缺失：无预览，释放仍按原 target 结算
         } else {
           if (resolution.index !== target.index) {
-            // 侧别仿真修正（不跳左）：槽展示与释放提交用同一修正后 index。
+            // 防御性对齐（持久侧别下恒相等——classify 的 index 即最终值）：槽展示
+            // 与释放提交用同一 index。
             target = { ...target, index: resolution.index };
           }
           slot = resolution.slot;
@@ -1262,7 +1374,7 @@ export class DragController {
   private updateHover(scene: Point): void {
     const drag = this.drag;
     if (!drag) return;
-    const hit = this.classifyAt(scene.x, scene.y, drag.id);
+    const hit = this.classifyAt(scene.x, scene.y);
     if (placementKey(hit.placement) !== placementKey(this.hoverPlacement)) {
       this.clearTargetFeedback(); // 目标切换：立即摘除旧描边类/预览（无门槛，无定时器）
       this.hoverPlacement = hit.placement;
@@ -1305,59 +1417,116 @@ export class DragController {
   }
 
   /**
-   * 跟随芯片（企微「拾起」）：被拖节点盒大小的白底圆角矩形（企微蓝描边 1.5px）+
-   * 居中文字（被拖节点文本，超宽省略）。挂悬浮层（场景坐标——与槽/边同坐标系，
-   * 缩放平移下视觉一致；该层在 nodesLayer 之上即画布视觉顶层）。文字/圆角取自被
-   * 拖节点 DOM（按属性值精确匹配扫描，规避 id 选择器转义问题）。
+   * 跟随芯片（企微「拾起」）。单节点（ids 长度 1）= 被拖节点盒大小的白底圆角矩形
+   * （企微蓝描边 1.5px）+ 居中文字（被拖节点文本，超宽省略）——旧口径逐属性不变。
+   * 组拖动（2026-09-30 需求方）= 组芯片：最多 2 层堆叠（第一、二个节点各自盒尺寸
+   * 与文字，第二层偏移 +6,+6 垫底、第一层盖顶），size>1 时第一层右上角画计数徽章
+   * （圆形企微蓝底白字 ×N，类/testid gm-drag-ghost-badge）。DOM 结构保持扁平——
+   * 两层 rect 均为 ghost g 直接子元素，禁止态 gm-drag-ghost-forbidden 的页面 CSS
+   * `> rect` 红描边规则对两层同时生效（变红逻辑沿用）。文字/圆角取自各被拖节点
+   * DOM（按属性值精确匹配扫描，规避 id 选择器转义问题）。
    */
-  private createGhost(id: string): void {
+  private createGhost(ids: string[]): void {
     const deps = this.deps;
     if (!deps || this.ghost) return;
-    const box = deps.getBoxes().find((b) => b.id === id);
-    if (!box) return;
-    let sourceText: SVGTextElement | null = null;
-    let rx = '8';
-    const all = deps.svg.querySelectorAll<SVGGElement>('[data-node-id]');
-    for (let i = 0; i < all.length; i += 1) {
-      if (all[i]!.getAttribute('data-node-id') === id) {
-        sourceText = all[i]!.querySelector('text.gm-text');
-        rx = all[i]!.querySelector('rect')?.getAttribute('rx') ?? rx;
-        break;
-      }
-    }
+    const boxes = deps.getBoxes();
     const g = document.createElementNS(SVG_NS, 'g');
     g.setAttribute('class', 'gm-drag-ghost');
-    const rect = document.createElementNS(SVG_NS, 'rect');
-    rect.setAttribute('x', '0');
-    rect.setAttribute('y', '0');
-    rect.setAttribute('width', fmt(box.w));
-    rect.setAttribute('height', fmt(box.h));
-    rect.setAttribute('rx', rx);
-    rect.setAttribute('fill', '#ffffff');
-    rect.setAttribute('stroke', ACCENT);
-    rect.setAttribute('stroke-width', '1.5');
-    g.appendChild(rect);
-    // 行集合并（多行空格连接）作芯片单行文案；无文字节点（桩/异常）则只有矩形。
-    const label = sourceText
-      ? Array.from(sourceText.children)
-          .map((t) => t.textContent ?? '')
-          .join(' ')
-          .trim() || (sourceText.textContent ?? '').trim()
-      : '';
-    if (label !== '') {
-      const fontSize = parseFloat(sourceText?.getAttribute('font-size') ?? '14') || 14;
-      const text = document.createElementNS(SVG_NS, 'text');
-      text.setAttribute('x', fmt(box.w / 2));
-      text.setAttribute('y', fmt(box.h / 2 + fontSize * 0.35));
-      text.setAttribute('text-anchor', 'middle');
-      const family = sourceText?.getAttribute('font-family');
-      const fill = sourceText?.getAttribute('fill');
-      if (family) text.setAttribute('font-family', family);
-      if (fill) text.setAttribute('fill', fill);
-      text.setAttribute('font-size', fmt(fontSize));
-      text.textContent = truncateLabel(label, box.w - 16, fontSize);
-      g.appendChild(text);
+    /** 单节点芯片素材：盒几何 + DOM 取圆角/文字样式（盒缺失 → null 跳层）。 */
+    const chipOf = (
+      id: string,
+    ): {
+      w: number;
+      h: number;
+      rx: string;
+      label: string;
+      fontSize: number;
+      family: string | null;
+      fill: string | null;
+    } | null => {
+      const box = boxes.find((b) => b.id === id);
+      if (!box) return null;
+      let sourceText: SVGTextElement | null = null;
+      let rx = '8';
+      const all = deps.svg.querySelectorAll<SVGGElement>('[data-node-id]');
+      for (let i = 0; i < all.length; i += 1) {
+        if (all[i]!.getAttribute('data-node-id') === id) {
+          sourceText = all[i]!.querySelector('text.gm-text');
+          rx = all[i]!.querySelector('rect')?.getAttribute('rx') ?? rx;
+          break;
+        }
+      }
+      // 行集合并（多行空格连接）作芯片单行文案；无文字节点（桩/异常）则只有矩形。
+      const label = sourceText
+        ? Array.from(sourceText.children)
+            .map((t) => t.textContent ?? '')
+            .join(' ')
+            .trim() || (sourceText.textContent ?? '').trim()
+        : '';
+      return {
+        w: box.w,
+        h: box.h,
+        rx,
+        label,
+        fontSize: parseFloat(sourceText?.getAttribute('font-size') ?? '14') || 14,
+        family: sourceText?.getAttribute('font-family') ?? null,
+        fill: sourceText?.getAttribute('fill') ?? null,
+      };
+    };
+    // 层序：组 = [第二成员(+6,+6 垫底), 首成员(盖顶)]；单节点 = [首成员无偏移]。
+    const layers =
+      ids.length > 1 ? [ids[1]!, ids[0]!] : ids.length === 1 ? [ids[0]!] : [];
+    for (let li = 0; li < layers.length; li += 1) {
+      const chip = chipOf(layers[li]!);
+      if (!chip) continue;
+      const ox = li === 0 && ids.length > 1 ? GHOST_STACK_OFFSET_PX : 0;
+      const oy = ox; // 第二层偏移 +6,+6；第一层（盖顶）无偏移
+      const rect = document.createElementNS(SVG_NS, 'rect');
+      rect.setAttribute('x', fmt(ox));
+      rect.setAttribute('y', fmt(oy));
+      rect.setAttribute('width', fmt(chip.w));
+      rect.setAttribute('height', fmt(chip.h));
+      rect.setAttribute('rx', chip.rx);
+      rect.setAttribute('fill', '#ffffff');
+      rect.setAttribute('stroke', ACCENT);
+      rect.setAttribute('stroke-width', '1.5');
+      g.appendChild(rect);
+      if (chip.label !== '') {
+        const text = document.createElementNS(SVG_NS, 'text');
+        text.setAttribute('x', fmt(ox + chip.w / 2));
+        text.setAttribute('y', fmt(oy + chip.h / 2 + chip.fontSize * 0.35));
+        text.setAttribute('text-anchor', 'middle');
+        if (chip.family) text.setAttribute('font-family', chip.family);
+        if (chip.fill) text.setAttribute('fill', chip.fill);
+        text.setAttribute('font-size', fmt(chip.fontSize));
+        text.textContent = truncateLabel(chip.label, chip.w - 16, chip.fontSize);
+        g.appendChild(text);
+      }
     }
+    // 计数徽章（size>1）：第一层芯片右上角（盒右上角点为圆心），圆形企微蓝底 +
+    // 白字 ×N——组规模一眼可辨。
+    const primary = ids.length > 1 ? boxes.find((b) => b.id === ids[0]) : undefined;
+    if (primary) {
+      const badge = document.createElementNS(SVG_NS, 'g');
+      badge.setAttribute('class', 'gm-drag-ghost-badge');
+      badge.setAttribute('data-testid', 'gm-drag-ghost-badge');
+      const circle = document.createElementNS(SVG_NS, 'circle');
+      circle.setAttribute('cx', fmt(primary.w));
+      circle.setAttribute('cy', '0');
+      circle.setAttribute('r', fmt(GHOST_BADGE_RADIUS));
+      circle.setAttribute('fill', ACCENT);
+      badge.appendChild(circle);
+      const text = document.createElementNS(SVG_NS, 'text');
+      text.setAttribute('x', fmt(primary.w));
+      text.setAttribute('y', fmt(GHOST_BADGE_FONT_SIZE * 0.35));
+      text.setAttribute('text-anchor', 'middle');
+      text.setAttribute('fill', '#ffffff');
+      text.setAttribute('font-size', fmt(GHOST_BADGE_FONT_SIZE));
+      text.textContent = `×${ids.length}`;
+      badge.appendChild(text);
+      g.appendChild(badge);
+    }
+    if (!g.hasChildNodes()) return; // 全组盒缺失（异常窗口期）：不建芯片
     deps.overlayLayer.appendChild(g);
     this.ghost = g;
   }
@@ -1445,10 +1614,13 @@ export class DragController {
     this.clearTargetFeedback();
     this.setClass(this.hoverForbidden, 'drop-forbidden', false);
     this.hoverForbidden = null;
-    // 被拖节点反馈兜底摘除：finish/destroy 全走这里（激活与收尾配对，见头注）。
-    this.setClass(this.draggingVisualId, 'gm-dragging', false);
-    this.setClass(this.draggingVisualId, 'gm-drag-origin', false);
-    this.draggingVisualId = null;
+    // 被拖组反馈兜底摘除：finish/destroy 全走这里（激活与收尾配对，见头注）——
+    // 组拖动对全组成员逐个摘类（2026-09-30）。
+    for (const gid of this.draggingVisualIds) {
+      this.setClass(gid, 'gm-dragging', false);
+      this.setClass(gid, 'gm-drag-origin', false);
+    }
+    this.draggingVisualIds = [];
     // 芯片/预览兜底移除：任何结束路径（释放/取消/destroy/svg 外 pointerup）不残留。
     this.removeGhost();
     this.removeDropPreview();

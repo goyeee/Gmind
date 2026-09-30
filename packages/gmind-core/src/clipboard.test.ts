@@ -29,12 +29,15 @@ function buildTestTree(): Y.Doc {
   });
 }
 
-/** 递归比较两棵子树：除 id/parentId/childIds 外的 getNode 快照逐点一致（结构 + 文本 + 默认字段）。 */
+/** 递归比较两棵子树：除 id/parentId/childIds 外的 getNode 快照逐点一致（结构 + 文本 + 默认字段）。
+ *  side（逆时针定侧的持久侧别）一并归一掉：它是创建上下文相关的布局提示——复制走
+ *  大纲文本不携带 side，粘贴端按 addChild 默认定侧重算（第 1~3 右/第 4 起左），两侧
+ *  文档的建序不同即合理地不同，不属于大纲往返的保真范围。 */
 function expectSameShape(docA: Y.Doc, aId: string, docB: Y.Doc, bId: string): void {
   const a = getNode(docA, aId)!;
   const b = getNode(docB, bId)!;
   const normalize = (n: ReturnType<typeof getNode>) =>
-    n === null ? null : { ...n, id: null, parentId: null, childIds: [] as string[] };
+    n === null ? null : { ...n, id: null, parentId: null, childIds: [] as string[], side: undefined };
   expect(normalize(b)).toEqual(normalize(a));
   expect(b.childIds).toHaveLength(a.childIds.length);
   expect(b.id).not.toBe(a.id);

@@ -871,3 +871,16 @@ body.painter-active .editor-canvas svg {
 .editor-canvas svg g.gm-drag-ghost.gm-drag-ghost-forbidden > rect {
   stroke: #f54a45;
 }
+
+/* —— 组拖动（2026-09-30 需求方批量拖动；类由 engine drag 写入，此处只落样式）—— */
+
+/* 组芯片计数徽章（g.gm-drag-ghost-badge：圆形企微蓝底白字 ×N，几何/配色由 engine
+   写属性）：纯视觉悬浮物随芯片 pointer-events:none，字体加重增强可辨度；文本禁选
+   双保险（画布 user-select:none 之外的兜底）。 */
+.editor-canvas svg g.gm-drag-ghost-badge {
+  pointer-events: none;
+}
+.editor-canvas svg g.gm-drag-ghost-badge > text {
+  font-weight: 600;
+  user-select: none;
+}

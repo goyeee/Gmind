@@ -248,6 +248,11 @@ export function normalizeTree(doc: Y.Doc, origin: string = ORIGIN_SYSTEM): numbe
   const descPlan = planDescriptionRepair(doc);
   repairs += descPlan.length;
 
+  // ── 侧别字段归一（逆时针定侧）：非 left/right 删键（口径见 planSideRepair 头注）。
+  //    与树修复/概要/图标/描述同一事务应用。
+  const sidePlan = planSideRepair(doc);
+  repairs += sidePlan.length;
+
   // ── 事务纪律：无修复不开事务、零写入；有修复则在单个 origin 事务内统一应用。
   if (repairs === 0) return 0;
   doc.transact(() => {
@@ -299,6 +304,7 @@ export function normalizeTree(doc: Y.Doc, origin: string = ORIGIN_SYSTEM): numbe
     applySummaryRepair(doc, summaryPlan); // 概要收敛（M6 T6）：同事务统一应用
     applyIconRepair(doc, iconPlan); // 图标三组制收敛（M7a-T1）：同事务统一应用
     applyDescriptionRepair(doc, descPlan); // 描述归一（M7c-C1）：同事务统一应用
+    applySideRepair(doc, sidePlan); // 侧别归一（逆时针定侧）：同事务统一应用
   }, origin);
   return repairs;
 }
@@ -736,6 +742,38 @@ export function applyDescriptionRepair(doc: Y.Doc, plan: Array<{ nodeId: string;
   for (const entry of plan) {
     nodes.get(entry.nodeId)?.set('description', entry.value);
   }
+}
+
+// ══ 侧别字段归一（需求方 2026-09-30 逆时针定侧，随全量 normalizeTree 执行）════
+
+/**
+ * 规划侧别（side）收敛（文档状态纯函数，replica 一致，幂等）：side 键存在但值非
+ * 'left'/'right'（远端坏数据 / crafted doc_state）→ 删除该键。键缺失或值合法不写——
+ * 干净文档零修复、零写入、字节级不变（「干净文档 normalize 返回 0」契约不破）。
+ * side 是普通可选字段：repair 不做「非 root 子级清键」之类的语义清理（产品流的
+ * 换父清侧由 moveNode 负责，见 operations.moveNode），只兜非法值。
+ *
+ * 覆盖范围：全部节点（含墓碑——撤销/快照还原可复活，children 冻结不变量不涉及
+ * side；与 planIconRepair/planDescriptionRepair 相同的覆盖裁定）。
+ * 仅接入全量 normalizeTree：产品流新写经 addChild/setNodeSide 校验不再制造坏值，
+ * 增量路径（normalizeTreeFor）脏区推导不含非结构键（deriveNormalizeDirty），与
+ * 图标/描述收敛同一「外部状态直入入口（docFromState / 第 64 写摊销清扫 / 安全阀）」口径。
+ */
+export function planSideRepair(doc: Y.Doc): string[] {
+  const nodes = nodesMap(doc);
+  const plan: string[] = [];
+  for (const [nodeId, node] of nodes.entries()) {
+    const raw = node.get('side');
+    if (raw === undefined) continue; // 键缺失：不补写（零修复契约）
+    if (raw !== 'left' && raw !== 'right') plan.push(nodeId);
+  }
+  return plan;
+}
+
+/** 应用侧别收敛计划（必须在调用方已开启的事务内执行）：删除非法 side 键。 */
+export function applySideRepair(doc: Y.Doc, plan: string[]): void {
+  const nodes = nodesMap(doc);
+  for (const nodeId of plan) nodes.get(nodeId)?.delete('side');
 }
 
 // ══ 远端事务收敛接线（M2 准入清单 §1）══════════════════════════════════════

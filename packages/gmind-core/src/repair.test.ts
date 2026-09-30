@@ -667,3 +667,56 @@ describe('描述 description 归一（M7c-C1，随 normalizeTree 全量执行）
     expect(getNode(doc, id)!.deleted).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// 侧别 side 归一（逆时针定侧，随 normalizeTree 全量执行）：side 是普通可选字段，
+// repair 只兜非法值（非 'left'/'right' → 删键）；语义清理（换父离 root 级）由
+// moveNode 负责，repair 不做。
+// ---------------------------------------------------------------------------
+
+describe('侧别 side 归一（逆时针定侧）', () => {
+  /** 裸写 side 键（绕过操作层校验，模拟远端坏数据 / crafted doc_state）。 */
+  function rawSetSide(doc: Y.Doc, id: string, value: unknown): void {
+    (doc.getMap('nodes').get(id) as Y.Map<unknown>).set('side', value);
+  }
+
+  it('非 left/right（含非字符串）→ 删键，修复数各计 1', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [] });
+    const a = addChild(doc, ROOT_NODE_ID, { text: 'A' });
+    const b = addChild(doc, ROOT_NODE_ID, { text: 'B' });
+    rawSetSide(doc, a, 'up');
+    rawSetSide(doc, b, 42);
+    expect(normalizeTree(doc)).toBe(2);
+    expect(getNode(doc, a)!.side).toBeUndefined();
+    expect(getNode(doc, b)!.side).toBeUndefined();
+    expect(normalizeTree(doc)).toBe(0); // 幂等
+  });
+
+  it('合法值与缺键零修复：normalize 返回 0、字节级不变（干净文档契约不破）', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [] });
+    const a = addChild(doc, ROOT_NODE_ID, { text: 'A' });
+    rawSetSide(doc, a, 'left');
+    const state = docToState(doc);
+    expect(normalizeTree(doc)).toBe(0);
+    expect(Buffer.from(docToState(doc)).equals(Buffer.from(state))).toBe(true);
+  });
+
+  it('墓碑节点的非法 side 同样收敛（children 冻结不变量不受影响）', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [] });
+    const a = addChild(doc, ROOT_NODE_ID, { text: 'A' });
+    rawSetSide(doc, a, 'bogus');
+    deleteNodes(doc, [a]);
+    expect(getNode(doc, a)!.deleted).toBe(true);
+    expect(normalizeTree(doc)).toBe(1);
+    expect(getNode(doc, a)!.side).toBeUndefined();
+    expect(getNode(doc, a)!.deleted).toBe(true);
+  });
+
+  it('docFromState（导入即收敛）同样归一非法 side', () => {
+    const base = createTemplateDoc({ title: 'T', children: [] });
+    const a = addChild(base, ROOT_NODE_ID, { text: 'A' });
+    rawSetSide(base, a, 'top');
+    const doc = docFromState(docToState(base));
+    expect(getNode(doc, a)!.side).toBeUndefined();
+  });
+});

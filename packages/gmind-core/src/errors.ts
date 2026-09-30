@@ -3,7 +3,8 @@ export type GmindCoreErrorCode =
   | 'TEXT_TOO_LONG' | 'NOTE_TOO_LONG' | 'DESCRIPTION_TOO_LONG' | 'INVALID_HREF' | 'INVALID_ICON_GROUP'
   | 'INVALID_ICON_VALUE' | 'INVALID_ICON_OVERFLOW'
   | 'TASK_INVALID_STATUS' | 'TASK_INVALID_PROGRESS' | 'TASK_INVALID_OWNERS' | 'TASK_INVALID_DATE'
-  | 'SUMMARY_INVALID';
+  | 'SUMMARY_INVALID'
+  | 'INVALID_NODE_SIDE' | 'SIDE_ONLY_ROOT_CHILD';
 
 export class GmindCoreError extends Error {
   constructor(readonly code: GmindCoreErrorCode, message: string) {

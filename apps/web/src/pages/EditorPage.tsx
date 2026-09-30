@@ -24,6 +24,7 @@ import {
   setHref,
   setImage,
   setIcon,
+  setNodeSide,
   setNote,
   setStyle,
   setSummary,
@@ -74,7 +75,7 @@ import {
   Viewport,
 } from '@gmind/engine';
 import { todayStr } from '@gmind/shared';
-import { attachKeyboardMap, isEditableTarget } from '../editor/keyboardMap';
+import { attachKeyboardMap, isEditableTarget, resolveDirectEditKey } from '../editor/keyboardMap';
 import { ActivityPanel } from '../editor/ActivityPanel';
 import { ThemePanel } from '../editor/ThemePanel';
 import {
@@ -139,7 +140,7 @@ import './editor.css';
  * - 所有用户写后统一 capUndoStack（afterUserWrite 集中封装）。
  *
  * M1 验收修复轮（2026-09-22）新增：空格进编辑态（FR-EDT-005，M7b-W3 改绑 F2——
- * Space 让位给「空格+左拖平移」手势）、粘贴为选中节点
+ * Space 曾让位给「空格+左拖平移」手势）、粘贴为选中节点
  * 子级（FR-EDT-009，推翻旧「同级」实现）、链接角标新标签页打开（FR-EDT-019）、
  * 画布粘贴截图直插（FR-EDT-020，imageUpload 共享助手）、剪贴板错误码映射。
  *
@@ -147,6 +148,13 @@ import './editor.css';
  * insert-wrap 下，弃 fixed 视口抽屉）+ 批量标记（多选全含则移除否则设置，单事务）；
  * 节点标记徽章点击换组（同组迷你选盘浮层）；空白无修饰左拖=框选（原 Shift+左拖，
  * 平移改道空格+左拖/中键，Viewport 自理）。
+ *
+ * 2026-09-30 编辑入口改进（需求方走查：「鼠标选中某主题后应该可以直接编辑，或
+ * 敲击空格全选主题内容」）：① 选中即可编辑——恰单选存活节点时敲可打印字符直入
+ * 编辑框（不 preventDefault，键入字符替换全选内容，与惰性新建同机制）；② 空格
+ * 收回进编辑——选中节点按空格=进编辑并全选（捕获层 stopPropagation 断掉 Viewport
+ * 挂 window 冒泡的空格跟踪，「空格按住+左拖平移」手势退役，画布平移只剩中键拖
+ * 拽，中键不受影响）。编辑入口现为 F2 / 双击 / 空格 / 可打印字符四通道。
  *
  * M2 终审修复轮（2026-09-22）：WS 路径配额强制（FR-ACC-003 P0，M1b 终审裁定）——
  * quota-exceeded 广播置 quotaBlockedRef（nextQuotaBlock 事件机），新增入口
@@ -1326,17 +1334,88 @@ export function EditorPage() {
     return true;
   };
 
-  // —— 惰性编辑补开监听（Tab/Enter 新建后的首个可打印字符进入编辑，企微语义）——
-  // 让路纪律与 `,` 快捷键 / Ctrl+F 同款：编辑覆盖层已开、焦点在输入控件、表格
-  // 视图不触发；且当前单选必须恰为 pending 节点。依赖含 doc：文件切换即重挂，
-  // 并把旧 doc 的 pending（含回收闭包）作废。只读（移动端）不装配。
+  // —— 键盘直入编辑监听（惰性编辑补开 + 选中即可编辑，共用一组让路纪律）——
+  //
+  // 惰性编辑补开（Tab/Enter 新建后的首个可打印字符进入编辑，企微语义）：编辑
+  // 覆盖层已开、焦点在输入控件、表格视图不触发；且当前单选必须恰为 pending 节点。
+  //
+  // 选中即可编辑（2026-09-30 需求方走查：「鼠标选中某主题后应该可以直接编辑，或
+  // 敲击空格全选主题内容」）：恰单选一个存活节点、未在编辑、焦点不在输入控件、
+  // 非表格视图时——可打印字符直入编辑（不 preventDefault，键入字符替换全选内容，
+  // 与惰性新建同机制）；空格进编辑并全选（preventDefault，不落空格）。pending
+  // 优先：新建待编辑态先消费（见冒泡层/捕获层各自分支）。
+  //
+  // 空格同时**全量接管**（捕获层 stopPropagation）：Viewport 的空格平移跟踪挂
+  // window 冒泡（engine viewport.ts attach 期 keydown/keyup），document 捕获层断
+  // 传播后 spacePressed 不再置位——「空格按住+左拖平移」手势退役，画布平移只剩
+  // 中键拖拽（中键平移不受影响）；输入控件/编辑框内的空格只断传播、不 prevent
+  // Default，照常落字。捕获层不做可打印字符处理：`,` 快速卡等同层冒泡处理器先
+  // 注册先行、其 preventDefault 的按键直入编辑须让路，而捕获层拿不到 default
+  // Prevented 终态（冒泡尚未走完）。
+  //
+  // 依赖含 doc：文件切换即重挂，并把旧 doc 的 pending（含回收闭包）作废。只读
+  // （移动端）不装配。
   useEffect(() => {
     if (readOnly || !doc) return;
+    const d = doc; // 门内已收窄非空：监听闭包统一用局部别名
     pendingEditRef.current = null;
     pendingCancelRef.current = null;
+
+    // 捕获层——空格通道（含空格平移手势退役）。
+    const onSpaceKeyDownCapture = (e: KeyboardEvent): void => {
+      if (resolveDirectEditKey(e) !== 'space') return;
+      // 先断传播再论动作：Viewport 挂 window 冒泡的空格跟踪收不到本事件（手势
+      // 退役）；不在此 preventDefault——输入控件/编辑框内的空格照常落字。
+      e.stopPropagation();
+      if (e.defaultPrevented) return; // 他处已消费的空格不再进编辑
+      if (overlay.isOpen || isEditableTarget(e.target)) return;
+      if (viewRef.current === 'table') return;
+      const selection = selectionRef.current;
+      if (!selection || selection.selected.size !== 1) return;
+      const nodeId = [...selection.selected][0];
+      const pending = pendingEditRef.current;
+      if (pending && pending === nodeId) {
+        // pending 优先：待编辑新建节点的空格等同其首个可打印字符——同步补开待
+        // 编辑框且**不 preventDefault**（空格替换全选的「新主题」，原语义不变）。
+        // 捕获层已断传播，冒泡层收不到空格，故须在此处理；盒子未就绪（创建同帧
+        // 极速按键）保留待编辑下一键重试，空格此时被吞（与旧冒泡路径同）。
+        if (openPendingEditor(pending)) {
+          pendingEditRef.current = null;
+        }
+        return;
+      }
+      if (pending) {
+        // 选中已不是 pending 节点（Tab 后点了别处）：待编辑作废（与冒泡层校验同
+        // 口径，不回收节点），落入下方既有节点直入编辑——空格对新选中节点仍生效。
+        pendingEditRef.current = null;
+        pendingCancelRef.current = null;
+      }
+      const snap = getNode(d, nodeId);
+      if (!snap || snap.deleted) return;
+      e.preventDefault(); // 不插空格：编辑框打开即全选（overlay 自带），覆盖式输入
+      openNodeEditor(nodeId);
+    };
+
+    // 冒泡层——选中即可编辑（可打印字符直入，空格归捕获层通道）。
+    const onDirectEditPrintable = (e: KeyboardEvent): void => {
+      if (resolveDirectEditKey(e) !== 'printable') return;
+      if (e.defaultPrevented) return; // `,` 快速卡等同层处理器已消费的按键让路
+      if (overlay.isOpen || isEditableTarget(e.target)) return;
+      if (viewRef.current === 'table') return;
+      const selection = selectionRef.current;
+      if (!selection || selection.selected.size !== 1) return;
+      const nodeId = [...selection.selected][0];
+      const snap = getNode(d, nodeId);
+      if (!snap || snap.deleted) return;
+      openNodeEditor(nodeId); // 不 preventDefault：键入字符替换全选内容（时序契约同 openPendingEditor）
+    };
+
     const onKeyDown = (e: KeyboardEvent): void => {
       const pending = pendingEditRef.current;
-      if (!pending) return;
+      if (!pending) {
+        onDirectEditPrintable(e);
+        return;
+      }
       const selection = selectionRef.current;
       // 校验失败（选中已不是 pending 节点：被删/被切换/多选）→ 待编辑作废
       if (!selection || selection.selected.size !== 1 || !selection.selected.has(pending)) {
@@ -1355,7 +1434,8 @@ export function EditorPage() {
       }
       // 可打印字符 → 同步补开编辑框且**不 preventDefault**（overlay.open 同步
       // focus+selectAll 后，浏览器默认插入/IME 组字落进 textarea——见 openPending
-      // Editor 时序契约）。方向键/功能键等其余按键不动 pending（保持待编辑态）。
+      // Editor 时序契约）。方向键/功能键等其余按键不动 pending（保持待编辑态）；
+      // 空格由捕获层通道处理（含 pending 分支），到不了本层。
       if (
         e.key.length === 1 &&
         !e.ctrlKey &&
@@ -1372,10 +1452,14 @@ export function EditorPage() {
         }
       }
     };
+    document.addEventListener('keydown', onSpaceKeyDownCapture, true);
     document.addEventListener('keydown', onKeyDown, false);
-    return () => document.removeEventListener('keydown', onKeyDown, false);
-    // openPendingEditor 每渲染重建但只读 ref/closure（同 locateNode 通知深链裁定），
-    // 不入依赖。
+    return () => {
+      document.removeEventListener('keydown', onSpaceKeyDownCapture, true);
+      document.removeEventListener('keydown', onKeyDown, false);
+    };
+    // openPendingEditor / openNodeEditor 每渲染重建但只读 ref/closure（同 locateNode
+    // 通知深链裁定），不入依赖。
   }, [readOnly, doc]);
 
   const handleEnter = (): void => {
@@ -1745,8 +1829,8 @@ export function EditorPage() {
     const id = g?.getAttribute('data-node-id');
     if (!id) {
       // 空白点击清空选择（M6 Task 2 企微对标，格式面板随选中联动配套）：修饰键
-      // （Shift/Ctrl/Cmd）空白点击不清空（加/减选语义占位）；框选/平移（空格+左拖、
-      // 中键）拖拽释放后的合成 click 以位移 >4px 排除（与节点拖拽 justDraggedRef
+      // （Shift/Ctrl/Cmd）空白点击不清空（加/减选语义占位）；框选/中键平移拖拽
+      // 释放后的合成 click 以位移 >4px 排除（与节点拖拽 justDraggedRef
       // 同一「拖拽不算点击」纪律）。
       const press = pointerPressRef.current;
       const moved = press ? Math.hypot(e.clientX - press.x, e.clientY - press.y) > 4 : false;
@@ -1773,7 +1857,7 @@ export function EditorPage() {
   /**
    * 空白左键按下 → 引擎 beginMarquee（scene 坐标）+ 起画橡皮筋（M7b-W3 #5 改道：
    * 需求方裁定「鼠标按住滑动直接框选」——原 Shift+左拖改为**无修饰左拖**；平移
-   * 改道空格+左拖 / 鼠标中键（Viewport 自理），空格按住时框选让位给平移手势）。
+   * 曾改道空格+左拖 / 鼠标中键，2026-09-30 空格收回进编辑后平移只剩中键拖拽）。
    */
   const onSvgPointerDown = (e: React.PointerEvent<SVGSVGElement>): void => {
     if (e.button !== 0) return;
@@ -1782,8 +1866,10 @@ export function EditorPage() {
     // onCommit→setText，无变化提交由 core setText 同值守卫消化（空转零写入）。
     if (overlay.isOpen) overlay.close(true);
     pointerPressRef.current = { x: e.clientX, y: e.clientY }; // 空白点击位移判定（M6 Task 2）
-    // 修饰键组合不进框选（Ctrl/Cmd=加减选、Shift=加选占位）；空格按住 = Viewport
-    // 平移手势（spacePressed），框选让位。
+    // 修饰键组合不进框选（Ctrl/Cmd=加减选、Shift=加选占位）；spacePressed 让位
+    // 判定保留为防御：空格已收回进编辑（键盘直入编辑监听捕获层断掉 Viewport 的
+    // 空格跟踪），spaceDown 仅在焦点处于输入控件等未拦路径残留——残留态下仍让位
+    // 给 Viewport 平移，避免框选与平移叠加。
     if (e.shiftKey || e.ctrlKey || e.metaKey) return;
     if (viewportRef.current?.spacePressed) return;
     const selection = selectionRef.current;
@@ -2154,26 +2240,63 @@ export function EditorPage() {
         isDescendant: (id, candidateId) => subtreeIds(d, id).includes(candidateId),
         // 文档子级序（M7c-D1）：sibling 落点 index 结算输入（engine 纯计算在事务外）。
         childrenIdsOf: (id) => childrenIds(d, id),
+        // 组拾起（2026-09-30 需求方批量拖动）：按下节点命中当前多选（size>1 且含该
+        // 节点）→ 返回整组 id，按布局序（box.y 再 box.x 升序）排序——释放端按
+        // index+i 递增插入即还原组内序；排除 root（root 不可移动，组不含 root）。
+        // size≤1 或按下的不在多选中 → 单节点（现状路径）。
+        getDragGroup: (grabbedId) => {
+          const selection = selectionRef.current;
+          if (!selection || selection.selected.size <= 1 || !selection.selected.has(grabbedId)) {
+            return [grabbedId];
+          }
+          const boxById = new Map(boxesRef.current.map((b) => [b.id, b]));
+          return [...selection.selected]
+            .filter((id) => id !== ROOT_NODE_ID && boxById.has(id))
+            .sort((idA, idB) => {
+              const ba = boxById.get(idA)!;
+              const bb = boxById.get(idB)!;
+              return ba.y - bb.y || ba.x - bb.x;
+            });
+        },
         overlayLayer: dragOverlay,
-        onDrop: (id, target) => {
+        onDrop: (ids, target) => {
           justDraggedRef.current = true;
           setTimeout(() => {
             justDraggedRef.current = false;
           }, 0);
           try {
-            // M7c-D1 落点三分：child=追加目标子级末尾（现状语义）；sibling=按引擎
-            // 结算的文档序 index 插入（同父移除修正已在 engine 完成；空白落点引擎
-            // 已解析为 root 对应侧末尾 sibling，M7c-F 复验问题4）；null 仅作兜底
-            // （root 盒缺失等窗口期；svg 外兜底释放为取消，不回调至此）。
-            if (target === null) moveNode(d, id, ROOT_NODE_ID);
-            else if (target.kind === 'child') moveNode(d, id, target.nodeId);
-            else moveNode(d, id, target.parentId, target.index);
+            // M7c-D1 落点三分 + 组拖动（2026-09-30）：整组**单事务**原子移动——
+            // 内层 moveNode 自带事务，嵌套复用外层，一次 Ctrl+Z 整组回滚。sibling
+            // 按引擎结算的文档序 index+i 递增插入（引擎 index 已按「移除全组后」的
+            // 子级堆结算），组内序 = 拾起时布局序；child=追加目标子级末尾（现状
+            // 语义，引擎已不产出、保留兜底）；null 仅作兜底（root 盒缺失等窗口期；
+            // svg 外兜底释放为取消，不回调至此），逐个挂 root 末尾。
+            withTransaction(d, ORIGIN_USER, () => {
+              if (target === null) {
+                for (const id of ids) moveNode(d, id, ROOT_NODE_ID);
+              } else if (target.kind === 'child') {
+                for (const id of ids) moveNode(d, id, target.nodeId);
+              } else {
+                ids.forEach((id, i) => moveNode(d, id, target.parentId, target.index + i));
+                // M7c-H 逆时针定侧：根级落点按引擎解析的目标侧持久化（拖到哪侧就换到
+                // 哪侧；setNodeSide 同值零事务幂等）。target.side 仅 root 级落点携带；
+                // 仅 mindmap 消费（logic/org 布局不读）。
+                if (target.side !== undefined && target.parentId === ROOT_NODE_ID
+                    && getMeta(d).structureType === 'mindmap') {
+                  for (const id of ids) setNodeSide(d, id, target.side);
+                }
+              }
+            });
             afterUserWrite();
+            // 移动后保持整组选中（selection 批量 set——onChange 统一重画/广播；
+            // 单节点不动旧选中行为，路径回归零差异）。
+            if (ids.length > 1) selectionRef.current?.set([...ids]);
             // M7c-F 复验问题2：拖动释放不再置 fitPending（rerender 全量 fit 会把
             // 100% 视口拉到 300%/400%，用户视口丢失）。改为 rAF 一帧等 moveNode 触发
             // 的重排落定后，仅把被拖节点平移进可视区（完整可见时 no-op，只平移不缩
-            // 放）；其余 fitPending 来源（删空/粘贴）不动。
-            requestAnimationFrame(() => panNodeIntoView(id));
+            // 放）；其余 fitPending 来源（删空/粘贴）不动。组拖动取组内首个节点。
+            const panId = ids[0];
+            if (panId !== undefined) requestAnimationFrame(() => panNodeIntoView(panId));
           } catch (e) {
             showToast(e instanceof Error ? e.message : '移动失败');
           }

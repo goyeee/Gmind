@@ -58,7 +58,9 @@ export const SHORTCUT_LIST: readonly ShortcutItem[] = [
   { id: 'undo', group: '节点编辑', label: '撤销', win: 'Ctrl+Z', mac: '⌘Z' },
   { id: 'redo', group: '节点编辑', label: '重做', win: 'Ctrl+Shift+Z / Ctrl+Y', mac: '⌘⇧Z / ⌘Y' },
   { id: 'enter', group: '节点编辑', label: '新建同级节点', win: 'Enter', mac: 'Return' },
-  { id: 'edit-selected', group: '节点编辑', label: '编辑选中节点', win: 'F2', mac: 'F2' },
+  // 空格进编辑由页面层「选中即可编辑」监听接管（EditorPage 键盘直入编辑监听，
+  // 2026-09-30 需求方收回空格），与本层 F2 同一动作面，清单同列便于发现。
+  { id: 'edit-selected', group: '节点编辑', label: '编辑选中节点（全选内容）', win: 'F2 / 空格', mac: 'F2 / 空格' },
   { id: 'insert-child', group: '节点编辑', label: '新建子级节点', win: 'Tab', mac: 'Tab' },
   {
     id: 'insert-parent',
@@ -96,8 +98,10 @@ export interface KeyboardMapDeps {
   redo(): void;
   /** Enter（未编辑态）：新建同级节点（root 上新建子级）并进入编辑。 */
   onEnter(): void;
-  /** F2（未编辑态，FR-EDT-005）：主选中节点进入编辑态。原 Space 绑定让位给
-   *  「空格按住 + 左键拖拽 = 平移画布」手势（M7b-W3 平移改道，需求方裁定）。 */
+  /** F2（未编辑态，FR-EDT-005）：主选中节点进入编辑态。原 Space 绑定 2026-09-30
+   *  起由页面层「选中即可编辑」监听收回（可打印字符直入编辑/空格进编辑并全选），
+   *  「空格按住 + 左键拖拽 = 平移画布」手势随之退役（M7b-W3 曾把 Space 让位给该
+   *  手势），画布平移只剩中键拖拽。 */
   onEditSelected(): void;
   /** Tab 新建子级 / Shift+Tab 在当前与父之间插新父级。 */
   onTab(shift: boolean): void;
@@ -135,6 +139,28 @@ export interface ShortcutKeySnapshot {
   metaKey: boolean;
   altKey: boolean;
   shiftKey: boolean;
+}
+
+/** 「选中即可编辑」的按键通道（2026-09-30 需求方：「鼠标选中某主题后应该可以
+ *  直接编辑，或敲击空格全选主题内容」）。 */
+export type DirectEditKeyKind = 'printable' | 'space';
+
+/**
+ * 按键快照 → 直入编辑通道（null = 非直入编辑键，让路）。「选中即可编辑」监听
+ * （EditorPage 键盘直入编辑 effect）的唯一裁决点，纯函数口径便于单测钉住让路矩阵：
+ * - printable：key.length === 1 的可打印字符（含 Shift 大写/符号/中文单字），**不含
+ *   空格**——空格单列 space 通道（进编辑并全选、不落空格）；Ctrl/Cmd/Alt 组合一律
+ *   null（剪贴板/帮助/折叠等修饰键族归属本文件 resolveShortcutAction）；
+ * - space：空格键（含 Shift+Space）。
+ * Enter/Tab/方向键/F2/Dead/Process（输入法死键/组字）等非可打印键不在通道内。
+ * 两通道的 preventDefault 纪律不同：printable **不**拦截默认行为（字符要落进打开
+ * 即全选的编辑框）、space 必须 preventDefault（不插空格）——由调用方按通道处置。
+ */
+export function resolveDirectEditKey(e: ShortcutKeySnapshot): DirectEditKeyKind | null {
+  if (e.ctrlKey || e.metaKey || e.altKey) return null;
+  if (e.key === ' ') return 'space';
+  if (e.key.length === 1) return 'printable';
+  return null;
 }
 
 /** 方向键 → 引擎导航方向。 */
@@ -175,7 +201,7 @@ export function resolveShortcutAction(e: ShortcutKeySnapshot): ShortcutActionId 
   switch (key) {
     case 'Enter':
       return 'enter';
-    case 'F2': // M7b-W3：原 Space「进入编辑」让位给平移手势（空格+左键拖拽），改绑 F2
+    case 'F2': // M7b-W3 改绑 F2（原 Space）；2026-09-30 空格收回进编辑走页面层，本层不回绑
       return 'edit-selected';
     case 'Tab':
       return e.shiftKey ? 'insert-parent' : 'insert-child';
@@ -264,7 +290,8 @@ export function attachKeyboardMap(deps: KeyboardMapDeps): () => void {
     }
     // 命中即抑制默认行为（原 if 链各分支逐个 preventDefault 的口径不变）；
     // F2 抑制部分浏览器的重命名/查找语义、Tab 抑制焦点移动等均沿袭。
-    // Space 不在此层接管：按键让位给 Viewport 平移手势（空格按住 + 左键拖拽）。
+    // Space 不在本层绑定：2026-09-30 起由页面层「选中即可编辑」捕获监听接管
+    // （进编辑并全选 + 空格平移手势退役），见 EditorPage 键盘直入编辑监听。
     e.preventDefault();
     dispatchAction(deps, action, e);
   };

@@ -30,6 +30,8 @@ interface PlainNode {
   image?: { key: string; w: number; h: number } | null;
   task?: NodeTaskVisual;
   description?: string;
+  /** 持久侧别（逆时针定侧）：透传 NodeSnapshotLike.side，仅 root 直接子级有语义。 */
+  side?: string;
 }
 
 function makeReader(defs: Record<string, PlainNode>, summaries?: SummaryLike[]): DocReader {
@@ -47,6 +49,7 @@ function makeReader(defs: Record<string, PlainNode>, summaries?: SummaryLike[]):
       image: def.image,
       task: def.task,
       description: def.description,
+      side: def.side,
     };
   };
   const reader: DocReader = {
@@ -285,37 +288,57 @@ describe('layout 不变量（5 树 × 3 结构）', () => {
     }
   }
 
-  it('mindmap：预检查分侧——3 个等高一級子树得 1 右 2 左，深层与一级祖先同侧', () => {
-    const result = layout(TREE_BUILDERS.wide(), { structure: 'mindmap', theme, measure: stubAdapter, styleOf });
+  it('mindmap：计数定侧——前 3 个一级子树恒右、第 4 个起左，深层与一级祖先同侧', () => {
+    // 逆时针定侧（需求方 2026-09-30）：无持久 side 按文档序计数兜底（index 0-2 →
+    // right、≥3 → left），与 core addChild 自动定侧配额同值；高度不再参与分侧。
+    const reader = makeReader({
+      root: { text: '根', children: ['a', 'b', 'c', 'd', 'e'] },
+      a: { text: '一支' },
+      b: { text: '二支' },
+      c: { text: '三支' },
+      d: { text: '四支' },
+      e: { text: '五支' },
+    });
+    const result = layout(reader, { structure: 'mindmap', theme, measure: stubAdapter, styleOf });
     const root = boxOf(result, 'root');
     const level1 = result.nodes.filter((n) => n.depth === 1);
-    expect(level1.length).toBe(3);
-    // 预检查/断行语义：a 装入右（0+54 ≤ 95），b 起累计 108 > 95 切左。
-    expect(level1.filter((n) => n.side === 'right')).toHaveLength(1);
-    expect(level1.filter((n) => n.side === 'left')).toHaveLength(2);
-    expect(boxOf(result, 'a').side).toBe('right');
-    expect(boxOf(result, 'b').side).toBe('left');
+    expect(level1.map((n) => n.id)).toEqual(['a', 'b', 'c', 'd', 'e']);
+    expect(level1.filter((n) => n.side === 'right').map((n) => n.id)).toEqual(['a', 'b', 'c']);
+    expect(level1.filter((n) => n.side === 'left').map((n) => n.id)).toEqual(['d', 'e']);
     for (const node of level1) {
       if (node.side === 'left') expect(node.x + node.w).toBeLessThan(root.x);
       else expect(node.x).toBeGreaterThan(root.x + root.w);
     }
-    // 深层后代与一级祖先同侧：左子树的叶子在更左侧，右子树的叶子在更右侧。
-    const ancestorSide = new Map<string, 'left' | 'right'>();
-    for (const edge of result.edges) {
-      const [p, c] = splitEdge(edge.id);
-      const parentSide = p === 'root' ? (boxOf(result, c).side as 'left' | 'right') : (ancestorSide.get(p) as 'left' | 'right');
-      ancestorSide.set(c, parentSide);
-      expect(boxOf(result, c).side).toBe(parentSide);
+    // 深层后代与一级祖先同侧（wide 树 3 个一级按计数全右，含各自深层）：全部盒在根右侧。
+    const mixed = layout(TREE_BUILDERS.wide(), { structure: 'mindmap', theme, measure: stubAdapter, styleOf });
+    const root2 = boxOf(mixed, 'root');
+    for (const node of mixed.nodes) {
+      if (node.id === 'root') continue;
+      expect(node.side).toBe('right');
+      expect(node.x).toBeGreaterThan(root2.x + root2.w);
     }
-    const leftLeaf = boxOf(result, 'c1');
-    expect(leftLeaf.side).toBe('left');
-    expect(leftLeaf.x + leftLeaf.w).toBeLessThan(root.x);
-    const rightLeaf = boxOf(result, 'a1');
-    expect(rightLeaf.side).toBe('right');
-    expect(rightLeaf.x).toBeGreaterThan(root.x + root.w);
   });
 
-  it('mindmap：两等高一級子树恰一左一右（分侧规则钉定）', () => {
+  it('mindmap：持久 side 优先于计数；混合文档逐节点独立判定；非法值按缺省兜底', () => {
+    const tree = makeReader({
+      root: { text: '根', children: ['p1', 'p2', 'p3', 'p4'] },
+      p1: { text: '持久左', side: 'left', children: ['pa'] },
+      pa: { text: '左支深叶', side: 'right' }, // 深层 side 无语义、被忽略（继承一级祖先）
+      p2: { text: '无侧' }, // index 1 → right（计数兜底）
+      p3: { text: '持久右', side: 'right' }, // 持久 side 落右
+      p4: { text: '坏值', side: 'up' }, // 非法值归 undefined → index 3 → left
+    });
+    const result = layout(tree, { structure: 'mindmap', theme, measure: stubAdapter, styleOf });
+    expect(boxOf(result, 'p1').side).toBe('left'); // 持久 side 压过 index 0 → right 的计数兜底
+    expect(boxOf(result, 'p2').side).toBe('right');
+    expect(boxOf(result, 'p3').side).toBe('right');
+    expect(boxOf(result, 'p4').side).toBe('left');
+    // 深层后代恒继承一级祖先（pa 的持久 side='right' 被忽略）
+    expect(boxOf(result, 'pa').side).toBe('left');
+    expect(boxOf(result, 'pa').x + boxOf(result, 'pa').w).toBeLessThan(boxOf(result, 'root').x);
+  });
+
+  it('mindmap：两个一级子树同落右侧（计数规则钉定；旧「等高一右一左」半分规则退役）', () => {
     const reader = makeReader({
       root: { text: '根', children: ['p1', 'p2'] },
       p1: { text: '支一', children: ['pa'] },
@@ -327,11 +350,10 @@ describe('layout 不变量（5 树 × 3 结构）', () => {
     const root = boxOf(result, 'root');
     const level1 = result.nodes.filter((n) => n.depth === 1);
     expect(level1).toHaveLength(2);
-    expect(level1.filter((n) => n.side === 'right')).toHaveLength(1);
-    expect(level1.filter((n) => n.side === 'left')).toHaveLength(1);
+    expect(level1.filter((n) => n.side === 'right')).toHaveLength(2);
+    expect(level1.filter((n) => n.side === 'left')).toHaveLength(0);
     for (const node of level1) {
-      if (node.side === 'left') expect(node.x + node.w).toBeLessThan(root.x);
-      else expect(node.x).toBeGreaterThan(root.x + root.w);
+      expect(node.x).toBeGreaterThan(root.x + root.w);
     }
   });
 

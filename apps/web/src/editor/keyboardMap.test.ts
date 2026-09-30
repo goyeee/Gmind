@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   handledActionIds,
+  resolveDirectEditKey,
   resolveShortcutAction,
   SHORTCUT_ACTION_IDS,
   SHORTCUT_LIST,
@@ -87,7 +88,8 @@ describe('resolveShortcutAction（绑定行为快照）', () => {
 
   it('单键族：Enter/F2/Tab 两态/删除/方向键/Home/End；修饰键一律不触发', () => {
     expect(resolveShortcutAction(keys({ key: 'Enter' }))).toBe('enter');
-    // M7b-W3 平移改道：Space 键位让位给「空格+左键拖拽平移」手势，编辑改绑 F2
+    // M7b-W3 改绑 F2（原 Space）；2026-09-30 需求方收回空格——空格由页面层
+    // 「选中即可编辑」监听接管（进编辑并全选），本层不回绑（见 resolveDirectEditKey）
     expect(resolveShortcutAction(keys({ key: 'F2' }))).toBe('edit-selected');
     expect(resolveShortcutAction(keys({ key: ' ' }))).toBeNull();
     expect(resolveShortcutAction(keys({ key: 'Tab' }))).toBe('insert-child');
@@ -101,5 +103,47 @@ describe('resolveShortcutAction（绑定行为快照）', () => {
     expect(resolveShortcutAction(keys({ key: 'Enter', ctrlKey: true }))).toBeNull();
     expect(resolveShortcutAction(keys({ key: 'Enter', altKey: true }))).toBeNull();
     expect(resolveShortcutAction(keys({ key: 'q', ctrlKey: true }))).toBeNull();
+  });
+});
+
+describe('resolveDirectEditKey（选中即可编辑：可打印字符直入 / 空格进编辑并全选）', () => {
+  it('可打印字符 → printable（字母/数字/符号/Shift 大写/中文单字）', () => {
+    expect(resolveDirectEditKey(keys({ key: 'a' }))).toBe('printable');
+    expect(resolveDirectEditKey(keys({ key: 'A' }))).toBe('printable'); // Shift 大写同为可打印
+    expect(resolveDirectEditKey(keys({ key: '1' }))).toBe('printable');
+    expect(resolveDirectEditKey(keys({ key: ',' }))).toBe('printable');
+    expect(resolveDirectEditKey(keys({ key: '!' }))).toBe('printable');
+    expect(resolveDirectEditKey(keys({ key: '主' }))).toBe('printable');
+  });
+
+  it('空格单列 space 通道（进编辑并全选、不落空格；不再是平移手势触发键）', () => {
+    expect(resolveDirectEditKey(keys({ key: ' ' }))).toBe('space');
+    expect(resolveDirectEditKey(keys({ key: ' ', shiftKey: true }))).toBe('space');
+  });
+
+  it('非可打印键一律 null（Enter/F2/Tab/方向键/删除/Home/End/Escape/死键/组字）', () => {
+    for (const key of [
+      'Enter',
+      'F2',
+      'Tab',
+      'ArrowUp',
+      'ArrowLeft',
+      'Delete',
+      'Backspace',
+      'Home',
+      'End',
+      'Escape',
+      'Dead',
+      'Process',
+    ]) {
+      expect(resolveDirectEditKey(keys({ key })), key).toBeNull();
+    }
+  });
+
+  it('Ctrl/Cmd/Alt 组合不让路（剪贴板/帮助/折叠等修饰键族归 resolveShortcutAction）', () => {
+    expect(resolveDirectEditKey(keys({ key: 'a', ctrlKey: true }))).toBeNull();
+    expect(resolveDirectEditKey(keys({ key: 'a', metaKey: true }))).toBeNull();
+    expect(resolveDirectEditKey(keys({ key: 'a', altKey: true }))).toBeNull();
+    expect(resolveDirectEditKey(keys({ key: ' ', ctrlKey: true }))).toBeNull();
   });
 });

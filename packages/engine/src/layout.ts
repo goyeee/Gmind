@@ -13,11 +13,11 @@
  *   自 parentY + parentH/2 − 子带高/2 起顶对齐堆叠，父垂直居中于子带（经典脑图）。
  * - 水平（org）：子树宽 = max(自身宽, Σ子树宽 + H_GAP×(n-1))；兄弟水平排布，
  *   父水平居中于子带上方，层间 V_GAP。
- * - mindmap 分侧（绑定规则，fix r1 改预检查/断行语义）：一级子树按文档序依次装箱——
- *   分配前判断累计 + 当前子树高是否超过总高之半，超过则自该子树起全部 LEFT，
- *   否则 RIGHT（两等高分支得 1 右 1 左，符合惯例）；首个子树恒 RIGHT（断行语义
- *   不留空行，单分支布局在右）；两侧各自自上而下、保文档序；更深后代恒与其一级
- *   祖先同侧。
+ * - mindmap 分侧（逆时针定侧，需求方 2026-09-30 裁定，高度半分逻辑退役）：root 直接
+ *   子级有持久 side（core addChild/setNodeSide 写入、快照透传）→ 用持久值；无 side
+ *   按文档序计数兜底（index 0-2 → right、≥3 → left，即第 1~3 个右、第 4 个起左——
+ *   与 core addChild 定侧配额同值）。混合文档逐节点独立判定；一级子树在单一文档序带
+ *   上自上而下排布（保序），更深后代恒与其一级祖先同侧；logic 全右、org 向下。
  * - 边锚点：mindmap/logic 父侧沿父边向子偏移（钳制父盒内）、子侧取相向边中点，
  *   bezier 控制点水平外伸 max(60, dx×0.5)；org 取父下中点/子上中点，elbow。折叠节点无子边。
  * - 根盒中心恒为 (0,0)；输出 bbox 宽高为全部节点盒的极差。
@@ -39,6 +39,13 @@ import type {
   TextStyle,
 } from './types';
 
+/**
+ * 右侧常驻配额（逆时针定侧，需求方 2026-09-30）：无持久 side 的 root 直接子级按
+ * 文档序计数兜底——index 0-2 → right、≥3 → left。与 @gmind/core addChild 定侧配额
+ * 同值（引擎不依赖 core，改动需两处同步）。
+ */
+const ROOT_SIDE_RIGHT_QUOTA = 3;
+
 /** 布局内部树节点：盒子尺寸收集期确定，坐标放置期回填。 */
 interface LayoutNode {
   id: string;
@@ -49,6 +56,12 @@ interface LayoutNode {
   y: number;
   side: NodeBox['side'];
   children: LayoutNode[];
+  /**
+   * 持久侧别（逆时针定侧）：core NodeSnapshot.side 透传（left/right 之外的值按
+   * 缺省处理）。仅 root 直接子级被 assignMindmapSides 消费；更深节点的该字段忽略
+   * （侧别恒继承一级祖先）。
+   */
+  persistedSide?: 'left' | 'right';
   /** 仅折叠节点有：被隐藏的存活后代数（可为 0）。 */
   collapsedCount?: number;
   /** 描述行（M7c-C1）：测量截断后的单行（无描述缺省，几何零参与）。 */
@@ -137,6 +150,9 @@ function collectTree(
     const rawLines = snap.text.split('\n');
     const wrapped =
       box.lines.length !== rawLines.length || box.lines.some((line, i) => line !== rawLines[i]);
+    // 持久侧别（逆时针定侧）：left/right 之外的值（远端坏数据）按缺省处理。
+    const persistedSide: 'left' | 'right' | undefined =
+      snap.side === 'left' || snap.side === 'right' ? snap.side : undefined;
     const node: LayoutNode = {
       id,
       depth,
@@ -150,6 +166,7 @@ function collectTree(
       subtreeW: box.w,
       ...(box.descLine !== undefined ? { descLine: box.descLine } : {}),
       ...(wrapped ? { lines: box.lines } : {}),
+      ...(persistedSide !== undefined ? { persistedSide } : {}),
     };
     if (collapsedCount !== undefined) node.collapsedCount = collapsedCount;
     return node;
@@ -190,24 +207,16 @@ function childrenWidth(children: LayoutNode[], hGap: number): number {
 }
 
 /**
- * mindmap 分侧（预检查，断行语义）：分配前判断累计 + 当前子树高是否超过总高之半，
- * 超过则自该子树起全部 LEFT，否则 RIGHT；首个子树恒 RIGHT（断行不留空行，
- * 单分支/首支超半时仍居右）。保序：右侧取文档序前段，左侧取其余。
+ * mindmap 分侧（逆时针定侧，需求方 2026-09-30）：root 直接子级侧别 =
+ * ① 持久 side（core addChild 自动定侧 / setNodeSide 手动调整写入）优先；
+ * ② 无持久 side 按文档序计数兜底：index 0-2 → right、≥3 → left（第 1~3 个右、
+ *    第 4 个起左，与 core addChild 定侧配额同值——引擎不依赖 core，改动需两处同步）。
+ * 旧「累计子树带高过半即翻左」的高度半分逻辑退役：侧别不再随几何漂移，布局恒
+ * 尊重文档持久状态；混合文档（部分有 side）逐节点独立判定，互不影响。
+ * 注意：本函数只决定侧别，不改变单一文档序带的 y 排布（保序不变，见 placeRootChildren）。
  */
-function assignMindmapSides(children: LayoutNode[], theme: ThemeTokens): Array<'left' | 'right'> {
-  const total = childrenHeight(children, theme.V_GAP);
-  const half = total / 2;
-  let cum = 0;
-  let flipped = false;
-  return children.map((child, i) => {
-    if (flipped) return 'left';
-    if (i > 0 && cum + child.subtreeH > half) {
-      flipped = true;
-      return 'left';
-    }
-    cum += child.subtreeH;
-    return 'right';
-  });
+function assignMindmapSides(children: LayoutNode[]): Array<'left' | 'right'> {
+  return children.map((child, i) => child.persistedSide ?? (i < ROOT_SIDE_RIGHT_QUOTA ? 'right' : 'left'));
 }
 
 /** 同侧子树横向延伸：子带以父垂直中线为带心顶对齐堆叠，层级间 H_GAP。 */
@@ -227,7 +236,7 @@ function placeRootChildren(root: LayoutNode, structure: Exclude<StructureType, '
   const sides =
     structure === 'logic'
       ? root.children.map((): 'left' | 'right' => 'right')
-      : assignMindmapSides(root.children, theme);
+      : assignMindmapSides(root.children);
   let cursor = root.y + root.h / 2 - childrenHeight(root.children, theme.V_GAP) / 2;
   root.children.forEach((child, i) => {
     const side = sides[i] as 'left' | 'right';

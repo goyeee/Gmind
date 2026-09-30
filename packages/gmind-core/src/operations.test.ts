@@ -16,6 +16,7 @@ import {
   setDescription,
   setHref,
   setCollapsed,
+  setNodeSide,
   setStyle,
   setText,
   toggleCollapse,
@@ -1032,5 +1033,127 @@ describe('同值守卫（M7c-E4：内容无变化不开事务）', () => {
     expect(count()).toBe(doneCount + 1);
     setNodeTask(doc, id, { owners: ['U1'] });
     expect(count()).toBe(doneCount + 1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 逆时针定侧（需求方 2026-09-30「按 enter 和 tab 新增的二级主题应该是逆时针的。
+// 默认一开始在右侧新增，当二级主题为三个以上时，第四个就要放到左侧（思维导图模式
+// 时），然后以后再多的新增也都在左侧了，用户可以手动调整到右侧」）：
+// addChild root 级自动定侧（第 1~3 右 / 第 4 起左）、setNodeSide 手动调整、
+// moveNode 换父清侧。断言口径：getNode(doc, id)!.side。
+// ---------------------------------------------------------------------------
+
+describe('逆时针定侧（root 级 side 字段）', () => {
+  it('addChild 到 root：第 1~3 个 side=right，第 4 个起 side=left', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [] });
+    const sides: Array<string | undefined> = [];
+    for (let i = 0; i < 6; i += 1) {
+      const id = addChild(doc, ROOT_NODE_ID, { text: `N${i}` });
+      sides.push(getNode(doc, id)!.side);
+    }
+    expect(sides).toEqual(['right', 'right', 'right', 'left', 'left', 'left']);
+  });
+
+  it('非 root 父级不写 side（缺省字段不出现）', () => {
+    const doc = buildTestTree();
+    const aId = findIdByText(doc, 'A');
+    const id = addChild(doc, aId, { text: 'A3' });
+    expect(getNode(doc, id)!.side).toBeUndefined();
+    expect('side' in (getNode(doc, id)!)).toBe(false);
+  });
+
+  it('计数含无 side 字段的旧节点（模板文档按 index 折算：index 0-2 视为右、≥3 视为左）', () => {
+    // 模板预置 4 个二级主题（旧格式，无 side 键）→ index 0-2 折算右侧=3 已满 → 新建左侧
+    const doc = createTemplateDoc({
+      title: 'T',
+      children: [{ text: 'A' }, { text: 'B' }, { text: 'C' }, { text: 'D' }],
+    });
+    const snapA = getNode(doc, findIdByText(doc, 'A'))!;
+    expect(snapA.side).toBeUndefined(); // 旧节点无 side 键
+    const id = addChild(doc, ROOT_NODE_ID, { text: 'E' });
+    expect(getNode(doc, id)!.side).toBe('left');
+  });
+
+  it('手动 setNodeSide 后再新建按当前计数：换走一个右侧后新建回补右侧', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [] });
+    const [a, b, c] = [0, 1, 2].map((i) => addChild(doc, ROOT_NODE_ID, { text: `N${i}` }));
+    setNodeSide(doc, c, 'left'); // 手动把第 3 个调到左 → 右侧现有 2
+    expect(getNode(doc, c)!.side).toBe('left');
+    const d = addChild(doc, ROOT_NODE_ID, { text: 'N3' });
+    expect(getNode(doc, d)!.side).toBe('right'); // 右侧计数 2 < 3 → 回补右侧
+    const e = addChild(doc, ROOT_NODE_ID, { text: 'N4' });
+    expect(getNode(doc, e)!.side).toBe('left'); // 右侧计数回满 3 → 左
+    const f = addChild(doc, ROOT_NODE_ID, { text: 'N5' });
+    expect(getNode(doc, f)!.side).toBe('left');
+    expect([a, b].map((id) => getNode(doc, id)!.side)).toEqual(['right', 'right']);
+  });
+
+  it('墓碑不入定侧计数：删掉一个右侧二级主题后新建回补右侧', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [] });
+    const ids = [0, 1, 2].map((i) => addChild(doc, ROOT_NODE_ID, { text: `N${i}` }));
+    deleteNodes(doc, [ids[0] as string]);
+    const next = addChild(doc, ROOT_NODE_ID, { text: 'N3' });
+    expect(getNode(doc, next)!.side).toBe('right');
+  });
+
+  it('setNodeSide：合法写入读回；非法值抛 INVALID_NODE_SIDE；非 root 直接子级抛 SIDE_ONLY_ROOT_CHILD', () => {
+    const doc = buildTestTree();
+    const aId = findIdByText(doc, 'A');
+    const a1Id = findIdByText(doc, 'A1');
+    setNodeSide(doc, aId, 'left');
+    expect(getNode(doc, aId)!.side).toBe('left');
+    try {
+      setNodeSide(doc, aId, 'up' as never);
+      expect.unreachable();
+    } catch (e) {
+      expect((e as GmindCoreError).code).toBe('INVALID_NODE_SIDE');
+    }
+    try {
+      setNodeSide(doc, a1Id, 'left'); // A1 是二级（父非 root）
+      expect.unreachable();
+    } catch (e) {
+      expect((e as GmindCoreError).code).toBe('SIDE_ONLY_ROOT_CHILD');
+    }
+    expect(getNode(doc, aId)!.side).toBe('left'); // 拒绝路径零变更
+  });
+
+  it('setNodeSide 同值 → 零事务（拖放重复释放幂等）；异值恰一次', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: '甲' }] });
+    let n = 0;
+    doc.on('afterTransaction', () => {
+      n += 1;
+    });
+    const id = childrenIds(doc, ROOT_NODE_ID)[0]!;
+    setNodeSide(doc, id, 'right');
+    expect(n).toBe(1);
+    setNodeSide(doc, id, 'right'); // 同值：零事务
+    expect(n).toBe(1);
+    setNodeSide(doc, id, 'left');
+    expect(n).toBe(2);
+  });
+
+  it('moveNode 换父离开 root 级 → 清 side；root 内重排 → 保留；深层换入 root → 不自动定侧', () => {
+    const doc = createTemplateDoc({
+      title: 'T',
+      children: [{ text: 'A' }, { text: 'B', children: [{ text: 'B1' }] }],
+    });
+    const aId = findIdByText(doc, 'A');
+    const b1Id = findIdByText(doc, 'B1');
+    setNodeSide(doc, aId, 'left');
+
+    moveNode(doc, aId, b1Id); // root 级 → 深层：清侧
+    expect(getNode(doc, aId)!.side).toBeUndefined();
+
+    moveNode(doc, aId, ROOT_NODE_ID); // 深层 → root 级：不自动定侧
+    expect(getNode(doc, aId)!.side).toBeUndefined();
+
+    setNodeSide(doc, aId, 'left');
+    const cId = addChild(doc, ROOT_NODE_ID, { text: 'C' }); // A 无 side 且在左 → 右侧计数 0 → right
+    expect(getNode(doc, cId)!.side).toBe('right');
+    moveNode(doc, aId, ROOT_NODE_ID, 2); // root 内重排（A:1→2）：side 保留
+    expect(getNode(doc, aId)!.side).toBe('left');
+    // 重排前序：root children=[B, A, C] → 移除 A 再插 index 2 → [B, C, A]
+    expect(childrenIds(doc, ROOT_NODE_ID)).toEqual([findIdByText(doc, 'B'), cId, aId]);
   });
 });

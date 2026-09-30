@@ -84,9 +84,9 @@ const ORG_CHILDREN: Record<string, string[]> = { q: ['s', 't', 'a'] };
 const ORG_CENTER_A = { x: 650, y: 220 };
 
 /**
- * 根级侧别仿真桩（M7c-D3 测试②）：3 个等高 root 子级 右右左分布（r 右缘 0、
- * 右列 x=60、左列 x=-240；带高均 40、带间距均 20 → 半分阈值 80，x1/x2 右、x3 左，
- * 与布局 assignMindmapSides 对真实几何的判定一致）。
+ * 根级侧别桩（逆时针定侧回归）：3 个等高 root 子级 右右左分布（r 右缘 0、
+ * 右列 x=60、左列 x=-240；带高均 40、带间距均 20）。持久 side 下布局不再翻面：
+ * 左列二级主题（x3）存在 → 左列门控开启，目标侧 = 芯片/指针所在侧。
  */
 const SIM_BOXES: NodeBox[] = [
   { id: 'x1', x: 60, y: -70, w: 100, h: 40, side: 'right', depth: 1, parentId: 'r' },
@@ -109,6 +109,8 @@ function buildHarness(
   boxes: NodeBox[],
   children: Record<string, string[]>,
   descendants: Record<string, string[]>,
+  /** 组拾起桩（2026-09-30 组拖动）：缺省恒单节点 [按下 id]——与旧口径一致。 */
+  getDragGroup?: (grabbedId: string) => string[],
 ): Harness {
   document.body.innerHTML = '';
   const svg = document.createElementNS(SVG_NS, 'svg');
@@ -141,7 +143,8 @@ function buildHarness(
     svg,
     viewport: vp,
     getBoxes: () => boxes,
-    onDrop: (id, target) => onDrop(id, target),
+    getDragGroup: getDragGroup ?? ((grabbedId) => [grabbedId]),
+    onDrop: (ids, target) => onDrop(ids, target),
     isDescendant: (id, candidateId) => (descendants[id] ?? []).includes(candidateId),
     childrenIdsOf: (id) => children[id] ?? [],
     overlayLayer: overlay,
@@ -210,13 +213,23 @@ function dragTo(
   svg.dispatchEvent(pe('pointerup', { clientX: x, clientY: y, pointerId: 1 }));
 }
 
-/** 兄弟顺序结算模拟：按引擎回报的 (parentId,index) 对桩数组做「先移除 a 再插入」。 */
-function applyTarget(target: DropTarget, children: Record<string, string[]>): void {
+/**
+ * 兄弟顺序结算模拟：按引擎回报的 (parentId,index) 对桩数组逐个「先移除该 id 再按
+ * index+i 插入」——与页面 onDrop 的 moveNode(id, parentId, index+i) 序列逐字一致；
+ * ids 顺序即组内序（2026-09-30 组拖动），缺省 ['a'] 单节点旧口径。
+ */
+function applyTarget(
+  target: DropTarget,
+  children: Record<string, string[]>,
+  ids: string[] = ['a'],
+): void {
   if (!target || target.kind !== 'sibling') return;
   const arr = children[target.parentId];
-  const from = arr.indexOf('a');
-  if (from !== -1) arr.splice(from, 1);
-  arr.splice(target.index, 0, 'a');
+  ids.forEach((id, i) => {
+    const from = arr.indexOf(id);
+    if (from !== -1) arr.splice(from, 1);
+    arr.splice(target.index + i, 0, id);
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -235,34 +248,37 @@ describe('DragController 列吸附连续模型（M7c-G，COL 桩）', () => {
     expect(slotEl()!.getAttribute('y')).toBe('-150'); // 槽中心 -130 − a.h/2 20
     expect(edgeEl()!.getAttribute('d')).toBe('M 40 0 C 70 0 70 -130 100 -130');
     svg.dispatchEvent(pe('pointerup', { clientX: 70, clientY: -110, pointerId: 1 }));
-    expect(onDrop).toHaveBeenLastCalledWith('a', {
+    expect(onDrop).toHaveBeenLastCalledWith(['a'], {
       kind: 'sibling',
       parentId: 'r',
       index: 0,
       anchorId: 'c1',
       position: 'before',
+      side: 'right', // 逆时针定侧：根级落点恒携带目标侧（全右文档门控后仍 right）
     });
     // 中点 y=-50 → 最近间隙 = c1/c2 之间（中心 -70）→ index 1（停在哪儿插在哪两个中间）
     dragStart(70, -50, COL_CENTER_A);
     expect(slotEl()!.getAttribute('y')).toBe('-90');
     svg.dispatchEvent(pe('pointerup', { clientX: 70, clientY: -50, pointerId: 1 }));
-    expect(onDrop).toHaveBeenLastCalledWith('a', {
+    expect(onDrop).toHaveBeenLastCalledWith(['a'], {
       kind: 'sibling',
       parentId: 'r',
       index: 1,
       anchorId: 'c1',
       position: 'after',
+      side: 'right',
     });
     // 下点 y=80 → 最近间隙 = c3 下方（中心 70）→ index 3（尾插对称外推）
     dragStart(70, 80, COL_CENTER_A);
     expect(slotEl()!.getAttribute('y')).toBe('50');
     svg.dispatchEvent(pe('pointerup', { clientX: 70, clientY: 80, pointerId: 1 }));
-    expect(onDrop).toHaveBeenLastCalledWith('a', {
+    expect(onDrop).toHaveBeenLastCalledWith(['a'], {
       kind: 'sibling',
       parentId: 'r',
       index: 3,
       anchorId: 'c3',
       position: 'after',
+      side: 'right',
     });
     // 文档序结算（中点那次）：先移除 a 再按 index 插入 → 落在 c1/c2 之间
     const children: Record<string, string[]> = { r: ['c1', 'c2', 'c3', 'a'] };
@@ -277,7 +293,7 @@ describe('DragController 列吸附连续模型（M7c-G，COL 桩）', () => {
     expect(slotEl()!.getAttribute('y')).toBe('-120'); // c1 中线 -100 − a.h/2 20（无子级=追加）
     expect(edgeEl()!.getAttribute('d')).toBe('M 200 -100 C 230 -100 230 -100 260 -100');
     svg.dispatchEvent(pe('pointerup', { clientX: 230, clientY: -100, pointerId: 1 }));
-    expect(onDrop).toHaveBeenLastCalledWith('a', {
+    expect(onDrop).toHaveBeenLastCalledWith(['a'], {
       kind: 'sibling',
       parentId: 'c1',
       index: 0,
@@ -295,7 +311,7 @@ describe('DragController 列吸附连续模型（M7c-G，COL 桩）', () => {
     expect(slotEl()!.getAttribute('x')).toBe('260'); // c2 右缘 200 + 60
     expect(slotEl()!.getAttribute('y')).toBe('-60'); // c2 中线 -40 − 20
     svg.dispatchEvent(pe('pointerup', { clientX: 150, clientY: -40, pointerId: 1 }));
-    expect(onDrop).toHaveBeenLastCalledWith('a', {
+    expect(onDrop).toHaveBeenLastCalledWith(['a'], {
       kind: 'sibling',
       parentId: 'c2',
       index: 0,
@@ -335,7 +351,7 @@ describe('DragController 左侧节点吸附（M7c-G，LEFT 桩）', () => {
     expect(slotEl()!.getAttribute('y')).toBe('-20'); // ll 中线 0 − 20
     expect(edgeEl()!.getAttribute('d')).toBe('M -320 0 C -350 0 -350 0 -380 0');
     svg.dispatchEvent(pe('pointerup', { clientX: -350, clientY: 0, pointerId: 1 }));
-    expect(onDrop).toHaveBeenLastCalledWith('a', {
+    expect(onDrop).toHaveBeenLastCalledWith(['a'], {
       kind: 'sibling',
       parentId: 'll',
       index: 0,
@@ -351,7 +367,7 @@ describe('DragController 左侧节点吸附（M7c-G，LEFT 桩）', () => {
     expect(slotEl()!.getAttribute('y')).toBe('10'); // 间隙中心 30 − a.h/2 20
     expect(edgeEl()!.getAttribute('d')).toBe('M -160 0 C -190 0 -190 30 -220 30');
     svg.dispatchEvent(pe('pointerup', { clientX: -110, clientY: 30, pointerId: 1 }));
-    expect(onDrop).toHaveBeenLastCalledWith('a', {
+    expect(onDrop).toHaveBeenLastCalledWith(['a'], {
       kind: 'sibling',
       parentId: 'L',
       index: 1,
@@ -373,7 +389,7 @@ describe('DragController 落点分类与释放结算（继承语义）', () => {
     expect(slotEl()!.getAttribute('y')).toBe('100'); // b 中线 120 − a.h/2 20
     svg.dispatchEvent(pe('pointerup', { clientX: CENTER.b.x, clientY: CENTER.b.y, pointerId: 1 }));
     expect(onDrop).toHaveBeenCalledTimes(1);
-    expect(onDrop).toHaveBeenCalledWith('a', {
+    expect(onDrop).toHaveBeenCalledWith(['a'], {
       kind: 'sibling',
       parentId: 'b',
       index: 0,
@@ -385,7 +401,7 @@ describe('DragController 落点分类与释放结算（继承语义）', () => {
   it('快速释放（move 后立即抬起）按同一最后悬停结算（一致性缓存，无门槛）', () => {
     dragTo(CENTER.b.x, CENTER.b.y);
     expect(onDrop).toHaveBeenCalledTimes(1);
-    expect(onDrop).toHaveBeenCalledWith('a', {
+    expect(onDrop).toHaveBeenCalledWith(['a'], {
       kind: 'sibling',
       parentId: 'b',
       index: 0,
@@ -397,12 +413,13 @@ describe('DragController 落点分类与释放结算（继承语义）', () => {
   it('根盒命中 → child of root：index 按指针 y 最近间隙位（此点位=c1 前插），侧别按指针半屏', () => {
     dragTo(CENTER.r.x, -116); // 根盒内（r 中线 -120 → 右半）
     expect(onDrop).toHaveBeenCalledTimes(1);
-    expect(onDrop).toHaveBeenCalledWith('a', {
+    expect(onDrop).toHaveBeenCalledWith(['a'], {
       kind: 'sibling',
       parentId: 'r',
       index: 0,
       anchorId: 'b',
       position: 'before',
+      side: 'right', // 逆时针定侧：指针在根盒右半 → 目标侧 right
     });
     const children: Record<string, string[]> = { r: ['a', 'b', 'd'], a: ['c'], q: ['s', 't'] };
     applyTarget(onDrop.mock.calls[0]![1] as DropTarget, children);
@@ -419,12 +436,13 @@ describe('DragController 落点分类与释放结算（继承语义）', () => {
     expect(edgeEl()!.getAttribute('d')).toBe('M -80 -100 C 60 -100 60 440 200 440');
     svg.dispatchEvent(pe('pointerup', { clientX: 650, clientY: 480, pointerId: 1 }));
     expect(onDrop).toHaveBeenCalledTimes(1);
-    expect(onDrop).toHaveBeenCalledWith('a', {
+    expect(onDrop).toHaveBeenCalledWith(['a'], {
       kind: 'sibling',
       parentId: 'r',
       index: 2, // 右侧（=文档序前缀）末尾：post-removal 子级 [b, d] 全右 → 2
       anchorId: 'd',
       position: 'after',
+      side: 'right', // 指针 650 在 r 中线 -120 右半 → 目标侧 right
     });
   });
 
@@ -469,7 +487,7 @@ describe('DragController org 结构（side=down，ORG 桩）', () => {
     expect(slotEl()!.getAttribute('y')).toBe('260'); // s 底 240 + 兜底层距 20
     expect(edgeEl()!.getAttribute('d')).toBe('M 240 240 L 240 250 L 240 250 L 240 260');
     svg.dispatchEvent(pe('pointerup', { clientX: 240, clientY: 220, pointerId: 1 }));
-    expect(onDrop).toHaveBeenLastCalledWith('a', {
+    expect(onDrop).toHaveBeenLastCalledWith(['a'], {
       kind: 'sibling',
       parentId: 's',
       index: 0,
@@ -485,7 +503,7 @@ describe('DragController org 结构（side=down，ORG 桩）', () => {
     expect(slotEl()!.getAttribute('y')).toBe('200'); // q 底 190 + 层距 10
     expect(edgeEl()!.getAttribute('d')).toBe('M 240 190 L 240 195 L 290 195 L 290 200');
     svg.dispatchEvent(pe('pointerup', { clientX: 290, clientY: 220, pointerId: 1 }));
-    expect(onDrop).toHaveBeenLastCalledWith('a', {
+    expect(onDrop).toHaveBeenLastCalledWith(['a'], {
       kind: 'sibling',
       parentId: 'q',
       index: 1,
@@ -498,7 +516,7 @@ describe('DragController org 结构（side=down，ORG 桩）', () => {
     dragStart(299, 255, ORG_CENTER_A); // 行下缘 240 之下、q 区底 248 之外（条带 y ≤ 264）
     expect(slotEl()!.getAttribute('x')).toBe('240');
     svg.dispatchEvent(pe('pointerup', { clientX: 299, clientY: 255, pointerId: 1 }));
-    expect(onDrop).toHaveBeenLastCalledWith('a', {
+    expect(onDrop).toHaveBeenLastCalledWith(['a'], {
       kind: 'sibling',
       parentId: 'q',
       index: 1, // 同父移动：index 已是「移除 a 后」的位次（[s,t] 中间），无需二次修正
@@ -507,7 +525,7 @@ describe('DragController org 结构（side=down，ORG 桩）', () => {
     });
     dragStart(185, 255, ORG_CENTER_A); // 行左缘 200 左侧（条带 x ≥ 180）
     svg.dispatchEvent(pe('pointerup', { clientX: 185, clientY: 255, pointerId: 1 }));
-    expect(onDrop).toHaveBeenLastCalledWith('a', {
+    expect(onDrop).toHaveBeenLastCalledWith(['a'], {
       kind: 'sibling',
       parentId: 'q',
       index: 0,
@@ -646,15 +664,15 @@ describe('resolveDropSlot 落位槽几何（M7c-D3 纯函数）', () => {
   });
 });
 
-describe('resolveDropSlot 根级侧别仿真（M7c-D3 不跳左，M7c-G 入口适配）', () => {
+describe('resolveDropSlot 根级落点（逆时针定侧：持久侧别不再翻面）', () => {
   beforeEach(() => {
-    // 重装侧别仿真桩场景（右右左分布）
+    // 重装根级侧别桩场景（右右左分布，左列门控开启）
     ({ svg, overlay, vp, onDrop, controller } = buildHarness(SIM_BOXES, SIM_CHILDREN, {}));
   });
 
-  it('纯函数：几何 index 仿真翻左 → 修正到同侧（右）兄弟最接近芯片 y 的插入位，仿真侧别 right', () => {
-    // 芯片在右侧低处（x2 下方 y≈80）：几何 index 2 插入后 [x2,x3,x1]，x1 累计过半翻左；
-    // 修正为右列兄弟 [x2] 的 y 最近插入位（尾插 p=1 → 文档序 index 1）→ 复核仿真 right。
+  it('纯函数：index 直通不修正（旧半分仿真退役）——芯片在右低处 → index 落右列、槽画右列', () => {
+    // 芯片在右侧低处（x2 下方 y≈80）：index 2 直通 = 文档序末尾（post-removal
+    // [x2,x3] 插 index 2 → [x2,x3,x1]，x1 仍在右列 x2 之下）；无仿真修正。
     const res = resolveDropSlot({
       boxes: SIM_BOXES,
       childrenIds: SIM_CHILDREN.r!,
@@ -664,56 +682,78 @@ describe('resolveDropSlot 根级侧别仿真（M7c-D3 不跳左，M7c-G 入口�
       chipBox: { x: 60, y: 80, w: 100, h: 40 },
     });
     expect(res).not.toBeNull();
-    expect(res!.index).toBe(1); // 不按几何位次 2（会跳左）
+    expect(res!.index).toBe(2); // 直通（旧版此处被仿真修正为 1）
     expect(res!.slot.side).toBe('right');
     expect(res!.slot.x).toBe(60); // 右列（r 右缘 0 + 列距 60）
     expect(res!.slot.y).toBe(40); // x2 底 30 + 带间距/2 10（槽顶）
   });
 
-  it('DOM：右侧节点拖到根右区低处（x2 下方）→ 解析 index 落右、槽画在右列（不跳左）', () => {
+  it('DOM：右侧节点拖到根右区低处（x2 下方）→ index 落右、槽画在右列，target.side=right', () => {
     dragStart(110, 60, { x: 110, y: -50 }, 'x1'); // 根区右带低处（x2 下方）
     expect(slotEl()).not.toBeNull();
     expect(slotEl()!.getAttribute('x')).toBe('60'); // 右列（与 x1/x2 同列），绝不在左侧
     expect(slotEl()!.getAttribute('y')).toBe('40');
     svg.dispatchEvent(pe('pointerup', { clientX: 110, clientY: 60, pointerId: 1 }));
-    expect(onDrop).toHaveBeenLastCalledWith('x1', {
+    expect(onDrop).toHaveBeenLastCalledWith(['x1'], {
       kind: 'sibling',
       parentId: 'r',
       index: 1,
       anchorId: 'x2',
       position: 'after',
+      side: 'right',
     });
   });
 
-  it('DOM：根左区命中（x3 上方）→ 侧别仿真修正 index 落左列尾、槽画左列', () => {
+  it('DOM：根左区命中（x3 上方）→ 目标侧=芯片侧落左列（y 最近插入位在 x3 之上），target.side=left', () => {
     dragStart(-100, 70, { x: 110, y: -50 }, 'x1'); // 根区左带（x3 上方间隙侧）
     expect(slotEl()).not.toBeNull();
     expect(slotEl()!.getAttribute('x')).toBe('-240'); // 左列（与 x3 同列）
-    expect(slotEl()!.getAttribute('y')).toBe('100'); // x3 底 90 + 带间距/2 10（槽顶）
+    expect(slotEl()!.getAttribute('y')).toBe('20'); // x3 顶 50 − 带间距/2 10 − a.h/2 20（槽顶）
     svg.dispatchEvent(pe('pointerup', { clientX: -100, clientY: 70, pointerId: 1 }));
-    expect(onDrop).toHaveBeenLastCalledWith('x1', {
+    expect(onDrop).toHaveBeenLastCalledWith(['x1'], {
       kind: 'sibling',
       parentId: 'r',
-      index: 2, // 仿真修正：左插位映射文档序（右数 1 + 尾插 1）
+      index: 1, // 左插位 p=0 → 文档序 x3 之前（sideInsertDocIndex 映射）
       anchorId: 'x2',
       position: 'after',
+      side: 'left', // 持久侧别：拖到左半 → 页面 setNodeSide 换左
     });
   });
 
-  it('空白（root 左半）→ 解析为左列末尾：槽画左列、index=文档序末尾（M7c-F 复验问题4）', () => {
+  it('空白（root 左半）→ 解析为左列末尾：槽画左列、index=文档序末尾、target.side=left', () => {
     dragStart(-500, 100, { x: 110, y: -50 }, 'x1');
-    // 空白（-500 < r 中线 -40 → 指针侧 left）：仿真插入文档序末尾落在左列
+    // 空白（-500 < r 中线 -40 → 指针侧 left；左列门控开启 → 目标侧 left）
     const slot = slotEl();
     expect(slot).not.toBeNull(); // 空白悬停有预览
     expect(slot!.getAttribute('x')).toBe('-240'); // 左列（与 x3 同列），不在右列
     expect(slot!.getAttribute('y')).toBe('100'); // x3 底 90 + 带间距/2 10（槽顶）
     svg.dispatchEvent(pe('pointerup', { clientX: -500, clientY: 100, pointerId: 1 }));
-    expect(onDrop).toHaveBeenLastCalledWith('x1', {
+    expect(onDrop).toHaveBeenLastCalledWith(['x1'], {
       kind: 'sibling',
       parentId: 'r',
-      index: 2, // 左侧 = 文档序后缀：末尾 = post-removal 文档序末尾 [x2, x3] → 2
+      index: 2, // 左侧尾插 = post-removal 文档序末尾 [x2, x3] → 2
       anchorId: 'x3',
       position: 'after',
+      side: 'left',
+    });
+  });
+
+  it('门控：全右文档（无左列二级主题）拖到根左半 → 恒结算右列（logic/新文档不受影响）', () => {
+    // COL 桩（全右，左列门控关闭）：根左半的子级吸附区命中——slot/target 恒 right，
+    // 与旧「单侧根级恒右」行为一致，绝不向左解析。
+    ({ svg, overlay, vp, onDrop, controller } = buildHarness(COL_BOXES, COL_CHILDREN, {}));
+    dragStart(-150, -110, COL_CENTER_A); // 根区左半（-150 < r 中线 0，根区 y 带内）
+    expect(slotEl()).not.toBeNull();
+    expect(slotEl()!.getAttribute('x')).toBe('100'); // 右列（绝不画左槽）
+    expect(slotEl()!.getAttribute('y')).toBe('-150'); // c1 上方空隙（与右列命中同槽）
+    svg.dispatchEvent(pe('pointerup', { clientX: -150, clientY: -110, pointerId: 1 }));
+    expect(onDrop).toHaveBeenLastCalledWith(['a'], {
+      kind: 'sibling',
+      parentId: 'r',
+      index: 0,
+      anchorId: 'c1',
+      position: 'before',
+      side: 'right',
     });
   });
 });
@@ -762,6 +802,103 @@ describe('classifyDropAt 纯函数（M7c-G 区域优先级）', () => {
         point: CENTER.c,
       }),
     ).toEqual({ placement: null, forbiddenId: 'c' });
+  });
+
+  it('组排除集并组（draggedIds）：组内任一成员本体/其后代均 forbiddenId（2026-09-30 组拖动）', () => {
+    // 组 ['a','b']：b 本体（组成员）与 c（a 的后代）都进排除集；非组成员 r 正常。
+    const group = (point: { x: number; y: number }): ReturnType<typeof classifyDropAt> =>
+      classifyDropAt({
+        boxes: BOXES,
+        childrenIdsOf: (id) => CHILDREN[id] ?? [],
+        isDescendant: (id, candidateId) => (DESCENDANTS[id] ?? []).includes(candidateId),
+        draggedId: 'a',
+        draggedIds: ['a', 'b'],
+        point,
+      });
+    expect(group(CENTER.b)!.placement).toBeNull();
+    expect(group(CENTER.b)!.forbiddenId).toBe('b');
+    expect(group(CENTER.c)!.placement).toBeNull();
+    expect(group(CENTER.c)!.forbiddenId).toBe('c');
+    expect(group({ x: 70, y: -110 })!.placement).toEqual({
+      kind: 'child',
+      nodeId: 'r',
+      index: 0,
+      sideHint: 'right',
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 组拖动（2026-09-30 需求方批量拖动：多选整组同时拖到其他节点）
+// ---------------------------------------------------------------------------
+
+describe('DragController 组拖动（2026-09-30 批量拖动）', () => {
+  /** COL 桩组拾起桩：按住 a → 组 ['c3','a']（布局序 box.y 升序：c3 y=0 < a y=60）。 */
+  const colGroup = (grabbedId: string): string[] => (grabbedId === 'a' ? ['c3', 'a'] : [grabbedId]);
+
+  beforeEach(() => {
+    ({ svg, overlay, vp, onDrop, controller } = buildHarness(COL_BOXES, COL_CHILDREN, {}, colGroup));
+  });
+
+  it('① 组拾起 → 悬停列条带 → 释放 onDrop 收 ids 长度 2；applyTarget 后两节点相邻兄弟、序=布局序', () => {
+    dragStart(70, -110); // 根右列（child of r，与单节点用例①同点位）
+    expect(slotEl()).not.toBeNull(); // 组同样单套边/槽预览（组落同一槽）
+    svg.dispatchEvent(pe('pointerup', { clientX: 70, clientY: -110, pointerId: 1 }));
+    expect(onDrop).toHaveBeenCalledTimes(1);
+    const [ids, target] = onDrop.mock.calls[0]! as [string[], DropTarget];
+    expect(ids).toEqual(['c3', 'a']); // 组序 = 拾起时布局序
+    expect(target).toMatchObject({ kind: 'sibling', parentId: 'r' });
+    // 页面侧 moveNode(id, parentId, index+i) 序列逐字模拟：组内任一成员先移除再插入
+    const children: Record<string, string[]> = { r: ['c1', 'c2', 'c3', 'a'] };
+    applyTarget(target, children, ids);
+    expect(children.r).toEqual(['c3', 'a', 'c1', 'c2']); // 相邻兄弟 + 组内序=布局序
+  });
+
+  it('② 组禁止：拖组到组内某节点的子级（c 为组成员 a 的后代）→ forbidden，释放不回调', () => {
+    ({ svg, overlay, vp, onDrop, controller } = buildHarness(BOXES, CHILDREN, DESCENDANTS, (id) =>
+      id === 'a' ? ['a', 'b'] : [id],
+    ));
+    // c = 组成员 a 的后代 → 全组各自子树并集禁止
+    dragStart(CENTER.c.x, CENTER.c.y);
+    expect(nodeEl('c').classList.contains('drop-forbidden')).toBe(true);
+    expect(nodeEl('c').classList.contains('drop-target')).toBe(false);
+    expect(slotEl()).toBeNull();
+    svg.dispatchEvent(pe('pointerup', { clientX: CENTER.c.x, clientY: CENTER.c.y, pointerId: 1 }));
+    expect(onDrop).not.toHaveBeenCalled();
+    // 组成员 b 本体同为禁止目标
+    dragStart(CENTER.b.x, CENTER.b.y);
+    expect(nodeEl('b').classList.contains('drop-forbidden')).toBe(true);
+    svg.dispatchEvent(pe('pointerup', { clientX: CENTER.b.x, clientY: CENTER.b.y, pointerId: 1 }));
+    expect(onDrop).not.toHaveBeenCalled();
+  });
+
+  it('③ 组 ghost：size>1 时 .gm-drag-ghost-badge（×N）存在；单节点路径无徽章', () => {
+    dragStart(70, -110);
+    const badge = ghostEl()!.querySelector('.gm-drag-ghost-badge');
+    expect(badge).not.toBeNull();
+    expect(badge!.querySelector('text')!.textContent).toBe('×2');
+    expect(badge!.querySelector('circle')).not.toBeNull(); // 圆形徽章底
+    svg.dispatchEvent(pe('pointerup', { clientX: 70, clientY: -110, pointerId: 1 }));
+    // 单节点（缺省桩 getDragGroup 返回单元素）：芯片保留、徽章不画
+    ({ svg, overlay, vp, onDrop, controller } = buildHarness(COL_BOXES, COL_CHILDREN, {}));
+    dragStart(70, -110);
+    expect(ghostEl()).not.toBeNull();
+    expect(ghostEl()!.querySelector('.gm-drag-ghost-badge')).toBeNull();
+  });
+
+  it('④ 单节点路径回归：getDragGroup 返回单元素时行为与旧一致（onDrop 收长度 1 数组）', () => {
+    ({ svg, overlay, vp, onDrop, controller } = buildHarness(BOXES, CHILDREN, DESCENDANTS, (id) => [
+      id,
+    ]));
+    dragTo(CENTER.b.x, CENTER.b.y);
+    expect(onDrop).toHaveBeenCalledTimes(1);
+    expect(onDrop).toHaveBeenCalledWith(['a'], {
+      kind: 'sibling',
+      parentId: 'b',
+      index: 0,
+      anchorId: 'b',
+      position: 'after',
+    });
   });
 });
 
@@ -975,14 +1112,14 @@ describe('DragController 边界与生命周期', () => {
       svg,
       viewport: vp,
       getBoxes: () => BOXES,
-      onDrop: (id, target) => onDrop(id, target),
+      onDrop: (ids, target) => onDrop(ids, target),
       isDescendant: (id, candidateId) => (DESCENDANTS[id] ?? []).includes(candidateId),
       childrenIdsOf: (id) => CHILDREN[id] ?? [],
       overlayLayer: overlay,
     });
     dragTo(CENTER.b.x, CENTER.b.y);
     expect(onDrop).toHaveBeenCalledTimes(1);
-    expect(onDrop).toHaveBeenCalledWith('a', {
+    expect(onDrop).toHaveBeenCalledWith(['a'], {
       kind: 'sibling',
       parentId: 'b',
       index: 0,
@@ -1006,7 +1143,7 @@ describe('DragController 边界与生命周期', () => {
     // 卡死修复后：下一次 pointerdown + 拖拽照常换父。
     dragTo(CENTER.b.x, CENTER.b.y);
     expect(onDrop).toHaveBeenCalledTimes(1);
-    expect(onDrop).toHaveBeenCalledWith('a', {
+    expect(onDrop).toHaveBeenCalledWith(['a'], {
       kind: 'sibling',
       parentId: 'b',
       index: 0,
@@ -1025,7 +1162,7 @@ describe('DragController 边界与生命周期', () => {
     expect(controller.dragging).toBeNull();
     dragTo(CENTER.b.x, CENTER.b.y);
     expect(onDrop).toHaveBeenCalledTimes(1);
-    expect(onDrop).toHaveBeenLastCalledWith('a', {
+    expect(onDrop).toHaveBeenLastCalledWith(['a'], {
       kind: 'sibling',
       parentId: 'b',
       index: 0,

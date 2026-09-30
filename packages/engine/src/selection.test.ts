@@ -316,7 +316,9 @@ describe('siblingEnd', () => {
 // 钉定「真实几何上的命中」。桩与 layout.test.ts 同款（每字符 10px、行高 20px）。
 // ---------------------------------------------------------------------------
 
-function makeReader(defs: Record<string, { text: string; children?: string[]; icons?: Record<string, unknown> }>): DocReader {
+function makeReader(
+  defs: Record<string, { text: string; children?: string[]; icons?: Record<string, unknown>; side?: string }>,
+): DocReader {
   const snap = (id: string): NodeSnapshotLike | null => {
     const def = defs[id];
     if (!def) return null;
@@ -329,6 +331,7 @@ function makeReader(defs: Record<string, { text: string; children?: string[]; ic
       deleted: false,
       icons: def.icons,
       image: null,
+      side: def.side,
     };
   };
   return {
@@ -371,21 +374,50 @@ describe('navigate/siblingEnd × layout() 真实输出（T8 债：金样树 3 �
   const kidsOf = (boxes: NodeBox[], id: string): NodeBox[] =>
     boxes.filter((b) => b.parentId === id); // boxes 文档序，同级随之有序
 
-  it('mindmap：分侧与父子方向命中（ga 图标加宽使 gb 几何更近）', () => {
+  it('mindmap：金样树逆时针定侧后全右（几何与 logic 同一），导航镜像 logic 结果', () => {
     const boxes = goldenBoxes('mindmap');
     expect(idsOf(boxes)).toEqual(['root', 'g1', 'ga', 'gb', 'g2', 'gc', 'g3']);
-    // root 左右各命中最近一级子（g1 右侧；左带 g2/g3 同 dc 取 lateral 小者 g2）
-    expect(navigate('root', 'right', boxes, 'mindmap')).toBe('g1');
-    expect(navigate('root', 'left', boxes, 'mindmap')).toBe('g2');
+    // 逆时针定侧（前 3 个一级恒右）：金样树无持久 side → 计数兜底全右，几何与 logic
+    // 完全一致——root 向右取 lateral 最小的居中子 g2，左侧无候选。
+    expect(navigate('root', 'right', boxes, 'mindmap')).toBe('g2');
+    expect(navigate('root', 'left', boxes, 'mindmap')).toBeNull();
     // 一级向左回根；向右命中子（真几何：gb 盒窄中心更近，先于加宽的 ga）
     expect(navigate('g1', 'left', boxes, 'mindmap')).toBe('root');
     expect(navigate('g1', 'right', boxes, 'mindmap')).toBe('gb');
-    // 同侧纵向：叶间上下互达；同一几何的跨侧对照见 logic 用例
+    // 全右文档：纵向命中不受分侧限制（与 logic 同几何同结果）
     expect(navigate('ga', 'down', boxes, 'mindmap')).toBe('gb');
     expect(navigate('gb', 'up', boxes, 'mindmap')).toBe('ga');
-    expect(navigate('gc', 'down', boxes, 'mindmap')).toBe('g3');
-    // 跨侧诱饵不选：gb 下方几何更近的是左侧 gc（dc 34）与 g2（dc 34），分侧限制全排除 → null
-    expect(navigate('gb', 'down', boxes, 'mindmap')).toBeNull();
+    expect(navigate('gb', 'down', boxes, 'mindmap')).toBe('gc');
+    expect(navigate('g1', 'down', boxes, 'mindmap')).toBe('root');
+  });
+
+  it('mindmap：持久 side 混合文档——跨侧纵向命中仍被分侧限制排除', () => {
+    // 定侧规则下金样树全右、不再覆盖「左右两列」几何；本用例以持久 side 构造双侧
+    // 文档，钉定 mindmap 导航的分侧限制在持久侧别模型下依旧生效。
+    const boxes = layout(
+      makeReader({
+        root: { text: '根', children: ['L', 'R'] },
+        L: { text: '左支', side: 'left', children: ['ll', 'l2'] },
+        ll: { text: '左叶一' },
+        l2: { text: '左叶二' },
+        R: { text: '右支', side: 'right', children: ['rr'] },
+        rr: { text: '右叶' },
+      }),
+      { structure: 'mindmap', theme, measure: stubAdapter, styleOf },
+    ).nodes;
+    expect(boxes.find((b) => b.id === 'L')!.side).toBe('left');
+    expect(boxes.find((b) => b.id === 'R')!.side).toBe('right');
+    // root 左右各命中持久侧所在列的一级子（跨侧方向的另一支被分侧排除）
+    expect(navigate('root', 'right', boxes, 'mindmap')).toBe('R');
+    expect(navigate('root', 'left', boxes, 'mindmap')).toBe('L');
+    expect(navigate('R', 'left', boxes, 'mindmap')).toBe('root');
+    expect(navigate('L', 'right', boxes, 'mindmap')).toBe('root');
+    // 同侧纵向互达（父不参与上下方向）
+    expect(navigate('l2', 'up', boxes, 'mindmap')).toBe('ll');
+    // l2 下方是右列 R/rr——跨侧排除 → null；rr 上方左列全排除，但根（side=right、
+    // 位置更高）同侧可命中——向上回根，符合「根是全列脊柱」的导航语义
+    expect(navigate('l2', 'down', boxes, 'mindmap')).toBeNull();
+    expect(navigate('rr', 'up', boxes, 'mindmap')).toBe('root');
   });
 
   it('logic：全部右侧逐层推进（同 dc 一级带取 lateral 居中者）', () => {

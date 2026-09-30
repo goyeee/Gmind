@@ -62,6 +62,14 @@ export interface NodeSnapshot {
   style: Record<string, string>;
   collapsed: boolean;
   deleted: boolean;
+  /**
+   * 持久化侧别（需求方 2026-09-30 逆时针定侧规则）：'left'|'right'，仅 root 直接
+   * 子级在 mindmap 结构下有语义（engine 布局优先采用，logic/org 与更深后代忽略）。
+   * 写入走 addChild（root 级自动定侧）/setNodeSide（手动调整）；非 left/right 的
+   * 非法值（远端坏数据/crafted 状态）防御归 undefined（键由 repair 删除）。
+   * 缺省（含旧文档无 side 键）= 无持久侧，布局按文档序计数规则兜底。
+   */
+  side?: string;
 }
 
 function nodesMap(doc: Y.Doc): Y.Map<Y.Map<unknown>> {
@@ -156,6 +164,8 @@ export function getNode(doc: Y.Doc, id: string): NodeSnapshot | null {
   const children = node.get('children') as Y.Array<string> | undefined;
   const style = node.get('style') as Y.Map<string> | undefined;
   const image = node.get('image') as NodeImage | undefined;
+  // 侧别透传（防御非法值归 undefined；键缺失不出现——旧文档快照零新增键面）
+  const side = node.get('side');
   return {
     id,
     text: asString(node.get('text')),
@@ -170,6 +180,7 @@ export function getNode(doc: Y.Doc, id: string): NodeSnapshot | null {
     style: style ? Object.fromEntries(style.entries()) : {},
     collapsed: node.get('collapsed') === true,
     deleted: node.get('deleted') === true,
+    ...(side === 'left' || side === 'right' ? { side } : {}),
   };
 }
 

@@ -33,6 +33,50 @@ export interface AddChildOptions {
   text?: string;
 }
 
+/**
+ * 节点持久侧别（需求方 2026-09-30 逆时针定侧规则）：仅 root 直接子级在 mindmap
+ * 结构下有语义（engine 布局优先采用；logic/org 与更深后代忽略）。写入口：
+ * addChild（root 级自动定侧）/ setNodeSide（手动调整，如拖放换侧）；换父离开
+ * root 级由 moveNode 清键，非法值由 repair 归一删除。
+ */
+export type NodeSide = 'left' | 'right';
+
+/** NodeSide 合法值目录（setNodeSide 校验 / repair 归一同一口径）。 */
+const NODE_SIDES: readonly NodeSide[] = ['left', 'right'];
+
+/**
+ * 右侧常驻配额（需求方原话「默认一开始在右侧新增，当二级主题为三个以上时，第四个
+ * 就要放到左侧……以后再多的新增也都在左侧了」）：第 1~3 个二级主题在右、第 4 个起
+ * 在左。engine layout.ts 有同值常量（引擎不依赖 core，改动需两处同步）。
+ */
+const ROOT_SIDE_RIGHT_QUOTA = 3;
+
+/**
+ * root 直接子级的「现有右侧计数」（逆时针定侧的计数口径，addChild 定侧用）：
+ * - 有 side 字段的节点按持久值计（含手动 setNodeSide 换过侧的）；
+ * - 无 side 字段的旧节点按文档序折算：index 0-2 视为 right、≥3 视为 left；
+ * - 墓碑不入计（normalize 后 root children 恒为存活节点，此处再防御一次）。
+ */
+function countRightSideRootChildren(doc: Y.Doc): number {
+  const nodes = doc.getMap('nodes') as Y.Map<Y.Map<unknown>>;
+  const root = nodes.get(ROOT_NODE_ID);
+  const children = root?.get('children') as Y.Array<string> | undefined;
+  if (!children) return 0;
+  let right = 0;
+  const ids = children.toArray();
+  ids.forEach((childId, index) => {
+    const node = nodes.get(childId);
+    if (!node || node.get('deleted') === true) return;
+    const side = node.get('side');
+    if (side === 'left' || side === 'right') {
+      if (side === 'right') right += 1;
+      return;
+    }
+    if (index < ROOT_SIDE_RIGHT_QUOTA) right += 1; // 旧节点（无 side）按 index 折算
+  });
+  return right;
+}
+
 export interface WithTransactionOptions {
   /** 事务后是否执行 normalizeTree（默认 true；normalize 以 system origin 执行）。 */
   normalize?: boolean;
@@ -104,6 +148,11 @@ export function withTransaction<T>(
  * 在 parent 下新增子节点，返回新 ULID。
  * 校验（先于 transact，拒绝即零变更）：parent 存在且存活（root 合法）；
  * text 长度 ≤ MAX_TEXT_LENGTH，否则 TEXT_TOO_LONG（与 setText 同规则，T3 评审补齐）。
+ *
+ * 逆时针定侧（需求方 2026-09-30）：parentId 为 root 时自动写 side——现有右侧二级
+ * 主题数（计数口径见 countRightSideRootChildren，含旧节点按 index 折算）<3 → 'right'，
+ * 否则 'left'（第 1~3 个右、第 4 个起左）。定侧计算在事务外（校验先于事务纪律），
+ * 随建节点同一事务落盘；非 root 父级不写 side。
  */
 export function addChild(
   doc: Y.Doc,
@@ -116,11 +165,19 @@ export function addChild(
   }
   const parent = requireAliveNode(doc, parentId);
   const id = ulid();
+  // 逆时针定侧（仅 root 直接子级）：现有右侧计数 < 配额 → 右，否则左。事务外只读计算。
+  const side: NodeSide | undefined =
+    parentId === ROOT_NODE_ID
+      ? countRightSideRootChildren(doc) < ROOT_SIDE_RIGHT_QUOTA
+        ? 'right'
+        : 'left'
+      : undefined;
   withTransaction(doc, origin, () => {
     const node = new Y.Map<unknown>();
     node.set('text', opts.text ?? '');
     node.set('parentId', parentId);
     node.set('children', new Y.Array<string>());
+    if (side !== undefined) node.set('side', side);
     doc.getMap('nodes').set(id, node);
 
     let parentChildren = parent.get('children') as Y.Array<string> | undefined;
@@ -225,6 +282,11 @@ export function deleteNodes(
  * （NODE_NOT_FOUND/NODE_DELETED）、newParent 存活；newParent 不得为 id 自身或其后代
  * （CYCLE_FORBIDDEN，subtreeIds 含自身）。同事务：从旧 parent children 移除、写 parentId、
  * 按指定 index 插入新 parent children（缺省/越界 clamp 到末尾）。
+ *
+ * 侧别清理（逆时针定侧，持久 side 仅 root 直接子级有语义）：oldParent==='root' 且
+ * newParent!=='root'（换父离开 root 级）→ 删 side；同父重排 / 换入 root 级不动 side——
+ * 换入 root 级不自动定侧（新归属的落点由调用方决定，页面拖放按落点解析的
+ * target.side 显式调 setNodeSide），无 side 时由 engine 按文档序计数规则兜底。
  */
 export function moveNode(
   doc: Y.Doc,
@@ -241,10 +303,15 @@ export function moveNode(
   if (subtreeIds(doc, id).includes(newParentId)) {
     throw new GmindCoreError('CYCLE_FORBIDDEN', '不能移动到自身或其后代');
   }
+  const oldParentId = node.get('parentId');
   withTransaction(doc, origin, () => {
     removeFromParentChildren(doc, id);
 
     node.set('parentId', newParentId);
+    // 换父离开 root 级 → 清持久侧别（键面删除，非 root 子级不残留无语义字段）
+    if (oldParentId === ROOT_NODE_ID && newParentId !== ROOT_NODE_ID) {
+      node.delete('side');
+    }
 
     let newChildren = newParent.get('children') as Y.Array<string> | undefined;
     if (!newChildren) {
@@ -254,6 +321,37 @@ export function moveNode(
     const len = newChildren.length;
     const idx = index !== undefined && index >= 0 && index <= len ? index : len;
     newChildren.insert(idx, [id]);
+  });
+}
+
+/**
+ * 设置节点持久侧别（逆时针定侧的手动调整口，需求方「用户可以手动调整到右侧」）：
+ * 写 node.side（'left'|'right'），engine mindmap 布局优先采用。
+ * 校验（先于 transact，拒绝即零变更）：side ∈ {left,right} 否则 INVALID_NODE_SIDE；
+ * 节点存活（NODE_NOT_FOUND/NODE_DELETED）；parent 必须为 root（中心主题的直接子级），
+ * 否则 SIDE_ONLY_ROOT_CHILD（持久侧别仅 root 级有语义，更深节点不收）。
+ * 同值守卫（M7c-E4）：side 与现值相同零事务——拖放释放对同侧节点重复调用的
+ * 幂等路径不产生空更新。
+ */
+export function setNodeSide(
+  doc: Y.Doc,
+  id: string,
+  side: NodeSide,
+  origin: WriteOrigin = ORIGIN_USER,
+): void {
+  if (!(NODE_SIDES as readonly string[]).includes(side)) {
+    throw new GmindCoreError(
+      'INVALID_NODE_SIDE',
+      `侧别非法（${JSON.stringify(String(side))}），仅支持左侧/右侧`,
+    );
+  }
+  const node = requireAliveNode(doc, id);
+  if (node.get('parentId') !== ROOT_NODE_ID) {
+    throw new GmindCoreError('SIDE_ONLY_ROOT_CHILD', '仅中心主题的直接子级可设置左右侧');
+  }
+  if (node.get('side') === side) return; // 同值守卫（M7c-E4）：零变更不开事务
+  withTransaction(doc, origin, () => {
+    node.set('side', side);
   });
 }
 
