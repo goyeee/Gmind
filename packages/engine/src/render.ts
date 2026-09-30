@@ -95,7 +95,8 @@ const BADGE_FONT_SIZE = 12;
 
 /** 概要 bracket 几何（M6 Task 6，确定性常量）：端子上挑 6px、label 12px 居中行下。 */
 const SUMMARY_TICK = 6;
-const SUMMARY_FONT_SIZE = 12;
+/** 概要标签字号（单源）：layout 标签避让测量同值消费（M7b 概要标签避让）。 */
+export const SUMMARY_FONT_SIZE = 12;
 /** label 基线相对 bracket 横线的行下偏移（= bracket 视觉下缘）。导出边界外扩消费
  *  （export.ts，M6 终审修复）——引擎内单源，不再手抄。 */
 export const SUMMARY_LABEL_BASELINE = 14;
@@ -710,7 +711,12 @@ function applyEdge(scene: SceneRoot, route: EdgeRoute, theme: ThemeTokens): void
 /**
  * 单概要协调（M6 Task 6）：不存在则创建 <g data-summary-id class="gm-summary">，
  * 存在则就地改属性（引用恒定）。下括弧 path（局部坐标）：端子上挑 SUMMARY_TICK、
- * 横线贴 y=0；label 居中于 w/2、基线行下 SUMMARY_LABEL_BASELINE。
+ * 横线贴 y=0；label 基线行下 SUMMARY_LABEL_BASELINE。
+ *
+ * 标签定位（M7b 概要标签避让）：布局层对同侧概要给出外置锚点 labelX + labelAnchor
+ * （右列概要 → bracket 右端外侧 anchor=start，左列镜像 anchor=end），渲染层只消费；
+ * 缺省（跨侧概要 / org）保持旧居中口径 x=w/2 + anchor=middle。x/anchor 每次协调
+ * 重算——概要成员增删引发同侧↔跨侧互转时，标签就地跟随布局结果（元素引用不变）。
  */
 function applySummary(scene: SceneRoot, s: SummaryBox, theme: ThemeTokens): void {
   let entry = scene.summaryEntries.get(s.id);
@@ -733,7 +739,8 @@ function applySummary(scene: SceneRoot, s: SummaryBox, theme: ThemeTokens): void
   path.setAttribute('d', `M 0 ${fmt(-SUMMARY_TICK)} L 0 0 L ${fmt(s.w)} 0 L ${fmt(s.w)} ${fmt(-SUMMARY_TICK)}`);
   path.setAttribute('stroke', theme.edgeColor);
   path.setAttribute('stroke-width', fmt(theme.edgeWidth));
-  label.setAttribute('x', fmt(s.w / 2));
+  label.setAttribute('x', fmt(s.labelX ?? s.w / 2));
+  label.setAttribute('text-anchor', s.labelAnchor ?? 'middle');
   label.setAttribute('y', fmt(SUMMARY_LABEL_BASELINE));
   label.setAttribute('fill', theme.edgeColor);
   if (entry.lastLabel !== s.label) {

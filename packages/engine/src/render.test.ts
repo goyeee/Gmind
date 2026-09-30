@@ -488,7 +488,9 @@ describe('renderScene：清理与幂等', () => {
 // ---------------------------------------------------------------------------
 
 describe('renderScene：概要 bracket（M6 Task 6）', () => {
-  function summaryLayout(summaries: Array<{ id: string; x: number; y: number; w: number; label: string }>): LayoutResult {
+  function summaryLayout(
+    summaries: Array<{ id: string; x: number; y: number; w: number; label: string; labelX?: number; labelAnchor?: 'start' | 'end' | 'middle' }>,
+  ): LayoutResult {
     return { ...baseLayout(), summaries };
   }
 
@@ -541,6 +543,28 @@ describe('renderScene：概要 bracket（M6 Task 6）', () => {
     renderScene(scene, makeInput(summaryLayout([]), baseData()));
     expect(svg.querySelector('[data-node-id="b"]')).toBe(gB);
     expect(svg.querySelector('[data-edge-id="a->b"]')).toBe(edgePath);
+  });
+
+  // M7b 概要标签避让：同侧概要由布局层给出外置锚点（labelX + labelAnchor），渲染
+  // 层只消费；字段缺省回退旧居中口径（w/2 + middle），同侧↔跨侧互转时属性就地跟随。
+  it('labelX/labelAnchor：外置锚点逐字段消费；缺省回退居中；互转就地更新且引用恒定', () => {
+    const scene = createScene(svg);
+    // 外置（右列概要：bracket 右端外 6px，anchor=start）
+    renderScene(scene, makeInput(summaryLayout([{ id: 'sm1', x: 40, y: 80, w: 100, label: '工作日', labelX: 106, labelAnchor: 'start' }]), baseData()));
+    const label = svg.querySelector('text.gm-summary-label') as SVGTextElement;
+    expect(label.getAttribute('x')).toBe('106');
+    expect(label.getAttribute('text-anchor')).toBe('start');
+    expect(label.getAttribute('y')).toBe('14'); // 基线偏移不受外置影响
+    // 缺省字段（跨侧/org）：回退 w/2 + middle，元素引用恒定
+    renderScene(scene, makeInput(summaryLayout([{ id: 'sm1', x: 40, y: 80, w: 100, label: '工作日' }]), baseData()));
+    expect(svg.querySelector('text.gm-summary-label')).toBe(label);
+    expect(label.getAttribute('x')).toBe('50');
+    expect(label.getAttribute('text-anchor')).toBe('middle');
+    // 左列镜像（anchor=end）：锚点在 bracket 左端外侧，引用仍恒定
+    renderScene(scene, makeInput(summaryLayout([{ id: 'sm1', x: 40, y: 80, w: 100, label: '工作日', labelX: -6, labelAnchor: 'end' }]), baseData()));
+    expect(svg.querySelector('text.gm-summary-label')).toBe(label);
+    expect(label.getAttribute('x')).toBe('-6');
+    expect(label.getAttribute('text-anchor')).toBe('end');
   });
 });
 

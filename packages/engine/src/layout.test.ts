@@ -12,6 +12,7 @@ import type {
   NodeBox,
   NodeSnapshotLike,
   StructureType,
+  SummaryBox,
   SummaryLike,
   ThemeTokens,
   TextStyle,
@@ -457,15 +458,16 @@ describe('layout 不变量（5 树 × 3 结构）', () => {
 // 概要 bracket 几何（M6 Task 6，企微对标）：只增不改——无概要时 summaries=[]
 // ---------------------------------------------------------------------------
 
+/** 固定片段树：root → [s1, s2, s3, s4]（叶）。M6 概要几何与 M7b 标签避让共用。 */
+const SEG_DEFS: Record<string, PlainNode> = {
+  root: { text: '根', children: ['s1', 's2', 's3', 's4'] },
+  s1: { text: '周一' },
+  s2: { text: '周三' },
+  s3: { text: '周五' },
+  s4: { text: '周日' },
+};
+
 describe('layout 概要 bracket（M6 Task 6）', () => {
-  /** 固定片段树：root → [s1, s2, s3, s4]（叶）。 */
-  const SEG_DEFS: Record<string, PlainNode> = {
-    root: { text: '根', children: ['s1', 's2', 's3', 's4'] },
-    s1: { text: '周一' },
-    s2: { text: '周三' },
-    s3: { text: '周五' },
-    s4: { text: '周日' },
-  };
 
   it('三节点片段：y=片段底+12、x=片段左-8、w=片段宽+16、label 原样透传', () => {
     for (const structure of STRUCTURES) {
@@ -550,6 +552,107 @@ describe('layout 概要 bracket（M6 Task 6）', () => {
 });
 
 // ---------------------------------------------------------------------------
+// 概要标签避让（M7b，只增不改）：同侧概要标签外置到 bracket 背离节点列的一端
+// （右列 → 右端外侧 anchor=start；左列镜像 anchor=end），并沿外向逐盒让位至与
+// 任何节点盒不相交——逆时针定侧（index 0-2 恒右）后全右布局的居中标签会落进
+// 下一兄弟盒内被遮挡（节点层在概要层之上），e2e summary 点击拦截实锤。
+// 跨侧概要 / org（side='down'）无左右列语义，维持旧居中口径（无新字段）。
+// ---------------------------------------------------------------------------
+
+describe('layout 概要标签避让（M7b）', () => {
+  /** 标签占位带与结果内节点盒求交（镜像 layout 私有判定：上伸 11 / 下延 3；
+   *  labelX 为 bracket 局部坐标，先加 sum.x 转绝对再比）。 */
+  function labelHits(result: LayoutResult, sum: SummaryBox, labelW: number): NodeBox[] {
+    const top = sum.y + 14 - 11; // SUMMARY_LABEL_BASELINE=14、ASCENT=11（同源常量镜像）
+    const bottom = sum.y + 14 + 3; // DESCENT=3
+    const localLeft = sum.labelAnchor === 'end' ? (sum.labelX as number) - labelW : (sum.labelX as number);
+    const left = sum.x + localLeft;
+    return result.nodes.filter(
+      (b) => b.y < bottom && b.y + b.h > top && b.x < left + labelW && b.x + b.w > left,
+    );
+  }
+
+  it('同侧（全右）概要：标签锚 bracket 右端外 6px（anchor=start），无遮挡时不让位', () => {
+    // 逆时针定侧：s1/s2/s3（index 0-2）恒右、s4 左；s1+s2 概要 = 同侧右。
+    // 右列兄弟等宽（两字文本），标签起点在列右缘之外 → s3 纵向同带但不横向相交。
+    const reader = makeReader(SEG_DEFS, [{ id: 'sm1', nodeIds: ['s1', 's2'], label: '上半周' }]);
+    const result = layout(reader, { structure: 'mindmap', theme, measure: stubAdapter, styleOf });
+    const sum = result.summaries[0] as SummaryBox;
+    expect(sum.labelAnchor).toBe('start');
+    expect(sum.labelW).toBe('上半周'.length * 10); // stubAdapter：每字符 10px
+    expect(sum.labelX).toBe(sum.w + 6); // bracket 右端 + GAP_OUT=6，未触发让位
+    expect(labelHits(result, sum, sum.labelW as number)).toEqual([]);
+  });
+
+  it('同侧（全左）概要：镜像锚 bracket 左端外 6px（anchor=end）', () => {
+    // 四个一级子全部持久 side=left → 全左列；标签向左延伸，列左缘外无盒 → 精确 -6。
+    const defs = Object.fromEntries(
+      Object.entries(SEG_DEFS).map(([id, def]) => [id, id === 'root' ? def : { ...def, side: 'left' }]),
+    );
+    const reader = makeReader(defs, [{ id: 'sm1', nodeIds: ['s1', 's2'], label: '上半周' }]);
+    const result = layout(reader, { structure: 'mindmap', theme, measure: stubAdapter, styleOf });
+    const sum = result.summaries[0] as SummaryBox;
+    expect(sum.labelAnchor).toBe('end');
+    expect(sum.labelX).toBe(-6);
+    expect(labelHits(result, sum, sum.labelW as number)).toEqual([]);
+  });
+
+  it('跨侧概要 / org 结构：无 labelX/labelAnchor/labelW 字段（旧居中口径逐字节不变）', () => {
+    // 跨侧：s1（index 0 → 右）+ s4（index 3 → 左）成员分属两列（连续性校验在 core，布局只算几何）。
+    const cross = layout(makeReader(SEG_DEFS, [{ id: 'sm1', nodeIds: ['s1', 's4'], label: 'L' }]), {
+      structure: 'mindmap',
+      theme,
+      measure: stubAdapter,
+      styleOf,
+    });
+    expect(cross.summaries[0]).toMatchObject({ id: 'sm1', x: expect.any(Number), w: expect.any(Number) });
+    expect(cross.summaries[0]?.labelX).toBeUndefined();
+    expect(cross.summaries[0]?.labelAnchor).toBeUndefined();
+    expect(cross.summaries[0]?.labelW).toBeUndefined();
+    // org：成员 side 全 'down'，无左右列概念 → 维持居中。
+    const org = layout(makeReader(SEG_DEFS, [{ id: 'sm1', nodeIds: ['s1', 's2'], label: 'L' }]), {
+      structure: 'org',
+      theme,
+      measure: stubAdapter,
+      styleOf,
+    });
+    expect(org.summaries[0]?.labelX).toBeUndefined();
+    expect(org.summaries[0]?.labelAnchor).toBeUndefined();
+    expect(org.summaries[0]?.labelW).toBeUndefined();
+  });
+
+  it('外向让位：右端外空位被更深层节点盒占据 → 标签跳到该盒右缘外 6px，仍与任何盒不相交', () => {
+    // s3（index 2 → 右，下一带兄弟）挂一个超宽子节点 s3c：其盒横向压过标签起点、
+    // 纵向居中外扩伸进标签带 → 触发让位，标签被推到 s3c 右缘 + 6。
+    const longText = '超'.repeat(60); // stubAdapter 60×10=600 > maxTextWidth=240 → 多行高盒
+    const defs: Record<string, PlainNode> = {
+      root: { text: '根', children: ['s1', 's2', 's3'] },
+      s1: { text: '周一' },
+      s2: { text: '周三' },
+      s3: { text: '周五', children: ['s3c'] },
+      s3c: { text: longText },
+    };
+    const reader = makeReader(defs, [{ id: 'sm1', nodeIds: ['s1', 's2'], label: '上半周' }]);
+    const result = layout(reader, { structure: 'mindmap', theme, measure: stubAdapter, styleOf });
+    const sum = result.summaries[0] as SummaryBox;
+    const s3c = boxOf(result, 's3c');
+    expect(sum.labelAnchor).toBe('start');
+    expect(sum.labelX).toBeGreaterThan(sum.w + 6); // 越过了最小外置位（发生了让位）
+    expect(sum.labelX).toBe(s3c.x + s3c.w + 6 - sum.x); // 精确落在遮挡盒右缘外 6px
+    expect(labelHits(result, sum, sum.labelW as number)).toEqual([]);
+  });
+
+  it('logic 结构（全右列）同款外置：与 mindmap 全右布局同规则', () => {
+    const reader = makeReader(SEG_DEFS, [{ id: 'sm1', nodeIds: ['s1', 's2'], label: 'L' }]);
+    const result = layout(reader, { structure: 'logic', theme, measure: stubAdapter, styleOf });
+    const sum = result.summaries[0] as SummaryBox;
+    expect(sum.labelAnchor).toBe('start');
+    expect(sum.labelX).toBe(sum.w + 6);
+    expect(labelHits(result, sum, sum.labelW as number)).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // 确定性与金样
 // ---------------------------------------------------------------------------
 
@@ -569,7 +672,18 @@ function serialize(result: LayoutResult): string {
       })),
       edges: result.edges.map((e) => ({ id: e.id, from: e.from, to: e.to, kind: e.kind, controls: e.controls ?? null })),
       collapsedCounts: Object.fromEntries(counts),
-      summaries: result.summaries.map((s) => ({ id: s.id, x: s.x, y: s.y, w: s.w, label: s.label })), // M6 T6 起金样含概要
+      summaries: result.summaries.map((s) => ({
+        id: s.id,
+        x: s.x,
+        y: s.y,
+        w: s.w,
+        label: s.label,
+        // M7b 标签避让起金样含外置锚点（undefined 字段被 JSON 丢弃——跨侧/org 输出
+        // 逐字节不变；同侧外置字段随概要出现才被锁定）。
+        ...(s.labelX !== undefined ? { labelX: s.labelX } : {}),
+        ...(s.labelAnchor !== undefined ? { labelAnchor: s.labelAnchor } : {}),
+        ...(s.labelW !== undefined ? { labelW: s.labelW } : {}),
+      })), // M6 T6 起金样含概要
       width: result.width,
       height: result.height,
     },

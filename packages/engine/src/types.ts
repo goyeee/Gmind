@@ -199,6 +199,21 @@ export interface SummaryBox {
   y: number;
   w: number;
   label: string;
+  /**
+   * 标签外置锚点（M7b 概要标签避让，只增不改）：bracket 局部坐标下 label 的
+   * text x。同侧概要（成员盒全右/全左）时布局层把标签放到 bracket 背离节点列
+   * 的一端并逐盒让位（右列 → 右端外侧 anchor=start；左列镜像 anchor=end），
+   * 避免标签落回列内被节点盒遮挡（节点层绘制在概要层之上）。缺省（跨侧概要 /
+   * org 结构）字段不出现 = 旧居中口径（x=w/2、anchor=middle），输出逐字节不变。
+   */
+  labelX?: number;
+  /** 标签对齐：与 labelX 成对出现（start=向右延伸、end=向左延伸、middle=居中）。 */
+  labelAnchor?: 'start' | 'end' | 'middle';
+  /**
+   * 标签文本实测宽（布局层经测量适配器取得）：渲染层不需要，供导出边界把外置
+   * 标签横向纳入包围盒（缺省不外扩）。
+   */
+  labelW?: number;
 }
 
 /** 布局结果：collapsedCounts 记录各折叠节点被隐藏的后代数；

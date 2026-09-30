@@ -104,6 +104,19 @@ export function exportSceneSvg(
   for (const s of result.summaries) {
     minX = Math.min(minX, s.x);
     maxX = Math.max(maxX, s.x + s.w);
+    // 标签外置（M7b 概要标签避让）：同侧概要标签锚在 bracket 端子外侧（labelX/
+    // labelAnchor，宽为布局实测 labelW），横向也要纳入包围盒，否则整图截图裁掉
+    // 外置标签。anchor=end 文本自锚点向左延伸、middle 居中（防御分支，布局不产）。
+    if (s.labelX !== undefined && s.labelW !== undefined) {
+      const left =
+        s.labelAnchor === 'end'
+          ? s.labelX - s.labelW
+          : s.labelAnchor === 'middle'
+            ? s.labelX - s.labelW / 2
+            : s.labelX;
+      minX = Math.min(minX, s.x + left);
+      maxX = Math.max(maxX, s.x + left + s.labelW);
+    }
     // 视觉下缘 = bracket 横线 y + label 基线（render 的 SUMMARY_LABEL_BASELINE）；
     // 端子上挑（-6）恒在成员盒内（y=片段底+12 ≥ 片段底），无需上扩。
     maxY = Math.max(maxY, s.y + SUMMARY_LABEL_BASELINE);
