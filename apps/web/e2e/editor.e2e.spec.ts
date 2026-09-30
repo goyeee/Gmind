@@ -138,18 +138,49 @@ test('编辑器：Ctrl+Z 撤销新建节点后 Ctrl+Y 重做恢复', async ({ pa
   await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '新节点' })).toBeVisible();
 });
 
-// 用例 5：结构切换到组织架构图 → 边形态 bezier→elbow；Ctrl+Z 恢复
+// 用例 5：结构切换到组织架构图 → 边形态 bezier→elbow；Ctrl+Z 恢复。
+// 2026-09-30 任务 3：structure-select 下拉移除，改走 structure-toggle 打开的
+// 图形化结构面板（structure-item-org 卡片），应用即收起面板，断言口径不变。
 test('编辑器：结构切换为组织架构图后边形态变化且可撤销', async ({ page }) => {
   await openSeedDoc(page, '本周计划');
   const firstEdge = page.locator('.editor-canvas svg path[data-edge-id]').first();
   await expect(firstEdge).toHaveAttribute('d', / C /); // mindmap：bezier
-  await page.getByTestId('structure-select').selectOption('org');
+  await page.getByTestId('structure-toggle').click();
+  await page.getByTestId('structure-item-org').click();
+  await expect(page.getByTestId('structure-panel')).toHaveCount(0); // 应用即收起
   await expect(firstEdge).toHaveAttribute('d', / L /); // org：elbow（正交折线）
   await expect(firstEdge).not.toHaveAttribute('d', / C /);
   // 焦点移出下拉框后再撤销
   await page.locator('.editor-canvas svg').click({ position: { x: 30, y: 30 } });
   await page.keyboard.press('Control+Z');
   await expect(firstEdge).toHaveAttribute('d', / C /);
+});
+
+// 用例 5b（2026-09-30 任务 3 新增）：结构面板正向链路——打开面板 → 点「逻辑图
+// （向右）」应用并收起 → 重开面板确认当前结构高亮 → Esc 关闭 → 面板切「组织架构
+// 图」复用用例 5 边形态断言（logic 与 mindmap 同为 bezier 边、种子树全在根右侧，
+// 引擎侧无独立边形态可断言，故应用断言落在 org 的 elbow 上——报告已登记）。
+test('编辑器：结构面板应用逻辑图并收起，组织架构图边形态 elbow', async ({ page }) => {
+  await openSeedDoc(page, '本周计划');
+  const firstEdge = page.locator('.editor-canvas svg path[data-edge-id]').first();
+  await page.getByTestId('structure-toggle').click();
+  const panel = page.getByTestId('structure-panel');
+  await expect(panel).toBeVisible();
+  // 当前结构（mindmap）卡片高亮
+  await expect(page.getByTestId('structure-item-mindmap')).toHaveAttribute('aria-pressed', 'true');
+  await page.getByTestId('structure-item-logic').click();
+  await expect(panel).toHaveCount(0); // 应用即收起
+  // 重开面板：logic 卡片已高亮（结构已写入 doc meta）
+  await page.getByTestId('structure-toggle').click();
+  await expect(page.getByTestId('structure-item-logic')).toHaveAttribute('aria-pressed', 'true');
+  await page.keyboard.press('Escape'); // Esc 关闭
+  await expect(panel).toHaveCount(0);
+  // 面板内切组织架构图：边 bezier → elbow（复用用例 5 断言）
+  await page.getByTestId('structure-toggle').click();
+  await page.getByTestId('structure-item-org').click();
+  await expect(panel).toHaveCount(0);
+  await expect(firstEdge).toHaveAttribute('d', / L /);
+  await expect(firstEdge).not.toHaveAttribute('d', / C /);
 });
 
 // 用例 6：折叠子节点 →「+N」徽标出现；再展开消失

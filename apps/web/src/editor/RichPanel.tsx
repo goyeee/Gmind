@@ -3,7 +3,9 @@ import type * as Y from 'yjs';
 import {
   applyStyle,
   getNode,
+  MAX_DESCRIPTION_LENGTH,
   MAX_NOTE_LENGTH,
+  setDescription,
   setHref,
   setImage,
   setNote,
@@ -23,6 +25,13 @@ import './rich-panel.css';
  * 2026-09-28 标记面板迁移：原「图标」区（优先级/进度/旗帜/星标/表情）整体搬至
  * 工具栏「插入」菜单的右侧层标记面板（MarkerPanel，企微对标）；本面板只保留
  * 样式区 + 备注/链接/图片区，数据模型与写链路零改动。
+ *
+ * 2026-09-30 需求方四条 UI 反馈：① 头部加 × 关闭钮（rich-panel-close，同任务
+ * 面板/评论面板关闭钮样式，EditorPage 传 onClose=setFormatOpen(false)，与既有
+ * 「外点关闭」不冲突）；② 「简介（备注）」与「描述」两个区块补清晰小节标题与
+ * 字数——备注（note）恢复为格式面板常驻区块并作为插入菜单「简介」项的落点，
+ * 描述（description，M7c-C1）同款受控草稿、失焦提交（未变更零写入，TaskPanel
+ * 同语义），字数逻辑沿用各自上限常量。
  */
 
 /** 样式色板（Task 15，8 色）：填充与文字色共用。 */
@@ -49,12 +58,16 @@ export interface RichPanelProps {
   selected: NodeSnapshot | null;
   afterUserWrite: () => void;
   showToast: (message: string) => void;
+  /** 关闭面板（2026-09-30 需求方反馈）：EditorPage 传 setFormatOpen(false)。 */
+  onClose: () => void;
 }
 
 export function RichPanel(props: RichPanelProps): ReactElement {
-  const { doc, fileId, nodeId, selected, afterUserWrite, showToast } = props;
+  const { doc, fileId, nodeId, selected, afterUserWrite, showToast, onClose } = props;
   const [note, setNoteValue] = useState('');
   const [href, setHrefValue] = useState('');
+  // 描述草稿（受控本地态，TaskPanel 同款裁决）：仅切换选中节点时回灌，失焦提交
+  const [desc, setDescValue] = useState('');
   const [uploading, setUploading] = useState(false);
   // 样式作用域（FR-EDT-015）：默认含子树，可切仅当前节点
   const [styleScope, setStyleScope] = useState<StyleScope>('subtree');
@@ -69,6 +82,7 @@ export function RichPanel(props: RichPanelProps): ReactElement {
     const s = getNode(doc, nodeId);
     setNoteValue(s?.note ?? '');
     setHrefValue(s?.href ?? '');
+    setDescValue(s?.description ?? '');
   }, [doc, nodeId]);
 
   const write = (fn: () => void): void => {
@@ -89,6 +103,31 @@ export function RichPanel(props: RichPanelProps): ReactElement {
     }
     write(() => setNote(doc, nodeId, value));
   };
+
+  /** 描述提交（TaskPanel 同语义）：trim 后与现值一致零写入，失焦触发。 */
+  const commitDescription = (): void => {
+    if (!snap) return;
+    const next = desc.trim();
+    if ((snap.description ?? '') === next) return;
+    write(() => setDescription(doc, nodeId, next));
+  };
+
+  /** 头部（2026-09-30 需求方反馈）：面板标题 + × 关闭钮（task-panel-head 同款）。 */
+  const panelHead = (
+    <div className="rich-panel-head">
+      <h3>格式</h3>
+      <button
+        type="button"
+        className="rich-panel-close"
+        data-testid="rich-panel-close"
+        title="关闭"
+        aria-label="关闭格式面板"
+        onClick={onClose}
+      >
+        ×
+      </button>
+    </div>
+  );
 
   const saveHref = (): void => {
     write(() => setHref(doc, nodeId, href.trim()));
@@ -197,9 +236,10 @@ export function RichPanel(props: RichPanelProps): ReactElement {
   if (!snap || snap.deleted) {
     return (
       <aside className="rich-panel" data-testid="rich-panel">
+        {panelHead}
         <h3>样式</h3>
         {styleSection(null)}
-        <h3>节点</h3>
+        <h3>简介与描述</h3>
         <p className="rich-empty">选中节点后编辑富内容</p>
       </aside>
     );
@@ -207,23 +247,48 @@ export function RichPanel(props: RichPanelProps): ReactElement {
 
   return (
     <aside className="rich-panel" data-testid="rich-panel">
+      {panelHead}
       <h3>样式</h3>
       {styleSection(snap)}
 
-      <h3>节点</h3>
+      <h3>简介与描述</h3>
 
+      {/* 简介即节点备注（note）：aria-label「节点备注」为既有 e2e 契约（rich-content
+          用例按此定位），保存钮沿用「保存备注」显式提交 */}
       <label className="field">
-        <span>节点备注</span>
+        <span>简介（备注）</span>
         <textarea
           aria-label="节点备注"
           value={note}
           maxLength={MAX_NOTE_LENGTH}
           onChange={(e) => setNoteValue(e.target.value)}
         />
+        <span className="field-count">
+          {note.length}/{MAX_NOTE_LENGTH}
+        </span>
       </label>
       <button type="button" className="primary" onClick={saveNote}>
         保存备注
       </button>
+
+      {/* 描述（M7c-C1）：受控草稿 + 失焦提交（未变更零写入），字数沿用
+          MAX_DESCRIPTION_LENGTH 上限 */}
+      <label className="field">
+        <span>描述</span>
+        <textarea
+          aria-label="节点描述"
+          value={desc}
+          maxLength={MAX_DESCRIPTION_LENGTH}
+          placeholder="一句话说明节点内容"
+          onChange={(e) => setDescValue(e.target.value)}
+          onBlur={commitDescription}
+        />
+        <span className="field-count">
+          {desc.length}/{MAX_DESCRIPTION_LENGTH}
+        </span>
+      </label>
+
+      <h3>链接与图片</h3>
 
       <label className="field">
         <span>节点链接</span>

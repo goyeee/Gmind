@@ -105,6 +105,7 @@ import { HelpPanel } from '../editor/HelpPanel';
 import { MarkerPanel, MarkerChip, type MarkerTab } from '../editor/MarkerPanel';
 import { MemberPanel } from '../editor/MemberPanel';
 import { RichPanel } from '../editor/RichPanel';
+import { StructurePanel, type StructureTypeValue } from '../editor/StructurePanel';
 import { TaskTable } from '../editor/TaskTable';
 import { TaskQuickCard } from '../editor/TaskQuickCard';
 import { TaskPanel } from '../editor/TaskPanel';
@@ -172,11 +173,8 @@ const measure = {
   },
 };
 
-const STRUCTURE_OPTIONS: { value: string; label: string }[] = [
-  { value: 'mindmap', label: '思维导图' },
-  { value: 'logic', label: '逻辑图（向右）' },
-  { value: 'org', label: '组织架构图' },
-];
+// 结构选项卡片（2026-09-30 任务 3）已随 structure-select 下拉移除迁入
+// StructurePanel（结构选项/缩略图/高亮口径内聚在面板组件）。
 
 
 /** 缩放快捷档位（Task 15 FR-EDT-027，PRD 50%~200%）。 */
@@ -316,6 +314,9 @@ export function EditorPage() {
   // 主题缩略图选择面板开合（M6 Task 4，企微对标）：theme-panel-toggle 打开，
   // theme-panel-close / 套用任一主题后关闭；与 theme-select 并存（零回归裁决）
   const [themePanelOpen, setThemePanelOpen] = useState(false);
+  // 结构切换面板开合（2026-09-30 任务 3，仿 ThemePanel）：structure-toggle 打开，
+  // 关闭通道=套用即收 / × 钮 / Esc / 外点（统一外点监听豁免 .structure-panel）。
+  const [structurePanelOpen, setStructurePanelOpen] = useState(false);
   // 格式刷（M6 Task 7，企微对标）：null = 未激活。state 驱动按钮 active / body
   // 光标 class 渲染；painterRef 供事件处理器同步读——双击序列里 click#2 退出与
   // dblclick 粘滞重进之间不等 React 提交，读 state 会拿到滞后一拍的旧值。
@@ -565,7 +566,9 @@ export function EditorPage() {
   useEffect(() => {
     if (readOnly) setQuickCard(null);
     if (readOnly && taskPanelOpen) setTaskPanelOpen(false);
-  }, [readOnly, taskPanelOpen]);
+    // 结构面板随桌面工具栏装配：只读降级即收（按钮已不装配，面板不留存）
+    if (readOnly && structurePanelOpen) setStructurePanelOpen(false);
+  }, [readOnly, taskPanelOpen, structurePanelOpen]);
   useEffect(() => {
     if (view === 'table') setQuickCard(null);
   }, [view]);
@@ -586,6 +589,7 @@ export function EditorPage() {
       helpOpen ||
       findOpen ||
       themePanelOpen ||
+      structurePanelOpen ||
       formatOpen ||
       taskPanelOpen ||
       commentsOpen;
@@ -599,7 +603,7 @@ export function EditorPage() {
       if (
         el.closest('[data-popover-toggle]') ||
         el.closest(
-          '.editor-right, .editor-mobile-comments, .theme-panel, .activity-panel, .help-panel, .find-bar, .member-panel, .version-panel',
+          '.editor-right, .editor-mobile-comments, .theme-panel, .structure-panel, .activity-panel, .help-panel, .find-bar, .member-panel, .version-panel',
         ) ||
         insertWrapRef.current?.contains(el) ||
         exportWrapRef.current?.contains(el)
@@ -612,6 +616,7 @@ export function EditorPage() {
       setHelpOpen(false);
       setFindOpen(false);
       setThemePanelOpen(false);
+      setStructurePanelOpen(false);
       setFormatOpen(false);
       setTaskPanelOpen(false);
       setCommentsOpen(false);
@@ -625,10 +630,23 @@ export function EditorPage() {
     helpOpen,
     findOpen,
     themePanelOpen,
+    structurePanelOpen,
     formatOpen,
     taskPanelOpen,
     commentsOpen,
   ]);
+
+  // —— 结构面板（2026-09-30 任务 3）：Esc 关闭（ThemePanel 无 Esc，本面板按需求
+  // 方要求补齐；编辑覆盖层自身的 Esc 先行 stopPropagation 不受影响）。 ——
+  useEffect(() => {
+    if (!structurePanelOpen) return;
+    const onKeyDown = (e: KeyboardEvent): void => {
+      if (e.key !== 'Escape') return;
+      setStructurePanelOpen(false);
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [structurePanelOpen]);
 
   // —— 右列面板开启的可见性兜底（M7c-D2 kimi P2 右列遮挡）——
   // editor-right 为 flex 占位列：开启瞬间画布收窄 280px，但视口变换不变 → 原贴
@@ -2851,6 +2869,19 @@ export function EditorPage() {
                 >
                   图片
                 </button>
+                {/* 简介=节点备注（2026-09-30 任务 4 第六项）：开格式右列并聚焦备注
+                    输入框（openRichAndFocus 模式，aria-label「节点备注」为 RichPanel
+                    既有 e2e 契约选择器）；无选中节点落到可行动 toast */}
+                <button
+                  data-testid="insert-note"
+                  role="menuitem"
+                  onClick={() => {
+                    closeInsertLayer();
+                    openRichAndFocus('textarea[aria-label="节点备注"]', '选中节点后编辑简介');
+                  }}
+                >
+                  简介
+                </button>
               </div>
             )}
             {/* 标记面板（M7b-W3 企微式竖层）：锚定弹出层，absolute 于 .insert-wrap
@@ -2876,7 +2907,7 @@ export function EditorPage() {
         <div className="toolbar-group">
           <button
             data-testid="toolbar-add-parent"
-            className="toolbar-btn toolbar-btn-text"
+            className="toolbar-btn toolbar-btn-text toolbar-add-node"
             title="添加上级主题（Shift+Tab）"
             aria-label="添加上级主题"
             disabled={!hasSelection}
@@ -2886,7 +2917,7 @@ export function EditorPage() {
           </button>
           <button
             data-testid="toolbar-add-child"
-            className="toolbar-btn toolbar-btn-text"
+            className="toolbar-btn toolbar-btn-text toolbar-add-node"
             title="添加子主题（Tab）"
             aria-label="添加子主题"
             disabled={!hasSelection}
@@ -2896,7 +2927,7 @@ export function EditorPage() {
           </button>
           <button
             data-testid="toolbar-add-sibling"
-            className="toolbar-btn toolbar-btn-text"
+            className="toolbar-btn toolbar-btn-text toolbar-add-node"
             title="添加同级主题（Enter）"
             aria-label="添加同级主题"
             disabled={!hasSelection}
@@ -2942,38 +2973,40 @@ export function EditorPage() {
           </button>
         </div>
         <span className="toolbar-sep" />
-        {/* 视图组：结构 / 主题（保持 <select> 功能件，图标前置）。
+        {/* 视图组：结构（2026-09-30 任务 3：下拉改图形化面板 toggle，图标+文字标签，
+            仿主题面板按钮）/ 主题。原 structure-select <select> 移除（e2e 已同步
+            适配为 structure-toggle + structure-panel）。
             「格式」样式面板现为右列常驻面板（M3b 裁决），不设工具栏按钮、此位留空。 */}
         <div className="toolbar-group">
-          <div className="toolbar-field" title="结构">
+          <button
+            data-testid="structure-toggle"
+            data-popover-toggle="structure-toggle"
+            className={structurePanelOpen ? 'toolbar-btn toolbar-btn-text active' : 'toolbar-btn toolbar-btn-text'}
+            title="结构"
+            aria-label="结构"
+            aria-haspopup="true"
+            aria-expanded={structurePanelOpen}
+            onClick={() => {
+              setStructurePanelOpen((v) => !v);
+              setThemePanelOpen(false); // 相邻两面板互斥（同 format/task 组惯例）
+            }}
+          >
             <StructureIcon />
-            <select
-              data-testid="structure-select"
-              aria-label="结构"
-              value={meta?.structureType ?? 'mindmap'}
-              onChange={(e) => {
-                if (!doc) return;
-                setDocMeta(doc, { structureType: e.target.value as 'mindmap' | 'logic' | 'org' }, ORIGIN_USER);
-                afterUserWrite();
-              }}
-            >
-              {STRUCTURE_OPTIONS.map((o) => (
-                <option key={o.value} value={o.value}>
-                  {o.label}
-                </option>
-              ))}
-            </select>
-          </div>
+            <span className="toolbar-btn-label">结构</span>
+          </button>
           {/* 主题入口（M7b-W2 #6 需求方裁定）：只留面板按钮（右侧缩略图画廊），
               原 theme-select 下拉移除——双入口重复； THEME_OPTIONS/ThemePanel 不动 */}
           <button
             data-testid="theme-panel-toggle"
             data-popover-toggle="theme-panel-toggle"
-            className="toolbar-btn"
+            className="toolbar-btn toolbar-btn-text"
             title="主题"
             aria-label="主题"
             aria-expanded={themePanelOpen}
-            onClick={() => setThemePanelOpen((v) => !v)}
+            onClick={() => {
+              setThemePanelOpen((v) => !v);
+              setStructurePanelOpen(false); // 相邻两面板互斥（同 format/task 组惯例）
+            }}
           >
             <ThemeIcon />
             <span className="toolbar-btn-label">主题</span>
@@ -3289,6 +3322,7 @@ export function EditorPage() {
                 selected={selectedSnapshot}
                 afterUserWrite={afterUserWrite}
                 showToast={showToast}
+                onClose={() => setFormatOpen(false)}
               />
             )}
             {/* 任务面板（M7c-C4）：与格式同列互斥（开任务收格式），评论面板可共存（纵排） */}
@@ -3524,6 +3558,19 @@ export function EditorPage() {
           setThemePanelOpen(false);
           if (!doc || id === themeId) return;
           setDocMeta(doc, { themeId: id }, ORIGIN_USER);
+          afterUserWrite();
+        }}
+      />
+      {/* 结构切换面板（2026-09-30 任务 3，仿 ThemePanel）：应用 = setDocMeta
+          structureType（原 select 同一写链路，可撤销）+ afterUserWrite，应用后收起 */}
+      <StructurePanel
+        open={structurePanelOpen}
+        current={(meta?.structureType ?? 'mindmap') as StructureTypeValue}
+        onClose={() => setStructurePanelOpen(false)}
+        onApply={(value) => {
+          setStructurePanelOpen(false);
+          if (!doc || value === meta?.structureType) return;
+          setDocMeta(doc, { structureType: value }, ORIGIN_USER);
           afterUserWrite();
         }}
       />

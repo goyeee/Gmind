@@ -10,31 +10,39 @@
   overscroll-behavior: none;
 }
 
-/* 视图切换 Tab（M7a-T4）：脑图 | 表格 分段控件（企微范式：白底胶囊 + 选中浅蓝） */
-.view-tabs {
+/* 视图切换 Tab（M7a-T4；2026-09-30 任务 1 融合改版）：脑图 | 表格 分段控件——
+   与工具栏同底色、小圆角、28px 高与相邻按钮对齐；选中态主题蓝浅蓝底+蓝描边
+   （inset shadow 不占布局），不再像独立大块。
+   坑：全局 styles.css 里工作台筛选用同名 .view-tabs（button padding 8×14、
+   margin-bottom 12 会串进来抬高工具栏行高）——此处一律加 .editor-toolbar 前缀
+   压过全局同名规则，不依赖 bundle 顺序。 */
+.editor-toolbar .view-tabs {
   display: flex;
-  border: 1px solid #e5e6eb;
+  align-items: center;
+  height: 28px;
+  gap: 2px;
+  margin: 0;
+  padding: 0 2px;
   border-radius: 6px;
-  overflow: hidden;
 }
-.view-tabs button {
+.editor-toolbar .view-tabs button {
   border: none;
-  background: #fff;
-  padding: 5px 14px;
+  background: transparent;
+  padding: 5px 10px;
+  border-radius: 4px;
   font-size: 12px;
+  line-height: 1;
   color: #4e5969;
   cursor: pointer;
 }
-.view-tabs button + button {
-  border-left: 1px solid #e5e6eb;
-}
-.view-tabs button:hover {
+.editor-toolbar .view-tabs button:hover {
   background: #f2f3f5;
 }
-.view-tabs button.active {
+.editor-toolbar .view-tabs button.active {
   background: #e8f3ff;
   color: #3370ff;
   font-weight: 500;
+  box-shadow: inset 0 0 0 1px rgba(51, 112, 255, 0.55);
 }
 
 /* 表格视图（M7a-T4）：画布仅视觉隐藏——引擎场景/视口/选中保留（切回不丢），
@@ -69,11 +77,12 @@
   margin-left: 4px;
   white-space: nowrap;
 }
-/* 组间 1px 竖线分隔符 */
+/* 组间 1px 竖线分隔符（2026-09-30 任务 1：高度对齐 28px 行高——单行判定要求
+   所有直接子元素等高居中，分隔线与按钮同高也更整齐） */
 .toolbar-sep {
   flex: none;
   width: 1px;
-  height: 16px;
+  height: 28px;
   background: #e5e6eb;
 }
 /* M7b-K5 修订（kimi 复核 P1）：overflow-x:auto 会让 overflow-y 计算为 auto，
@@ -132,33 +141,14 @@
 body.painter-active .editor-canvas svg {
   cursor: copy;
 }
-/* 结构/主题下拉：图标前置的紧凑功能件（保持 <select> 原生交互） */
-.toolbar-field {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  height: 28px;
-  padding: 0 6px 0 4px;
-  border-radius: 6px;
-  color: #4e5969;
-}
-.toolbar-field:hover {
-  background: #f2f3f5;
-}
-.toolbar-field select {
-  height: 28px;
-  padding: 0 2px;
-  border: none;
-  background: transparent;
-  font-size: 12px;
-  color: #1f2329;
-  cursor: pointer;
-}
+/* 结构/主题下拉的 .toolbar-field 功能件已随 structure-select 迁入结构面板移除
+   （2026-09-30 任务 3），样式一并退役。 */
 .editor-toolbar .title-input {
   flex: none;
   width: 200px;
   max-width: 320px;
-  padding: 5px 8px;
+  height: 28px; /* 单行判定：标题组与相邻按钮等高（2026-09-30 任务 1） */
+  padding: 0 8px;
   border: none;
   border-radius: 6px;
   background: transparent;
@@ -204,6 +194,51 @@ body.painter-active .editor-canvas svg {
     display: none;
   }
 }
+
+/* 单行收敛（2026-09-30 需求方反馈任务 1：1440/1280 视口工具栏恒单行、不横向
+   滚动）——原 ≤1080 断点的「藏标签/缩标题」手段提前至 ≤1536（1440 视口若不
+   收敛，未压缩总宽 ≈1660px 必换行）：插入/格式刷/格式/任务/结构/主题降为图标
+   +title（hover 有文字提示，功能零删减）；企微三按钮（上级/子级/同级，无图标）
+   保留文字并收窄 padding；标题输入收窄、间距压缩。flex-wrap 保留作为 <1280
+   视口的兜底（更窄视口仍由 ≤1080 断点接管）。 */
+@media (max-width: 1536px) {
+  .editor-toolbar {
+    gap: 2px;
+    padding: 6px 8px;
+  }
+  .toolbar-group {
+    gap: 1px;
+  }
+  .toolbar-group.toolbar-group-title {
+    gap: 4px;
+  }
+  .editor-toolbar .title-input {
+    width: 140px;
+  }
+  .editor-toolbar .toolbar-btn-label {
+    display: none;
+  }
+  .editor-toolbar .toolbar-btn.toolbar-btn-text {
+    width: 28px;
+    min-width: 28px;
+    padding: 0;
+  }
+  /* 企微三按钮纯文字、无图标可显：保留文字（toolbar-add-node 在 TSX 侧挂类），
+     只收水平 padding；label 恢复内联且去掉图标间距（无图标） */
+  .editor-toolbar .toolbar-btn.toolbar-btn-text.toolbar-add-node {
+    width: auto;
+    min-width: 0;
+    padding: 0 6px;
+  }
+  .editor-toolbar .toolbar-btn.toolbar-btn-text.toolbar-add-node .toolbar-btn-label {
+    display: inline;
+    margin-left: 0;
+  }
+  .avatar-bar {
+    margin-left: 4px;
+    gap: 3px;
+  }
+}
 /* 工具栏星标切换（M3b 清偿包，FR-FIL-004）：未加星空心灰、加星金色 */
 .star-toggle {
   border: none;
@@ -239,6 +274,7 @@ body.painter-active .editor-canvas svg {
   display: flex;
   align-items: center;
   gap: 4px;
+  height: 28px; /* 单行判定：与按钮行等高，头像在其中垂直居中（2026-09-30 任务 1） */
   margin-left: 8px;
 }
 .editor-toolbar .avatar-chip {

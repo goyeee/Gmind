@@ -14,6 +14,34 @@
   font-size: 14px;
   color: #1f2329;
 }
+/* 面板头部（2026-09-30 需求方反馈）：标题 + × 关闭钮（task-panel-head 同款） */
+.rich-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex: none;
+  padding-bottom: 2px;
+  border-bottom: 1px solid #f2f3f5;
+}
+.rich-panel-head h3 {
+  margin: 0;
+}
+.rich-panel-close {
+  border: none;
+  background: transparent;
+  color: #86909c;
+  font-size: 18px;
+  line-height: 1;
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  cursor: pointer;
+  padding: 0;
+}
+.rich-panel-close:hover {
+  background: #f2f3f5;
+  color: #1f2329;
+}
 .rich-empty {
   color: #86909c;
   font-size: 13px;
@@ -26,8 +54,17 @@
   gap: 6px;
   font-size: 13px;
 }
+/* 小节标题（2026-09-30 需求方反馈）：简介/描述等区块标题加重，与字段提示区分 */
 .rich-panel .field > span {
-  color: #4e5969;
+  color: #1f2329;
+  font-weight: 600;
+}
+/* 字数计数（简介/描述）：弱化灰，置于输入框下方右对齐 */
+.rich-panel .field-count {
+  align-self: flex-end;
+  color: #86909c;
+  font-size: 12px;
+  line-height: 1;
 }
 .rich-panel textarea {
   min-height: 88px;

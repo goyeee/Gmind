@@ -50,9 +50,10 @@ async function useMobileViewport(page: Page): Promise<void> {
 /** 移动端只读分支应不装配的工具栏编辑控件（桌面回归用例反向断言可见）。
  *  insert-menu（标记面板任务的插入菜单）随桌面工具栏分支装配——T5 口径：
  *  标记写入是编辑动作，移动端只读不提供入口。theme-select 下拉已移除
- *  （M7b-W2 #6：主题只留面板按钮），不再列入清单。 */
+ *  （M7b-W2 #6：主题只留面板按钮），不再列入清单。structure-select 已随
+ *  2026-09-30 结构面板改版替换为 structure-toggle（口径不变：编辑控件不装配）。 */
 const EDITING_TESTIDS = [
-  'structure-select',
+  'structure-toggle',
   'theme-panel-toggle',
   'undo-btn',
   'redo-btn',

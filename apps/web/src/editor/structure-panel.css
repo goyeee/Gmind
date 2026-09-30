@@ -1,0 +1,81 @@
+/* 结构切换面板 — 2026-09-30 需求方反馈任务 3。骨架/定位复用 ThemePanel 抽屉模式
+   （编辑器右上角工具栏下方浮层，open=false 整棵不渲染），样式与主题面板同族。 */
+
+.structure-panel {
+  position: fixed;
+  top: 56px;
+  right: 16px;
+  width: 320px;
+  max-height: 60vh;
+  overflow: auto;
+  background: #fff;
+  border: 1px solid #e5e6eb;
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  z-index: 1150;
+  padding: 8px 12px 12px;
+  font-size: 13px;
+}
+
+.structure-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 0 6px;
+  border-bottom: 1px solid #f2f3f5;
+}
+.structure-panel-title {
+  font-weight: 600;
+}
+.structure-panel-close {
+  border: none;
+  background: none;
+  font-size: 16px;
+  line-height: 1;
+  color: #86909c;
+  cursor: pointer;
+  padding: 2px 6px;
+}
+
+/* 卡片网格：3 列自适应（同主题面板），当前结构高亮描边 */
+.structure-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin-top: 8px;
+}
+.structure-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid #e5e6eb;
+  border-radius: 6px;
+  background: #fff;
+  cursor: pointer;
+}
+.structure-item:hover {
+  border-color: #94bfff;
+  background: #f7faff;
+}
+.structure-item.current {
+  border-color: #3370ff;
+  box-shadow: 0 0 0 1px #3370ff inset;
+}
+.structure-thumb {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 4px;
+}
+.structure-item-label {
+  font-size: 12px;
+  color: #4e5969;
+  line-height: 1.4;
+  text-align: center;
+}
+.structure-item.current .structure-item-label {
+  color: #3370ff;
+  font-weight: 500;
+}

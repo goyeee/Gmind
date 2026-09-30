@@ -10,7 +10,7 @@ import { expect, test, type Page } from '@playwright/test';
  * 结构断言：
  * 1. 单行分组：11 个 .toolbar-group（返回/标题/视图切换/撤销重做格式刷/插入/
  *    上级子级同级/格式任务/结构主题/导出/协作视图/全屏），组间竖线分隔符 9；
- * 2. 图标按钮：全部带内联 svg 的 .toolbar-btn 均含非空 title 提示（15 枚；
+ * 2. 图标按钮：全部带内联 svg 的 .toolbar-btn 均含非空 title 提示（16 枚；
  *    上级/子级/同级三按钮为纯文字钮，label+title 单列断言）；
  * 3. 既有 testid 全保留（循环逐个断言可见）；
  * 4. find-toggle：查找入口（启用 + title「查找 (Ctrl+F)」+ 点击打开查找条）；
@@ -37,7 +37,9 @@ async function openSeedDoc(page: Page): Promise<void> {
   await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '本周计划' })).toBeVisible();
 }
 
-/** 既有工具栏 testid 清单（历轮改版后必须全部仍在，mobile-readonly 清单的桌面全集）。 */
+/** 既有工具栏 testid 清单（历轮改版后必须全部仍在，mobile-readonly 清单的桌面全集）。
+ *  structure-select 已随 2026-09-30 结构面板改版移除（structure-select →
+ *  structure-toggle + structure-panel，见 editor.e2e 用例 5 适配）。 */
 const EXISTING_TESTIDS = [
   'back-btn',
   'title-input',
@@ -45,7 +47,7 @@ const EXISTING_TESTIDS = [
   'save-status',
   'undo-btn',
   'redo-btn',
-  'structure-select',
+  'structure-toggle',
   'theme-panel-toggle',
   'insert-menu',
   'export-menu',
@@ -82,9 +84,9 @@ test('工具栏：单行分组 + 竖线分隔符（11 组 / 9 分隔线）', asy
 test('工具栏：图标按钮均带内联 svg 与 title 提示；上级/子级/同级为文字钮', async ({ page }) => {
   await openSeedDoc(page);
   const iconButtons = page.locator('.editor-toolbar button.toolbar-btn', { has: page.locator('> svg') });
-  // 返回/撤销/重做/格式刷/插入/格式/任务/主题面板/导出/成员/版本历史/动态/快捷键/
-  // 查找/全屏 = 15 个图标按钮
-  await expect(iconButtons).toHaveCount(15);
+  // 返回/撤销/重做/格式刷/插入/格式/任务/结构/主题面板/导出/成员/版本历史/动态/
+  // 快捷键/查找/全屏 = 16 个图标按钮（2026-09-30 结构 toggle 入列：图标+文字标签）
+  await expect(iconButtons).toHaveCount(16);
   const count = await iconButtons.count();
   for (let i = 0; i < count; i++) {
     const btn = iconButtons.nth(i);
@@ -125,13 +127,14 @@ test('工具栏：find-toggle 已接线为查找入口（T3 启用，替换 T1 �
   await expect(page.getByTestId('find-bar')).toBeVisible();
 });
 
-test('工具栏：members-btn 与结构下拉/主题面板钮可访问名语义正确', async ({ page }) => {
+test('工具栏：members-btn 与结构面板钮/主题面板钮可访问名语义正确', async ({ page }) => {
   await openSeedDoc(page);
   // 评审 Important（round 1）：members-btn 内容为 aria-hidden SVG + 角标数字，
   // accname 计算内容先于 title → 名字会退化为「1」；须 aria-label 补语义名。
   await expect(page.getByTestId('members-btn')).toHaveAccessibleName('在线成员');
-  // 外包 div 的 title 不下传给 <select>，读屏得到空名 → 各补 aria-label。
-  await expect(page.getByTestId('structure-select')).toHaveAccessibleName('结构');
+  // 结构入口（2026-09-30 任务 3）：select 移除后为面板 toggle 按钮，aria-label
+  // 同语义保留（accessible-name 契约自 structure-select 平移）
+  await expect(page.getByTestId('structure-toggle')).toHaveAccessibleName('结构');
   // 主题入口（M7b-W2 #6）：下拉移除后为面板按钮，aria-label 同语义保留
   await expect(page.getByTestId('theme-panel-toggle')).toHaveAccessibleName('主题');
 });
@@ -146,7 +149,7 @@ test('工具栏：组序符合企微对标布局（返回|标题|视图|撤销�
     'insert-menu',
     'toolbar-add-parent',
     'format-toggle',
-    'structure-select',
+    'structure-toggle',
     'theme-panel-toggle',
     'export-menu',
     'members-btn',
@@ -173,7 +176,7 @@ test('工具栏：组序符合企微对标布局（返回|标题|视图|撤销�
   const insertX = (await page.getByTestId('insert-menu').boundingBox())!.x;
   const addX = (await page.getByTestId('toolbar-add-parent').boundingBox())!.x;
   const formatX = (await page.getByTestId('format-toggle').boundingBox())!.x;
-  const structX = (await page.getByTestId('structure-select').boundingBox())!.x;
+  const structX = (await page.getByTestId('structure-toggle').boundingBox())!.x;
   expect(addX).toBeGreaterThan(insertX);
   expect(formatX).toBeGreaterThan(addX);
   expect(structX).toBeGreaterThan(formatX);

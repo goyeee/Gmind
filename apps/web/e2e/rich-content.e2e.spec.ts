@@ -243,3 +243,25 @@ test('富内容：链接/图片/图标齐设后刷新全部仍在', async ({ pag
   await expect(gAfter.locator('image.gm-image')).toBeVisible();
   await expect(markerBadgeByValue(page, '周五', 'flag')).toHaveCount(1);
 });
+
+// 用例 8（2026-09-30 需求方四条 UI 反馈任务 2/4）：插入菜单第六项「简介」= 开格式
+// 右列并聚焦备注输入框（openRichAndFocus 模式）；面板内「简介（备注）」「描述」
+// 两区块小节标题/输入框齐备；头部 × 关闭钮（rich-panel-close）收起右列。
+test('富内容：插入菜单「简介」项聚焦备注框，面板 × 钮收起', async ({ page }) => {
+  await openSeedDoc(page, '本周计划');
+  await selectNodeByText(page, '周一');
+  await page.getByTestId('insert-menu').click();
+  const noteItem = page.getByTestId('insert-note');
+  await expect(noteItem).toBeVisible();
+  await noteItem.click();
+  // 右列格式面板随「简介」项打开，备注输入框聚焦（openRichAndFocus 一帧后聚焦）
+  const panel = page.getByTestId('rich-panel');
+  await expect(panel).toBeVisible();
+  const noteArea = panel.getByLabel('节点备注');
+  await expect(noteArea).toBeFocused();
+  // 「简介（备注）」+「描述」两区块齐备（描述为 M7c-C1 字段的第二编辑入口）
+  await expect(panel.getByLabel('节点描述')).toBeVisible();
+  // 头部 × 关闭钮：收起右列（formatOpen=false，右列整列不渲染）
+  await panel.getByTestId('rich-panel-close').click();
+  await expect(panel).toHaveCount(0);
+});
