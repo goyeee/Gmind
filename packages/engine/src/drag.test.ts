@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { DragController, type DropTarget } from './drag';
+import { DragController, resolveDropSlot, type DropTarget } from './drag';
 import { Viewport } from './viewport';
 import type { NodeBox } from './types';
 
@@ -11,7 +11,8 @@ const SVG_NS = 'http://www.w3.org/2000/svg';
 
 /**
  * 测试盒几何（M7c-D1 落点三分）：a=拖拽源；b/d=合法目标（根 r 的子级）；c=a 的
- * 后代（禁止目标）；r=根（无 parentId，整盒=变子级）；s=org 竖排兄弟锚（父 q）。
+ * 后代（禁止目标）；r=根（无 parentId，整盒=变子级）；s=org 竖排兄弟锚（父 q，
+ * M7c-D3 起补 q 盒供落位槽/预览边结算）；q=org 父盒（side down）。
  */
 const BOXES: NodeBox[] = [
   { id: 'a', x: 0, y: 0, w: 100, h: 40, side: 'right', depth: 1, parentId: 'r' },
@@ -20,6 +21,7 @@ const BOXES: NodeBox[] = [
   { id: 'd', x: 400, y: 300, w: 100, h: 40, side: 'right', depth: 2, parentId: 'r' },
   { id: 'r', x: -160, y: -120, w: 80, h: 40, side: 'right', depth: 0 },
   { id: 's', x: 200, y: 200, w: 80, h: 40, side: 'down', depth: 2, parentId: 'q' },
+  { id: 'q', x: 200, y: 150, w: 80, h: 40, side: 'down', depth: 1 },
 ];
 /** 文档子级序桩：childrenIdsOf 的返回（r 下 a/b/d 顺序即兄弟序判定基准）。 */
 const CHILDREN: Record<string, string[]> = { r: ['a', 'b', 'd'], a: ['c'], q: ['s', 't'] };
@@ -34,6 +36,7 @@ const CENTER: Record<string, { x: number; y: number }> = {
   d: { x: 450, y: 320 },
   r: { x: -120, y: -100 },
   s: { x: 240, y: 220 },
+  q: { x: 240, y: 170 },
 };
 /** b 盒边缘插入带代表点：上缘带 10%（before）与下缘带 90%（after）。 */
 const B_BAND = {
@@ -46,40 +49,80 @@ const S_BAND = {
   after: { x: 272, y: 220 },
 };
 
+/**
+ * 根级侧别仿真桩（M7c-D3 测试②）：3 个等高 root 子级 右右左分布（r 右缘 0、
+ * 右列 x=60、左列 x=-240；带高均 40、带间距均 20 → 半分阈值 80，x1/x2 右、x3 左，
+ * 与布局 assignMindmapSides 对真实几何的判定一致）。
+ */
+const SIM_BOXES: NodeBox[] = [
+  { id: 'x1', x: 60, y: -70, w: 100, h: 40, side: 'right', depth: 1, parentId: 'r' },
+  { id: 'x2', x: 60, y: -10, w: 100, h: 40, side: 'right', depth: 1, parentId: 'r' },
+  { id: 'x3', x: -240, y: 50, w: 100, h: 40, side: 'left', depth: 1, parentId: 'r' },
+  { id: 'r', x: -80, y: -30, w: 80, h: 60, side: 'right', depth: 0 },
+];
+const SIM_CHILDREN: Record<string, string[]> = { r: ['x1', 'x2', 'x3'] };
+
+interface Harness {
+  svg: SVGSVGElement;
+  overlay: SVGGElement;
+  vp: Viewport;
+  onDrop: ReturnType<typeof vi.fn>;
+  controller: DragController;
+}
+
+/** 装配测试场景：节点 g（含 rect + gm-text 文字）+ 既有连线（供预览边取主题边色）。 */
+function buildHarness(
+  boxes: NodeBox[],
+  children: Record<string, string[]>,
+  descendants: Record<string, string[]>,
+): Harness {
+  document.body.innerHTML = '';
+  const svg = document.createElementNS(SVG_NS, 'svg');
+  const edgesLayer = document.createElementNS(SVG_NS, 'g');
+  const canvasEdge = document.createElementNS(SVG_NS, 'path');
+  canvasEdge.setAttribute('data-edge-id', `${boxes[boxes.length - 1]!.id}->probe`);
+  canvasEdge.setAttribute('stroke', '#7c8496');
+  edgesLayer.appendChild(canvasEdge);
+  svg.appendChild(edgesLayer);
+  const sceneRoot = document.createElementNS(SVG_NS, 'g');
+  const overlay = document.createElementNS(SVG_NS, 'g');
+  svg.appendChild(sceneRoot);
+  svg.appendChild(overlay);
+  document.body.appendChild(svg);
+  for (const b of boxes) {
+    const g = document.createElementNS(SVG_NS, 'g');
+    g.setAttribute('data-node-id', b.id);
+    const rect = document.createElementNS(SVG_NS, 'rect');
+    g.appendChild(rect);
+    const text = document.createElementNS(SVG_NS, 'text');
+    text.setAttribute('class', 'gm-text');
+    text.textContent = b.id;
+    g.appendChild(text);
+    sceneRoot.appendChild(g);
+  }
+  const vp = new Viewport(svg, sceneRoot);
+  const onDrop = vi.fn();
+  const controller = new DragController();
+  controller.attach({
+    svg,
+    viewport: vp,
+    getBoxes: () => boxes,
+    onDrop: (id, target) => onDrop(id, target),
+    isDescendant: (id, candidateId) => (descendants[id] ?? []).includes(candidateId),
+    childrenIdsOf: (id) => children[id] ?? [],
+    overlayLayer: overlay,
+  });
+  return { svg, overlay, vp, onDrop, controller };
+}
+
 let svg: SVGSVGElement;
-let sceneRoot: SVGGElement;
 let overlay: SVGGElement;
 let vp: Viewport;
 let onDrop: ReturnType<typeof vi.fn>;
 let controller: DragController;
 
 beforeEach(() => {
-  document.body.innerHTML = '';
-  svg = document.createElementNS(SVG_NS, 'svg');
-  sceneRoot = document.createElementNS(SVG_NS, 'g');
-  overlay = document.createElementNS(SVG_NS, 'g');
-  svg.appendChild(sceneRoot);
-  svg.appendChild(overlay);
-  document.body.appendChild(svg);
-  for (const b of BOXES) {
-    const g = document.createElementNS(SVG_NS, 'g');
-    g.setAttribute('data-node-id', b.id);
-    const rect = document.createElementNS(SVG_NS, 'rect');
-    g.appendChild(rect);
-    sceneRoot.appendChild(g);
-  }
-  vp = new Viewport(svg, sceneRoot);
-  onDrop = vi.fn();
-  controller = new DragController();
-  controller.attach({
-    svg,
-    viewport: vp,
-    getBoxes: () => BOXES,
-    onDrop: (id, target) => onDrop(id, target),
-    isDescendant: (id, candidateId) => (DESCENDANTS[id] ?? []).includes(candidateId),
-    childrenIdsOf: (id) => CHILDREN[id] ?? [],
-    overlayLayer: overlay,
-  });
+  ({ svg, overlay, vp, onDrop, controller } = buildHarness(BOXES, CHILDREN, DESCENDANTS));
 });
 
 afterEach(() => {
@@ -93,8 +136,15 @@ function nodeEl(id: string): SVGGElement {
   return el as SVGGElement;
 }
 
-function indicatorEl(): SVGLineElement | null {
-  return overlay.querySelector('line.gm-drop-indicator');
+/** 落位预览边/槽/芯片（M7c-D3：悬浮层内临时元素）。 */
+function edgeEl(): SVGPathElement | null {
+  return overlay.querySelector('path.gm-drop-edge');
+}
+function slotEl(): SVGRectElement | null {
+  return overlay.querySelector('rect.gm-drop-slot');
+}
+function ghostEl(): SVGGElement | null {
+  return overlay.querySelector('g.gm-drag-ghost');
 }
 
 function pe(type: string, init: PointerEventInit & { cancelable?: boolean }): PointerEvent {
@@ -207,7 +257,7 @@ describe('DragController 落点分类与释放结算（M7c-D1）', () => {
     expect(onDrop).toHaveBeenCalledWith('a', null);
   });
 
-  it('后代目标（本体/边缘带均禁止）：加 drop-forbidden、释放不回调、抬起后高亮清除', () => {
+  it('后代目标（本体/边缘带均禁止）：加 drop-forbidden、释放不回调、无预览、抬起后高亮清除', () => {
     nodeEl('a').dispatchEvent(
       pe('pointerdown', { button: 0, clientX: CENTER.a.x, clientY: CENTER.a.y, pointerId: 1 }),
     );
@@ -216,8 +266,9 @@ describe('DragController 落点分类与释放结算（M7c-D1）', () => {
     );
     expect(nodeEl('c').classList.contains('drop-forbidden')).toBe(true);
     expect(nodeEl('c').classList.contains('drop-target')).toBe(false);
-    expect(indicatorEl()).toBeNull(); // 禁止目标不出指示线
     vi.advanceTimersByTime(400);
+    expect(edgeEl()).toBeNull(); // 禁止目标无边/槽预览
+    expect(slotEl()).toBeNull();
     svg.dispatchEvent(
       pe('pointerup', { clientX: CENTER.c.x, clientY: CENTER.c.y + 12, pointerId: 1 }),
     );
@@ -242,32 +293,40 @@ describe('DragController 落点分类与释放结算（M7c-D1）', () => {
 });
 
 // ---------------------------------------------------------------------------
-// 插入指示线（gm-drop-indicator）
+// 落位预览：真实边 + 落位槽（M7c-D3，取代旧 gm-drop-indicator 横向指示线）
 // ---------------------------------------------------------------------------
 
-describe('DragController 插入指示线（gm-drop-indicator）', () => {
+describe('DragController 落位预览（gm-drop-edge / gm-drop-slot）', () => {
   beforeEach(() => {
     vi.useFakeTimers();
   });
 
-  it('进入横排盒上缘带 100ms → 悬浮层出现横线，y=盒顶、两端外伸 8px', () => {
+  it('进入上缘带满 100ms → 真实边 + 槽出现：槽=首盒上方同列，边=父盒边中点到槽边中点的同款 bezier', () => {
     nodeEl('a').dispatchEvent(
       pe('pointerdown', { button: 0, clientX: CENTER.a.x, clientY: CENTER.a.y, pointerId: 1 }),
     );
     svg.dispatchEvent(
       pe('pointermove', { clientX: B_BAND.before.x, clientY: B_BAND.before.y, pointerId: 1 }),
     );
-    expect(indicatorEl()).toBeNull(); // 未满 100ms 不出现
+    expect(edgeEl()).toBeNull(); // 未满 100ms 不出现
+    expect(slotEl()).toBeNull();
     vi.advanceTimersByTime(100);
-    const line = indicatorEl();
-    expect(line).not.toBeNull();
-    expect(line!.getAttribute('y1')).toBe('100'); // b.y
-    expect(line!.getAttribute('y2')).toBe('100');
-    expect(line!.getAttribute('x1')).toBe('192'); // b.x - 8
-    expect(line!.getAttribute('x2')).toBe('308'); // b.x + b.w + 8
+    const slot = slotEl();
+    const edge = edgeEl();
+    expect(slot).not.toBeNull();
+    expect(edge).not.toBeNull();
+    // 槽列 x = r 右缘(-80) + 列距 280（= b.x − r 右缘）→ 与现有子级同列 200；
+    // 槽 y = b.y(100) − 带间距/2(80) − a.h/2(20) = 0（未触发父中线钳制）。
+    expect(slot!.getAttribute('x')).toBe('200');
+    expect(slot!.getAttribute('y')).toBe('0');
+    expect(slot!.getAttribute('width')).toBe('100');
+    expect(slot!.getAttribute('height')).toBe('40');
+    // 与画布普通连线同形：M 父右缘中点(-80,-100) C 水平控制点(60,±) 槽左边中点(200,20)。
+    expect(edge!.getAttribute('d')).toBe('M -80 -100 C 60 -100 60 20 200 20');
+    expect(edge!.getAttribute('stroke')).toBe('#7c8496'); // 与画布既有连线同色
   });
 
-  it('切到下缘带 → 指示线随动到盒底（y=140）；切回本体 → 移除指示线、点亮 drop-target', () => {
+  it('切到下缘带 → 槽随动到相邻盒垂直中点（y=200）；切回本体 → 边/槽移除、点亮 drop-target', () => {
     nodeEl('a').dispatchEvent(
       pe('pointerdown', { button: 0, clientX: CENTER.a.x, clientY: CENTER.a.y, pointerId: 1 }),
     );
@@ -275,53 +334,60 @@ describe('DragController 插入指示线（gm-drop-indicator）', () => {
       pe('pointermove', { clientX: B_BAND.after.x, clientY: B_BAND.after.y, pointerId: 1 }),
     );
     vi.advanceTimersByTime(100);
-    expect(indicatorEl()!.getAttribute('y1')).toBe('140'); // b.y + b.h
-    // 同一节点带→本体互切也重置反馈：先摘线，满 100ms 后点亮高亮
+    expect(slotEl()!.getAttribute('y')).toBe('200'); // (b 底 140 + d 顶 300)/2 = 220 − a.h/2
+    // 同一节点带→本体互切也重置反馈：先摘边/槽，满 100ms 后点亮高亮
     svg.dispatchEvent(pe('pointermove', { clientX: CENTER.b.x, clientY: CENTER.b.y, pointerId: 1 }));
-    expect(indicatorEl()).toBeNull();
+    expect(edgeEl()).toBeNull();
+    expect(slotEl()).toBeNull();
     expect(nodeEl('b').classList.contains('drop-target')).toBe(false);
     vi.advanceTimersByTime(100);
     expect(nodeEl('b').classList.contains('drop-target')).toBe(true);
   });
 
-  it('移开到空白/释放/pointercancel/destroy → 指示线移除', () => {
-    nodeEl('a').dispatchEvent(
-      pe('pointerdown', { button: 0, clientX: CENTER.a.x, clientY: CENTER.a.y, pointerId: 1 }),
-    );
-    svg.dispatchEvent(
-      pe('pointermove', { clientX: B_BAND.before.x, clientY: B_BAND.before.y, pointerId: 1 }),
-    );
-    vi.advanceTimersByTime(100);
-    expect(indicatorEl()).not.toBeNull();
-    svg.dispatchEvent(pe('pointermove', { clientX: 650, clientY: 480, pointerId: 1 })); // 空白
-    expect(indicatorEl()).toBeNull();
-    svg.dispatchEvent(pe('pointerup', { clientX: 650, clientY: 480, pointerId: 1 })); // 结束第一段拖拽
+  it('移开到空白/释放/pointercancel/destroy → 芯片/边/槽全部移除（预览元素存在性）', () => {
+    const startDrag = (pointerId: number): void => {
+      nodeEl('a').dispatchEvent(
+        pe('pointerdown', { button: 0, clientX: CENTER.a.x, clientY: CENTER.a.y, pointerId }),
+      );
+      svg.dispatchEvent(
+        pe('pointermove', { clientX: B_BAND.before.x, clientY: B_BAND.before.y, pointerId }),
+      );
+      vi.advanceTimersByTime(100);
+      expect(ghostEl()).not.toBeNull();
+      expect(edgeEl()).not.toBeNull();
+      expect(slotEl()).not.toBeNull();
+    };
+    // 空白：边/槽摘除，芯片仍在（拖拽未结束）
+    startDrag(1);
+    svg.dispatchEvent(pe('pointermove', { clientX: 650, clientY: 480, pointerId: 1 }));
+    expect(edgeEl()).toBeNull();
+    expect(slotEl()).toBeNull();
+    expect(ghostEl()).not.toBeNull();
+    svg.dispatchEvent(pe('pointerup', { clientX: 650, clientY: 480, pointerId: 1 }));
+    expect(ghostEl()).toBeNull();
     // 释放路径
-    nodeEl('a').dispatchEvent(pe('pointerdown', { button: 0, clientX: CENTER.a.x, clientY: CENTER.a.y, pointerId: 2 }));
-    svg.dispatchEvent(pe('pointermove', { clientX: B_BAND.before.x, clientY: B_BAND.before.y, pointerId: 2 }));
-    vi.advanceTimersByTime(100);
-    expect(indicatorEl()).not.toBeNull();
+    startDrag(2);
     svg.dispatchEvent(
       pe('pointerup', { clientX: B_BAND.before.x, clientY: B_BAND.before.y, pointerId: 2 }),
     );
-    expect(indicatorEl()).toBeNull();
+    expect(ghostEl()).toBeNull();
+    expect(edgeEl()).toBeNull();
+    expect(slotEl()).toBeNull();
     // pointercancel 路径
-    nodeEl('a').dispatchEvent(pe('pointerdown', { button: 0, clientX: CENTER.a.x, clientY: CENTER.a.y, pointerId: 3 }));
-    svg.dispatchEvent(pe('pointermove', { clientX: B_BAND.before.x, clientY: B_BAND.before.y, pointerId: 3 }));
-    vi.advanceTimersByTime(100);
-    expect(indicatorEl()).not.toBeNull();
+    startDrag(3);
     svg.dispatchEvent(pe('pointercancel', { pointerId: 3 }));
-    expect(indicatorEl()).toBeNull();
+    expect(ghostEl()).toBeNull();
+    expect(edgeEl()).toBeNull();
+    expect(slotEl()).toBeNull();
     // destroy 路径
-    nodeEl('a').dispatchEvent(pe('pointerdown', { button: 0, clientX: CENTER.a.x, clientY: CENTER.a.y, pointerId: 4 }));
-    svg.dispatchEvent(pe('pointermove', { clientX: B_BAND.before.x, clientY: B_BAND.before.y, pointerId: 4 }));
-    vi.advanceTimersByTime(100);
-    expect(indicatorEl()).not.toBeNull();
+    startDrag(4);
     controller.destroy();
-    expect(indicatorEl()).toBeNull();
+    expect(ghostEl()).toBeNull();
+    expect(edgeEl()).toBeNull();
+    expect(slotEl()).toBeNull();
   });
 
-  it('org（side=down）盒边缘带 → 竖线贴左/右缘、上下外伸 8px', () => {
+  it('org（side=down）盒边缘带 → 槽在水平插入位、边为竖直 elbow（与真实 org 连线同形）', () => {
     nodeEl('a').dispatchEvent(
       pe('pointerdown', { button: 0, clientX: CENTER.a.x, clientY: CENTER.a.y, pointerId: 1 }),
     );
@@ -329,12 +395,119 @@ describe('DragController 插入指示线（gm-drop-indicator）', () => {
       pe('pointermove', { clientX: S_BAND.after.x, clientY: S_BAND.after.y, pointerId: 1 }),
     );
     vi.advanceTimersByTime(100);
-    const line = indicatorEl();
-    expect(line).not.toBeNull();
-    expect(line!.getAttribute('x1')).toBe('280'); // s.x + s.w
-    expect(line!.getAttribute('x2')).toBe('280');
-    expect(line!.getAttribute('y1')).toBe('192'); // s.y - 8
-    expect(line!.getAttribute('y2')).toBe('248'); // s.y + s.h + 8
+    const slot = slotEl();
+    const edge = edgeEl();
+    expect(slot).not.toBeNull();
+    expect(edge).not.toBeNull();
+    // 尾部追加：cx = s 右缘(280) + 间距/2(10) + a.w/2(50) → 槽 x 290；y = q 底(190) + 层距(10)。
+    expect(slot!.getAttribute('x')).toBe('290');
+    expect(slot!.getAttribute('y')).toBe('200');
+    // elbow：父下中点(240,190) → 槽顶中(340,200)，正交中线拐点（render 同公式）。
+    expect(edge!.getAttribute('d')).toBe('M 240 190 L 240 195 L 340 195 L 340 200');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 落位槽纯函数（resolveDropSlot：槽几何 + 根级侧别仿真）
+// ---------------------------------------------------------------------------
+
+describe('resolveDropSlot 落位槽几何（M7c-D3 纯函数）', () => {
+  it('中间插入 = 相邻两子级盒的垂直中点；尾部追加 = 末盒下方（间距一半）', () => {
+    const mid = resolveDropSlot({
+      boxes: BOXES,
+      childrenIds: CHILDREN.r!,
+      draggedId: 'a',
+      parentId: 'r',
+      index: 1,
+      chipBox: { x: 200, y: 84, w: 100, h: 40 },
+    });
+    expect(mid).not.toBeNull();
+    expect(mid!.index).toBe(1);
+    expect(mid!.slot.x).toBe(200); // 与现有子级同列（r 右缘 -80 + 列距 280）
+    expect(mid!.slot.y).toBe(200); // (b 底 140 + d 顶 300)/2 = 220 − a.h/2 20
+    expect(mid!.slot.side).toBe('right');
+    const tail = resolveDropSlot({
+      boxes: BOXES,
+      childrenIds: CHILDREN.r!,
+      draggedId: 'a',
+      parentId: 'r',
+      index: 2,
+      chipBox: { x: 400, y: 316, w: 100, h: 40 },
+    });
+    expect(tail!.index).toBe(2);
+    expect(tail!.slot.y).toBe(420); // d 底 340 + 带间距 160/2 = 420（槽顶）
+  });
+
+  it('首位插入 = 首盒上方（间距一半，不高于父盒中线），槽列与现有子级同列', () => {
+    const head = resolveDropSlot({
+      boxes: BOXES,
+      childrenIds: CHILDREN.r!,
+      draggedId: 'a',
+      parentId: 'r',
+      index: 0,
+      chipBox: { x: 200, y: 84, w: 100, h: 40 },
+    });
+    expect(head!.index).toBe(0);
+    expect(head!.slot.y).toBe(0); // b.y 100 − 带间距/2 80 − a.h/2 20
+    expect(head!.slot.x).toBe(200);
+  });
+
+  it('父盒缺失（协同删除窗口期）→ null（无预览，释放仍按 target 结算）', () => {
+    expect(
+      resolveDropSlot({
+        boxes: BOXES,
+        childrenIds: ['zz'],
+        draggedId: 'a',
+        parentId: 'zz',
+        index: 0,
+        chipBox: { x: 0, y: 0, w: 100, h: 40 },
+      }),
+    ).toBeNull();
+  });
+});
+
+describe('resolveDropSlot 根级侧别仿真（M7c-D3 不跳左）', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    // 重装侧别仿真桩场景（右右左分布）
+    ({ svg, overlay, vp, onDrop, controller } = buildHarness(SIM_BOXES, SIM_CHILDREN, {}));
+  });
+
+  it('纯函数：几何 index 仿真翻左 → 修正到同侧（右）兄弟最接近芯片 y 的插入位，仿真侧别 right', () => {
+    // 芯片在右侧低处（x2 下方 y≈80）：几何 index 2 插入后 [x2,x3,x1]，x1 累计过半翻左；
+    // 修正为右列兄弟 [x2] 的 y 最近插入位（尾插 p=1 → 文档序 index 1）→ 复核仿真 right。
+    const res = resolveDropSlot({
+      boxes: SIM_BOXES,
+      childrenIds: SIM_CHILDREN.r!,
+      draggedId: 'x1',
+      parentId: 'r',
+      index: 2,
+      chipBox: { x: 60, y: 80, w: 100, h: 40 },
+    });
+    expect(res).not.toBeNull();
+    expect(res!.index).toBe(1); // 不按几何位次 2（会跳左）
+    expect(res!.slot.side).toBe('right');
+    expect(res!.slot.x).toBe(60); // 右列（r 右缘 0 + 列距 60）
+    expect(res!.slot.y).toBe(40); // x2 底 30 + 带间距/2 10（槽顶）
+  });
+
+  it('DOM：右侧节点拖到右侧低处（x2 下缘带）→ 解析 index 落右、槽画在右列（不跳左）', () => {
+    nodeEl('x1').dispatchEvent(
+      pe('pointerdown', { button: 0, clientX: 110, clientY: -50, pointerId: 1 }),
+    );
+    svg.dispatchEvent(pe('pointermove', { clientX: 110, clientY: 26, pointerId: 1 })); // x2 下缘带
+    vi.advanceTimersByTime(100);
+    const slot = slotEl();
+    expect(slot).not.toBeNull();
+    expect(slot!.getAttribute('x')).toBe('60'); // 右列（与 x1/x2 同列），绝不在左侧
+    svg.dispatchEvent(pe('pointerup', { clientX: 110, clientY: 26, pointerId: 1 }));
+    expect(onDrop).toHaveBeenCalledWith('x1', {
+      kind: 'sibling',
+      parentId: 'r',
+      index: 1,
+      anchorId: 'x2',
+      position: 'after',
+    });
   });
 });
 
@@ -368,68 +541,93 @@ describe('DragController 反馈时机（100ms）', () => {
 });
 
 // ---------------------------------------------------------------------------
-// 被拖节点视觉反馈（gm-dragging）
+// 被拖节点视觉反馈（gm-dragging + gm-drag-origin）与拖拽芯片（gm-drag-ghost）
 // ---------------------------------------------------------------------------
 
-describe('DragController 被拖节点视觉反馈（gm-dragging）', () => {
+describe('DragController 被拖节点视觉反馈与拖拽芯片（M7c-D3）', () => {
   beforeEach(() => {
     vi.useFakeTimers();
   });
 
-  /** 激活拖拽：down 于 a 中心 → 一步 move 到 b 中心（过阈值即 activate）。 */
-  function activateDrag(pointerId: number): void {
+  /** 激活拖拽：down 于 a 中心 → 一步 move 到 (x,y)（过阈值即 activate）。 */
+  function activateAt(x: number, y: number, pointerId = 1): void {
     nodeEl('a').dispatchEvent(
       pe('pointerdown', { button: 0, clientX: CENTER.a.x, clientY: CENTER.a.y, pointerId }),
     );
-    svg.dispatchEvent(pe('pointermove', { clientX: CENTER.b.x, clientY: CENTER.b.y, pointerId }));
+    svg.dispatchEvent(pe('pointermove', { clientX: x, clientY: y, pointerId }));
   }
 
-  it('候选期（未过 4px 阈值）不挂类；过阈值激活即给被拖节点挂 gm-dragging', () => {
+  it('候选期不挂类；激活即建芯片（被拖盒大小白底蓝描边+文字）并并挂 gm-dragging/gm-drag-origin', () => {
     nodeEl('a').dispatchEvent(
       pe('pointerdown', { button: 0, clientX: CENTER.a.x, clientY: CENTER.a.y, pointerId: 1 }),
     );
     svg.dispatchEvent(pe('pointermove', { clientX: 52, clientY: 21, pointerId: 1 })); // ≈2.2px
     expect(nodeEl('a').classList.contains('gm-dragging')).toBe(false);
+    expect(ghostEl()).toBeNull(); // 候选期无芯片
     svg.dispatchEvent(pe('pointermove', { clientX: CENTER.b.x, clientY: CENTER.b.y, pointerId: 1 }));
+    const ghost = ghostEl();
+    expect(ghost).not.toBeNull();
+    const rect = ghost!.querySelector('rect');
+    expect(rect!.getAttribute('width')).toBe('100'); // 同被拖节点盒 w/h
+    expect(rect!.getAttribute('height')).toBe('40');
+    expect(rect!.getAttribute('fill')).toBe('#ffffff');
+    expect(rect!.getAttribute('stroke')).toBe('#3370ff');
+    expect(rect!.getAttribute('stroke-width')).toBe('1.5');
+    expect(ghost!.querySelector('text')!.textContent).toBe('a'); // 被拖节点文本
     expect(nodeEl('a').classList.contains('gm-dragging')).toBe(true);
+    expect(nodeEl('a').classList.contains('gm-drag-origin')).toBe(true); // 原位虚线占位
   });
 
-  it('正常释放 → 摘除 gm-dragging，且任何节点不残留', () => {
-    activateDrag(1);
+  it('芯片逐帧跟随「指针场景点 − 抓取偏移」（按下点 − 盒左上角），芯片不跳变', () => {
+    activateAt(CENTER.b.x, CENTER.b.y); // 指针 (250,120)、抓取偏移 (50,20)
+    expect(ghostEl()!.getAttribute('transform')).toBe('translate(200, 100)');
+    svg.dispatchEvent(pe('pointermove', { clientX: 300, clientY: 160, pointerId: 1 }));
+    expect(ghostEl()!.getAttribute('transform')).toBe('translate(250, 140)');
+  });
+
+  it('正常释放 → 摘除 gm-dragging/origin 与芯片，且任何节点不残留', () => {
+    activateAt(CENTER.b.x, CENTER.b.y);
     svg.dispatchEvent(pe('pointerup', { clientX: CENTER.b.x, clientY: CENTER.b.y, pointerId: 1 }));
     expect(onDrop).toHaveBeenCalledTimes(1);
+    expect(ghostEl()).toBeNull();
     for (const b of BOXES) {
       expect(nodeEl(b.id).classList.contains('gm-dragging')).toBe(false);
+      expect(nodeEl(b.id).classList.contains('gm-drag-origin')).toBe(false);
     }
   });
 
   it('禁止落点静默取消 / pointercancel / svg 外释放（window 兜底）→ 均摘除', () => {
     // 自身盒 = 禁止目标：释放走静默取消路径
-    activateDrag(1);
-    svg.dispatchEvent(pe('pointermove', { clientX: 80, clientY: 30, pointerId: 1 })); // a 盒内
+    activateAt(80, 30);
     svg.dispatchEvent(pe('pointerup', { clientX: 80, clientY: 30, pointerId: 1 }));
     expect(onDrop).not.toHaveBeenCalled();
     expect(nodeEl('a').classList.contains('gm-dragging')).toBe(false);
+    expect(ghostEl()).toBeNull();
     // pointercancel 路径
-    activateDrag(2);
+    activateAt(CENTER.b.x, CENTER.b.y, 2);
     svg.dispatchEvent(pe('pointercancel', { pointerId: 2 }));
     expect(nodeEl('a').classList.contains('gm-dragging')).toBe(false);
+    expect(ghostEl()).toBeNull();
     // svg 外释放（window pointerup 兜底）路径
-    activateDrag(3);
+    activateAt(CENTER.b.x, CENTER.b.y, 3);
     window.dispatchEvent(pe('pointerup', { clientX: 5000, clientY: -20, pointerId: 3 }));
     expect(nodeEl('a').classList.contains('gm-dragging')).toBe(false);
+    expect(ghostEl()).toBeNull();
   });
 
-  it('destroy 中途打断 → gm-dragging 摘除（不回调 onDrop）', () => {
-    activateDrag(1);
+  it('destroy 中途打断 → gm-dragging 摘除、芯片移除（不回调 onDrop）', () => {
+    activateAt(CENTER.b.x, CENTER.b.y);
     expect(nodeEl('a').classList.contains('gm-dragging')).toBe(true);
+    expect(ghostEl()).not.toBeNull();
     controller.destroy();
     expect(nodeEl('a').classList.contains('gm-dragging')).toBe(false);
+    expect(nodeEl('a').classList.contains('gm-drag-origin')).toBe(false);
+    expect(ghostEl()).toBeNull();
     expect(onDrop).not.toHaveBeenCalled();
   });
 
   it('gm-dragging 与落点反馈（drop-target/drop-forbidden）互不干扰、可共存', () => {
-    activateDrag(1);
+    activateAt(CENTER.b.x, CENTER.b.y);
     vi.advanceTimersByTime(100); // b 本体悬停满 100ms 点亮
     expect(nodeEl('a').classList.contains('gm-dragging')).toBe(true);
     expect(nodeEl('a').classList.contains('drop-target')).toBe(false);

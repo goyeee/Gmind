@@ -335,10 +335,9 @@ describe('startSaveLoop（clearRetry：WS 重连取消兜底 PUT 重试）', () 
   it('PUT 失败退避重试 armed 后 clearRetry → 不再发射；下次事务照常防抖 PUT', async () => {
     vi.useFakeTimers();
     let fail = true;
-    const { doc, stop } = await withMockedSave(async () =>
+    const { stop } = await withMockedSave(async () =>
       fail ? Promise.reject(new TypeError('网络失败')) : jsonResponse(200, { nodeCount: 1 }),
     );
-    const handleRef: { current: ReturnType<typeof startSaveLoop> | null } = { current: null };
     // withMockedSave 未暴露句柄：重开一个直接装配的循环
     stop();
     vi.stubGlobal('fetch', vi.fn(async () =>
@@ -347,7 +346,6 @@ describe('startSaveLoop（clearRetry：WS 重连取消兜底 PUT 重试）', () 
     vi.stubGlobal('localStorage', { getItem: () => 'token', setItem: () => undefined, removeItem: () => undefined });
     const doc2 = new Y.Doc();
     const handle = startSaveLoop(doc2, 'file-1', () => undefined);
-    handleRef.current = handle;
 
     doc2.getMap('m').set('k', 'v');
     await vi.advanceTimersByTimeAsync(DEBOUNCE_MS); // 首发 PUT 失败 → armRetry(1s)

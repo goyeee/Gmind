@@ -829,3 +829,38 @@ body.painter-active .editor-canvas svg {
 .editor-canvas svg g.gm-editing > .gm-text {
   opacity: 0;
 }
+
+/* —— M7c-D3 拖动企微对齐（2026-09-30，类由 engine drag 写入，此处只落样式）—— */
+
+/* 拾起占位：被拖节点原 g 并挂 gm-dragging + gm-drag-origin——origin 段在本文件更
+   后位置，同级特异性后者胜出：整体透明度复位为 1，只留「虚线框 + 淡字」的企微式
+   占位（避免 0.45×0.35 叠乘后虚线淡到不可辨）。 */
+.editor-canvas svg g.gm-drag-origin {
+  opacity: 1;
+}
+.editor-canvas svg g.gm-drag-origin > rect:first-of-type {
+  stroke-dasharray: 5 4;
+  opacity: 0.35;
+}
+.editor-canvas svg g.gm-drag-origin > .gm-text {
+  opacity: 0.25;
+}
+
+/* 跟随芯片（g.gm-drag-ghost：白底圆角 + 蓝描边 + 居中文字，几何由 engine 写属性）：
+   纯视觉悬浮物，不拦截指针（否则会挡住落点命中检测）。 */
+.editor-canvas svg g.gm-drag-ghost {
+  pointer-events: none;
+}
+
+/* 落位预览边（path.gm-drop-edge）：与画布普通连线同款 bezier（d 由 engine 按
+   render.ts 同公式生成），fill none 防闭合填充。 */
+.editor-canvas svg path.gm-drop-edge {
+  fill: none;
+  pointer-events: none;
+}
+
+/* 落位槽（rect.gm-drop-slot）：虚线圆角框，松手后节点将出现的盒位。 */
+.editor-canvas svg rect.gm-drop-slot {
+  stroke-dasharray: 5 4;
+  pointer-events: none;
+}
