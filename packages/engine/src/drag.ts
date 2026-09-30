@@ -1,22 +1,38 @@
 /**
  * 节点拖拽：换父 / 同级排序插入 — M1b Task 9 起步，M7c-D1 按企微对标 spec P0-2 重做，
- * M7c-D3（需求方 2026-09-30 企微拖动实测对齐）升级为「芯片跟随 + 原位占位 + 真实边
- * 落位预览」。
+ * M7c-D3 升级「芯片跟随 + 原位占位 + 真实边落位预览」，M7c-G（需求方 2026-09-30 拖动
+ * 吸附实测反馈）把落点解析重写为「列吸附连续模型」。
  *
- * M7c-D1 落点三分语义（需求方原话「拖动的功能简直糟糕透了，我都没看懂逻辑是啥」）：
- * - 拖到目标节点**本体**（盒中线 ±25% 区域）= 变其子级（追加末尾，M1b 语义保留）；
- * - 拖到盒子**边缘插入带**（上下各 25%；side='down' 的 org 结构兄弟横排，带在左右）
- *   = 同级插入：释放调 core moveNode(id, anchor.parentId, index) 按落点排序——
- *   index 由 childrenIdsOf 文档序 + 锚点位次结算，同父移动做「先移除后插入」的
- *   前移修正（纪律#2：纯计算，全部在事务之外）；
- * - 拖到**空白** = 挂 root 对应侧末尾（M7c-F 复验问题4：侧别按指针相对 root 盒中线，
- *   index 取该侧现有子级文档序末尾并过既有侧别仿真——悬停即画边+槽预览，释放按
- *   同一结算提交，不再「零预览、释放跳对侧」）。
- * - 自身/自身后代仍是禁止目标（fix round 1）：整盒含边缘带一律 drop-forbidden、
- *   释放静默取消不回调（否则 self 落 null 分支会把整枝浮动成根主题，破坏性）。
- * - 根节点无 parentId：整盒 = 变其子级（根不可作兄弟锚点）。
+ * M7c-G 列吸附连续模型（需求方原话「我把节点拉到对应位置，并没有产生吸附最佳节点的
+ * 效果。比如我靠近中心节点上下移动，吸附线应该出现在我当前所在位置——我在哪停，他就
+ * 应该插在哪两个节点中间。比如我拖到了某个层级的子节点右边或左边（朝左的节点就是左边），
+ * 就应该对这个子节点产生吸附效果，松开后就要吸附上去。」）——落点按**区域优先级**解析
+ * （纯函数 classifyDropAt，全几何判定，导出供单测直测）：
+ * 0. **盒直击禁止**：被拖节点/其后代本体一律 drop-forbidden（整盒，先于一切区域）；
+ * 1. **子级吸附区**（最深优先）：节点 N 的生长侧区——right 侧 x ∈ [N.left, N.right +
+ *    列间隙 + max(子级列宽, 被拖盒宽)]、left 侧镜像、root 两侧都算（侧别按指针相对根盒
+ *    中线）；y ∈ [区顶 − 8, N 子树带底 + 8]，root 区顶取全树带顶——根是整列脊柱，「靠近
+ *    中心节点上下移动」要求根侧全程跟随。命中 → child of N：插入 index = P.y 在 N 子级
+ *    中的**最近间隙位**（无子级=追加），蓝描边（drop-target）保留、真实边+槽预览同画
+ *    （此前只有描边）；
+ * 2. **同级插入列**（次优先）：父节点的子级列条带——x ∈ [列x − 24, 列右 + 24]、
+ *    y ∈ [首子级带顶 − 带间距, 末子级带底 + 带间距]（列 x/宽、带间距从「移除被拖节点后」
+ *    的同侧子级盒实测）。命中 → 插到该父的子级中，index 同按最近间隙位（org 镜像：
+ *    子级行条带、index 按 P.x）；
+ * 3. **空白**：维持 resolveBlankTarget（root 对应侧末尾，侧别按指针半屏）。
+ *    同一指针同中多区取更深节点（子级区先于其父列条带）——候选按 depth 降序遍历即得。
+ * - **index 结算口径**：classify 以「移除被拖节点后」的子级堆算最近间隙位（槽中心与
+ *   resolveDropSlot/insertCenterY 同公式，同点必同槽）；moveNode 先移除后插入，引擎不再
+ *   做二次位次修正。child 区命中与列条带命中统一产出 sibling 写参数 {parentId, index}；
+ *   DropTarget 的 child 成员仅为页面既有分支保留，引擎不再产出。
+ * - **去掉 100ms 点亮门槛**（DROP_HOVER_MS 移除）：预览随指针即时更新（每次 move 直接
+ *   结算并画，落点切换即摘旧反馈），释放仍取最后一帧缓存——所见即所提不变。
+ * - root 直接子级侧别仿真、logic/org 门控（org 镜像区/列见上）、ghost 芯片右下偏移、
+ *   禁止红描边+芯片变红、释放同参——全部保留不动。
  *
- * M7c-D3 企微拖动对齐（实测录像 wecom-drag-a|b|c 抽帧结论）：
+ * 【M7c-D1/D3/F 历史裁决（M7c-G 起带模型/点亮门槛退役，其余仍有效）】
+ * M7c-D1 落点三分语义（需求方原话「拖动的功能简直糟糕透了，我都没看懂逻辑是啥」；
+ * ±25% 边缘带模型已被 M7c-G 区域模型取代，保留原文备查）：
  * - **拾起**：过阈值激活即在悬浮层建 `g.gm-drag-ghost` 芯片（被拖节点盒大小的圆角
  *   矩形 + 居中文字），逐帧定位到「指针 + 右下偏移」（screen 14px 恒定 → scene 偏移
  *   = 14/scale，M7c-F 复验问题3① 改——原「指针 − 抓取偏移」居中口径会压住光标处
@@ -57,9 +73,9 @@
  *    EditorPage 的 target===null 分支仅作兜底；svg 外 window 兜底释放改为取消（拖
  *    离画布视为放弃，不按远点结算）。
  *
- * 反馈时机（300ms → 100ms，spec P0-2）：同一落点悬停满 100ms 才点亮高亮/预览；
- * 切换落点立即摘除并重置计时。**释放裁决不再要求悬停时长**——指针在哪里松开，
- * 落点就按哪里结算（企微/XMind 通例）。芯片跟随不受 100ms 门控（逐帧）。
+ * 反馈时机（300ms → 100ms，spec P0-2；**M7c-G 起门槛整体移除**，预览即时随指针）：
+ * 同一落点悬停满 100ms 才点亮高亮/预览；切换落点立即摘除并重置计时。**释放裁决不再
+ * 要求悬停时长**——指针在哪里松开，落点就按哪里结算（企微/XMind 通例）。
  *
  * 被拖节点视觉反馈（需求方「拖动节点时被拖节点零反馈」）：激活瞬间（activate，
  * 过 4px 阈值那一步）给被拖节点 g 挂 `gm-dragging` + `gm-drag-origin` 类，视觉由
@@ -95,10 +111,10 @@ import type { Viewport } from './viewport';
 
 /** 拖拽激活位移阈值（screen px）。 */
 export const DRAG_THRESHOLD_PX = 4;
-/** 落点反馈确认时长（同一落点累计悬停 ≥ 此值才点亮高亮/预览；纯视觉时机，不裁决释放）。 */
-export const DROP_HOVER_MS = 100;
-/** 边缘插入带占比：盒高（org 为宽）两侧各此比例为「插入带」，其余为本体（变子级）。 */
-export const SIBLING_BAND_RATIO = 0.25;
+/** 子级吸附区纵向余量：区上下各外扩此值（M7c-G 需求方定值 8px）。 */
+export const ZONE_Y_PAD = 8;
+/** 同级插入列横向余量：列两侧各外扩此值（M7c-G 需求方定值 24px；org 镜像为纵向余量）。 */
+export const STRIP_X_PAD = 24;
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 /** 企微蓝（芯片描边/落位槽描边）。 */
@@ -113,23 +129,27 @@ const H_GAP_FALLBACK = 60;
 const GHOST_CURSOR_OFFSET_PX = 14;
 
 /**
- * 悬停中的几何落点（未含文档序 index——index 仅在释放时按 childrenIdsOf 结算）。
- * kind:'blank' = 空白（M7c-F 复验问题4：悬停即解析为 root 对应侧末尾并画预览）；
- * 注意与「禁止目标」的 placement null 区分——后者不参与反馈点亮。
+ * 悬停中的几何落点（M7c-G 列吸附连续模型）。index 恒为「移除被拖节点后」的文档序
+ * 插入位（最近间隙位，classify 纯几何结算，moveNode 先移除后插入——引擎不再二次修正）；
+ * sideHint 仅 root 级命中时携带侧别意图（根列左右分侧，芯片几何中心带右下偏移与节点
+ * 半宽，不靠它推导）。kind:'blank' = 空白（M7c-F 复验问题4：悬停即解析为 root 对应侧
+ * 末尾并画预览）；注意与「禁止目标」的 placement null 区分——后者不参与反馈点亮。
  */
 export type DropPlacement =
-  | { kind: 'child'; nodeId: string }
-  | { kind: 'sibling'; anchorId: string; position: 'before' | 'after' }
+  /** 子级吸附区命中：变 nodeId 子级、插第 index 位（无子级 index=0 同追加）。 */
+  | { kind: 'child'; nodeId: string; index: number; sideHint?: 'left' | 'right' }
+  /** 同级插入列命中：插为 parentId 的第 index 个子级。 */
+  | { kind: 'sibling'; parentId: string; index: number; sideHint?: 'left' | 'right' }
   | { kind: 'blank' };
 
 /**
- * 释放落点（onDrop 第二参，M7c-D1 三分）：
- * - `{kind:'child'}` = 变 nodeId 子级（追加末尾）；
- * - `{kind:'sibling'}` = 插为 parentId 的第 index 个子级（core moveNode 直用；
- *   anchorId/position 为落点意图，供测试/调试，页面可忽略。index 为**最终**文档序
- *   index——mindmap 根级落点经侧别仿真修正（见 resolveDropSlot），可能与几何位次
- *   不同，预览与释放共用同一值。空白落点亦解析为 sibling（root 对应侧末尾，
- *   M7c-F 复验问题4））；
+ * 释放落点（onDrop 第二参，M7c-G 列吸附连续模型）：
+ * - `{kind:'sibling'}` = 插为 parentId 的第 index 个子级（core moveNode 直用；index 为
+ *   「移除被拖节点后」的文档序位次——classify 按指针最近间隙位结算、root 级再经
+ *   resolveDropSlot 侧别仿真修正，预览与释放共用同一值。子级吸附区命中也产出本形态
+ *   （parentId=吸附目标 N、index=P.y 序位，「松开就吸附上去」），引擎不再产出 child）；
+ * - `{kind:'child'}` = 变 nodeId 子级（追加末尾）——仅为页面既有分支保留的类型成员，
+ *   引擎现不再产出；
  * - `null` = 禁止目标（释放静默取消）或空白解析失败（root 盒缺失等窗口期）——页面
  *   层保留 moveNode(id,'root') 兜底。
  */
@@ -439,6 +459,341 @@ function previewEdge(
   };
 }
 
+// ---------------------------------------------------------------------------
+// 列吸附连续模型（M7c-G）：落点区域判定的纯几何函数集（不依赖控制器状态、不 import
+// layout.ts——不动布局与金样）。区域优先级：盒直击禁止 > 子级吸附区（depth 降序）>
+// 同级插入列（depth 降序）> 空白；同中多区取更深节点（子级区先于其父列条带）。
+// ---------------------------------------------------------------------------
+
+/** 盒邻接表（parentId → 可见子盒；盒子来自 layout，无环）。 */
+function kidsOfBoxes(boxes: NodeBox[]): Map<string, NodeBox[]> {
+  const kidsOf = new Map<string, NodeBox[]>();
+  for (const b of boxes) {
+    if (b.parentId === undefined) continue;
+    const list = kidsOf.get(b.parentId);
+    if (list) list.push(b);
+    else kidsOf.set(b.parentId, [b]);
+  }
+  return kidsOf;
+}
+
+/** 子树垂直带：盒 + 全部可见后代盒的 min y..max y（= 布局 subtreeH 语义；折叠子树不在盒集）。 */
+function subtreeBand(
+  id: string,
+  byId: Map<string, NodeBox>,
+  kidsOf: Map<string, NodeBox[]>,
+): { top: number; bottom: number } {
+  const box = byId.get(id);
+  if (!box) return { top: 0, bottom: 0 };
+  let top = box.y;
+  let bottom = box.y + box.h;
+  const walk = (nid: string): void => {
+    for (const k of kidsOf.get(nid) ?? []) {
+      if (k.y < top) top = k.y;
+      if (k.y + k.h > bottom) bottom = k.y + k.h;
+      walk(k.id);
+    }
+  };
+  walk(id);
+  return { top, bottom };
+}
+
+/** 兄弟堆带间距：相邻文档序带实测最小值（= 布局 V_GAP；不可得兜底 20，与 resolveDropSlot 同口径）。 */
+function stackBandGap(
+  stack: NodeBox[],
+  bandOf: (id: string) => { top: number; bottom: number },
+): number {
+  if (stack.length < 2) return V_GAP_FALLBACK;
+  return Math.max(
+    0,
+    Math.min(...stack.slice(1).map((b, i) => bandOf(b.id).top - bandOf(stack[i]!.id).bottom)),
+  );
+}
+
+/**
+ * 节点 N 在生长侧 g 的水平生长量（M7c-G 子级吸附区横向延伸）：有同侧子级 = 列间隙 +
+ * max(子级列宽, 被拖盒宽)——区缘盖住子级列整列、被拖盒更宽时再外扩（槽随被拖盒宽）；
+ * 无子级 = 兜底列距 + 被拖盒宽。
+ */
+function growthExtent(n: NodeBox, g: 'left' | 'right', kids: NodeBox[], dragW: number): number {
+  const gKids = kids.filter((k) => k.side === g);
+  if (gKids.length === 0) return H_GAP_FALLBACK + Math.max(0, dragW);
+  const colLeft = Math.min(...gKids.map((k) => k.x));
+  const colRight = Math.max(...gKids.map((k) => k.x + k.w));
+  const gap = g === 'right' ? Math.max(0, colLeft - (n.x + n.w)) : Math.max(0, n.x - colRight);
+  return gap + Math.max(colRight - colLeft, Math.max(0, dragW));
+}
+
+/**
+ * 子级吸附区判定（M7c-G 区域 1）：P 落在 N 的生长侧区内返回吸附侧别（org 为 'down'），
+ * 未命中 null。
+ * - 横向（mindmap/logic）：right 侧 x ∈ [N.left, N.right + 生长量]、left 侧镜像
+ *   [N.left − 生长量, N.right]；root（无 parentId）两侧都算，侧别按指针相对根盒中线
+ *   （与 resolveBlankTarget 同口径 ≥ 中线为右）。
+ * - y：非 root = [N.top − 8, N 子树带底 + 8]（需求方定值 ±8）；root 区顶取全树带顶——
+ *   根是整列脊柱，验收「靠近中心节点上下移动、停哪插哪」要求根侧全程跟随。
+ * - org（side 'down'，向下生长）：区 = 本体盒 ∪ 子级行横向范围，y 向下延伸
+ *   层距 + max(行高, 被拖盒高)（无子级兜底层距 20）。
+ */
+function zoneSideAt(
+  n: NodeBox,
+  p: Point,
+  dragW: number,
+  dragH: number,
+  byId: Map<string, NodeBox>,
+  kidsOf: Map<string, NodeBox[]>,
+): 'left' | 'right' | 'down' | null {
+  const kids = kidsOf.get(n.id) ?? [];
+  if (n.side === 'down') {
+    const rowLeft = kids.length > 0 ? Math.min(...kids.map((k) => k.x)) : n.x;
+    const rowRight = kids.length > 0 ? Math.max(...kids.map((k) => k.x + k.w)) : n.x + n.w;
+    const rowTop = kids.length > 0 ? Math.min(...kids.map((k) => k.y)) : n.y + n.h;
+    const rowBottom = kids.length > 0 ? Math.max(...kids.map((k) => k.y + k.h)) : n.y + n.h;
+    const vGap = kids.length > 0 ? Math.max(0, rowTop - (n.y + n.h)) : V_GAP_FALLBACK;
+    const rowH = rowBottom - rowTop;
+    return p.x >= Math.min(n.x, rowLeft) &&
+      p.x <= Math.max(n.x + n.w, rowRight) &&
+      p.y >= n.y - ZONE_Y_PAD &&
+      p.y <= n.y + n.h + vGap + Math.max(rowH, Math.max(0, dragH)) + ZONE_Y_PAD
+      ? 'down'
+      : null;
+  }
+  const band = subtreeBand(n.id, byId, kidsOf);
+  const yTop = (n.parentId === undefined ? band.top : n.y) - ZONE_Y_PAD;
+  if (p.y < yTop || p.y > band.bottom + ZONE_Y_PAD) return null;
+  if (n.parentId === undefined) {
+    const extR = growthExtent(n, 'right', kids, dragW);
+    const extL = growthExtent(n, 'left', kids, dragW);
+    if (p.x < n.x - extL || p.x > n.x + n.w + extR) return null;
+    return p.x >= n.x + n.w / 2 ? 'right' : 'left'; // 侧别按指针半屏（与空白解析同口径）
+  }
+  if (n.side === 'right') {
+    const ext = growthExtent(n, 'right', kids, dragW);
+    return p.x >= n.x && p.x <= n.x + n.w + ext ? 'right' : null;
+  }
+  const ext = growthExtent(n, 'left', kids, dragW);
+  return p.x >= n.x - ext && p.x <= n.x + n.w ? 'left' : null;
+}
+
+/**
+ * 同级插入列判定（M7c-G 区域 2）：P 落在父节点 M 的子级列条带返回侧别（org 'down'）。
+ * 横向：x ∈ [列x − 24, 列右 + 24]、y ∈ [首子级带顶 − 带间距, 末子级带底 + 带间距]；
+ * 列 x/宽与带间距从「移除被拖节点后」的同侧子级盒实测（stackOf），root 左右分侧各一条。
+ * org 镜像：子级行条带 x ∈ [行左 − 行距, 行右 + 行距]、y ∈ [行顶 − 24, 行底 + 24]。
+ * 无可见子级（含唯一子级正被拖走）无条带。
+ */
+function stripSideAt(
+  m: NodeBox,
+  p: Point,
+  byId: Map<string, NodeBox>,
+  kidsOf: Map<string, NodeBox[]>,
+  stackOf: (parentId: string) => NodeBox[],
+): 'left' | 'right' | 'down' | null {
+  const stack = stackOf(m.id);
+  if (stack.length === 0) return null;
+  if (m.side === 'down') {
+    const rowLeft = Math.min(...stack.map((k) => k.x));
+    const rowRight = Math.max(...stack.map((k) => k.x + k.w));
+    const rowTop = Math.min(...stack.map((k) => k.y));
+    const rowBottom = Math.max(...stack.map((k) => k.y + k.h));
+    const gapX =
+      stack.length >= 2
+        ? Math.max(
+            0,
+            Math.min(...stack.slice(1).map((b, i) => b.x - (stack[i]!.x + stack[i]!.w))),
+          )
+        : V_GAP_FALLBACK;
+    return p.x >= rowLeft - gapX &&
+      p.x <= rowRight + gapX &&
+      p.y >= rowTop - STRIP_X_PAD &&
+      p.y <= rowBottom + STRIP_X_PAD
+      ? 'down'
+      : null;
+  }
+  const sides: Array<'left' | 'right'> =
+    m.parentId === undefined ? ['right', 'left'] : [m.side === 'left' ? 'left' : 'right'];
+  const hit: Array<'left' | 'right'> = [];
+  for (const g of sides) {
+    const gKids = stack.filter((b) => b.side === g);
+    if (gKids.length === 0) continue;
+    const colLeft = Math.min(...gKids.map((k) => k.x));
+    const colRight = Math.max(...gKids.map((k) => k.x + k.w));
+    const vg = stackBandGap(gKids, (id) => subtreeBand(id, byId, kidsOf));
+    const top = Math.min(...gKids.map((k) => k.y));
+    const bottom = Math.max(...gKids.map((k) => k.y + k.h));
+    if (
+      p.x >= colLeft - STRIP_X_PAD &&
+      p.x <= colRight + STRIP_X_PAD &&
+      p.y >= top - vg &&
+      p.y <= bottom + vg
+    ) {
+      hit.push(g);
+    }
+  }
+  if (hit.length === 0) return null;
+  if (hit.length === 1) return hit[0]!;
+  return p.x >= m.x + m.w / 2 ? 'right' : 'left'; // 双侧同时命中（正常几何不重叠）：按指针侧
+}
+
+/**
+ * 最近间隙插入位（M7c-G「我在哪停，就插在哪两个节点中间」）：argmin_p |槽中心 − P.y|。
+ * 槽中心与 resolveDropSlot/insertCenterY 同公式（首位=首盒上方空隙、中间=相邻带中点、
+ * 尾位=末盒下方对称外推），同点必同槽；平局取更上（先遇到的 p）。
+ */
+function nearestInsertIndex(
+  sideSibs: NodeBox[],
+  py: number,
+  nodeH: number,
+  vGap: number,
+  parentBox: NodeBox,
+): number {
+  let best = 0;
+  let bestDist = Infinity;
+  for (let p = 0; p <= sideSibs.length; p += 1) {
+    const dist = Math.abs(insertCenterY(sideSibs, p, nodeH, vGap, parentBox) - py);
+    if (dist < bestDist) {
+      bestDist = dist;
+      best = p;
+    }
+  }
+  return best;
+}
+
+/** org 槽中心 x：与 resolveDropSlot org 分支同公式（首位不越父中线、中间=相邻盒中点、尾位对称外推）。 */
+function orgInsertCenterX(
+  stack: NodeBox[],
+  p: number,
+  nodeW: number,
+  gapX: number,
+  parentBox: NodeBox,
+): number {
+  const parentCx = parentBox.x + parentBox.w / 2;
+  if (stack.length === 0) return parentCx;
+  if (p === 0) return Math.max(parentCx, stack[0]!.x - gapX / 2 - nodeW / 2);
+  if (p >= stack.length) {
+    const last = stack[stack.length - 1]!;
+    return last.x + last.w + gapX / 2 + nodeW / 2;
+  }
+  const prev = stack[p - 1]!;
+  const next = stack[p]!;
+  return (prev.x + prev.w + next.x) / 2;
+}
+
+/** org 镜像的最近间隙插入位：argmin_p |槽中心 x − P.x|。 */
+function nearestOrgInsertIndex(
+  stack: NodeBox[],
+  px: number,
+  nodeW: number,
+  gapX: number,
+  parentBox: NodeBox,
+): number {
+  let best = 0;
+  let bestDist = Infinity;
+  for (let p = 0; p <= stack.length; p += 1) {
+    const dist = Math.abs(orgInsertCenterX(stack, p, nodeW, gapX, parentBox) - px);
+    if (dist < bestDist) {
+      bestDist = dist;
+      best = p;
+    }
+  }
+  return best;
+}
+
+/**
+ * 落点解析纯函数（M7c-G 列吸附连续模型主入口；classifyAt 薄委托，导出供单测直测）。
+ * 输入盒子几何 + 文档子级序 + 禁止判定，输出悬停落点：
+ * 0. 盒直击被拖节点/其后代 → forbiddenId（整盒禁止，不参与区域解析）；
+ * 1. 子级吸附区（depth 降序）→ {kind:'child', nodeId, index, sideHint?}；
+ * 2. 同级插入列（depth 降序）→ {kind:'sibling', parentId, index, sideHint?}；
+ * 3. 都未命中 → {kind:'blank'}（computeResolved 再解析为 root 对应侧末尾）。
+ * index = 「移除被拖节点后」子级堆上按指针 y（org 按 x）的最近间隙位——与
+ * resolveDropSlot 的槽几何同公式，预览与释放天然一致；root 级命中携带 sideHint
+ * （根列左右分侧的侧别意图）供槽结算的侧别仿真入口。
+ */
+export function classifyDropAt(args: {
+  boxes: NodeBox[];
+  childrenIdsOf(nodeId: string): string[];
+  isDescendant(id: string, candidateId: string): boolean;
+  draggedId: string;
+  point: Point;
+}): { placement: DropPlacement | null; forbiddenId: string | null } {
+  const { boxes, childrenIdsOf, isDescendant, draggedId, point } = args;
+  const byId = new Map(boxes.map((b) => [b.id, b]));
+  const draggedBox = byId.get(draggedId);
+  const dragW = draggedBox?.w ?? 0;
+  const dragH = draggedBox?.h ?? 0;
+  const forbidden = (id: string): boolean => id === draggedId || isDescendant(draggedId, id);
+
+  // 0) 盒直击：被拖/后代本体一律禁止（含旧「整盒含边缘带」语义的范围）——先于一切区域。
+  for (const b of boxes) {
+    if (point.x < b.x || point.x > b.x + b.w || point.y < b.y || point.y > b.y + b.h) continue;
+    if (forbidden(b.id)) return { placement: null, forbiddenId: b.id };
+    break; // 盒不重叠（布局不变量）：直击判定即止
+  }
+
+  const kidsOf = kidsOfBoxes(boxes);
+  const bandOf = (id: string): { top: number; bottom: number } => subtreeBand(id, byId, kidsOf);
+  /** 移除被拖节点后的文档序子级堆（盒缺失跳过——折叠/协同删除窗口期）。 */
+  const stackOf = (parentId: string): NodeBox[] =>
+    childrenIdsOf(parentId)
+      .filter((cid) => cid !== draggedId)
+      .map((cid) => byId.get(cid))
+      .filter((b): b is NodeBox => b !== undefined);
+
+  /** 命中侧的插入 index 结算：org 按 P.x；root 按同侧堆结算再映射文档序（右侧恒前缀）。 */
+  const indexOfStack = (
+    parent: NodeBox,
+    side: 'left' | 'right' | 'down',
+  ): { index: number; sideHint?: 'left' | 'right' } => {
+    const stack = stackOf(parent.id);
+    if (side === 'down') {
+      const gapX =
+        stack.length >= 2
+          ? Math.max(
+              0,
+              Math.min(...stack.slice(1).map((b, i) => b.x - (stack[i]!.x + stack[i]!.w))),
+            )
+          : V_GAP_FALLBACK;
+      return { index: nearestOrgInsertIndex(stack, point.x, dragW, gapX, parent) };
+    }
+    if (parent.parentId === undefined) {
+      const sideSibs = stack.filter((b) => b.side === side);
+      const p = nearestInsertIndex(
+        sideSibs,
+        point.y,
+        dragH,
+        stackBandGap(sideSibs, bandOf),
+        parent,
+      );
+      return { index: side === 'right' ? p : rightCountOf(stack) + p, sideHint: side };
+    }
+    return {
+      index: nearestInsertIndex(stack, point.y, dragH, stackBandGap(stack, bandOf), parent),
+    };
+  };
+
+  // 候选按 depth 降序（同深度保持盒序）：区域重叠时更深节点优先。
+  const ordered = boxes.filter((b) => !forbidden(b.id)).sort((a, z) => z.depth - a.depth);
+
+  // 1) 子级吸附区（最深优先）：命中 → child of N，蓝描边 + 边/槽预览同画。
+  for (const n of ordered) {
+    const side = zoneSideAt(n, point, dragW, dragH, byId, kidsOf);
+    if (side === null) continue;
+    const { index, sideHint } = indexOfStack(n, side);
+    return { placement: { kind: 'child', nodeId: n.id, index, sideHint }, forbiddenId: null };
+  }
+  // 2) 同级插入列（次优先）：命中 → 插到该父的子级中（锚点调试信息由 resolveTarget 按 index 回补）。
+  for (const m of ordered) {
+    if (!kidsOf.has(m.id)) continue;
+    const side = stripSideAt(m, point, byId, kidsOf, stackOf);
+    if (side === null) continue;
+    const { index, sideHint } = indexOfStack(m, side);
+    return { placement: { kind: 'sibling', parentId: m.id, index, sideHint }, forbiddenId: null };
+  }
+  // 3) 空白：维持 M7c-F 裁定——解析为 root 对应侧末尾（resolveBlankTarget）。
+  return { placement: { kind: 'blank' }, forbiddenId: null };
+}
+
 /** 依赖注入：坐标换算与落点写参数由页面侧提供。 */
 export interface DragControllerDeps {
   svg: SVGSVGElement;
@@ -446,7 +801,8 @@ export interface DragControllerDeps {
   /** 当前布局节点盒（场景坐标；每次命中检测实时取，拖拽中可被重布局刷新）。 */
   getBoxes(): NodeBox[];
   /**
-   * 释放回调：target 见 {@link DropTarget}（child/sibling/兜底 null；空白已在引擎
+   * 释放回调：target 见 {@link DropTarget}（M7c-G 起恒为 sibling/兜底 null——child 区
+   * 命中也产出带 index 的 sibling；空白已在引擎
    * 解析为 root 对应侧末尾 sibling——null 仅在 root 盒缺失等窗口期出现）。
    */
   onDrop(id: string, target: DropTarget): void;
@@ -470,11 +826,11 @@ export interface DragSnapshot {
   offsetY: number;
 }
 
-/** 落点比较键：落点切换（含同一节点本体↔边缘带互切）即重置反馈计时。 */
+/** 落点比较键：目标切换（换节点/换父）即摘旧反馈；同目标内 index 连续变化不重置（预览原地刷新）。 */
 function placementKey(p: DropPlacement | null): string | null {
   if (!p) return null;
   if (p.kind === 'blank') return 'blank';
-  return p.kind === 'child' ? `child:${p.nodeId}` : `sibling:${p.anchorId}:${p.position}`;
+  return p.kind === 'child' ? `child:${p.nodeId}` : `sibling:${p.parentId}`;
 }
 
 /** 数值 → 属性串：两位小数去尾零（与 render.ts fmt 同口径，输出确定）。 */
@@ -536,10 +892,6 @@ export class DragController {
   private drag: { id: string; pointerId: number; offsetX: number; offsetY: number } | null = null;
   /** 当前悬停落点（比较键见 placementKey）；空白/禁止为 null。 */
   private hoverPlacement: DropPlacement | null = null;
-  /** 落点反馈的 100ms 点亮定时器（离开/切换/结束即撤销）。 */
-  private hoverTimer: ReturnType<typeof setTimeout> | null = null;
-  /** 反馈是否已点亮（点亮后逐帧随 pending 刷新预览，保持与芯片一致）。 */
-  private lit = false;
   /** 当前被标 drop-forbidden 的节点 id（自身或后代）。 */
   private hoverForbidden: string | null = null;
   /** 被拖节点当前挂 gm-dragging/gm-drag-origin 的 id（激活挂上、clearHighlights 摘除）。 */
@@ -626,7 +978,7 @@ export class DragController {
     if (this.drag) {
       if (e.pointerId !== this.drag.pointerId) return;
       const scene = deps.viewport.toSceneFromEvent(e);
-      this.updateGhost(scene); // 芯片逐帧跟随（不受 100ms 反馈门控）
+      this.updateGhost(scene); // 芯片逐帧跟随
       this.updateHover(scene);
       return;
     }
@@ -762,15 +1114,9 @@ export class DragController {
   }
 
   /**
-   * 场景点落点分类（M7c-D1 三分）：命中最先匹配的盒（getBoxes 序；盒不重叠）。
-   * - 自身/后代 → forbiddenId（整盒含边缘带一律禁止，fix round 1；placement null
-   *   ——禁止目标不参与反馈点亮）；
-   * - 根（无 parentId）→ 整盒 = 变其子级（根不可作兄弟锚点）；
-   * - 其余按边缘插入带切分：横向布局（side left/right，兄弟纵排）取上下 25% 带，
-   *   org（side 'down'，兄弟横排）取左右 25% 带；带内 = sibling(before/after)，
-   *   带外本体 = child。
-   * - 未命中任何盒 → 空白（kind:'blank'；M7c-F 复验问题4：解析为 root 对应侧末尾
-   *   并画预览，与按下即框选的手势无关——候选只登记在节点上）。
+   * 场景点落点分类（M7c-G 列吸附连续模型）：薄委托到纯函数 classifyDropAt（几何判定
+   * 全部在纯函数——盒直击禁止 > 子级吸附区 > 同级插入列 > 空白，depth 降序取更深；
+   * 语义与区域定义见 classifyDropAt / zoneSideAt / stripSideAt 头注）。
    */
   private classifyAt(
     sceneX: number,
@@ -779,60 +1125,40 @@ export class DragController {
   ): { placement: DropPlacement | null; forbiddenId: string | null } {
     const deps = this.deps;
     if (!deps) return { placement: null, forbiddenId: null };
-    for (const b of deps.getBoxes()) {
-      if (sceneX < b.x || sceneX > b.x + b.w || sceneY < b.y || sceneY > b.y + b.h) continue;
-      if (b.id === draggedId || deps.isDescendant(draggedId, b.id)) {
-        return { placement: null, forbiddenId: b.id };
-      }
-      if (b.parentId === undefined) {
-        return { placement: { kind: 'child', nodeId: b.id }, forbiddenId: null };
-      }
-      const vertical = b.side === 'down';
-      const rel = vertical ? (sceneX - b.x) / b.w : (sceneY - b.y) / b.h;
-      if (rel < SIBLING_BAND_RATIO || rel > 1 - SIBLING_BAND_RATIO) {
-        return {
-          placement: {
-            kind: 'sibling',
-            anchorId: b.id,
-            position: rel < SIBLING_BAND_RATIO ? 'before' : 'after',
-          },
-          forbiddenId: null,
-        };
-      }
-      return { placement: { kind: 'child', nodeId: b.id }, forbiddenId: null };
-    }
-    return { placement: { kind: 'blank' }, forbiddenId: null };
+    return classifyDropAt({
+      boxes: deps.getBoxes(),
+      childrenIdsOf: (id) => deps.childrenIdsOf(id),
+      isDescendant: (id, candidateId) => deps.isDescendant(id, candidateId),
+      draggedId,
+      point: { x: sceneX, y: sceneY },
+    });
   }
 
   /**
    * 释放结算：把几何落点换算成文档写参数（纪律#2：纯计算，事务之外）。
-   * sibling 的 index = 锚点在 childrenIdsOf(parentId) 的位次（before 取本位、after
-   * 取下一位）；同父移动因 moveNode 先移除后插入，移除位次在结算位次之前时 index
-   * −1 修正。锚点不在文档序（协同删除窗口期/桩不一致）→ 降级为变其子级，由 core
-   * 校验兜底（拒绝即抛错走页面 toast）。sibling 另经 resolveDropSlot 侧别仿真：
-   * mindmap 根级落点仿真到对侧时修正 index（预览与释放共用同一修正值）。
+   * M7c-G：child（子级吸附区）与 sibling（同级插入列）的 index 都已在 classify 按
+   * 「移除被拖节点后」的子级堆结算为最近间隙位——moveNode 先移除后插入，引擎不再做
+   * 二次位次修正（旧「锚点位次 + 同父前移」口径随带模型退役）。锚点不在文档序的降级
+   * 分支随之不再需要（classify 与 resolve 同步结算，无协同变更窗口）。anchorId/
+   * position 仅作落点意图调试信息（页面按 parentId+index 提交）：index 位前一个子级 =
+   * after 锚，index 0 = 首子级 before 锚，空堆 = 父自身。
    */
   private resolveTarget(draggedId: string, placement: DropPlacement): DropTarget {
     const deps = this.deps;
     // placement null = 禁止目标（target 恒 null，释放先行取消）；blank 由
     // computeResolved 走 resolveBlankTarget，不经此路径。
     if (!deps || placement === null || placement.kind === 'blank') return null;
-    if (placement.kind === 'child') return { kind: 'child', nodeId: placement.nodeId };
-    const anchor = deps.getBoxes().find((b) => b.id === placement.anchorId);
-    if (!anchor || anchor.parentId === undefined) {
-      return { kind: 'child', nodeId: placement.anchorId };
-    }
-    const parentId = anchor.parentId;
-    const siblings = deps.childrenIdsOf(parentId);
-    const anchorIdx = siblings.indexOf(anchor.id);
-    if (anchorIdx === -1) return { kind: 'child', nodeId: anchor.id };
-    let index = placement.position === 'before' ? anchorIdx : anchorIdx + 1;
-    const dragged = deps.getBoxes().find((b) => b.id === draggedId);
-    if (dragged && dragged.parentId === parentId) {
-      const curIdx = siblings.indexOf(draggedId);
-      if (curIdx !== -1 && curIdx < index) index -= 1; // 先移除自身：后续位次前移
-    }
-    return { kind: 'sibling', parentId, index, anchorId: anchor.id, position: placement.position };
+    const parentId = placement.kind === 'child' ? placement.nodeId : placement.parentId;
+    const stack = deps
+      .childrenIdsOf(parentId)
+      .filter((cid) => cid !== draggedId)
+      .map((cid) => deps.getBoxes().find((b) => b.id === cid))
+      .filter((b): b is NodeBox => b !== undefined);
+    const anchorId = (stack[placement.index - 1] ?? stack[0])?.id ?? parentId;
+    // 空堆（追加/变子级）= after 父自身；非空 index 0 = before 首子级。
+    const position: 'before' | 'after' =
+      placement.index === 0 && stack.length > 0 ? 'before' : 'after';
+    return { kind: 'sibling', parentId, index: placement.index, anchorId, position };
   }
 
   /**
@@ -883,16 +1209,19 @@ export class DragController {
     }
     // 落点 → 写参数（纪律#2：纯计算，事务之外）。空白解析为 root 对应侧末尾（问题4）；
     // 禁止目标 placement 为 null，target 恒 null（释放路径先行取消，不会提交）。
+    // sideHint：空白按指针侧；child/sibling 命中按 classify 携带的侧别意图（仅 root 级
+    // 左右分列时有值——芯片几何中心带右下偏移与半宽，不靠它推导）。
     let target: DropTarget = null;
-    let blankSide: 'left' | 'right' | undefined;
+    let sideHint: 'left' | 'right' | undefined;
     if (hit.placement?.kind === 'blank') {
       const blank = this.resolveBlankTarget(scene);
       if (blank) {
         target = blank.target;
-        blankSide = blank.side;
+        sideHint = blank.side;
       }
     } else if (hit.placement !== null) {
       target = this.resolveTarget(drag.id, hit.placement);
+      sideHint = hit.placement.sideHint;
     }
     let slot: DropSlotPreview | null = null;
     if (target !== null && target.kind === 'sibling') {
@@ -908,8 +1237,8 @@ export class DragController {
           // 芯片盒与芯片视觉同源（问题3①：指针 + 右下偏移），侧别/最近插入位判定
           // 跟随所见芯片。
           chipBox: ghostChipBox(scene, draggedBox, deps.viewport.scale),
-          // 空白落点：侧别意图按指针相对 root 中线（芯片几何中心带节点半宽，会偏）。
-          sideHint: blankSide,
+          // 侧别意图覆写（空白=指针侧；root 级区域命中=命中列侧）。
+          sideHint,
         });
         if (resolution === null) {
           slot = null; // 父盒/被拖盒缺失：无预览，释放仍按原 target 结算
@@ -925,29 +1254,24 @@ export class DragController {
     return { placement: hit.placement, forbiddenId: hit.forbiddenId, target, slot };
   }
 
-  /** 悬停反馈状态机：落点切换立即摘除旧反馈并重置计时；满 100ms 点亮；禁止即时。 */
+  /**
+   * 悬停反馈状态机（M7c-G 即时模型）：**去掉 100ms 点亮门槛**——每次 move 直接按当前
+   * 结算画预览（落点切换先摘旧反馈，同目标内 index 连变原地刷新）；禁止态即时显隐。
+   * 释放取最后一帧缓存，一致性机制不变。
+   */
   private updateHover(scene: Point): void {
     const drag = this.drag;
     if (!drag) return;
     const hit = this.classifyAt(scene.x, scene.y, drag.id);
     if (placementKey(hit.placement) !== placementKey(this.hoverPlacement)) {
-      this.clearTargetFeedback(); // 离开/切换：立即摘除 + 撤销未触发的点亮定时器
+      this.clearTargetFeedback(); // 目标切换：立即摘除旧描边类/预览（无门槛，无定时器）
       this.hoverPlacement = hit.placement;
-      if (hit.placement !== null) {
-        this.hoverTimer = setTimeout(() => {
-          this.hoverTimer = null;
-          if (placementKey(this.hoverPlacement) === placementKey(hit.placement)) {
-            this.applyFeedback();
-          }
-        }, DROP_HOVER_MS);
-      }
     }
     // 单一结算路径逐帧刷新（含同落点内移动：芯片位置实时影响槽位/侧别修正），
     // 释放取最后一帧——与所见严格一致。
     this.pending = { at: scene, resolved: this.computeResolved(scene, hit) };
-    // 已点亮的反馈随结算逐帧刷新（槽/边跟随芯片；child 高亮类幂等）。
-    if (this.lit && this.hoverPlacement !== null) this.applyFeedback();
-    // 自身/后代的禁止反馈即时显隐，不参与 100ms 延迟。
+    this.applyFeedback();
+    // 自身/后代的禁止反馈即时显隐。
     if (hit.forbiddenId !== this.hoverForbidden) {
       this.setClass(this.hoverForbidden, 'drop-forbidden', false);
       this.hoverForbidden = hit.forbiddenId;
@@ -959,28 +1283,24 @@ export class DragController {
     this.ghost?.classList.toggle('gm-drag-ghost-forbidden', hit.forbiddenId !== null);
   }
 
-  /** 点亮落点反馈：child=目标盒描边高亮（.drop-target）；sibling/空白=真实边 + 落位槽。 */
+  /**
+   * 点亮落点反馈（即时）：child = 目标盒描边（.drop-target）**且**真实边+槽同画
+   * （M7c-G：蓝描边保留、边/槽也画）；sibling/空白 = 真实边 + 落位槽。结算无槽
+   * （父盒/被拖盒缺失窗口期）时摘除预览，不留残影。
+   */
   private applyFeedback(): void {
     const p = this.hoverPlacement;
     if (!p || !this.pending) return;
-    this.lit = true;
-    if (p.kind === 'child') {
-      this.setClass(p.nodeId, 'drop-target', true);
-      return;
-    }
-    this.drawDropPreview();
+    if (p.kind === 'child') this.setClass(p.nodeId, 'drop-target', true);
+    if (this.pending.resolved.slot === null) this.removeDropPreview();
+    else this.drawDropPreview();
   }
 
-  /** 摘除落点反馈：清定时器、去类/移预览元素、复位点亮标记与落点。 */
+  /** 摘除落点反馈：去类/移预览元素并复位落点（点亮定时器随 100ms 门槛一并退役）。 */
   private clearTargetFeedback(): void {
-    if (this.hoverTimer !== null) {
-      clearTimeout(this.hoverTimer);
-      this.hoverTimer = null;
-    }
     const p = this.hoverPlacement;
     if (p && p.kind === 'child') this.setClass(p.nodeId, 'drop-target', false);
     this.removeDropPreview();
-    this.lit = false;
     this.hoverPlacement = null;
   }
 
