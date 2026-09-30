@@ -25,6 +25,7 @@ export const SHORTCUT_ACTION_IDS = [
   'open-help',
   'toggle-collapse',
   'enter',
+  'enter-reverse',
   'edit-selected',
   'insert-child',
   'insert-parent',
@@ -57,7 +58,11 @@ export const SHORTCUT_LIST: readonly ShortcutItem[] = [
   // —— 节点编辑（增删改/插入/撤销重做/复制粘贴/全选） ——
   { id: 'undo', group: '节点编辑', label: '撤销', win: 'Ctrl+Z', mac: '⌘Z' },
   { id: 'redo', group: '节点编辑', label: '重做', win: 'Ctrl+Shift+Z / Ctrl+Y', mac: '⌘⇧Z / ⌘Y' },
-  { id: 'enter', group: '节点编辑', label: '新建同级节点', win: 'Enter', mac: 'Return' },
+  // Enter 方向矩阵（2026-09-30 需求方）：mindmap 二级主题按逆时针生长——右列
+  // Enter 向下/左列 Enter 向上；Shift+Enter 恒为反方向。方向裁决在 EditorPage
+  // handleEnter（需读文档侧别），本清单只负责键位的可发现性。
+  { id: 'enter', group: '节点编辑', label: '新建同级节点（二级主题按逆时针：右列向下/左列向上）', win: 'Enter', mac: 'Return' },
+  { id: 'enter-reverse', group: '节点编辑', label: '反方向新建同级节点', win: 'Shift+Enter', mac: '⇧Return' },
   // 空格进编辑由页面层「选中即可编辑」监听接管（EditorPage 键盘直入编辑监听，
   // 2026-09-30 需求方收回空格），与本层 F2 同一动作面，清单同列便于发现。
   { id: 'edit-selected', group: '节点编辑', label: '编辑选中节点（全选内容）', win: 'F2 / 空格', mac: 'F2 / 空格' },
@@ -96,8 +101,10 @@ export interface KeyboardMapDeps {
   isInactive?(): boolean;
   undo(): void;
   redo(): void;
-  /** Enter（未编辑态）：新建同级节点（root 上新建子级）并进入编辑。 */
-  onEnter(): void;
+  /** Enter（未编辑态）：新建同级节点（root 上新建子级）。reverse=true（Shift+Enter）
+   *  为反方向：mindmap 二级主题按逆时针定侧反向（右列向上/左列向下），其余层级/
+   *  结构恒改为向上（插入 index=current）。方向矩阵见 EditorPage handleEnter。 */
+  onEnter(reverse: boolean): void;
   /** F2（未编辑态，FR-EDT-005）：主选中节点进入编辑态。原 Space 绑定 2026-09-30
    *  起由页面层「选中即可编辑」监听收回（可打印字符直入编辑/空格进编辑并全选），
    *  「空格按住 + 左键拖拽 = 平移画布」手势随之退役（M7b-W3 曾把 Space 让位给该
@@ -200,7 +207,9 @@ export function resolveShortcutAction(e: ShortcutKeySnapshot): ShortcutActionId 
 
   switch (key) {
     case 'Enter':
-      return 'enter';
+      // Shift+Enter = 反方向新建同级（2026-09-30 需求方）；带 Ctrl/Cmd/Alt 的
+      // Enter 不落此处（上方 mod/alt 分支已 return null，原生/自定义语义让路）
+      return e.shiftKey ? 'enter-reverse' : 'enter';
     case 'F2': // M7b-W3 改绑 F2（原 Space）；2026-09-30 空格收回进编辑走页面层，本层不回绑
       return 'edit-selected';
     case 'Tab':
@@ -249,7 +258,10 @@ function dispatchAction(deps: KeyboardMapDeps, action: ShortcutActionId, e: Keyb
       deps.onToggleCollapse();
       return;
     case 'enter':
-      deps.onEnter();
+      deps.onEnter(false);
+      return;
+    case 'enter-reverse':
+      deps.onEnter(true);
       return;
     case 'edit-selected':
       deps.onEditSelected();

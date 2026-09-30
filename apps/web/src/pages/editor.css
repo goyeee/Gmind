@@ -20,17 +20,20 @@
   display: flex;
   align-items: center;
   height: 28px;
-  gap: 2px;
+  gap: 0;
   margin: 0;
-  padding: 0 2px;
+  padding: 2px;
   border-radius: 6px;
+  /* M7c-J（Kimi 专审 #3）：灰轨道+贴齐分段，消除「蓝 chip+裸文字」的拼贴感 */
+  background: #f2f3f5;
 }
 .editor-toolbar .view-tabs button {
   border: none;
   background: transparent;
-  padding: 5px 10px;
+  height: 24px;
+  padding: 0 12px;
   border-radius: 4px;
-  font-size: 12px;
+  font-size: 13px;
   line-height: 1;
   color: #4e5969;
   cursor: pointer;
@@ -39,10 +42,10 @@
   background: #f2f3f5;
 }
 .editor-toolbar .view-tabs button.active {
-  background: #e8f3ff;
-  color: #3370ff;
+  background: #fff;
+  color: #1d2129;
   font-weight: 500;
-  box-shadow: inset 0 0 0 1px rgba(51, 112, 255, 0.55);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
 }
 
 /* 表格视图（M7a-T4）：画布仅视觉隐藏——引擎场景/视口/选中保留（切回不丢），
@@ -144,6 +147,7 @@ body.painter-active .editor-canvas svg {
 /* 结构/主题下拉的 .toolbar-field 功能件已随 structure-select 迁入结构面板移除
    （2026-09-30 任务 3），样式一并退役。 */
 .editor-toolbar .title-input {
+  text-overflow: ellipsis;
   flex: none;
   width: 200px;
   max-width: 320px;
@@ -165,6 +169,10 @@ body.painter-active .editor-canvas svg {
   color: #86909c;
   font-size: 12px;
   white-space: nowrap;
+  /* M7c-J（需求方反馈）：状态文案宽度随「保存中…/已保存 HH:MM」变化会挤得后续
+     按钮短暂位移——min-width 钉住最宽文案（已保存 HH:MM），窄文案左对齐不回缩。 */
+  min-width: 78px;
+  text-align: left;
 }
 /* 窄视口收缩（M7a-K1 #1，≤1080px）：标题输入 min-width:120px 使标题组内容无法随
    min-width:0 收缩而外溢，压住视图 Tab/星标/保存状态。窄断点内隐藏标题组保存状态
@@ -176,7 +184,6 @@ body.painter-active .editor-canvas svg {
   }
   .editor-toolbar .title-input {
     width: 140px;
-    text-overflow: ellipsis;
   }
   /* K1-R 回归：900px 残留 .star-toggle × view-tab 相交一处，窄断点一并隐藏星标 */
   .editor-toolbar .star-toggle {
@@ -239,17 +246,28 @@ body.painter-active .editor-canvas svg {
     gap: 3px;
   }
 }
-/* 工具栏星标切换（M3b 清偿包，FR-FIL-004）：未加星空心灰、加星金色 */
-.star-toggle {
+/* 工具栏星标切换（M3b 清偿包，FR-FIL-004）：未加星空心灰、加星金色。
+   M7c-J（Kimi 专审 #1）：兜底 .editor-toolbar button 特异性压过本规则致白盒灰星，
+   提升优先级并对齐 28px 图标钮范式。 */
+.editor-toolbar .star-toggle {
+  width: 28px;
+  height: 28px;
+  padding: 0;
   border: none;
   background: transparent;
-  font-size: 18px;
+  border-radius: 6px;
+  font-size: 16px;
   line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   color: #c9cdd4;
   cursor: pointer;
-  padding: 4px;
 }
-.star-toggle.starred {
+.editor-toolbar .star-toggle:hover {
+  background: #f2f3f5;
+}
+.editor-toolbar .star-toggle.starred {
   color: #f7ba1e;
 }
 /* 在线成员按钮角标（M2 Task 6，FR-COL-005）：awareness 在线数 */
@@ -275,7 +293,12 @@ body.painter-active .editor-canvas svg {
   align-items: center;
   gap: 4px;
   height: 28px; /* 单行判定：与按钮行等高，头像在其中垂直居中（2026-09-30 任务 1） */
-  margin-left: 8px;
+  /* M7c-J（需求方反馈）：头像钉在工具栏最右——auto 外边距吸收左侧状态文案的宽度
+     变化，保存中/已保存切换只改变弹性空隙、不再推移任何按钮。 */
+  margin-left: auto;
+}
+.editor-toolbar .avatar-bar button:hover {
+  box-shadow: 0 0 0 2px #e8f3ff;
 }
 .editor-toolbar .avatar-chip {
   display: inline-flex;

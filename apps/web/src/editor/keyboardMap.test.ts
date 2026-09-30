@@ -57,6 +57,21 @@ describe('SHORTCUT_LIST（面板清单完整性）', () => {
     expect([...listIds].filter((id) => !handled.has(id)), '清单列出但未绑定').toEqual([]);
     expect(listIds.size).toBe(SHORTCUT_ACTION_IDS.length);
   });
+
+  it('Enter 两态清单项：enter 带方向说明、enter-reverse 键位 Shift+Enter（⇧Return）', () => {
+    // 方向矩阵（2026-09-30 需求方）落在 EditorPage handleEnter（需读文档侧别），
+    // 清单侧钉住「方向说明文案 + 键位」不被静默漂移
+    const enter = SHORTCUT_LIST.find((s) => s.id === 'enter');
+    expect(enter?.win).toBe('Enter');
+    expect(enter?.mac).toBe('Return');
+    expect(enter?.label).toContain('新建同级节点');
+    expect(enter?.label).toContain('右列向下/左列向上'); // 逆时针方向说明
+    const reverse = SHORTCUT_LIST.find((s) => s.id === 'enter-reverse');
+    expect(reverse?.group).toBe('节点编辑');
+    expect(reverse?.label).toContain('反方向');
+    expect(reverse?.win).toBe('Shift+Enter');
+    expect(reverse?.mac).toBe('⇧Return');
+  });
 });
 
 describe('resolveShortcutAction（绑定行为快照）', () => {
@@ -86,8 +101,11 @@ describe('resolveShortcutAction（绑定行为快照）', () => {
     expect(resolveShortcutAction(keys({ key: 'a', ctrlKey: true }))).toBe('select-all');
   });
 
-  it('单键族：Enter/F2/Tab 两态/删除/方向键/Home/End；修饰键一律不触发', () => {
+  it('单键族：Enter 两态（Shift=反方向）/F2/Tab 两态/删除/方向键/Home/End；修饰键一律不触发', () => {
     expect(resolveShortcutAction(keys({ key: 'Enter' }))).toBe('enter');
+    // 2026-09-30 需求方方向矩阵：Shift+Enter = 反方向新建同级（enter-reverse），
+    // 与 Tab/Shift+Tab 的两态拆分同构（分发共用 onEnter(reverse) 依赖口）
+    expect(resolveShortcutAction(keys({ key: 'Enter', shiftKey: true }))).toBe('enter-reverse');
     // M7b-W3 改绑 F2（原 Space）；2026-09-30 需求方收回空格——空格由页面层
     // 「选中即可编辑」监听接管（进编辑并全选），本层不回绑（见 resolveDirectEditKey）
     expect(resolveShortcutAction(keys({ key: 'F2' }))).toBe('edit-selected');

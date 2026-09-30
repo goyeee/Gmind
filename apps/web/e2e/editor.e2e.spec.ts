@@ -322,6 +322,83 @@ test('编辑器：复制节点后选中另一节点 Ctrl+V 粘贴为其子级', 
   expect(childIds('root').map(textOf)).toContain('周三');
 });
 
+// ─────────────── Enter 方向矩阵（2026-09-30 需求方） ───────────────
+
+/**
+ * 惰性待编辑节点补开编辑框后覆写提交为指定文本：pressFirstCharToOpen 首键（ASCII，
+ * 带盒就绪重试）打开即全选，fill 整值覆写（不依赖首键落了几枚占位字符，确定性
+ * 文本供 docState 精确断言），Enter 提交（overlay 吞 Enter，画布映射不再响应）。
+ */
+async function commitLazyNodeText(page: Page, text: string): Promise<void> {
+  const editor = page.locator('.gm-text-editor');
+  await pressFirstCharToOpen(page);
+  await editor.fill(text);
+  await page.keyboard.press('Enter');
+  await expect(editor).toHaveCount(0);
+}
+
+// Enter/Shift+Enter 方向矩阵：mindmap 二级主题按逆时针定侧生长——左列 Enter 向上
+// （新节点占当前节点 index，参照节点后移一位）、右列 Shift+Enter 向上；root 级落点
+// 同侧保持（addChild 按右列计数自动定侧会给相反侧，openNewNodeEditor 显式
+// setNodeSide 覆写）。按服务端 docState 反解结构断言 Y.Doc index + side 持久值
+// （与 Shift+Tab 用例同一口径，不依赖渲染几何）。
+test('编辑器：Enter 方向矩阵——左列二级主题 Enter 向上建同级且同侧，右列 Shift+Enter 向上', async ({ page }) => {
+  await registerAndLogin(page);
+  // 空白新文档造「3 右 1 左」：root 默认选中，Tab×4——前 3 个经 addChild 自动定侧
+  // 落右（右列计数<配额 3），第 4 个落左（逆时针配额），四个节点均带持久 side。
+  await page.getByRole('button', { name: '新建脑图' }).click();
+  await page.locator('.file-list li', { hasText: '未命名脑图' }).click();
+  await expect(page).toHaveURL(/\/edit\//);
+  await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '未命名脑图' })).toBeVisible();
+  for (const text of ['右一', '右二', '右三', '左一']) {
+    await page.locator('.editor-canvas svg .gm-text', { hasText: '未命名脑图' }).click(); // root 上 Tab 追加
+    await page.keyboard.press('Tab');
+    await commitLazyNodeText(page, text);
+  }
+  await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '左一' })).toBeVisible();
+
+  // 左列节点敲 Enter：新节点出现在其**上方**（占据其原 index），且同侧落左
+  await page.locator('.editor-canvas svg .gm-text', { hasText: '左一' }).click();
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '新主题' })).toBeVisible();
+  // 右列节点敲 Shift+Enter：新节点出现在其**上方**（占其原 index），同侧保持右
+  await page.locator('.editor-canvas svg .gm-text', { hasText: '右二' }).click();
+  await page.keyboard.press('Shift+Enter');
+  await expect(page.getByTestId('save-status')).toHaveText(/已保存/);
+
+  // 从服务端读回 docState 反解结构（避免依赖渲染几何）
+  const token = await page.evaluate(() => localStorage.getItem('gmind.token'));
+  const fileId = page.url().split('/').pop() ?? '';
+  const res = await page.request.get(`/api/files/${fileId}`, {
+    headers: { Authorization: `Bearer ${token ?? ''}` },
+  });
+  expect(res.ok()).toBeTruthy();
+  const detail = (await res.json()) as { docState: string };
+  const doc = new Y.Doc();
+  const binary = atob(detail.docState); // web tsconfig 无 node types，不用 Buffer
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  Y.applyUpdate(doc, bytes);
+  const nodes = doc.getMap('nodes') as Y.Map<Y.Map<unknown>>;
+  const childIds = (id: string): string[] =>
+    ((nodes.get(id)?.get('children') as Y.Array<string> | undefined)?.toArray() ?? []);
+  const textOf = (id: string): string => String(nodes.get(id)?.get('text') ?? '');
+  const sideOf = (id: string): string => String(nodes.get(id)?.get('side') ?? '');
+
+  // 终序 = [右一, 新主题(Shift+Enter), 右二, 右三, 新主题(Enter), 左一]
+  const rootKids = childIds('root');
+  expect(rootKids.map(textOf)).toEqual(['右一', '新主题', '右二', '右三', '新主题', '左一']);
+  // 右列 Shift+Enter：新主题占右二原 index 1（其上方），右二后移到 2，同侧=right
+  expect(sideOf(rootKids[1] as string)).toBe('right');
+  expect(sideOf(rootKids[2] as string)).toBe('right'); // 右二（参照节点侧别不变）
+  // 左列 Enter：新主题占左一原 index（其上方，左一后移至末位），同侧=left
+  expect(sideOf(rootKids[4] as string)).toBe('left');
+  expect(sideOf(rootKids[5] as string)).toBe('left'); // 左一（参照节点侧别不变）
+  // 造数自证：Tab×4 的 3 右 1 左均带持久 side（右一/右三 right，非计数兜底）
+  expect(sideOf(rootKids[0] as string)).toBe('right');
+  expect(sideOf(rootKids[3] as string)).toBe('right');
+});
+
 // —— 2026-09-28 走查配套锁定：编辑文字时点画布任意处 = 提交并关闭编辑框 ——
 
 test('编辑器：编辑既有节点时点击画布任意处提交并关闭编辑框', async ({ page }) => {

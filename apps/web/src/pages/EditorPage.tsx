@@ -36,6 +36,7 @@ import {
   undo as coreUndo,
   withTransaction,
   type IconGroup,
+  type NodeSide,
 } from '@gmind/core';
 import {
   computeFit,
@@ -1218,6 +1219,7 @@ export function EditorPage() {
     relation: 'child' | 'sibling' | 'parent',
     via: NodeVia = 'keyboard',
     nodeToOutdent?: string, // relation='parent' 时必填：被插入新父级的当前节点
+    forceSide?: NodeSide, // Enter 同级（root 级 mindmap）同侧保持目标侧；缺省不覆写
   ): void => {
     if (addBlockedByQuota()) return; // 配额拦截（Tab 插子级/Enter 插同级/右键菜单共用本入口）
     if (!doc) return;
@@ -1225,11 +1227,19 @@ export function EditorPage() {
     // 默认文本同事务写入——不落「空壳」，未敲字也有语义可读。
     // relation='parent'（M7b-K2）：Shift+Tab 语义——新节点插在 parent 的 index
     // 处后，立即把 nodeToOutdent（当前选中）换父到新节点下（P→N→C）。
+    // forceSide（Enter 方向矩阵，2026-09-30 需求方）：root 级 mindmap 同级落点的
+    // 同侧保持——addChild 自动定侧按「右列计数」给侧（≥3 右即 left），会与参照
+    // 节点相反，故建后同事务内显式 setNodeSide 覆写（同值守卫幂等、嵌套事务复用
+    // 外层，一次 Ctrl+Z 与建节点同撤）。仅 mindmap 消费侧别（logic/org 布局不读，
+    // 不落 side 键）；参照节点无持久侧（旧文档）时 forceSide 缺省，自动定侧接管。
     let createdId = '';
     try {
       withTransaction(doc, ORIGIN_USER, () => {
         createdId = addChild(doc, parentId, index === undefined ? {} : { index });
         setText(doc, createdId, '新主题', ORIGIN_USER);
+        if (forceSide && parentId === ROOT_NODE_ID && getMeta(doc).structureType === 'mindmap') {
+          setNodeSide(doc, createdId, forceSide);
+        }
         if (relation === 'parent' && nodeToOutdent) moveNode(doc, nodeToOutdent, createdId);
       });
     } catch (e) {
@@ -1480,7 +1490,16 @@ export function EditorPage() {
     // 通知深链裁定），不入依赖。
   }, [readOnly, doc]);
 
-  const handleEnter = (): void => {
+  /**
+   * Enter/Shift+Enter 新建同级（2026-09-30 需求方方向矩阵）：Enter 默认向**下**、
+   * Shift+Enter 恒为反方向（向上）；唯一例外是 mindmap 的二级主题（parent===root）
+   * 按逆时针定侧方向生长——右列 Enter 向下/Shift+Enter 向上，**左列 Enter 向上/**
+   * Shift+Enter 向下（左列向上生长，呼应逆时针定侧）。logic（全右单侧）与 org、
+   * 更深层级维持现状（Enter 下方）。root 上 Enter 降级为新建子级（现状不变）。
+   * 同侧保持：root 级 mindmap 落点把参照节点的持久侧经 forceSide 下沉给
+   * openNewNodeEditor（addChild 按计数自动定侧可能给相反侧）。
+   */
+  const handleEnter = (reverse = false): void => {
     if (!doc) return;
     const current = primaryId();
     const snap = getNode(doc, current);
@@ -1492,7 +1511,26 @@ export function EditorPage() {
     }
     const parent = getNode(doc, snap.parentId);
     if (!parent || parent.deleted) return;
-    openNewNodeEditor(parent.id, parent.childIds.indexOf(current) + 1, 'sibling');
+    const currentIdx = parent.childIds.indexOf(current);
+    // 二级主题侧别裁决：doc 持久 side 优先（NodeSnapshot 读侧已防御非法值）；
+    // 无持久侧的旧文档按文档序计数折算有效侧——index<3 右、≥3 左，与 engine
+    // assignMindmapSides / core countRightSideRootChildren 的兜底同式（配额常量
+    // 三处同值 3，改动需同步）。无持久侧不 forceSide：新节点由 addChild 自动
+    // 定侧接管（不与计数兜底互相覆写）。
+    let index: number;
+    let forceSide: NodeSide | undefined;
+    if (parent.id === ROOT_NODE_ID && getMeta(doc).structureType === 'mindmap') {
+      const persistedSide = snap.side === 'left' || snap.side === 'right' ? snap.side : undefined;
+      const side = persistedSide ?? (currentIdx < 3 ? 'right' : 'left');
+      // 左列默认向上（index=current）、右列默认向下（index=current+1）；reverse 翻转
+      const upward = side === 'left' ? !reverse : reverse;
+      index = upward ? currentIdx : currentIdx + 1;
+      forceSide = persistedSide;
+    } else {
+      // 其余层级/结构：默认下方（现状），Shift+Enter 上方
+      index = reverse ? currentIdx : currentIdx + 1;
+    }
+    openNewNodeEditor(parent.id, index, 'sibling', 'keyboard', undefined, forceSide);
   };
 
   const handleTab = (shift: boolean): void => {
