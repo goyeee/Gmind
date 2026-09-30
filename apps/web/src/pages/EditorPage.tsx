@@ -2162,13 +2162,18 @@ export function EditorPage() {
           }, 0);
           try {
             // M7c-D1 落点三分：child=追加目标子级末尾（现状语义）；sibling=按引擎
-            // 结算的文档序 index 插入（同父移除修正已在 engine 完成）；null=空白 →
-            // 根子级末尾（现状保留）。
+            // 结算的文档序 index 插入（同父移除修正已在 engine 完成；空白落点引擎
+            // 已解析为 root 对应侧末尾 sibling，M7c-F 复验问题4）；null 仅作兜底
+            // （root 盒缺失等窗口期；svg 外兜底释放为取消，不回调至此）。
             if (target === null) moveNode(d, id, ROOT_NODE_ID);
             else if (target.kind === 'child') moveNode(d, id, target.nodeId);
             else moveNode(d, id, target.parentId, target.index);
             afterUserWrite();
-            fitPendingRef.current = true;
+            // M7c-F 复验问题2：拖动释放不再置 fitPending（rerender 全量 fit 会把
+            // 100% 视口拉到 300%/400%，用户视口丢失）。改为 rAF 一帧等 moveNode 触发
+            // 的重排落定后，仅把被拖节点平移进可视区（完整可见时 no-op，只平移不缩
+            // 放）；其余 fitPending 来源（删空/粘贴）不动。
+            requestAnimationFrame(() => panNodeIntoView(id));
           } catch (e) {
             showToast(e instanceof Error ? e.message : '移动失败');
           }

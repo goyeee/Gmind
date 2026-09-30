@@ -9,16 +9,19 @@
  *   = 同级插入：释放调 core moveNode(id, anchor.parentId, index) 按落点排序——
  *   index 由 childrenIdsOf 文档序 + 锚点位次结算，同父移动做「先移除后插入」的
  *   前移修正（纪律#2：纯计算，全部在事务之外）；
- * - 拖到**空白** = 移为 root 子级末尾（现状保留）。
+ * - 拖到**空白** = 挂 root 对应侧末尾（M7c-F 复验问题4：侧别按指针相对 root 盒中线，
+ *   index 取该侧现有子级文档序末尾并过既有侧别仿真——悬停即画边+槽预览，释放按
+ *   同一结算提交，不再「零预览、释放跳对侧」）。
  * - 自身/自身后代仍是禁止目标（fix round 1）：整盒含边缘带一律 drop-forbidden、
  *   释放静默取消不回调（否则 self 落 null 分支会把整枝浮动成根主题，破坏性）。
  * - 根节点无 parentId：整盒 = 变其子级（根不可作兄弟锚点）。
  *
  * M7c-D3 企微拖动对齐（实测录像 wecom-drag-a|b|c 抽帧结论）：
  * - **拾起**：过阈值激活即在悬浮层建 `g.gm-drag-ghost` 芯片（被拖节点盒大小的圆角
- *   矩形 + 居中文字），逐帧定位到「指针 − 抓取偏移」（按下点 − 被拖盒左上角，芯片
- *   不跳变）；被拖节点原位挂 `gm-drag-origin`（与 gm-dragging 并挂）——虚线淡出成
- *   占位框，树其余部分不回流。
+ *   矩形 + 居中文字），逐帧定位到「指针 + 右下偏移」（screen 14px 恒定 → scene 偏移
+ *   = 14/scale，M7c-F 复验问题3① 改——原「指针 − 抓取偏移」居中口径会压住光标处
+ *   的目标描边）；被拖节点原位挂 `gm-drag-origin`（与 gm-dragging 并挂）——虚线淡
+ *   出成占位框，树其余部分不回流。
  * - **落位预览 = 真实连线**（需求方原话「吸附效果应该有一条线和被吸附节点连着，
  *   放开后就真正吸附上去」）：sibling 落点悬停点亮后画 `path.gm-drop-edge`（候选父
  *   盒边中点 → 落位槽盒边中点，render.ts 同款 bezier 公式——这条线就是松手后会
@@ -36,6 +39,23 @@
  *   兄弟中按 y 找最接近芯片 y 的插入位修正 index，释放与槽共用修正结果。仅 root
  *   直接子级且现有兄弟含 left 侧（mindmap 双侧文档）启用——logic 全右/单侧文档无
  *   翻转证据，几何 index 即最终 index（org 另有横排分支）。
+ *
+ * M7c-F 复验修复（Kimi K3 复验 commit e484dcc 报四问题）：
+ * 1. **上缘带槽位错位**：insertCenterY 首位插入去掉「不高于父盒中线」下钳制——首
+ *    兄弟悬在父中线上方时槽曾被钳到父中线，与真实插入位（插首位、锚点顺移）偏离
+ *    最多 228px。槽中心 = 首盒上方空隙（首盒 y − 带间距/2），跟随几何。
+ * 2. （页面侧）拖动释放不再强制全量 fit，改 rAF panNodeIntoView——见 EditorPage
+ *    onDrop 注释。
+ * 3. **芯片遮挡目标描边**：芯片跟随改「指针 + 右下偏移」（screen 14px 恒定 → scene
+ *    偏移 = 14/scale，读 deps.viewport.scale，无需新增 deps 回调）；禁止态芯片挂
+ *    `gm-drag-ghost-forbidden`（描边转红由页面 editor.css 落色）。chipBox（侧别/
+ *    最近插入位判定输入）与芯片视觉定位同源（ghostChipBox）。
+ * 4. **空白悬停零预览、释放跳对侧**：classify 空白改返回 `kind:'blank'` placement，
+ *    resolveBlankTarget 解析为「root 对应侧末尾」sibling 落点（侧别=指针 x 相对
+ *    root 盒中线，经 sideHint 传入 resolveDropSlot 过既有侧别仿真；单侧文档槽侧恒
+ *    跟结构实际侧 right）——画真实边+槽预览，释放按同一 computeResolved 结算提交。
+ *    EditorPage 的 target===null 分支仅作兜底；svg 外 window 兜底释放改为取消（拖
+ *    离画布视为放弃，不按远点结算）。
  *
  * 反馈时机（300ms → 100ms，spec P0-2）：同一落点悬停满 100ms 才点亮高亮/预览；
  * 切换落点立即摘除并重置计时。**释放裁决不再要求悬停时长**——指针在哪里松开，
@@ -89,11 +109,18 @@ const EDGE_COLOR_FALLBACK = '#a6b0bf';
 const V_GAP_FALLBACK = 20;
 /** 水平列间距实测不到（父级暂无同侧子级）时的槽位兜底（px，企微留白量级）。 */
 const H_GAP_FALLBACK = 60;
+/** 芯片相对光标的右下偏移（screen px 恒定；scene 偏移 = 此值 / 当前 scale）。 */
+const GHOST_CURSOR_OFFSET_PX = 14;
 
-/** 悬停中的几何落点（未含文档序 index——index 仅在释放时按 childrenIdsOf 结算）。 */
+/**
+ * 悬停中的几何落点（未含文档序 index——index 仅在释放时按 childrenIdsOf 结算）。
+ * kind:'blank' = 空白（M7c-F 复验问题4：悬停即解析为 root 对应侧末尾并画预览）；
+ * 注意与「禁止目标」的 placement null 区分——后者不参与反馈点亮。
+ */
 export type DropPlacement =
   | { kind: 'child'; nodeId: string }
-  | { kind: 'sibling'; anchorId: string; position: 'before' | 'after' };
+  | { kind: 'sibling'; anchorId: string; position: 'before' | 'after' }
+  | { kind: 'blank' };
 
 /**
  * 释放落点（onDrop 第二参，M7c-D1 三分）：
@@ -101,8 +128,10 @@ export type DropPlacement =
  * - `{kind:'sibling'}` = 插为 parentId 的第 index 个子级（core moveNode 直用；
  *   anchorId/position 为落点意图，供测试/调试，页面可忽略。index 为**最终**文档序
  *   index——mindmap 根级落点经侧别仿真修正（见 resolveDropSlot），可能与几何位次
- *   不同，预览与释放共用同一值）；
- * - `null` = 空白 → 页面层移为 root 子级（现状语义）。
+ *   不同，预览与释放共用同一值。空白落点亦解析为 sibling（root 对应侧末尾，
+ *   M7c-F 复验问题4））；
+ * - `null` = 禁止目标（释放静默取消）或空白解析失败（root 盒缺失等窗口期）——页面
+ *   层保留 moveNode(id,'root') 兜底。
  */
 export type DropTarget =
   | { kind: 'child'; nodeId: string }
@@ -147,13 +176,14 @@ export interface DropSlotResolution {
  * - 几何 index 仿真到对侧 → 在同侧（side === 芯片侧）兄弟中按 y 找最接近芯片 y 的
  *   插入位，并复核仿真——仍到不了芯片侧时如实按仿真侧画槽（所见即所得优先）；
  * - 门控：仅 root 直接子级且现有兄弟含 left 侧（mindmap 双侧文档）仿真；logic 全右
- *   /单侧文档无翻转证据，芯片侧即槽侧、index 按几何。非 root 父级：side=父级侧、
- *   index 按几何（placeHorizontal 后代继承父侧，无重排）。
+ *   /单侧文档无翻转证据，槽侧恒跟结构实际侧 right（M7c-F 复验问题4）。非 root 父级：
+ *   side=父级侧、index 按几何（placeHorizontal 后代继承父侧，无重排）。
  *
  * 槽几何：x = 父盒同侧列（水平间距 = 父盒与首个同侧子级的 x 差，兜底 60）；y = 按
- * index 插入同侧兄弟堆——插中间 = 相邻两盒垂直中点；插首 = 首盒上方（首盒 y −
- * 间距/2）但不高于父盒中线；插尾 = 末盒下方对称；无兄弟 = 父盒垂直居中。org
- * （side 'down'）兄弟横排：槽取水平插入位（镜像同款公式），边为竖直 elbow。
+ * index 插入同侧兄弟堆——插中间 = 相邻两盒垂直中点；插首 = 首盒上方空隙（首盒 y −
+ * 间距/2，跟随几何不做父中线钳制，M7c-F 复验问题1）；插尾 = 末盒下方对称；无兄弟 =
+ * 父盒垂直居中。org（side 'down'）兄弟横排：槽取水平插入位（镜像同款公式），边为
+ * 竖直 elbow。
  */
 export function resolveDropSlot(args: {
   boxes: NodeBox[];
@@ -165,8 +195,13 @@ export function resolveDropSlot(args: {
   index: number;
   /** 芯片盒（场景坐标左上角 + 被拖盒 w/h）——侧别与最近插入位判定输入。 */
   chipBox: { x: number; y: number; w: number; h: number };
+  /**
+   * 可选：侧别意图覆写（M7c-F 复验问题4 空白落点）。缺省按芯片盒中心相对父盒中线
+   * 推导；空白落点的芯片中心带节点半宽偏移，侧别意图应取指针侧——由调用方传入。
+   */
+  sideHint?: 'left' | 'right';
 }): DropSlotResolution | null {
-  const { boxes, childrenIds, draggedId, parentId, index, chipBox } = args;
+  const { boxes, childrenIds, draggedId, parentId, index, chipBox, sideHint } = args;
   const byId = new Map(boxes.map((b) => [b.id, b]));
   const parentBox = byId.get(parentId);
   const draggedBox = byId.get(draggedId);
@@ -256,7 +291,7 @@ export function resolveDropSlot(args: {
   // —— 横向（mindmap/logic）：兄弟纵排，槽在父同侧列 ——
   const chipCx = chipBox.x + chipBox.w / 2;
   const parentCx = parentBox.x + parentBox.w / 2;
-  const chipSide: 'left' | 'right' = chipCx >= parentCx ? 'right' : 'left';
+  const chipSide: 'left' | 'right' = sideHint ?? (chipCx >= parentCx ? 'right' : 'left');
   const isRootLevel = parentBox.parentId === undefined;
 
   /** 带间距：相邻文档序兄弟带实测（= 布局 V_GAP；不可得兜底 20）。 */
@@ -312,7 +347,11 @@ export function resolveDropSlot(args: {
     }
     side = sim;
   } else if (isRootLevel) {
-    side = chipSide; // logic / 单侧 mindmap 根级：无翻转证据，芯片侧即槽侧
+    // 单侧根级（logic 全右 / 全右 mindmap / 空兄弟）：布局首个恒右、无左翻证据——
+    // 槽侧恒跟结构实际侧（right），不跟芯片/指针侧（空白悬停在左半画左槽会与重排
+    // 结果相悖，M7c-F 复验问题4「可预期」）。既有 sibling 带落点芯片必在盒 x 域内
+    // （右列盒整体在父中线右），此取值与旧「芯片侧」等价。
+    side = 'right';
   } else {
     side = parentBox.side === 'left' ? 'left' : 'right'; // 非 root：继承父侧
   }
@@ -363,8 +402,9 @@ function insertCenterY(
   const parentMid = parentBox.y + parentBox.h / 2;
   if (sideSibs.length === 0) return parentMid; // 无兄弟：父盒垂直居中
   if (p === 0) {
-    // 首位上方：不高于父盒中线（槽不跑到父级头顶之上）。
-    return Math.max(sideSibs[0]!.y - vGap / 2, parentMid);
+    // 首位上方 = 首盒之前的空隙（首盒 y − 带间距/2）：跟随几何，不做父中线钳制——
+    // 首兄弟本可悬在父中线上方，钳制会让槽偏离真实插入位（M7c-F 复验问题1）。
+    return sideSibs[0]!.y - vGap / 2;
   }
   if (p >= sideSibs.length) {
     const last = sideSibs[sideSibs.length - 1]!;
@@ -405,7 +445,10 @@ export interface DragControllerDeps {
   viewport: Viewport;
   /** 当前布局节点盒（场景坐标；每次命中检测实时取，拖拽中可被重布局刷新）。 */
   getBoxes(): NodeBox[];
-  /** 释放回调：target 见 {@link DropTarget}（空白 null → 页面层 moveNode(id,'root')）。 */
+  /**
+   * 释放回调：target 见 {@link DropTarget}（child/sibling/兜底 null；空白已在引擎
+   * 解析为 root 对应侧末尾 sibling——null 仅在 root 盒缺失等窗口期出现）。
+   */
   onDrop(id: string, target: DropTarget): void;
   /** candidateId 是否为 id 的后代（含间接）——后代不可作为落点锚（禁止目标）。 */
   isDescendant(id: string, candidateId: string): boolean;
@@ -417,7 +460,10 @@ export interface DragControllerDeps {
   canReparent?(id: string): boolean;
 }
 
-/** 拖拽进行中的公开快照（供页面绘制 ghost；offset 为指针场景点 − 盒左上角）。 */
+/**
+ * 拖拽进行中的公开快照。offsetX/Y = 抓取偏移（按下点场景坐标 − 被拖盒左上角）；
+ * M7c-F 复验问题3① 起芯片定位改用「指针 + 右下偏移」，本快照仅作公开状态留存。
+ */
 export interface DragSnapshot {
   id: string;
   offsetX: number;
@@ -427,12 +473,32 @@ export interface DragSnapshot {
 /** 落点比较键：落点切换（含同一节点本体↔边缘带互切）即重置反馈计时。 */
 function placementKey(p: DropPlacement | null): string | null {
   if (!p) return null;
+  if (p.kind === 'blank') return 'blank';
   return p.kind === 'child' ? `child:${p.nodeId}` : `sibling:${p.anchorId}:${p.position}`;
 }
 
 /** 数值 → 属性串：两位小数去尾零（与 render.ts fmt 同口径，输出确定）。 */
 function fmt(n: number): string {
   return String(Math.round(n * 100) / 100);
+}
+
+/** 光标右下偏移折算成 scene 量：screen 14px 恒定（scale 异常时按 1 兜底）。 */
+function ghostSceneOffset(scale: number): number {
+  return GHOST_CURSOR_OFFSET_PX / (scale > 0 ? scale : 1);
+}
+
+/**
+ * 芯片盒（M7c-F 复验问题3①）：左上角 = 指针 scene 点 + 右下偏移（screen 14px 恒定
+ * → scene 偏移 = 14/scale），尺寸 = 被拖盒。侧别/最近插入位判定输入，与芯片视觉
+ * 定位同源——判定所「见」即芯片所在。
+ */
+function ghostChipBox(
+  scene: Point,
+  draggedBox: { w: number; h: number },
+  scale: number,
+): { x: number; y: number; w: number; h: number } {
+  const o = ghostSceneOffset(scale);
+  return { x: scene.x + o, y: scene.y + o, w: draggedBox.w, h: draggedBox.h };
 }
 
 /**
@@ -579,6 +645,14 @@ export class DragController {
       return;
     }
     if (!this.drag || e.pointerId !== this.drag.pointerId) return;
+    // svg 外兜底释放（window 监听收到 target 在 svg 子树外的事件）＝取消：拖离画布
+    // 视为放弃，不按离谱远点结算落点（M7c-F 复验问题4）。指针捕获成功时 pointerup
+    // 被重定向至 svg（target=svg），仍走下方正常释放路径。
+    const t = e.target;
+    if (!(t instanceof Node && deps.svg.contains(t))) {
+      this.finish();
+      return;
+    }
     const id = this.drag.id;
     const scene = deps.viewport.toSceneFromEvent(e);
     // 释放结算（M7c-D3 一致性）：常态（释放点 = 最后悬停点）直接复用最后一帧缓存
@@ -614,9 +688,10 @@ export class DragController {
     e.preventDefault();
     const scene = deps.viewport.toSceneFromEvent(e);
     const box = deps.getBoxes().find((b) => b.id === cand.id);
-    // 抓取偏移 = 按下点 − 被拖盒左上角（M7c-D3 企微口径：芯片从原位无跳变起步，
-    // 随后逐帧贴指针）。按下点用候选登记时的 client 坐标换算（与 toSceneFromEvent
-    // 同一套 rect 数学），不用激活 move 点——慢起手时二者可差很远。
+    // 抓取偏移 = 按下点 − 被拖盒左上角：DragSnapshot 公开字段（页面/测试可读）。
+    // M7c-F 复验问题3① 起芯片定位改为「指针 + 右下偏移」，不再消费该偏移。按下点
+    // 用候选登记时的 client 坐标换算（与 toSceneFromEvent 同一套 rect 数学），不用
+    // 激活 move 点——慢起手时二者可差很远。
     const rect = deps.svg.getBoundingClientRect();
     const downScene = deps.viewport.toScene(cand.x - rect.left, cand.y - rect.top);
     this.drag = {
@@ -688,12 +763,14 @@ export class DragController {
 
   /**
    * 场景点落点分类（M7c-D1 三分）：命中最先匹配的盒（getBoxes 序；盒不重叠）。
-   * - 自身/后代 → forbiddenId（整盒含边缘带一律禁止，fix round 1）；
+   * - 自身/后代 → forbiddenId（整盒含边缘带一律禁止，fix round 1；placement null
+   *   ——禁止目标不参与反馈点亮）；
    * - 根（无 parentId）→ 整盒 = 变其子级（根不可作兄弟锚点）；
    * - 其余按边缘插入带切分：横向布局（side left/right，兄弟纵排）取上下 25% 带，
    *   org（side 'down'，兄弟横排）取左右 25% 带；带内 = sibling(before/after)，
    *   带外本体 = child。
-   * - 未命中任何盒 → 空白（placement/forbiddenId 双 null）。
+   * - 未命中任何盒 → 空白（kind:'blank'；M7c-F 复验问题4：解析为 root 对应侧末尾
+   *   并画预览，与按下即框选的手势无关——候选只登记在节点上）。
    */
   private classifyAt(
     sceneX: number,
@@ -724,7 +801,7 @@ export class DragController {
       }
       return { placement: { kind: 'child', nodeId: b.id }, forbiddenId: null };
     }
-    return { placement: null, forbiddenId: null };
+    return { placement: { kind: 'blank' }, forbiddenId: null };
   }
 
   /**
@@ -735,9 +812,11 @@ export class DragController {
    * 校验兜底（拒绝即抛错走页面 toast）。sibling 另经 resolveDropSlot 侧别仿真：
    * mindmap 根级落点仿真到对侧时修正 index（预览与释放共用同一修正值）。
    */
-  private resolveTarget(draggedId: string, placement: DropPlacement | null): DropTarget {
+  private resolveTarget(draggedId: string, placement: DropPlacement): DropTarget {
     const deps = this.deps;
-    if (!deps || placement === null) return null;
+    // placement null = 禁止目标（target 恒 null，释放先行取消）；blank 由
+    // computeResolved 走 resolveBlankTarget，不经此路径。
+    if (!deps || placement === null || placement.kind === 'blank') return null;
     if (placement.kind === 'child') return { kind: 'child', nodeId: placement.nodeId };
     const anchor = deps.getBoxes().find((b) => b.id === placement.anchorId);
     if (!anchor || anchor.parentId === undefined) {
@@ -757,8 +836,41 @@ export class DragController {
   }
 
   /**
-   * 单一结算路径（M7c-D3）：classify 结果 → resolveTarget → 落位槽（含根级侧别
-   * 仿真修正）。预览绘制与释放提交都只消费本函数产物——同点必同果。
+   * 空白落点解析（M7c-F 复验问题4）：企微语义「空白=挂 root」但要可预期——侧别取
+   * 指针相对 root 盒中线（右半→right、左半→left），index 取该侧现有子级（扣除被拖
+   * 节点）的文档序末尾：右侧 = 文档序前缀的长度（assignMindmapSides 首个恒右 + 前缀
+   * 切分），左侧/单侧（logic 全右、org 全 down）= 文档序末尾。index 随后照常过
+   * resolveDropSlot 侧别仿真（sideHint 传指针侧）——预览与释放同一结算，槽画在哪
+   * 松手就落在哪，不再「零预览、释放跳对侧」。从节点起拖进入空白才走此路；空白
+   * **按下**的框选/平移手势在候选登记（仅节点命中）处即已分流。root 盒缺失（协同
+   * 删除窗口期）返回 null → 释放回退页面层 moveNode(id,'root') 兜底。
+   */
+  private resolveBlankTarget(
+    scene: Point,
+  ): { target: DropTarget; side: 'left' | 'right' } | null {
+    const deps = this.deps;
+    const drag = this.drag;
+    if (!deps || !drag) return null;
+    const rootBox = deps.getBoxes().find((b) => b.parentId === undefined);
+    if (!rootBox) return null;
+    const side: 'left' | 'right' = scene.x >= rootBox.x + rootBox.w / 2 ? 'right' : 'left';
+    const children = deps.childrenIdsOf(rootBox.id).filter((cid) => cid !== drag.id);
+    const sideOf = (id: string): string | undefined =>
+      deps.getBoxes().find((b) => b.id === id)?.side;
+    const index =
+      side === 'left' ? children.length : children.filter((cid) => sideOf(cid) !== 'left').length;
+    // 锚点仅作 DropTarget 调试信息（页面按 parentId+index 提交）：该侧最后一个子级。
+    const anchorId = children[index - 1] ?? rootBox.id;
+    return {
+      target: { kind: 'sibling', parentId: rootBox.id, index, anchorId, position: 'after' },
+      side,
+    };
+  }
+
+  /**
+   * 单一结算路径（M7c-D3）：classify 结果 → resolveTarget / resolveBlankTarget →
+   * 落位槽（含根级侧别仿真修正）。预览绘制与释放提交都只消费本函数产物——同点必
+   * 同果。
    */
   private computeResolved(
     scene: Point,
@@ -769,7 +881,19 @@ export class DragController {
     if (!deps || !drag) {
       return { placement: hit.placement, forbiddenId: hit.forbiddenId, target: null, slot: null };
     }
-    let target = this.resolveTarget(drag.id, hit.placement);
+    // 落点 → 写参数（纪律#2：纯计算，事务之外）。空白解析为 root 对应侧末尾（问题4）；
+    // 禁止目标 placement 为 null，target 恒 null（释放路径先行取消，不会提交）。
+    let target: DropTarget = null;
+    let blankSide: 'left' | 'right' | undefined;
+    if (hit.placement?.kind === 'blank') {
+      const blank = this.resolveBlankTarget(scene);
+      if (blank) {
+        target = blank.target;
+        blankSide = blank.side;
+      }
+    } else if (hit.placement !== null) {
+      target = this.resolveTarget(drag.id, hit.placement);
+    }
     let slot: DropSlotPreview | null = null;
     if (target !== null && target.kind === 'sibling') {
       const boxes = deps.getBoxes();
@@ -781,12 +905,11 @@ export class DragController {
           draggedId: drag.id,
           parentId: target.parentId,
           index: target.index,
-          chipBox: {
-            x: scene.x - drag.offsetX,
-            y: scene.y - drag.offsetY,
-            w: draggedBox.w,
-            h: draggedBox.h,
-          },
+          // 芯片盒与芯片视觉同源（问题3①：指针 + 右下偏移），侧别/最近插入位判定
+          // 跟随所见芯片。
+          chipBox: ghostChipBox(scene, draggedBox, deps.viewport.scale),
+          // 空白落点：侧别意图按指针相对 root 中线（芯片几何中心带节点半宽，会偏）。
+          sideHint: blankSide,
         });
         if (resolution === null) {
           slot = null; // 父盒/被拖盒缺失：无预览，释放仍按原 target 结算
@@ -830,9 +953,13 @@ export class DragController {
       this.hoverForbidden = hit.forbiddenId;
       if (hit.forbiddenId !== null) this.setClass(hit.forbiddenId, 'drop-forbidden', true);
     }
+    // 禁止态芯片同步变红（M7c-F 复验问题3②）：目标盒红描边之外，白底芯片自身的
+    // 描边也转红（类由页面 CSS 落色），悬停目标本体时反馈不再被芯片完全遮盖。
+    // 芯片随 clearHighlights 整体移除，类无需单独清理。
+    this.ghost?.classList.toggle('gm-drag-ghost-forbidden', hit.forbiddenId !== null);
   }
 
-  /** 点亮落点反馈：child=目标盒描边高亮（.drop-target）；sibling=真实边 + 落位槽。 */
+  /** 点亮落点反馈：child=目标盒描边高亮（.drop-target）；sibling/空白=真实边 + 落位槽。 */
   private applyFeedback(): void {
     const p = this.hoverPlacement;
     if (!p || !this.pending) return;
@@ -915,13 +1042,18 @@ export class DragController {
     this.ghost = g;
   }
 
-  /** 芯片逐帧定位：指针场景点 − 抓取偏移（= 按下点 − 被拖盒左上角，芯片不跳变）。 */
+  /**
+   * 芯片逐帧定位（M7c-F 复验问题3①）：指针 scene 点 + 右下偏移——screen 像素恒
+   * 14px（scene 偏移 = 14 / 当前 scale，读 deps.viewport.scale 折算）。芯片不再以
+   * 「指针 − 抓取偏移」居中压住光标处的目标描边/落点反馈。
+   */
   private updateGhost(scene: Point): void {
-    const drag = this.drag;
-    if (!this.ghost || !drag) return;
+    const deps = this.deps;
+    if (!this.ghost || !deps) return;
+    const o = ghostSceneOffset(deps.viewport.scale);
     this.ghost.setAttribute(
       'transform',
-      `translate(${fmt(scene.x - drag.offsetX)}, ${fmt(scene.y - drag.offsetY)})`,
+      `translate(${fmt(scene.x + o)}, ${fmt(scene.y + o)})`,
     );
   }
 

@@ -251,10 +251,27 @@ describe('DragController 落点分类与释放结算（M7c-D1）', () => {
     expect(onDrop).toHaveBeenCalledWith('a', { kind: 'child', nodeId: 'r' });
   });
 
-  it('空白释放 → onDrop(id, null)（浮动主题，页面层 moveNode(id, "root")）', () => {
-    dragTo(650, 480, 500);
+  it('空白悬停 → 预览（root 边缘→对应侧末尾槽）+ 释放解析为 root 右侧末尾 sibling（M7c-F 复验问题4）', () => {
+    nodeEl('a').dispatchEvent(
+      pe('pointerdown', { button: 0, clientX: CENTER.a.x, clientY: CENTER.a.y, pointerId: 1 }),
+    );
+    svg.dispatchEvent(pe('pointermove', { clientX: 650, clientY: 480, pointerId: 1 })); // 空白（650 在 r 中线 -120 右半）
+    vi.advanceTimersByTime(100);
+    expect(edgeEl()).not.toBeNull(); // 空白悬停不再零预览
+    expect(slotEl()).not.toBeNull();
+    expect(slotEl()!.getAttribute('x')).toBe('200'); // 右列（与 b/d 同列）
+    expect(slotEl()!.getAttribute('y')).toBe('420'); // d 底 340 + 带间距 160/2 − a.h/2 20
+    // 边 = root 右缘中点 → 槽左边中点（render 同款 bezier）
+    expect(edgeEl()!.getAttribute('d')).toBe('M -80 -100 C 60 -100 60 440 200 440');
+    svg.dispatchEvent(pe('pointerup', { clientX: 650, clientY: 480, pointerId: 1 }));
     expect(onDrop).toHaveBeenCalledTimes(1);
-    expect(onDrop).toHaveBeenCalledWith('a', null);
+    expect(onDrop).toHaveBeenCalledWith('a', {
+      kind: 'sibling',
+      parentId: 'r',
+      index: 2, // 右侧（=文档序前缀）末尾：post-removal 子级 [b, d] 全右 → 2
+      anchorId: 'd',
+      position: 'after',
+    });
   });
 
   it('后代目标（本体/边缘带均禁止）：加 drop-forbidden、释放不回调、无预览、抬起后高亮清除', () => {
@@ -316,7 +333,7 @@ describe('DragController 落位预览（gm-drop-edge / gm-drop-slot）', () => {
     expect(slot).not.toBeNull();
     expect(edge).not.toBeNull();
     // 槽列 x = r 右缘(-80) + 列距 280（= b.x − r 右缘）→ 与现有子级同列 200；
-    // 槽 y = b.y(100) − 带间距/2(80) − a.h/2(20) = 0（未触发父中线钳制）。
+    // 槽 y = b.y(100) − 带间距/2(80) − a.h/2(20) = 0（首位空隙，几何直出）。
     expect(slot!.getAttribute('x')).toBe('200');
     expect(slot!.getAttribute('y')).toBe('0');
     expect(slot!.getAttribute('width')).toBe('100');
@@ -438,7 +455,7 @@ describe('resolveDropSlot 落位槽几何（M7c-D3 纯函数）', () => {
     expect(tail!.slot.y).toBe(420); // d 底 340 + 带间距 160/2 = 420（槽顶）
   });
 
-  it('首位插入 = 首盒上方（间距一半，不高于父盒中线），槽列与现有子级同列', () => {
+  it('首位插入 = 首盒上方空隙（间距一半，跟随几何），槽列与现有子级同列', () => {
     const head = resolveDropSlot({
       boxes: BOXES,
       childrenIds: CHILDREN.r!,
@@ -450,6 +467,31 @@ describe('resolveDropSlot 落位槽几何（M7c-D3 纯函数）', () => {
     expect(head!.index).toBe(0);
     expect(head!.slot.y).toBe(0); // b.y 100 − 带间距/2 80 − a.h/2 20
     expect(head!.slot.x).toBe(200);
+  });
+
+  it('首位插入不做父中线钳制：首兄弟悬在父中线上方时槽中心 = 首盒上方空隙（M7c-F 复验问题1）', () => {
+    // 首兄弟 k1（y=-100）悬在父 rt（y=-20..20，中线 0）上方：旧钳制把槽钳到父中线
+    // （slotY=-20），与真实插入位（插首位、锚点顺移）偏离——现按几何直出。
+    const boxes: NodeBox[] = [
+      { id: 'k1', x: 120, y: -100, w: 100, h: 40, side: 'right', depth: 1, parentId: 'rt' },
+      { id: 'rt', x: 0, y: -20, w: 80, h: 40, side: 'right', depth: 0 },
+      { id: 'a', x: 400, y: 200, w: 100, h: 40, side: 'right', depth: 1, parentId: 'ot' },
+      { id: 'ot', x: 380, y: 180, w: 80, h: 40, side: 'right', depth: 0 },
+    ];
+    const res = resolveDropSlot({
+      boxes,
+      childrenIds: ['k1'],
+      draggedId: 'a',
+      parentId: 'rt',
+      index: 0,
+      chipBox: { x: 120, y: -160, w: 100, h: 40 },
+    });
+    expect(res).not.toBeNull();
+    expect(res!.index).toBe(0);
+    // 槽中心 = 首盒 y − 带间距/2（单兄弟间距实测不到 → 兜底 20）= -110 ≠ 父中线 0。
+    expect(res!.slot.y + res!.slot.h / 2).toBe(-110);
+    expect(res!.slot.y).not.toBe(-20); // 旧钳制值（钳到父中线）不再出现
+    expect(res!.slot.x).toBe(120); // 与首盒同列
   });
 
   it('父盒缺失（协同删除窗口期）→ null（无预览，释放仍按 target 结算）', () => {
@@ -506,6 +548,27 @@ describe('resolveDropSlot 根级侧别仿真（M7c-D3 不跳左）', () => {
       parentId: 'r',
       index: 1,
       anchorId: 'x2',
+      position: 'after',
+    });
+  });
+
+  it('空白（root 左半）→ 解析为左列末尾：槽画左列、index=文档序末尾（M7c-F 复验问题4）', () => {
+    nodeEl('x1').dispatchEvent(
+      pe('pointerdown', { button: 0, clientX: 110, clientY: -50, pointerId: 1 }),
+    );
+    // 空白（-500 < r 中线 -40 → 指针侧 left）：仿真插入文档序末尾落在左列
+    svg.dispatchEvent(pe('pointermove', { clientX: -500, clientY: 100, pointerId: 1 }));
+    vi.advanceTimersByTime(100);
+    const slot = slotEl();
+    expect(slot).not.toBeNull(); // 空白悬停有预览
+    expect(slot!.getAttribute('x')).toBe('-240'); // 左列（与 x3 同列），不在右列
+    expect(slot!.getAttribute('y')).toBe('100'); // x3 底 90 + 带间距/2 10（槽顶）
+    svg.dispatchEvent(pe('pointerup', { clientX: -500, clientY: 100, pointerId: 1 }));
+    expect(onDrop).toHaveBeenCalledWith('x1', {
+      kind: 'sibling',
+      parentId: 'r',
+      index: 2, // 左侧 = 文档序后缀：末尾 = post-removal 文档序末尾 [x2, x3] → 2
+      anchorId: 'x3',
       position: 'after',
     });
   });
@@ -578,11 +641,26 @@ describe('DragController 被拖节点视觉反馈与拖拽芯片（M7c-D3）', (
     expect(nodeEl('a').classList.contains('gm-drag-origin')).toBe(true); // 原位虚线占位
   });
 
-  it('芯片逐帧跟随「指针场景点 − 抓取偏移」（按下点 − 盒左上角），芯片不跳变', () => {
-    activateAt(CENTER.b.x, CENTER.b.y); // 指针 (250,120)、抓取偏移 (50,20)
-    expect(ghostEl()!.getAttribute('transform')).toBe('translate(200, 100)');
+  it('芯片跟随 = 指针 scene 点 + 右下偏移（screen 14px 恒定 → scene 偏移 = 14/scale）', () => {
+    activateAt(CENTER.b.x, CENTER.b.y); // 指针 (250,120)，scale=1 → 偏移 14
+    expect(ghostEl()!.getAttribute('transform')).toBe('translate(264, 134)');
     svg.dispatchEvent(pe('pointermove', { clientX: 300, clientY: 160, pointerId: 1 }));
-    expect(ghostEl()!.getAttribute('transform')).toBe('translate(250, 140)');
+    expect(ghostEl()!.getAttribute('transform')).toBe('translate(314, 174)');
+    // screen 偏移恒定：scale=2 时 scene 偏移折半（7）——芯片不随缩放贴远光标
+    vp.scale = 2;
+    vp.apply();
+    svg.dispatchEvent(pe('pointermove', { clientX: 300, clientY: 160, pointerId: 1 }));
+    expect(ghostEl()!.getAttribute('transform')).toBe('translate(157, 87)');
+  });
+
+  it('禁止落点（自身/后代）→ 芯片并挂 gm-drag-ghost-forbidden（描边转红由 CSS 落地），离开即摘', () => {
+    activateAt(CENTER.b.x, CENTER.b.y); // b 本体 = 合法 child 落点
+    expect(ghostEl()!.classList.contains('gm-drag-ghost-forbidden')).toBe(false);
+    // c = a 的后代 → 禁止目标
+    svg.dispatchEvent(pe('pointermove', { clientX: CENTER.c.x, clientY: CENTER.c.y, pointerId: 1 }));
+    expect(ghostEl()!.classList.contains('gm-drag-ghost-forbidden')).toBe(true);
+    svg.dispatchEvent(pe('pointermove', { clientX: CENTER.b.x, clientY: CENTER.b.y, pointerId: 1 }));
+    expect(ghostEl()!.classList.contains('gm-drag-ghost-forbidden')).toBe(false);
   });
 
   it('正常释放 → 摘除 gm-dragging/origin 与芯片，且任何节点不残留', () => {
@@ -785,17 +863,16 @@ describe('DragController 边界与生命周期', () => {
     expect(onDrop).toHaveBeenCalledWith('a', { kind: 'child', nodeId: 'b' });
   });
 
-  it('拖拽激活后 svg 外释放：走同一结束逻辑（空白 → null），且不卡死', () => {
+  it('拖拽激活后 svg 外释放（window 兜底）：取消不回调（M7c-F 复验问题4），且不卡死', () => {
     nodeEl('a').dispatchEvent(
       pe('pointerdown', { button: 0, clientX: CENTER.a.x, clientY: CENTER.a.y, pointerId: 1 }),
     );
     svg.dispatchEvent(pe('pointermove', { clientX: CENTER.b.x, clientY: CENTER.b.y, pointerId: 1 }));
     window.dispatchEvent(pe('pointerup', { clientX: 5000, clientY: -20, pointerId: 1 }));
-    expect(onDrop).toHaveBeenCalledTimes(1);
-    expect(onDrop).toHaveBeenCalledWith('a', null); // 释放点在空白 → null
+    expect(onDrop).not.toHaveBeenCalled(); // svg 外兜底释放 = 取消，不按远点结算
     expect(controller.dragging).toBeNull();
     dragTo(CENTER.b.x, CENTER.b.y, 150);
-    expect(onDrop).toHaveBeenCalledTimes(2);
+    expect(onDrop).toHaveBeenCalledTimes(1);
     expect(onDrop).toHaveBeenLastCalledWith('a', { kind: 'child', nodeId: 'b' });
   });
 

@@ -864,3 +864,10 @@ body.painter-active .editor-canvas svg {
   stroke-dasharray: 5 4;
   pointer-events: none;
 }
+
+/* 禁止态芯片（M7c-F 复验问题3②）：悬停自身/后代（drop-forbidden）时，白底芯片
+   不再完全盖住目标盒红描边——engine 在 ghost g 上并挂 gm-drag-ghost-forbidden，
+   芯片自身描边同步转红（描边属性写在子 rect 的演示属性上，CSS 规则覆写之）。 */
+.editor-canvas svg g.gm-drag-ghost.gm-drag-ghost-forbidden > rect {
+  stroke: #f54a45;
+}
