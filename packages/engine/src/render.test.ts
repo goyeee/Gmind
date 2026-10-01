@@ -396,6 +396,100 @@ describe('renderScene：协调更新（保元素引用）', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// 标记行签名缓存一致性（需求方 bug：加表情→取消→再加同一表情，徽章只剩无字形占位）。
+// 病灶在 lastMarkersSig 与 DOM 真态失配：摘除整行后签名残留，re-add 同值命中旧签名
+// 跳过重建。以下四例钉住：re-add 重建、换值重建、无变化幂等、多组交错增删。
+// ---------------------------------------------------------------------------
+
+describe('renderScene：标记行签名缓存（remove→re-add 完整重建）', () => {
+  it('复现用例：加表情→整行摘除→再加同一表情，徽章必须带字形（不得残留空占位壳）', () => {
+    const scene = createScene(svg);
+    const withEmoji = baseData();
+    withEmoji.set('b', { text: 'x', icons: { emoji: ['😊'] } });
+    const without = baseData();
+    renderScene(scene, makeInput(baseLayout(), withEmoji));
+    expect(nodeG('b')?.querySelectorAll('.gm-marker-badge')).toHaveLength(1);
+    // 取消：整行摘除（容器与徽章一并离场，不留 gm-markers）
+    renderScene(scene, makeInput(baseLayout(), without));
+    expect(nodeG('b')?.querySelector('.gm-markers')).toBeNull();
+    // 再加同一表情：签名与残留旧签名相同也必须完整重建字形
+    renderScene(scene, makeInput(baseLayout(), withEmoji));
+    const badge = nodeG('b')?.querySelector('.gm-marker-badge');
+    expect(badge).not.toBeNull();
+    expect(badge?.getAttribute('data-marker-group')).toBe('emoji');
+    expect(badge?.getAttribute('data-marker-value')).toBe('😊');
+    expect(badge?.querySelector('text')?.textContent).toBe('😊'); // 字形本体（修复前：容器空壳）
+  });
+
+  it('同组换值（A→B，含 A→无→B 穿插摘行）：glyph 文本随值更新，不停留旧字形', () => {
+    const scene = createScene(svg);
+    const a = baseData();
+    a.set('b', { text: 'x', icons: { emoji: ['😊'] } });
+    const b = baseData();
+    b.set('b', { text: 'x', icons: { emoji: ['😍'] } });
+    const without = baseData();
+    renderScene(scene, makeInput(baseLayout(), a));
+    expect(nodeG('b')?.querySelector('.gm-marker-badge text')?.textContent).toBe('😊');
+    renderScene(scene, makeInput(baseLayout(), b));
+    expect(nodeG('b')?.querySelector('.gm-marker-badge text')?.textContent).toBe('😍');
+    // A→无→B：中间摘行不得让旧值签名串扰新值重建
+    renderScene(scene, makeInput(baseLayout(), without));
+    expect(nodeG('b')?.querySelector('.gm-markers')).toBeNull();
+    renderScene(scene, makeInput(baseLayout(), b));
+    expect(nodeG('b')?.querySelector('.gm-marker-badge text')?.textContent).toBe('😍');
+  });
+
+  it('幂等：同 icons 连续两次 render，标记行容器与徽章元素引用不变（不重建）', () => {
+    const scene = createScene(svg);
+    const data = baseData();
+    data.set('b', { text: 'x', icons: { emoji: ['😊'], priority: ['p0'] } });
+    renderScene(scene, makeInput(baseLayout(), data));
+    const row = nodeG('b')?.querySelector('.gm-markers');
+    const badge = nodeG('b')?.querySelector('.gm-marker-badge');
+    expect(row).not.toBeNull();
+    expect(badge).not.toBeNull();
+    renderScene(scene, makeInput(baseLayout(), data));
+    expect(nodeG('b')?.querySelector('.gm-markers')).toBe(row);
+    expect(nodeG('b')?.querySelector('.gm-marker-badge')).toBe(badge);
+    expect(nodeG('b')?.querySelectorAll('.gm-marker-badge')).toHaveLength(2);
+  });
+
+  it('多组共存（表情+优先级）增删交错：字形与组/值锚点随签名逐次对齐', () => {
+    const scene = createScene(svg);
+    const both = baseData();
+    both.set('b', { text: 'x', icons: { emoji: ['😊'], priority: ['p0'] } });
+    const onlyPriority = baseData();
+    onlyPriority.set('b', { text: 'x', icons: { priority: ['p0'] } });
+    const swapped = baseData();
+    swapped.set('b', { text: 'x', icons: { emoji: ['😊'], priority: ['p2'] } });
+
+    renderScene(scene, makeInput(baseLayout(), both));
+    let badges = nodeG('b')?.querySelectorAll('.gm-marker-badge');
+    expect(badges).toHaveLength(2); // 固定组序：priority 在前、emoji 在后
+    expect(badges?.[0]?.getAttribute('data-marker-group')).toBe('priority');
+    expect(badges?.[0]?.querySelector('text')?.textContent).toBe('P0');
+    expect(badges?.[1]?.getAttribute('data-marker-value')).toBe('😊');
+
+    renderScene(scene, makeInput(baseLayout(), onlyPriority)); // 摘表情（行保留）
+    badges = nodeG('b')?.querySelectorAll('.gm-marker-badge');
+    expect(badges).toHaveLength(1);
+    expect(badges?.[0]?.getAttribute('data-marker-value')).toBe('p0');
+
+    renderScene(scene, makeInput(baseLayout(), both)); // re-add 同表情
+    badges = nodeG('b')?.querySelectorAll('.gm-marker-badge');
+    expect(badges).toHaveLength(2);
+    expect(badges?.[1]?.querySelector('text')?.textContent).toBe('😊');
+    expect(badges?.[0]?.querySelector('text')?.textContent).toBe('P0');
+
+    renderScene(scene, makeInput(baseLayout(), swapped)); // 优先级换值 p0→p2
+    badges = nodeG('b')?.querySelectorAll('.gm-marker-badge');
+    expect(badges).toHaveLength(2);
+    expect(badges?.[0]?.querySelector('text')?.textContent).toBe('P2');
+    expect(badges?.[1]?.querySelector('text')?.textContent).toBe('😊');
+  });
+});
+
 describe('renderScene：评论角标（FR-CMT-002）', () => {
   it('count>0 渲染 .gm-comment-badge（内容=计数）；0/缺省不渲染', () => {
     const data = baseData();
@@ -812,5 +906,26 @@ describe('renderScene：长文本断行（box.lines 直绘）', () => {
     expect(tspans).toHaveLength(2);
     expect(tspans?.[0]?.textContent).toBe('一二三四');
     expect(tspans?.[1]?.textContent).toBe('五');
+  });
+});
+
+
+describe('renderScene：任务行签名缓存（remove→re-add 完整重建，与标记行同不变式）', () => {
+  const taskOf = (status: string, due: string) => ({
+    status, progress: 40, owners: ['01M352X50QV7T99S3WBH6PDTR5'], startDate: null, dueDate: due, doneDate: null,
+  });
+  it('任务信息移除后重加相同数据 → 任务行完整重建（日期徽标在位，不得残留空壳）', () => {
+    const scene = createScene(svg);
+    const withTask = baseData();
+    (withTask.set as (k: string, v: unknown) => void)('b', { text: 'x', task: taskOf('doing', '2026-10-15') });
+    const without = baseData();
+    renderScene(scene, makeInput(baseLayout(), withTask));
+    expect(nodeG('b')?.querySelector('.gm-task-row')).not.toBeNull();
+    renderScene(scene, makeInput(baseLayout(), without));
+    expect(nodeG('b')?.querySelector('.gm-task-row')).toBeNull();
+    renderScene(scene, makeInput(baseLayout(), withTask));
+    const row = nodeG('b')?.querySelector('.gm-task-row');
+    expect(row).not.toBeNull();
+    expect(row?.querySelector('.gm-task-due')?.textContent).toContain('10-15');
   });
 });

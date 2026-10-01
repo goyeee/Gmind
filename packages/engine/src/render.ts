@@ -425,9 +425,18 @@ function applyNode(
   // 标记区（M7b-W1 八组制多值，固定组序，位置不变：文字左侧）。签名差分：签名
   // 不变则徽标元素引用保持；变化时整行重建（徽标为无状态绘制，重建代价极小）。
   const markersSig = markerSignatureOf(visual.icons);
+  const prevMarkers = entry.markers;
   entry.markers = syncOptional(entry.markers, markersSig !== '', g, () =>
     el('g', { class: 'gm-markers' }),
   );
+  if (entry.markers !== prevMarkers) {
+    // 容器实例变化（首次创建/整行摘除/摘除后再加）时签名缓存必须同步失效：
+    // lastMarkersSig 只描述「当前容器实例」的 DOM 真态。摘除路径 syncOptional
+    // 会整容器移除 DOM，但残留的旧签名会让 remove→re-add 同值序列（如加表情→
+    // 取消→再加同一表情）命中缓存跳过重建，徽章只剩无字形占位壳——归零即强制
+    // re-add 走完整重建；无变化时容器实例不变，不进此支，幂等语义保持。
+    entry.lastMarkersSig = '';
+  }
   if (entry.markers && entry.lastMarkersSig !== markersSig) {
     const defs = markerDefsOf(visual.icons);
     const children: SVGGElement[] = [];
@@ -563,7 +572,14 @@ function applyNode(
   const taskRowSig = hasTask
     ? `${task?.status ?? 'todo'}|${(task?.owners ?? []).join(',')}|${taskCtx.progress}|${task?.dueDate ?? ''}|${taskCtx.overdue ? 1 : 0}|${fmt(b.w)}x${fmt(b.h)}`
     : '';
+  const prevTaskRow = entry.taskRow;
   entry.taskRow = syncOptional(entry.taskRow, hasTask, g, () => el('g', { class: 'gm-task-row' }));
+  if (entry.taskRow !== prevTaskRow) {
+    // 容器实例变化（首次创建/整行摘除/摘除后再加）⇒ 签名缓存同步归零：与标记行
+    // 同一不变式——lastTaskSig 只描述当前容器实例的 DOM 真态，否则 remove→re-add
+    // 相同任务数据会命中残留签名跳过重建，留下空任务行（M7c-L）。
+    entry.lastTaskSig = '';
+  }
   if (entry.taskRow && entry.lastTaskSig !== taskRowSig) {
     entry.lastTaskSig = taskRowSig;
     const rowY = b.h - TASK_ROW_H / 2;
