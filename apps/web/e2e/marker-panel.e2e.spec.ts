@@ -7,12 +7,12 @@ import { expect, test, type Page } from '@playwright/test';
  * marker-panel（absolute 于 .insert-wrap，顶贴按钮下沿、向下展开；开面板收菜单，
  * 二者同挂 insert-wrap 互斥）；「表情」项（insert-emoji）同层直开表情页签。
  * 面板内分段页签 marker-tab-icon / marker-tab-emoji 切换；图标页七组竖排（心情/
- * 优先级/数字/箭头/旗帜/进程/其他，M7b-W1 目录单源 MARKER_CATALOG），表情页 28 枚
+ * 优先级/数字/箭头/旗帜/进度/其他，M7b-W1 目录单源 MARKER_CATALOG），表情页 28 枚
  * emoji 网格（emoji-picker 容器，逐值 testid marker-emoji-{char}）。
  *
  * 语义（M7b-W1/W3）：按钮 testid `marker-{group}-{slug}`（旗帜 = marker-flag-flag）；
  * 点击 = 批量 setIcon（「全含则移除否则设置」，单事务）；single 组（心情/优先级/数字/
- * 箭头/旗帜/进程）组内单选替换，multi 组（其他/表情）组内多选叠加；回显按当前选中
+ * 箭头/旗帜/进度）组内单选替换，multi 组（其他/表情）组内多选叠加；回显按当前选中
  * 集**交集口径** aria-pressed；无选中节点 → 面板禁用 + 提示「选中节点后添加标记」。
  * Esc / 外点关闭整个插入层（菜单 + 面板）。
  *
@@ -83,20 +83,21 @@ test('标记面板：插入菜单锚定弹出层展开，页签 + 七组值域 +
     ['number', '数字'],
     ['arrow', '箭头'],
     ['flag', '旗帜'],
-    ['progress', '进程'],
+    ['progress', '进度'],
     ['other', '其他'],
   ] as const) {
     const row = panel.getByTestId(`marker-group-${group}`);
     await expect(row).toBeVisible();
     await expect(row.locator('.marker-group-label')).toHaveText(label);
   }
-  // 值域与 M7b-W1 目录一致：心情 5 / 优先级 9 / 数字 10 / 箭头 5 / 旗帜 3 / 进程 8 / 其他 27
+  // 值域与企微目录一致（2026-10-01 需求方反馈任务 3 补档）：心情 5 / 优先级 9 / 数字 10 /
+  // 箭头 5 / 旗帜 3 / 进度 9（含首位「未开始」none）/ 其他 27
   await expect(panel.locator('[data-testid^="marker-mood-"]')).toHaveCount(5);
   await expect(panel.locator('[data-testid^="marker-priority-"]')).toHaveCount(9);
   await expect(panel.locator('[data-testid^="marker-number-"]')).toHaveCount(10);
   await expect(panel.locator('[data-testid^="marker-arrow-"]')).toHaveCount(5);
   await expect(panel.locator('[data-testid^="marker-flag-"]')).toHaveCount(3);
-  await expect(panel.locator('[data-testid^="marker-progress-"]')).toHaveCount(8);
+  await expect(panel.locator('[data-testid^="marker-progress-"]')).toHaveCount(9);
   await expect(panel.locator('[data-testid^="marker-other-"]')).toHaveCount(27);
   // 表情页：28 枚 emoji 平铺网格（emoji-picker 容器 + marker-emoji-{char} 逐值；
   // 前缀匹配须圈定 picker 内部——容器 testid marker-emoji-page 同前缀会多计 1）
@@ -128,6 +129,23 @@ test('标记面板：旗帜写入渲染与 pressed 回显，再点同值取消',
   // Esc 关闭整个插入层（菜单 + 右侧面板）
   await page.keyboard.press('Escape');
   await expect(page.getByTestId('marker-panel')).toHaveCount(0);
+});
+
+// 用例 2b（2026-10-01 需求方反馈任务 3/4）：进度组首位「未开始」（none）写入 →
+// 画布 0% 空心环徽章；组名「进度」与按钮悬停标题（目录中文 label）齐备。
+test('标记面板：进度组「未开始」写入空心环徽章，组名与悬停标题齐备', async ({ page }) => {
+  await openSeedDoc(page, '本周计划');
+  await selectNodeByText(page, '周一');
+  const panel = await openMarkerPanel(page);
+  const group = panel.getByTestId('marker-group-progress');
+  await expect(group.locator('.marker-group-label')).toHaveText('进度');
+  const none = panel.getByTestId('marker-progress-none');
+  await expect(none).toHaveAttribute('title', '进度 未开始');
+  await none.click();
+  const badge = markerBadgeByValue(page, '周一', 'none');
+  await expect(badge).toHaveCount(1);
+  // 徽章悬停标题：SVG <title> 子元素 = 原生 tooltip（与面板按钮 title 同源 label）
+  await expect(badge.locator('title')).toHaveText('进度 未开始');
 });
 
 // 用例 3：回显按节点独立——换选另一节点后原 pressed 不串台；异组并存（优先级+旗帜）。

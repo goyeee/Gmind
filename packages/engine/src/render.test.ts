@@ -158,6 +158,30 @@ describe('renderScene：初次渲染', () => {
     expect(nodeG('c')?.querySelectorAll('.gm-marker-badge').length).toBe(0);
   });
 
+  it('进度组「未开始」（2026-10-01 需求方反馈任务 3）：none 画 0% 空心环徽章（无扇形路径）', () => {
+    const data = baseData();
+    data.set('b', { text: 'x', icons: { progress: ['none'] } });
+    renderScene(createScene(svg), makeInput(baseLayout(), data));
+    const badge = nodeG('b')?.querySelector('.gm-marker-badge');
+    expect(badge).not.toBeNull();
+    expect(badge?.getAttribute('data-marker-value')).toBe('none');
+    // 空心环：stroke 圆（fill=none）+ 无扇形 path（fraction=0 不落零面积退化路径）
+    const ring = badge?.querySelector('circle');
+    expect(ring?.getAttribute('fill')).toBe('none');
+    expect(ring?.getAttribute('stroke')).toBe('#47a26b');
+    expect(badge?.querySelector('path')).toBeNull();
+  });
+
+  it('徽章悬停标题（2026-10-01 需求方反馈任务 4）：徽章首个子元素是 <title>（MARKER_CATALOG 中文 label）', () => {
+    const data = baseData();
+    data.set('b', { text: 'x', icons: { priority: ['p0'], progress: ['none'] } });
+    renderScene(createScene(svg), makeInput(baseLayout(), data));
+    const badges = nodeG('b')?.querySelectorAll('.gm-marker-badge');
+    expect(badges?.length).toBe(2);
+    expect(badges?.[0]?.querySelector('title')?.textContent).toBe('优先级 P0');
+    expect(badges?.[1]?.querySelector('title')?.textContent).toBe('进度 未开始');
+  });
+
   it('multi 组叠加与组序：priority/other/emoji 三组徽标按固定组序展开，槽位逐枚递增', () => {
     const data = baseData();
     data.set('b', { text: 'x', icons: { priority: ['p3'], other: ['done', 'clock'], emoji: ['😄'] } });

@@ -117,6 +117,51 @@ test('编辑器：惰性创建——Tab 立即落位新主题节点、敲字才�
   await expect(groups).toHaveCount(before + 1);
 });
 
+// 用例 2c（2026-10-01 需求方反馈任务 1）：新建提交文本后按 Tab → 描述编辑浮层
+// （复用 .gm-text-editor，锚定节点盒下一行；仅非简洁模式）——Enter 写入 Y.Doc
+// description；该次 Tab 不再新建子主题（节点数不增，日常 Tab 建子语义不受影响）。
+test('编辑器：新建提交后 Tab 打开描述浮层，Enter 写入描述', async ({ page }) => {
+  await openSeedDoc(page, '本周计划');
+  await expect(page.locator('.editor-canvas svg .gm-text')).toHaveCount(7); // 种子 root+3子+3孙
+  // 新建（惰性）→ 敲字补开编辑框 → Enter 提交文本（提交后挂一次「Tab 直填描述」机会）
+  await page.keyboard.press('Tab');
+  await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '新主题' })).toBeVisible();
+  await pressFirstCharToOpen(page);
+  await page.keyboard.press('Backspace');
+  await page.keyboard.insertText('需求评审');
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.gm-text-editor')).toHaveCount(0);
+  // Tab：打开描述编辑浮层（不是新建子主题——文本总数仍 8）
+  await page.keyboard.press('Tab');
+  const desc = page.locator('.gm-text-editor');
+  await expect(desc).toBeVisible();
+  await expect(desc).toBeFocused();
+  await expect(page.locator('.editor-canvas svg .gm-text')).toHaveCount(8);
+  await page.keyboard.insertText('一句话任务描述');
+  await page.keyboard.press('Enter');
+  await expect(desc).toHaveCount(0);
+  await expect(page.getByTestId('save-status')).toHaveText(/已保存/);
+  // Y.Doc description 断言：保存后的 docState 反解，新节点 description 已写入
+  const token = await page.evaluate(() => localStorage.getItem('gmind.token'));
+  const fileId = page.url().split('/').pop() ?? '';
+  const res = await page.request.get(`/api/files/${fileId}`, {
+    headers: { Authorization: `Bearer ${token ?? ''}` },
+  });
+  expect(res.ok()).toBeTruthy();
+  const detail = (await res.json()) as { docState: string };
+  const doc = new Y.Doc();
+  const binary = atob(detail.docState); // web tsconfig 无 node types，不用 Buffer
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  Y.applyUpdate(doc, bytes);
+  const nodes = doc.getMap('nodes') as Y.Map<Y.Map<unknown>>;
+  const textOf = (id: string): string => String(nodes.get(id)?.get('text') ?? '');
+  const rootKids = ((nodes.get('root')?.get('children') as Y.Array<string>)?.toArray() ?? []);
+  const newId = rootKids.find((id) => textOf(id) === '需求评审');
+  expect(newId).toBeTruthy();
+  expect(String(nodes.get(newId as string)?.get('description') ?? '')).toBe('一句话任务描述');
+});
+
 // 用例 3：保存后刷新页面，「新节点」仍在（持久化闭环）
 test('编辑器：保存后刷新页面新建节点仍在', async ({ page }) => {
   await openSeedDoc(page, '本周计划');

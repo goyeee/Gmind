@@ -12,13 +12,13 @@ import './marker-panel.css';
  * 宽 340px、max-height 70vh 内部滚动。替换 M7a 版 position:fixed 视口抽屉。
  * 顶部「图标」/「表情」标题 + 分段页签（图标|表情）+ 右上角 ×（企微截图同构）。
  *
- * 内容（M7b-W1 目录单源，不手抄）：图标页 = 心情/优先级/数字/箭头/旗帜/进程/其他
+ * 内容（M7b-W1 目录单源，不手抄）：图标页 = 心情/优先级/数字/箭头/旗帜/进度/其他
  * 七组竖排（组名左上小字 + 图标行，MARKER_CATALOG 逐值渲染彩色 chip）；表情页 =
  * 28 枚 emoji 平铺网格。容器 testid（marker-panel-close/marker-tab-icon/
  * marker-tab-emoji/marker-icon-page/marker-emoji-page/marker-group-*）与逐值
  * testid `marker-{group}-{slug}` 全部保留。
  *
- * 语义（M7b-W1 组语义常量 + W3 批量）：single 组（心情/优先级/数字/箭头/旗帜/进程）
+ * 语义（M7b-W1 组语义常量 + W3 批量）：single 组（心情/优先级/数字/箭头/旗帜/进度）
  * 组内单选替换；multi 组（其他/表情）组内多选叠加。回显 = 选中集**交集口径**
  * （全含才亮，页面侧算好传入）；无选中禁用 + 提示；有选中（单选/多选）即可点，
  * 点标记 = 批量应用（「全含则移除否则设置」在页面侧 applyMarker 展开，一次性事务）。

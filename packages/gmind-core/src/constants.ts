@@ -7,7 +7,7 @@ export const MAX_DESCRIPTION_LENGTH = 200;
 /**
  * 标记八组制（M7b-W1，2026-09-29 需求方裁定「企微全量对标」）：M7a 三组制
  * （priority/icon/emoji）扩容为企微标记面板全量八组——mood 心情(5) / priority
- * 优先级(9) / number 数字(10) / arrow 箭头(5) / flag 旗帜(3) / progress 进程(8) /
+ * 优先级(9) / number 数字(10) / arrow 箭头(5) / flag 旗帜(3) / progress 进度(9) /
  * other 其他(27) / emoji 表情(28)。值目录（组→值 slug/字符）由本模块单源导出：
  * setIcon 值校验、repair 旧值收敛、xmind-io 目录对齐与消费方目录遍历都指向这里；
  * 字形/配色的渲染层数据在 @gmind/engine MARKER_CATALOG（web MarkerPanel 同源消费）。
@@ -28,7 +28,7 @@ export const ICON_GROUPS = [
 export type IconGroup = (typeof ICON_GROUPS)[number];
 
 /**
- * 组语义矩阵（M7b-W1，企微实测定案）：优先级/心情/数字/箭头/旗帜/进程 = 组内
+ * 组语义矩阵（M7b-W1，企微实测定案）：优先级/心情/数字/箭头/旗帜/进度 = 组内
  * 单选替换（再点同值=移除该组）；其他/表情 = 组内多选叠加（单组上限
  * MARKER_MULTI_MAX，再点同值=移除该枚）；跨组并存。常量导出供 W3 面板/批量
  * 标记逻辑复用（「全含则移除否则设置」按组模式展开）。
@@ -68,11 +68,24 @@ export const ARROW_VALUES = ['left', 'right', 'up', 'down', 'leftright'] as cons
 export const FLAG_VALUES = ['flag', 'flagRect', 'flagPennant'] as const;
 
 /**
- * 进程组（8，企微截图转录：绿色饼图 1/8→7/8 + 完成对勾；XMind 进程八档同构）。
- * slug 后缀为近似百分档：p12=1/8、p25=1/4、p37=3/8、p50=1/2、p62=5/8、p75=3/4、
- * p87=7/8、done=完成。PROGRESS_LEGACY_MAP 负责旧百分比环的对应档落位。
+ * 进度组（9，企微截图转录：未开始空心环 + 绿色饼图 1/8→7/8 + 完成对勾；XMind 进度
+ * 八档同构，首位「未开始」为 2026-10-01 需求方反馈任务 3 补档）。组 id/存储键仍是
+ * 'progress'（既有文档零迁移），组显示名改「进度」（engine MARKER_GROUP_LABELS）。
+ * slug 口径：none=未开始（0%，空心环）、p12=1/8、p25=1/4、p37=3/8、p50=1/2、
+ * p62=5/8、p75=3/4、p87=7/8、done=完成。旧百分比环经 progressStageOf 落对应档
+ * （0% → none）。
  */
-export const PROGRESS_VALUES = ['p12', 'p25', 'p37', 'p50', 'p62', 'p75', 'p87', 'done'] as const;
+export const PROGRESS_VALUES = [
+  'none',
+  'p12',
+  'p25',
+  'p37',
+  'p50',
+  'p62',
+  'p75',
+  'p87',
+  'done',
+] as const;
 
 /**
  * other 组（27，企微截图「其他」组逐枚转录）：done ✓绿 / cancel ✕红 / calendar
@@ -200,15 +213,20 @@ export const ICON_LEGACY_MAP: Record<string, { group: IconGroup; value: string }
   flag: { group: 'flag', value: 'flag' },
 };
 
-/** 旧百分比进度环（M6 '0%'-'100%'，repair/xmind-io 共用）→ 进程组对应档
- *  （最近 1/8 档：round(pct/12.5) 钳 1-8，8=done）。 */
+/** 旧百分比进度环（M6 '0%'-'100%'，repair/xmind-io 共用）→ 进度组对应档
+ *  （最近档：round(pct/12.5) 钳 0-8，0=none 未开始、8=done）。 */
 export const PROGRESS_LEGACY_VALUES = ['0%', '10%', '25%', '40%', '50%', '60%', '75%', '100%'] as const;
 
-/** 百分比 → 进程组档位 slug（非法/越界输入返回 null，调用方确定性丢弃）。 */
+/**
+ * 百分比 → 进度组档位 slug（非法/越界输入返回 null，调用方确定性丢弃）。
+ * 2026-10-01 补档「未开始」（PROGRESS_VALUES[0]='none'）后索引直接对位：
+ * 0-6.25% 最近档为 none（0% 旧版落 p12，现语义修正为未开始），1-7 档 slug 与
+ * 8=done 落位与旧版一致。
+ */
 export function progressStageOf(pct: number): string | null {
   if (!Number.isFinite(pct) || pct < 0 || pct > 100) return null;
-  const idx = Math.min(8, Math.max(1, Math.round(pct / 12.5)));
-  return idx === 8 ? 'done' : (PROGRESS_VALUES[idx - 1] as string);
+  const idx = Math.min(8, Math.max(0, Math.round(pct / 12.5)));
+  return PROGRESS_VALUES[idx] as string;
 }
 
 /* ── 任务字段约束（M7a-T1，setNodeTask 校验口径单源）────────────────────── */

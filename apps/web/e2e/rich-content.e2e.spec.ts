@@ -68,23 +68,25 @@ function nodeGroup(page: Page, text: string) {
   return page.locator('.editor-canvas svg g[data-node-id]').filter({ hasText: text });
 }
 
-// 用例 1：面板写备注保存 → 画布备注角标出现（含 <title> 悬停预览）→ 刷新仍在（持久化）
-test('富内容：面板写备注保存后角标出现且刷新仍在', async ({ page }) => {
+// 用例 1（2026-10-01 需求方反馈任务 2 反向钉死）：「简介」功能回退——恢复 M7b #3
+// 裁定的 note 隐藏态：插入菜单无「简介」项（insert-note 撤下）、格式面板无备注
+// 编辑区；「描述」（M7c-C1）小节与 × 收起钮仍工作。note 数据模型/画布 'N' 角标
+// 渲染不动（XMind 导入的 note 仍显角标，e2e 覆盖见 import-export；悬停 title
+// 单测钉在 engine render.test note 角标用例）。
+test('富内容：简介（备注）区块已回退隐藏，描述区块与 × 收起仍工作', async ({ page }) => {
   await openSeedDoc(page, '本周计划');
   await selectNodeByText(page, '周一');
-  const panel = await openFormatPanel(page); // 右列默认隐藏：点格式开
-  await panel.getByLabel('节点备注').fill('评审要点');
-  await panel.getByRole('button', { name: '保存备注' }).click();
-  const g = nodeGroup(page, '周一');
-  await expect(g.locator('.gm-note-badge')).toBeVisible();
-  // 悬停预览为 SVG <title> 子元素（SVG 标准原生 tooltip；HTML title 属性在
-  // SVG 元素上多数浏览器不渲染提示）
-  await expect(g.locator('.gm-note-badge > title')).toHaveText(/评审要点/);
-  await expect(page.getByTestId('save-status')).toHaveText(/已保存/);
-  await page.reload();
-  await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '本周计划' })).toBeVisible();
-  await expect(nodeGroup(page, '周一').locator('.gm-note-badge')).toBeVisible();
-  await expect(nodeGroup(page, '周一').locator('.gm-note-badge > title')).toHaveText(/评审要点/);
+  await page.getByTestId('insert-menu').click();
+  await expect(page.getByTestId('insert-note')).toHaveCount(0); // 插入菜单无「简介」项
+  await page.keyboard.press('Escape'); // 收起插入层（Esc/外点关闭语义）
+  const panel = await openFormatPanel(page);
+  await expect(panel.getByLabel('节点备注')).toHaveCount(0); // 备注编辑区不渲染
+  await expect(panel.getByRole('button', { name: '保存备注' })).toHaveCount(0);
+  await expect(panel.locator('h3', { hasText: '描述' })).toHaveCount(1); // 小节标题改回「描述」
+  await expect(panel.getByLabel('节点描述')).toBeVisible();
+  // 头部 × 关闭钮：收起右列（formatOpen=false，右列整列不渲染）
+  await panel.getByTestId('rich-panel-close').click();
+  await expect(panel).toHaveCount(0);
 });
 
 // 用例 2：设 https 链接角标出现；javascript: 被拒——toast 文案出现且角标不新增
@@ -242,26 +244,4 @@ test('富内容：链接/图片/图标齐设后刷新全部仍在', async ({ pag
   await expect(gAfter.locator('.gm-link-badge')).toBeVisible();
   await expect(gAfter.locator('image.gm-image')).toBeVisible();
   await expect(markerBadgeByValue(page, '周五', 'flag')).toHaveCount(1);
-});
-
-// 用例 8（2026-09-30 需求方四条 UI 反馈任务 2/4）：插入菜单第六项「简介」= 开格式
-// 右列并聚焦备注输入框（openRichAndFocus 模式）；面板内「简介（备注）」「描述」
-// 两区块小节标题/输入框齐备；头部 × 关闭钮（rich-panel-close）收起右列。
-test('富内容：插入菜单「简介」项聚焦备注框，面板 × 钮收起', async ({ page }) => {
-  await openSeedDoc(page, '本周计划');
-  await selectNodeByText(page, '周一');
-  await page.getByTestId('insert-menu').click();
-  const noteItem = page.getByTestId('insert-note');
-  await expect(noteItem).toBeVisible();
-  await noteItem.click();
-  // 右列格式面板随「简介」项打开，备注输入框聚焦（openRichAndFocus 一帧后聚焦）
-  const panel = page.getByTestId('rich-panel');
-  await expect(panel).toBeVisible();
-  const noteArea = panel.getByLabel('节点备注');
-  await expect(noteArea).toBeFocused();
-  // 「简介（备注）」+「描述」两区块齐备（描述为 M7c-C1 字段的第二编辑入口）
-  await expect(panel.getByLabel('节点描述')).toBeVisible();
-  // 头部 × 关闭钮：收起右列（formatOpen=false，右列整列不渲染）
-  await panel.getByTestId('rich-panel-close').click();
-  await expect(panel).toHaveCount(0);
 });

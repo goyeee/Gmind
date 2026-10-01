@@ -13,7 +13,7 @@
  * 确定性输出（两位小数去尾零）。
  */
 
-/** 标记渲染固定组序（M7b-W1 八组制）：心情→优先级→数字→箭头→旗帜→进程→其他→表情。 */
+/** 标记渲染固定组序（M7b-W1 八组制）：心情→优先级→数字→箭头→旗帜→进度→其他→表情。 */
 export const MARKER_ROW_ORDER = [
   'mood',
   'priority',
@@ -30,7 +30,7 @@ export type MarkerBadgeKind =
   | 'squareText' // 彩色圆角方块 + 白字（日历 31）
   | 'triangle' // 彩色三角 + 白字（注意 !）
   | 'text' // 彩色字符（箭头/+/⚑/★/♥/emoji 本色字符）
-  | 'pie' // 绿色饼图（进程 1/8-7/8；done=满圆+白✓）
+  | 'pie' // 绿色饼图（进度：none=0% 空心环、1/8-7/8；done=满圆+白✓）
   | 'pieIcon' // 其他组的饼图（3/4 饼 + 分离象限）
   | 'star' // 五角星
   | 'heart' // 心（heartbroken 加白裂纹）
@@ -105,17 +105,20 @@ const ARROW_DEFS: MarkerGlyphDef[] = [
   { value: 'leftright', label: '箭头 左右', kind: 'arrow', color: C.arrowBlue, variant: 4, text: '↔', chipFg: 'color' },
 ];
 
-/** 进程八档（绿色饼图 1/8→7/8 + 完成）。 */
+/** 进度组档位（绿色饼图：未开始空心环 + 1/8→7/8 + 完成；组名 2026-10-01 起「进度」）。 */
 const PROGRESS_FRACTIONS: Array<[string, number, string]> = [
-  ['p12', 0.125, '进程 1/8'],
-  ['p25', 0.25, '进程 1/4'],
-  ['p37', 0.375, '进程 3/8'],
-  ['p50', 0.5, '进程 1/2'],
-  ['p62', 0.625, '进程 5/8'],
-  ['p75', 0.75, '进程 3/4'],
-  ['p87', 0.875, '进程 7/8'],
+  ['p12', 0.125, '进度 1/8'],
+  ['p25', 0.25, '进度 1/4'],
+  ['p37', 0.375, '进度 3/8'],
+  ['p50', 0.5, '进度 1/2'],
+  ['p62', 0.625, '进度 5/8'],
+  ['p75', 0.75, '进度 3/4'],
+  ['p87', 0.875, '进度 7/8'],
 ];
 const PROGRESS_DEFS: MarkerGlyphDef[] = [
+  // 首位「未开始」（core PROGRESS_VALUES[0]='none' 对齐，2026-10-01 需求方反馈任务 3）：
+  // fraction=0 → drawMarkerBadge 只画空心环（无扇形）。
+  { value: 'none', label: '进度 未开始', kind: 'pie', color: C.green, fraction: 0 },
   ...PROGRESS_FRACTIONS.map(([value, fraction, label]) => ({
     value,
     label,
@@ -123,7 +126,7 @@ const PROGRESS_DEFS: MarkerGlyphDef[] = [
     color: C.green,
     fraction,
   })),
-  { value: 'done', label: '进程 完成', kind: 'pie', color: C.green, fraction: 1, text: '✓' },
+  { value: 'done', label: '进度 完成', kind: 'pie', color: C.green, fraction: 1, text: '✓' },
 ];
 
 /** 其他组 27 枚（复杂实物形以 emoji 字符近似：link/like/unlike/money/printer）。 */
@@ -231,7 +234,7 @@ export const MARKER_GROUP_LABELS: Record<(typeof MARKER_ROW_ORDER)[number], stri
   number: '数字',
   arrow: '箭头',
   flag: '旗帜',
-  progress: '进程',
+  progress: '进度',
   other: '其他',
   emoji: '表情',
 };
@@ -267,7 +270,7 @@ function f(n: number): string {
   return String(Math.round(n * 100) / 100);
 }
 
-function el(tag: string, attrs: Record<string, string | number>): SVGElement {
+function el(tag: string, attrs: Record<string, string | number> = {}): SVGElement {
   const node = document.createElementNS(SVG_NS, tag);
   for (const key of Object.keys(attrs)) node.setAttribute(key, String(attrs[key]));
   return node;
@@ -332,6 +335,13 @@ const NUT_PATH = 'M 7 0.6 L 12.5 3.8 L 12.5 10.2 L 7 13.4 L 1.5 10.2 L 1.5 3.8 Z
  */
 export function drawMarkerBadge(def: MarkerGlyphDef): SVGGElement | null {
   const g = el('g', { class: 'gm-marker-badge' }) as SVGGElement;
+  // 悬停标题（2026-10-01 需求方反馈任务 4）：SVG <title> 子元素 = 原生 tooltip
+  // （与 render note 角标同机制，SVG 元素上的 HTML title 属性多数浏览器不渲染提示）。
+  // 文案取 MARKER_CATALOG 的中文 label（「组名 值」，如「进度 1/2」「优先级 P0」），
+  // 面板 chip / 迷你选盘 / 节点徽章三处同源。置于首位是 SVG title 的惯例位置。
+  const title = el('title');
+  title.textContent = def.label;
+  g.appendChild(title);
   const text = (content: string, attrs: Record<string, string | number>): void => {
     const t = el('text', { 'text-anchor': 'middle', ...attrs });
     t.textContent = content;
@@ -365,7 +375,10 @@ export function drawMarkerBadge(def: MarkerGlyphDef): SVGGElement | null {
         text(def.text ?? '✓', { x: 7, y: 10.1, 'font-size': 7.6, 'font-weight': 700, fill: '#ffffff' });
       } else {
         g.appendChild(el('circle', { cx: 7, cy: 7, r: 6.1, fill: 'none', stroke: def.color, 'stroke-width': 1.1 }));
-        g.appendChild(el('path', { d: pieWedgePath(7, 7, 6.1, frac), fill: def.color }));
+        // fraction=0（未开始）只画空心环：零扇形的路径是零面积退化形，跳过不落。
+        if (frac > 0) {
+          g.appendChild(el('path', { d: pieWedgePath(7, 7, 6.1, frac), fill: def.color }));
+        }
       }
       break;
     }

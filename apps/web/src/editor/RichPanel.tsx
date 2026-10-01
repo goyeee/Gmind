@@ -4,11 +4,9 @@ import {
   applyStyle,
   getNode,
   MAX_DESCRIPTION_LENGTH,
-  MAX_NOTE_LENGTH,
   setDescription,
   setHref,
   setImage,
-  setNote,
   type NodeSnapshot,
   type StyleScope,
 } from '@gmind/core';
@@ -18,20 +16,22 @@ import './rich-panel.css';
 /**
  * 富内容面板（M1b Task 12，FR-EDT-018~021）+ 样式区（Task 15，FR-EDT-015；
  * M6 Task 2 企微对标：样式区随选中节点联动回显）：
- * 选中节点的样式/备注/链接/图片编辑。写入一律经 @gmind/core 操作 API
+ * 选中节点的样式/描述/链接/图片编辑。写入一律经 @gmind/core 操作 API
  * （applyStyle 作用域 subtree/single；调用方统一 origin 与 capUndoStack），画布刷新
  * 走既有 doc update → renderScene 管线。
  *
  * 2026-09-28 标记面板迁移：原「图标」区（优先级/进度/旗帜/星标/表情）整体搬至
  * 工具栏「插入」菜单的右侧层标记面板（MarkerPanel，企微对标）；本面板只保留
- * 样式区 + 备注/链接/图片区，数据模型与写链路零改动。
+ * 样式区 + 描述/链接/图片区，数据模型与写链路零改动。
  *
- * 2026-09-30 需求方四条 UI 反馈：① 头部加 × 关闭钮（rich-panel-close，同任务
- * 面板/评论面板关闭钮样式，EditorPage 传 onClose=setFormatOpen(false)，与既有
- * 「外点关闭」不冲突）；② 「简介（备注）」与「描述」两个区块补清晰小节标题与
- * 字数——备注（note）恢复为格式面板常驻区块并作为插入菜单「简介」项的落点，
- * 描述（description，M7c-C1）同款受控草稿、失焦提交（未变更零写入，TaskPanel
- * 同语义），字数逻辑沿用各自上限常量。
+ * 2026-09-30 需求方四条 UI 反馈：① 头部加 × 关闭钮（rich-panel-close）；
+ * ② 「描述」区块（description，M7c-C1）受控草稿、失焦提交（未变更零写入，
+ * TaskPanel 同语义），字数沿用上限常量。
+ *
+ * 2026-10-01 需求方反馈任务 2（「简介」回退）：M7c-I 曾把备注（note）以「简介
+ * （备注）」区块放回本面板并在插入菜单挂「简介」项——现按 M7b #3 裁定恢复隐藏态：
+ * 面板不再渲染任何 note 编辑 UI（textarea/字数/保存钮全撤）。note 的 core 数据
+ * 模型与画布 'N' 角标渲染不动（XMind 导入的 note 仍显示角标），仅 UI 入口隐藏。
  */
 
 /** 样式色板（Task 15，8 色）：填充与文字色共用。 */
@@ -64,7 +64,6 @@ export interface RichPanelProps {
 
 export function RichPanel(props: RichPanelProps): ReactElement {
   const { doc, fileId, nodeId, selected, afterUserWrite, showToast, onClose } = props;
-  const [note, setNoteValue] = useState('');
   const [href, setHrefValue] = useState('');
   // 描述草稿（受控本地态，TaskPanel 同款裁决）：仅切换选中节点时回灌，失焦提交
   const [desc, setDescValue] = useState('');
@@ -80,7 +79,6 @@ export function RichPanel(props: RichPanelProps): ReactElement {
   // tick 驱动的快照刷新不得覆盖正在编辑的输入——M2 多端再按需细化）。
   useEffect(() => {
     const s = getNode(doc, nodeId);
-    setNoteValue(s?.note ?? '');
     setHrefValue(s?.href ?? '');
     setDescValue(s?.description ?? '');
   }, [doc, nodeId]);
@@ -92,16 +90,6 @@ export function RichPanel(props: RichPanelProps): ReactElement {
     } catch (e) {
       showToast(e instanceof Error ? e.message : '操作失败');
     }
-  };
-
-  const saveNote = (): void => {
-    let value = note;
-    if (value.length > MAX_NOTE_LENGTH) {
-      value = value.slice(0, MAX_NOTE_LENGTH);
-      setNoteValue(value);
-      showToast('备注长度已达上限');
-    }
-    write(() => setNote(doc, nodeId, value));
   };
 
   /** 描述提交（TaskPanel 同语义）：trim 后与现值一致零写入，失焦触发。 */
@@ -239,7 +227,7 @@ export function RichPanel(props: RichPanelProps): ReactElement {
         {panelHead}
         <h3>样式</h3>
         {styleSection(null)}
-        <h3>简介与描述</h3>
+        <h3>描述</h3>
         <p className="rich-empty">选中节点后编辑富内容</p>
       </aside>
     );
@@ -251,28 +239,10 @@ export function RichPanel(props: RichPanelProps): ReactElement {
       <h3>样式</h3>
       {styleSection(snap)}
 
-      <h3>简介与描述</h3>
-
-      {/* 简介即节点备注（note）：aria-label「节点备注」为既有 e2e 契约（rich-content
-          用例按此定位），保存钮沿用「保存备注」显式提交 */}
-      <label className="field">
-        <span>简介（备注）</span>
-        <textarea
-          aria-label="节点备注"
-          value={note}
-          maxLength={MAX_NOTE_LENGTH}
-          onChange={(e) => setNoteValue(e.target.value)}
-        />
-        <span className="field-count">
-          {note.length}/{MAX_NOTE_LENGTH}
-        </span>
-      </label>
-      <button type="button" className="primary" onClick={saveNote}>
-        保存备注
-      </button>
-
       {/* 描述（M7c-C1）：受控草稿 + 失焦提交（未变更零写入），字数沿用
-          MAX_DESCRIPTION_LENGTH 上限 */}
+          MAX_DESCRIPTION_LENGTH 上限。画布上的第二编辑入口见 EditorPage
+          描述编辑浮层（新建提交后 Tab 直填，2026-10-01 需求方反馈任务 1）。 */}
+      <h3>描述</h3>
       <label className="field">
         <span>描述</span>
         <textarea

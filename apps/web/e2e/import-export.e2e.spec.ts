@@ -92,20 +92,37 @@ function findTitle(node: XmindNode, title: string): XmindNode | null {
   return null;
 }
 
-/** 打开种子文件「本周计划」并给「周一」写备注「评审要点」（复用富内容面板 UI 流，
- *  同 rich-content.e2e.spec.ts 的既定模式）。角标可见即备注已入本地 doc——导出读
- *  本地 doc，无需等网络落库。 */
+/** 打开种子文件「本周计划」并给「周一」写备注「评审要点」。备注 UI（格式面板
+ *  「简介」区/插入菜单项）已随 2026-10-01 需求方反馈任务 2 回退隐藏（恢复 M7b #3
+ *  裁定的隐藏态），种子数据改在页面上下文内经 @gmind/core 操作 API setNote 直写
+ *  （唯一写入口纪律不变；动态 import('/@id/@gmind/core') 复用页面同一模块实例，
+ *  perf-editor 同款模式）。角标可见即备注已入本地 doc——导出读本地 doc，无需等
+ *  网络落库。 */
 async function openSeedDocWithNote(page: Page): Promise<void> {
   await registerAndLogin(page);
   await page.locator('.file-list li', { hasText: '本周计划' }).click();
   await expect(page).toHaveURL(/\/edit\//);
   await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '本周计划' })).toBeVisible();
-  await page.locator('.editor-canvas svg .gm-text', { hasText: '周一' }).click();
-  const panel = page.getByTestId('rich-panel');
-  await page.getByTestId('format-toggle').click(); // 右列默认隐藏（M7b-R6）：点格式开
-  await expect(panel).toBeVisible();
-  await panel.getByLabel('节点备注').fill('评审要点');
-  await panel.getByRole('button', { name: '保存备注' }).click();
+  await page.evaluate(async () => {
+    const bare = ['/@id/', '@gmind/core'].join(''); // 动态拼串：vite dev 的 bare-id 路由
+    const core = (await import(bare)) as {
+      ROOT_NODE_ID: string;
+      getNode: (doc: unknown, id: string) => { text: string; deleted: boolean } | null;
+      childrenIds: (doc: unknown, id: string) => string[];
+      setNote: (doc: unknown, id: string, note: string) => void;
+    };
+    const doc = (window as unknown as { __gmind?: { getDoc: () => unknown } }).__gmind?.getDoc();
+    if (!doc) throw new Error('window.__gmind 未就绪');
+    const kidIds = core.childrenIds(doc, core.ROOT_NODE_ID);
+    for (const id of kidIds) {
+      const snap = core.getNode(doc, id);
+      if (snap && !snap.deleted && snap.text === '周一') {
+        core.setNote(doc, id, '评审要点');
+        return;
+      }
+    }
+    throw new Error('种子节点「周一」未找到');
+  });
   await expect(
     page.locator('.editor-canvas svg g[data-node-id]', { hasText: '周一' }).locator('.gm-note-badge'),
   ).toBeVisible();
