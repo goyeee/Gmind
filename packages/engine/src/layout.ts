@@ -83,6 +83,13 @@ export interface LayoutOptions {
   measure: MeasureAdapter;
   /** 缺省时按深度取主题派生样式（根/一级/二级+，字号/字重/字族全由 theme token 驱动）。 */
   styleOf?: (id: string, depth: number) => TextStyle;
+  /**
+   * 简洁模式（M7b 补课，mindgrid 账号级显示偏好）：true 时测量以紧凑口径执行
+   * （描述行不产出、任务行槽位不计入盒高/宽，见 measureNodeBox compact 选项——
+   * 分支收口在测量侧，本模块只透传）；渲染侧内联进度走 SceneInput.compact。
+   * 缺省 false = 原路径，布局输出逐字节不变（金样锁定）。
+   */
+  compact?: boolean;
 }
 
 /** 统计折叠节点之下被隐藏的存活后代数（跳过墓碑；visited 防环）。 */
@@ -109,6 +116,7 @@ function collectTree(
   theme: ThemeTokens,
   measure: MeasureAdapter,
   styleOf: (id: string, depth: number) => TextStyle,
+  compact: boolean,
 ): LayoutNode | null {
   const visited = new Set<string>();
   const build = (id: string, depth: number): LayoutNode | null => {
@@ -139,6 +147,8 @@ function collectTree(
     const taskRow = taskRowSlotsOf(snap.task, children.length > 0);
     // 描述（M7c-C1，只增不改）：快照 description 透传测量（非空时第二行 + 高度自适应，
     // 截断产物 box.descLine 随盒输出）。缺省时选项与旧版逐项一致（金样锁定）。
+    // 简洁模式（M7b 补课）：原值照传，紧凑口径由测量侧 compact 分支收口（描述行
+    // 不产出、任务行槽位不计高宽，内联进度槽宽代偿）。
     const box = measureNodeBox(snap.text, styleOf(id, depth), theme, {
       adapter: measure,
       iconCount,
@@ -146,6 +156,7 @@ function collectTree(
       imageW: image ? image.w : undefined,
       taskRow,
       description: snap.description,
+      compact,
     });
     // 断行行集（长文本溢出修复，只增不改）：测量行集与显式 '\n' 分行不一致（发生
     // 贪心断行）才随盒透传——渲染 tspan 行结构单源 = 测量；未断行字段不出现，
@@ -461,7 +472,7 @@ export function layout(reader: DocReader, opts: LayoutOptions): LayoutResult {
   // 缺省样式：主题分级派生（Task 5 主题系统；页面层闭合文档传 styleOf 以叠加 nodeStyle）。
   const styleOf = opts.styleOf ?? ((_id: string, depth: number) => themeTextStyleOf(theme, depth));
 
-  const root = collectTree(reader, theme, measure, styleOf);
+  const root = collectTree(reader, theme, measure, styleOf, opts.compact ?? false);
   if (!root) return { nodes: [], edges: [], collapsedCounts: new Map(), summaries: [], width: 0, height: 0 };
   computeMetrics(root, theme);
 

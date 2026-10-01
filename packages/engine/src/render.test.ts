@@ -929,3 +929,76 @@ describe('renderScene：任务行签名缓存（remove→re-add 完整重建，�
     expect(row?.querySelector('.gm-task-due')?.textContent).toContain('10-15');
   });
 });
+
+// ---------------------------------------------------------------------------
+// 简洁模式（M7b 补课，mindgrid 账号级显示偏好「脑图简洁模式」）：SceneInput.compact
+// = true 时状态色条/任务行条带/描述行均隐藏，任务进度改内联小字画在标题行右缘
+// （gm-task-progress-inline，槽宽 TASK_PROGRESS_W 与测量侧盒宽下限同源）；缺省
+// false = 原路径，DOM 逐字节不变（金样锁定）。
+// ---------------------------------------------------------------------------
+
+describe('renderScene：简洁模式（compact）', () => {
+  const TODAY = '2026-09-28';
+
+  function compactInput(
+    data: Map<string, NodeVisual>,
+    opts: { compact: boolean; nodes?: NodeBox[] },
+  ): SceneInput {
+    const layout = baseLayout();
+    if (opts.nodes) layout.nodes = opts.nodes;
+    return { layout, theme, styleOf, nodeData: data, today: TODAY, compact: opts.compact };
+  }
+
+  it('compact：状态条与任务行隐藏，进度内联标题行右缘（有任务信息）；无任务节点零内联', () => {
+    const data = baseData();
+    data.set('b', { text: 'x', task: { status: 'doing', progress: 50 } });
+    renderScene(createScene(svg), compactInput(data, { compact: true }));
+    expect(nodeG('b')?.querySelector('rect.gm-task-bar')).toBeNull();
+    expect(nodeG('b')?.querySelector('g.gm-task-row')).toBeNull();
+    const inline = nodeG('b')?.querySelector('text.gm-task-progress-inline');
+    expect(inline?.textContent).toBe('50%');
+    expect(inline?.getAttribute('fill')).toBe('#86909c');
+    // 内联槽右对齐：x = 盒宽 − nodePaddingX（gmind-blue=12；槽宽 TASK_PROGRESS_W 由测量侧预留）
+    expect(inline?.getAttribute('x')).toBe('88'); // b.w=100 − 12
+    // 基线 = contentCenter(=b.h/2=20) + 11×0.35 = 23.85（紧凑盒行中心，不扣任务条带）
+    expect(inline?.getAttribute('y')).toBe('23.85');
+    // 无任务信息节点（root a）：纯标题+标记，无内联进度
+    expect(nodeG('a')?.querySelector('text.gm-task-progress-inline')).toBeNull();
+  });
+
+  it('compact：描述行不渲染（手工构造盒携带 descLine 也隐藏——渲染侧独立裁定）', () => {
+    const nodes = baseLayout().nodes.map((n) => (n.id === 'c' ? { ...n, h: 40, descLine: '一句话描述' } : n));
+    renderScene(createScene(svg), compactInput(baseData(), { compact: true, nodes }));
+    expect(nodeG('c')?.querySelector('text.gm-desc')).toBeNull();
+    // 主文本回紧凑盒垂直居中：contentCenter = 40/2 = 20 → y = 20 + 14×0.35 = 24.9
+    expect(nodeG('c')?.querySelector('tspan')?.getAttribute('y')).toBe('24.9');
+  });
+
+  it('compact 往返切换：切回详细模式条带/任务行恢复（签名缓存随容器重建归零），再切回再隐藏', () => {
+    const scene = createScene(svg);
+    const data = baseData();
+    data.set('b', { text: 'x', task: { progress: 40, dueDate: '2026-10-15' } });
+    renderScene(scene, compactInput(data, { compact: true }));
+    expect(nodeG('b')?.querySelector('.gm-task-bar, .gm-task-row')).toBeNull();
+    expect(nodeG('b')?.querySelector('text.gm-task-progress-inline')?.textContent).toBe('40%');
+    renderScene(scene, compactInput(data, { compact: false })); // 切回详细
+    expect(nodeG('b')?.querySelector('rect.gm-task-bar')).not.toBeNull();
+    expect(nodeG('b')?.querySelector('text.gm-task-progress')?.textContent).toBe('40%');
+    expect(nodeG('b')?.querySelector('text.gm-task-progress-inline')).toBeNull();
+    renderScene(scene, compactInput(data, { compact: true })); // 再切回简洁
+    expect(nodeG('b')?.querySelector('.gm-task-bar, .gm-task-row')).toBeNull();
+    expect(nodeG('b')?.querySelector('text.gm-task-progress-inline')?.textContent).toBe('40%');
+  });
+
+  it('缺省（不传 compact）与 compact:false 输出逐字节一致（金样锁定口径）', () => {
+    const svg1 = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    const svg2 = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    document.body.appendChild(svg1);
+    document.body.appendChild(svg2);
+    const data = baseData();
+    data.set('b', { text: 'x', task: { status: 'doing', progress: 50 } });
+    renderScene(createScene(svg1), makeInput(baseLayout(), data));
+    renderScene(createScene(svg2), compactInput(data, { compact: false }));
+    expect(svg2.innerHTML).toBe(svg1.innerHTML);
+  });
+});

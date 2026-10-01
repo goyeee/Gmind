@@ -229,6 +229,39 @@ function clockNow(): string {
   return `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
 }
 
+/**
+ * 简洁模式偏好键（M7b 补课，mindgrid 账号级显示偏好「脑图简洁模式」的移植）：
+ * localStorage 持久（浏览器本地、跨文件/刷新保持），**不入文档数据**——纯显示
+ * 偏好，不进 Yjs、不参与协同与保存。值 '1' = 开、缺省/其他 = 关。
+ */
+const COMPACT_STORAGE_KEY = 'gmind.compact';
+
+/**
+ * 简洁模式图标（M7b 补课）：三行收拢线形（行长递减 = 内容收敛）。本地图标组件
+ * ——与 ../editor/icons 同款约定（16×16、stroke=currentColor、strokeWidth 1.6），
+ * 仅简洁模式一个消费者，不外溢图标集文件。
+ */
+function CompactIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      width={16}
+      height={16}
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.6}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M2.5 4h11" />
+      <path d="M2.5 8h7" />
+      <path d="M2.5 12h4" />
+    </svg>
+  );
+}
+
 export function EditorPage() {
   const { fileId = '' } = useParams();
   const navigate = useNavigate();
@@ -361,6 +394,23 @@ export function EditorPage() {
   useEffect(() => {
     if (readOnly) setView('mind');
   }, [readOnly]);
+
+  // 简洁模式（M7b 补课，mindgrid 账号级显示偏好）：隐藏描述与任务详情、节点收敛
+  // 紧凑盒（引擎 LayoutOptions.compact / SceneInput.compact 双侧接线）。装载时读
+  // localStorage 初始值；ref 供装配闭包（rerender/scheduleRerender）同步读最新值
+  // ——切换即重渲染不等 React 提交（viewRef 同款裁定）。仅显示偏好，不入文档。
+  const [compact, setCompact] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem(COMPACT_STORAGE_KEY) === '1';
+    } catch {
+      return false; // storage 不可读（隐私模式等）：按关兜底
+    }
+  });
+  const compactRef = useRef<boolean>(compact);
+  compactRef.current = compact;
+  // 装配后画布重排入口 ref（同 commentsRefreshRef 桥接模式）：简洁模式切换是纯
+  // 显示偏好、无文档写入，需要该入口主动触发 scheduleRerender。
+  const scheduleRerenderRef = useRef<(() => void) | null>(null);
 
   const [tick, setTick] = useState(0);
   const [status, setStatus] = useState('尚未编辑');
@@ -1114,6 +1164,31 @@ export function EditorPage() {
     const dx = oversizeDelta(p1.x, p2.x, rect.width) || edgeDelta(p1.x, p2.x, rect.width);
     const dy = oversizeDelta(p1.y, p2.y, rect.height) || edgeDelta(p1.y, p2.y, rect.height);
     if (dx || dy) vp.panBy(dx, dy);
+  };
+
+  /**
+   * 简洁模式切换（M7b 补课，mindgrid 账号级显示偏好「脑图简洁模式」）：写
+   * localStorage（账号级显示偏好、不入文档数据——刷新/文件切换保持）+ ref/state
+   * 同步 + 经装配桥接触发画布重排。视口不跳变：重排落定后把当前单选节点平移进
+   * 可视区（panNodeIntoView 对完整可见节点 no-op，复用既有兜底）；rAF 注册序在
+   * scheduleRerender 之后，同一帧先重渲染（boxesRef 更新）后平移。
+   */
+  const toggleCompact = (): void => {
+    const next = !compactRef.current;
+    compactRef.current = next;
+    setCompact(next);
+    try {
+      localStorage.setItem(COMPACT_STORAGE_KEY, next ? '1' : '0');
+    } catch {
+      // storage 不可写（隐私模式等）：偏好降级为仅本次会话生效，不阻断切换
+    }
+    scheduleRerenderRef.current?.();
+    requestAnimationFrame(() => {
+      const selection = selectionRef.current;
+      if (!selection) return;
+      const id = [...selection.selected][0];
+      if (id) panNodeIntoView(id);
+    });
   };
 
   /**
@@ -2409,6 +2484,9 @@ export function EditorPage() {
         // carry-in 裁决 2：样式闭合 doc 读取
         styleOf: (id, depth) =>
           resolveNodeStyle(theme, depth, getNode(d, id)?.style ?? {}).textStyle,
+        // 简洁模式（M7b 补课）：紧凑盒测量（描述/任务行不占几何，进度内联）。
+        // ref 直读最新值——切换当帧生效，不等 React 提交（viewRef 同款裁定）。
+        compact: compactRef.current,
       });
       layoutRef.current = result;
       boxesRef.current = result.nodes;
@@ -2440,6 +2518,9 @@ export function EditorPage() {
         nodeData,
         // 逾期判定「今天」（M7c-C2 接线）：宿主显式传当日，与表格视图口径一致
         today: todayStr(),
+        // 简洁模式（M7b 补课）：状态条/任务行条带隐藏、进度内联标题行右缘——
+        // 与 layout 侧同帧同值（compactRef 直读）。
+        compact: compactRef.current,
       });
       applySelectionClasses();
       // 远端光标重画（FR-COL-002）：awareness 变化与 rerender（布局/主题变化）双
@@ -2467,6 +2548,9 @@ export function EditorPage() {
         rerender();
       });
     };
+    // 桥接出装配闭包（M7b 补课）：简洁模式切换（纯显示偏好、无文档写入）经此
+    // 入口触发画布重排；卸载置空防悬挂调用。
+    scheduleRerenderRef.current = scheduleRerender;
 
     // —— 评论拉取（FR-CMT-002）：进入文档全量 GET；此后仅 comment-updated 广播
     // （服务端在创建/回复成功后广播，含本端自己的 POST——广播经 WS 回来同样触发
@@ -2662,6 +2746,7 @@ export function EditorPage() {
       quotaBlockedRef.current = false; // 文件切换不继承上一文件的配额拦截
       collab.destroy(); // provider + IndexedDB 本地副本一并收尾（顺序：先冲刷 saveLoop 决策再断链）
       commentsRefreshRef.current = null; // 文件切换不继承上一文件的评论刷新入口
+      scheduleRerenderRef.current = null; // 文件切换不继承上一文件的画布重排入口
       commentCountsRef.current = {};
       setComments({ threads: [], counts: {} });
       setCommentFilter(null);
@@ -3026,6 +3111,24 @@ export function EditorPage() {
           >
             <TaskIcon />
             <span className="toolbar-btn-label">任务</span>
+          </button>
+          {/* 简洁模式切换（M7b 补课，mindgrid 账号级显示偏好）：隐藏描述与任务详情、
+              节点收敛紧凑盒（表格视图不受影响，有自己的密度）。与「任务」钮同族装配
+              （图标+文字）；激活态蓝描边（compact-active，同 view-tabs active 蓝描边
+              家族）；偏好走 localStorage，不入文档数据。 */}
+          <button
+            type="button"
+            data-testid="compact-toggle"
+            className={
+              compact ? 'toolbar-btn toolbar-btn-text active compact-active' : 'toolbar-btn toolbar-btn-text'
+            }
+            title="简洁模式：隐藏描述与任务详情，缩小节点"
+            aria-label="简洁模式"
+            aria-pressed={compact}
+            onClick={toggleCompact}
+          >
+            <CompactIcon />
+            <span className="toolbar-btn-label">简洁</span>
           </button>
         </div>
         <span className="toolbar-sep" />

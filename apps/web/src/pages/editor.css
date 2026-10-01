@@ -139,6 +139,12 @@
   background: #e8f3ff;
   color: #3370ff;
 }
+/* 简洁模式切换（M7b 补课，mindgrid 账号级显示偏好）：激活态在浅蓝底蓝字家族
+   （toolbar-btn.active 同款）上追加蓝描边（inset shadow 不占布局，同 view-tabs
+   active 蓝描边风格）——常驻显示偏好开关与暂态模式按钮的视觉区分。 */
+.editor-toolbar .toolbar-btn.compact-active {
+  box-shadow: inset 0 0 0 1px #3370ff;
+}
 /* 格式刷（M6 Task 7）：模式激活期画布 copy 光标提示（body.painter-active 由
    EditorPage 挂载；仅画布区域，工具栏/面板光标不受影响） */
 body.painter-active .editor-canvas svg {
@@ -208,12 +214,18 @@ body.painter-active .editor-canvas svg {
   .toolbar-group.toolbar-group-title {
     gap: 4px;
   }
+  /* M7b 补课（简洁模式钮入列宽度预算）：标题输入 120→104px（超宽仍省略号截断）、
+     视图 Tab 水平 padding 12→10px、文字钮 6→5px——合计回收 ~44px，抵消「简洁」
+     文字钮（图标+文字 ≈57px）的增量，1440/1280 维持单行承诺（e2e 锚点用例兜底）。 */
   .editor-toolbar .title-input {
-    width: 120px;
+    width: 104px;
+  }
+  .editor-toolbar .view-tabs button {
+    padding: 0 10px;
   }
   /* 文字钮收窄水平 padding + 图标-文字间距（文字常显后的宽度预算） */
   .editor-toolbar .toolbar-btn.toolbar-btn-text {
-    padding: 0 6px;
+    padding: 0 5px;
   }
   .editor-toolbar .toolbar-btn-label {
     margin-left: 2px;

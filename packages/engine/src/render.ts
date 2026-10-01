@@ -30,6 +30,9 @@
  *   + <text class="gm-task-due">（MM-DD；逾期（isOverdue 口径）红底白字否则灰底）。
  *   任务行占盒底 TASK_ROW_H 条带，主文本/标记行在其余区域垂直居中——无任务行时
  *   contentCenter 恒等于 b.h/2，既有几何逐字节不变）、
+ *   简洁模式（SceneInput.compact，M7b 补课）：状态条/任务行条带与描述行均隐藏，
+ *   改绘 <text class="gm-task-progress-inline">（有效进度小字内联标题行右缘，槽宽
+ *   TASK_PROGRESS_W 与测量侧盒宽下限同源；仅 hasTaskInfo 节点渲染）、
  *   <text class="gm-desc">（M7c-C1 节点描述第二行：text 下方 12px 灰 #86909c、
  *   单行省略——截断在测量期完成，直绘 box.descLine；占底部条带（任务行上方），
  *   无描述不渲染，DOM 与现状一致）、
@@ -148,6 +151,8 @@ export interface NodeEntry {
   taskRow: SVGGElement | null;
   /** 上次渲染的任务签名（签名+几何；变化才重建行内元素，引用保持策略同标记行）。 */
   lastTaskSig: string;
+  /** 简洁模式内联进度（M7b 补课；非 compact 或无任务信息时 null）。 */
+  taskInline: SVGTextElement | null;
   /** 描述行（M7c-C1；盒无 descLine 时 null）。 */
   descText: SVGTextElement | null;
   badge: SVGGElement | null;
@@ -217,6 +222,14 @@ export interface SceneInput {
    * 固定值保确定性（当天到期不算逾期，isOverdue 口径）。
    */
   today?: string;
+  /**
+   * 简洁模式（M7b 补课，mindgrid 账号级显示偏好「脑图简洁模式」）：true 时隐藏
+   * 状态色条（gm-task-bar）与任务行条带（gm-task-row）、描述行不渲染（紧凑盒
+   * 测量侧不产出 descLine——LayoutOptions.compact 同款裁定），任务进度改为内联
+   * 小字画在标题行右缘（gm-task-progress-inline，仅 hasTaskInfo 节点渲染；
+   * 无任务=纯标题+标记）。缺省 false = 原路径，DOM 逐字节不变（金样锁定）。
+   */
+  compact?: boolean;
 }
 
 /**
@@ -318,6 +331,7 @@ function applyNode(
   theme: ThemeTokens,
   collapsedCount: number,
   taskCtx: NodeTaskContext,
+  compact: boolean,
 ): void {
   let entry = scene.nodeEntries.get(b.id);
   if (!entry) {
@@ -340,6 +354,7 @@ function applyNode(
       taskBar: null,
       taskRow: null,
       lastTaskSig: '',
+      taskInline: null,
       descText: null,
       badge: null,
       badgeText: null,
@@ -366,10 +381,12 @@ function applyNode(
   // 底部条带（M7c-C2 任务行 + M7c-C1 描述行）各占 TASK_ROW_H：主文本/标记行在其余
   // 区域垂直居中；任务行恒最底，描述行在其上（两者并存时）或独占底部条带（仅描述）。
   // 无任务行且无描述时 contentCenter === b.h/2，基线/标记位与旧版逐字节一致（只增不改）。
+  // 简洁模式（M7b 补课）：紧凑盒测量侧已不计任务行/描述行（b.h 即紧凑高），条带
+  // 扣除同步关闭——contentCenter 回归 b.h/2，标题/标记在紧凑盒内垂直居中。
   const taskSlots = taskRowSlotsOf(visual.task, taskCtx.parent);
-  const descLine = b.descLine ?? '';
+  const descLine = compact ? '' : (b.descLine ?? '');
   const contentCenter =
-    (b.h - (taskSlots ? TASK_ROW_H : 0) - (descLine !== '' ? TASK_ROW_H : 0)) / 2;
+    (b.h - (!compact && taskSlots ? TASK_ROW_H : 0) - (descLine !== '' ? TASK_ROW_H : 0)) / 2;
   text.setAttribute('x', fmt(textX));
   text.setAttribute('fill', style.textColor);
   text.setAttribute('font-size', fmt(fontSize));
@@ -552,12 +569,14 @@ function applyNode(
     entry.image.setAttribute('height', fmt(img.h));
   }
 
-  // —— 任务视觉（M7c-C2，只增不改）——
+  // —— 任务视觉（M7c-C2，只增不改；简洁模式 M7b 补课）——
   // 状态色左边条：左缘 TASK_BAR_W 竖条、全盒高，fill 按 task.status 四色；
-  // 无任务信息（hasTaskInfo false）不创建（syncOptional 同步移除）。
+  // 无任务信息（hasTaskInfo false）不创建（syncOptional 同步移除）；简洁模式恒
+  // 隐藏（状态语义随条带让位给内联进度，节点卡收敛为紧凑盒）。
   const task = visual.task;
   const hasTask = hasTaskInfo(task);
-  entry.taskBar = syncOptional(entry.taskBar, hasTask, g, () => el('rect', { class: 'gm-task-bar' }));
+  const showTaskStrips = hasTask && !compact;
+  entry.taskBar = syncOptional(entry.taskBar, showTaskStrips, g, () => el('rect', { class: 'gm-task-bar' }));
   if (entry.taskBar) {
     entry.taskBar.setAttribute('x', '0');
     entry.taskBar.setAttribute('y', '0');
@@ -568,12 +587,13 @@ function applyNode(
 
   // 任务信息行：盒底 TASK_ROW_H 条带，行内容自右缘向左排（日期徽标→进度→负责人，
   // mindgrid 卡片行序的右对齐镜像）。签名（任务数据+盒几何）不变则整行元素引用
-  // 保持（重建为无状态绘制，代价极小——同标记行策略）。
-  const taskRowSig = hasTask
+  // 保持（重建为无状态绘制，代价极小——同标记行策略）。简洁模式恒隐藏（进度改
+  // 内联，见下方 gm-task-progress-inline；syncOptional 同步移除整行）。
+  const taskRowSig = showTaskStrips
     ? `${task?.status ?? 'todo'}|${(task?.owners ?? []).join(',')}|${taskCtx.progress}|${task?.dueDate ?? ''}|${taskCtx.overdue ? 1 : 0}|${fmt(b.w)}x${fmt(b.h)}`
     : '';
   const prevTaskRow = entry.taskRow;
-  entry.taskRow = syncOptional(entry.taskRow, hasTask, g, () => el('g', { class: 'gm-task-row' }));
+  entry.taskRow = syncOptional(entry.taskRow, showTaskStrips, g, () => el('g', { class: 'gm-task-row' }));
   if (entry.taskRow !== prevTaskRow) {
     // 容器实例变化（首次创建/整行摘除/摘除后再加）⇒ 签名缓存同步归零：与标记行
     // 同一不变式——lastTaskSig 只描述当前容器实例的 DOM 真态，否则 remove→re-add
@@ -653,6 +673,26 @@ function applyNode(
       }
     }
     entry.taskRow.replaceChildren(...parts);
+  }
+
+  // 简洁模式内联进度（M7b 补课，mindgrid compact 同语义）：任务条带隐藏后，有效
+  // 进度以小号灰字内联在标题行右缘（text-anchor=end、x=盒右内边距，槽宽
+  // TASK_PROGRESS_W=30——测量侧同值预留盒宽下限，长标题不与其重叠；基线取
+  // contentCenter 行中心，与标记同行）。仅 hasTaskInfo 节点渲染（无任务=纯标题+
+  // 标记，零任务视觉）；非 compact 不渲染（进度由任务行条带承担）。syncOptional
+  // 增删 + 每帧回填 x/y/textContent（盒宽/行中心随布局变化），元素引用保持。
+  entry.taskInline = syncOptional(entry.taskInline, compact && hasTask, g, () =>
+    el('text', {
+      class: 'gm-task-progress-inline',
+      'text-anchor': 'end',
+      'font-size': fmt(TASK_META_FONT_SIZE),
+      fill: TASK_META_FG,
+    }),
+  );
+  if (entry.taskInline) {
+    entry.taskInline.textContent = `${taskCtx.progress}%`;
+    entry.taskInline.setAttribute('x', fmt(b.w - theme.nodePaddingX));
+    entry.taskInline.setAttribute('y', fmt(contentCenter + TASK_META_FONT_SIZE * 0.35));
   }
 
   // 折叠徽标：+N，仅 count>0；元素随有无增删（旧徽标元素移除，不保留引用）。
@@ -772,6 +812,8 @@ function applySummary(scene: SceneRoot, s: SummaryBox, theme: ThemeTokens): void
  */
 export function renderScene(scene: SceneRoot, input: SceneInput): void {
   const { layout, theme, styleOf, nodeData } = input;
+  // 简洁模式（M7b 补课）：场景级显示偏好（非 per-node），透传给逐节点协调。
+  const compact = input.compact ?? false;
   // 任务上下文预计算（M7c-C2）：有效进度（叶=自身、父=Σ 直属子级均值，shared
   // effectiveProgress 口径）、逾期集（isOverdue 口径，today 可由宿主固定）、
   // 父节点集（layout.nodes parentId 反查，与布局侧槽位判定同源同树）。
@@ -797,6 +839,7 @@ export function renderScene(scene: SceneRoot, input: SceneInput): void {
         parent: parentIds.has(b.id),
         overdue: overdueIds.has(b.id),
       },
+      compact,
     );
   }
   for (const [id, entry] of scene.nodeEntries) {

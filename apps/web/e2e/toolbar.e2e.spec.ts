@@ -5,12 +5,13 @@ import { expect, test, type Page } from '@playwright/test';
  * - M7b-R2/R3/R4：样式右列收进「格式」按钮（右列默认隐藏）、企微三按钮
  *   上级主题·子主题·同级主题（复用 Shift+Tab/Tab/Enter 路径）、主题下拉移除只留
  *   theme-panel-toggle 面板按钮、视图切换（脑图|表格）分段控件入列；
- * - M7c-C4：任务面板开关「任务」与格式同组互斥。
+ * - M7c-C4：任务面板开关「任务」与格式同组互斥；
+ * - M7b 补课：简洁模式切换「简洁」（任务钮旁，账号级显示偏好，激活蓝描边）。
  *
  * 结构断言：
  * 1. 单行分组：11 个 .toolbar-group（返回/标题/视图切换/撤销重做格式刷/插入/
- *    上级子级同级/格式任务/结构主题/导出/协作视图/全屏），组间竖线分隔符 9；
- * 2. 图标按钮：全部带内联 svg 的 .toolbar-btn 均含非空 title 提示（16 枚；
+ *    上级子级同级/格式任务简洁/结构主题/导出/协作视图/全屏），组间竖线分隔符 9；
+ * 2. 图标按钮：全部带内联 svg 的 .toolbar-btn 均含非空 title 提示（17 枚；
  *    上级/子级/同级三按钮为纯文字钮，label+title 单列断言）；
  * 3. 既有 testid 全保留（循环逐个断言可见）；
  * 4. find-toggle：查找入口（启用 + title「查找 (Ctrl+F)」+ 点击打开查找条）；
@@ -58,6 +59,7 @@ const EXISTING_TESTIDS = [
   'fullscreen-btn',
   'format-toggle',
   'task-toggle',
+  'compact-toggle',
   'toolbar-add-parent',
   'toolbar-add-child',
   'toolbar-add-sibling',
@@ -80,8 +82,9 @@ test('工具栏：单行分组 + 竖线分隔符（11 组 / 9 分隔线）', asy
     await expect(seps.nth(i)).toBeVisible();
   }
   // 2026-09-30 需求方反馈任务 2：文字标签所有宽度常显 + e2e 默认视口（1280）恒
-  // 单行——全部直接子元素 offsetTop 相等（不换行）、无横向溢出；9 个文字标签
-  // （格式刷/插入/三按钮/格式/任务/结构/主题）全部可见（不再随 ≤1536 降级隐藏）。
+  // 单行——全部直接子元素 offsetTop 相等（不换行）、无横向溢出；10 个文字标签
+  // （格式刷/插入/三按钮/格式/任务/简洁/结构/主题）全部可见（不再随 ≤1536 降级隐藏；
+  // M7b 补课「简洁」入列由 ≤1536 宽度预算回收抵消，见 editor.css 断点注释）。
   const lineTops = await toolbar
     .locator('> *')
     .evaluateAll((els) => [...new Set(els.map((e) => (e as HTMLElement).offsetTop))]);
@@ -89,7 +92,7 @@ test('工具栏：单行分组 + 竖线分隔符（11 组 / 9 分隔线）', asy
   const overflow = await toolbar.evaluate((el) => el.scrollWidth > el.clientWidth);
   expect(overflow, '工具栏不得横向溢出').toBe(false);
   const labels = toolbar.locator('.toolbar-btn-label');
-  await expect(labels).toHaveCount(9);
+  await expect(labels).toHaveCount(10);
   for (let i = 0; i < (await labels.count()); i++) {
     await expect(labels.nth(i)).toBeVisible();
   }
@@ -98,9 +101,9 @@ test('工具栏：单行分组 + 竖线分隔符（11 组 / 9 分隔线）', asy
 test('工具栏：图标按钮均带内联 svg 与 title 提示；上级/子级/同级为文字钮', async ({ page }) => {
   await openSeedDoc(page);
   const iconButtons = page.locator('.editor-toolbar button.toolbar-btn', { has: page.locator('> svg') });
-  // 返回/撤销/重做/格式刷/插入/格式/任务/结构/主题面板/导出/成员/版本历史/动态/
-  // 快捷键/查找/全屏 = 16 个图标按钮（2026-09-30 结构 toggle 入列：图标+文字标签）
-  await expect(iconButtons).toHaveCount(16);
+  // 返回/撤销/重做/格式刷/插入/格式/任务/简洁/结构/主题面板/导出/成员/版本历史/
+  // 动态/快捷键/查找/全屏 = 17 个图标按钮（M7b 补课：简洁模式切换入列，图标+文字标签）
+  await expect(iconButtons).toHaveCount(17);
   const count = await iconButtons.count();
   for (let i = 0; i < count; i++) {
     const btn = iconButtons.nth(i);
