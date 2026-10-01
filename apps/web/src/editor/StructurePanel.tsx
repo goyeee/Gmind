@@ -6,8 +6,11 @@ import './structure-panel.css';
  * 工具栏「结构」按钮（structure-toggle）点开的缩略图选择面板，替代原
  * structure-select 下拉（testid 契约同步适配 e2e）。
  *
- * - 面板骨架/定位复用 ThemePanel 模式（编辑器右上角工具栏下方 fixed 浮层，
- *   open=false 整棵不渲染；头部标题 + × 关闭，Esc/外点关闭由 EditorPage 侧装配）；
+ * - 面板骨架/定位复用 ThemePanel 模式（open=false 整棵不渲染；头部标题 + × 关闭，
+ *   Esc/外点关闭由 EditorPage 侧装配）。定位为**锚定下拉**（2026-09-30 任务 1
+ *   企微式改版）：absolute 挂工具栏 .structure-wrap（relative）下、top 贴按钮下沿
+ *   +6px、left 对齐按钮左缘，不再是 fixed 右上浮层；右缘越界由页面侧 offsetLeft
+ *   钳制（同 marker-panel 模式）；
  * - 三张卡片各带纯 SVG 手绘迷你缩略图：思维导图=中心主题右侧两级曲线子主题；
  *   逻辑图（向右）=单侧纵向层级直角连线；组织架构图=自上而下树+横排兄弟；
  * - 当前结构卡片高亮描边（aria-pressed）；点击即应用（EditorPage 侧 setDocMeta
@@ -84,15 +87,28 @@ export interface StructurePanelProps {
   open: boolean;
   /** 当前生效结构：对应卡片高亮描边（aria-pressed）。 */
   current: StructureTypeValue;
+  /** 右缘越界钳制偏移（页面侧实测 wrap 坐标换算；0 = 左对齐按钮左缘直落）。 */
+  offsetLeft?: number;
   onClose(): void;
   /** 应用结构：EditorPage 侧走 setDocMeta structureType（可撤销）并收起面板。 */
   onApply(value: StructureTypeValue): void;
 }
 
-export function StructurePanel({ open, current, onClose, onApply }: StructurePanelProps) {
+export function StructurePanel({
+  open,
+  current,
+  offsetLeft = 0,
+  onClose,
+  onApply,
+}: StructurePanelProps) {
   if (!open) return null;
   return (
-    <aside className="structure-panel" data-testid="structure-panel" aria-label="结构选择">
+    <aside
+      className="structure-panel"
+      data-testid="structure-panel"
+      aria-label="结构选择"
+      style={offsetLeft !== 0 ? { left: offsetLeft } : undefined}
+    >
       <header className="structure-panel-header">
         <span className="structure-panel-title">结构</span>
         <button

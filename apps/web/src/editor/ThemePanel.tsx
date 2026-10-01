@@ -4,12 +4,13 @@ import './theme-panel.css';
 /**
  * 主题选择面板 — M6 Task 4（企微对标）：缩略图网格抽屉。
  *
- * - 抽屉样式复用 MemberPanel 模式（右上角工具栏下方浮层，open=false 整棵不渲染）；
+ * - 抽屉样式复用 MemberPanel 模式（open=false 整棵不渲染）。定位为**锚定下拉**
+ *   （2026-09-30 需求方反馈任务 1 企微式改版）：absolute 挂工具栏 .theme-wrap
+ *   （relative）下、top 贴按钮下沿 +6px、left 对齐按钮左缘，不再是 fixed 右上
+ *   浮层；右缘越界由页面侧 offsetLeft 钳制（同 marker-panel 模式）；
  * - 缩略图 = 3 节点迷你 SVG 内联渲染（root/level1/level2 三级 fill + 画布底色 +
  *   edge 连线色全部取自 THEMES 真值，所见即所得）；
  * - 点击即套用：EditorPage 侧 setDocMeta themeId（既有链路，可撤销）并关闭抽屉；
- * - 既有工具栏 theme-select <select> 保留（零回归裁决，见任务报告），本面板是
- *   增量的第二入口；
  * - 当前主题 aria-pressed=true 高亮；testid theme-panel / theme-item-{id} /
  *   theme-panel-close。
  */
@@ -60,15 +61,22 @@ export interface ThemePanelProps {
   open: boolean;
   /** 当前生效主题（resolveThemeId 解析后的合法 id）：对应缩略图高亮。 */
   currentId: ThemeId;
+  /** 右缘越界钳制偏移（页面侧实测 wrap 坐标换算；0 = 左对齐按钮左缘直落）。 */
+  offsetLeft?: number;
   onClose(): void;
   /** 套用主题：EditorPage 侧走 setDocMeta themeId（可撤销）+ afterUserWrite。 */
   onApply(id: ThemeId): void;
 }
 
-export function ThemePanel({ open, currentId, onClose, onApply }: ThemePanelProps) {
+export function ThemePanel({ open, currentId, offsetLeft = 0, onClose, onApply }: ThemePanelProps) {
   if (!open) return null;
   return (
-    <aside className="theme-panel" data-testid="theme-panel" aria-label="主题选择">
+    <aside
+      className="theme-panel"
+      data-testid="theme-panel"
+      aria-label="主题选择"
+      style={offsetLeft !== 0 ? { left: offsetLeft } : undefined}
+    >
       <header className="theme-panel-header">
         <span className="theme-panel-title">主题</span>
         <button

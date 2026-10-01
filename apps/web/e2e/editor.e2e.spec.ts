@@ -183,6 +183,29 @@ test('编辑器：结构面板应用逻辑图并收起，组织架构图边形�
   await expect(firstEdge).not.toHaveAttribute('d', / C /);
 });
 
+// 用例 5c（2026-09-30 需求方四条反馈任务 1 新增）：结构面板 = 按钮正下方贴靠的
+// 锚定下拉（企微式，不再是 fixed 右上浮层）——几何断言：面板 top 严格大于按钮
+// bottom（正下方展开）、面板 left 与按钮 left 差 < 200px（左缘贴靠按钮而非视口
+// 右上角）；应用逻辑图后面板收起（开合/写链路不受挂载点迁移影响）。
+test('编辑器：结构面板贴靠结构按钮正下方展开（锚定下拉），应用逻辑图后收起', async ({ page }) => {
+  await openSeedDoc(page, '本周计划');
+  await page.getByTestId('structure-toggle').click();
+  const panel = page.getByTestId('structure-panel');
+  await expect(panel).toBeVisible();
+  const btnBox = await page.getByTestId('structure-toggle').boundingBox();
+  const panelBox = await panel.boundingBox();
+  expect(btnBox, '结构按钮必须已渲染').toBeTruthy();
+  expect(panelBox, '结构面板必须已渲染').toBeTruthy();
+  // 面板顶 > 按钮底：面板在按钮正下方（而非视口右上 fixed 浮层）
+  expect(panelBox!.y).toBeGreaterThan(btnBox!.y + btnBox!.height);
+  // 面板左缘贴靠按钮左缘（差 < 200px；fixed 右上旧形态下差距为数百 px 必挂）
+  expect(Math.abs(panelBox!.x - btnBox!.x)).toBeLessThan(200);
+  // 贴靠不得溢出视口右缘（1280 视口下按钮左对齐直落，钳制兜底不触发）
+  expect(panelBox!.x + panelBox!.width).toBeLessThanOrEqual(1280);
+  await page.getByTestId('structure-item-logic').click();
+  await expect(panel).toHaveCount(0); // 应用即收起
+});
+
 // 用例 6：折叠子节点 →「+N」徽标出现；再展开消失
 test('编辑器：折叠 root 后出现 +N 徽标，展开后消失', async ({ page }) => {
   await openSeedDoc(page, '本周计划');

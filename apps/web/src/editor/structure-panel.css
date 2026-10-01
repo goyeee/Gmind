@@ -1,10 +1,13 @@
-/* 结构切换面板 — 2026-09-30 需求方反馈任务 3。骨架/定位复用 ThemePanel 抽屉模式
-   （编辑器右上角工具栏下方浮层，open=false 整棵不渲染），样式与主题面板同族。 */
+/* 结构切换面板 — 2026-09-30 需求方反馈任务 3。骨架复用 ThemePanel 抽屉模式
+   （open=false 整棵不渲染），样式与主题面板同族。
+   定位（2026-09-30 需求方反馈任务 1 企微式改版）：**锚定下拉**——absolute 挂
+   工具栏 .structure-wrap（relative，见 editor.css）下，top=按钮底 +6px、left
+   对齐按钮左缘；右缘越界时页面侧以 inline left（offsetLeft）左移钳制。 */
 
 .structure-panel {
-  position: fixed;
-  top: 56px;
-  right: 16px;
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
   width: 320px;
   max-height: 60vh;
   overflow: auto;
@@ -12,7 +15,7 @@
   border: 1px solid #e5e6eb;
   border-radius: 8px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
-  z-index: 1150;
+  z-index: 1200;
   padding: 8px 12px 12px;
   font-size: 13px;
 }

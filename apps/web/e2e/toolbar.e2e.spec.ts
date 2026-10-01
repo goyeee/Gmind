@@ -79,6 +79,20 @@ test('工具栏：单行分组 + 竖线分隔符（11 组 / 9 分隔线）', asy
   for (let i = 0; i < (await seps.count()); i++) {
     await expect(seps.nth(i)).toBeVisible();
   }
+  // 2026-09-30 需求方反馈任务 2：文字标签所有宽度常显 + e2e 默认视口（1280）恒
+  // 单行——全部直接子元素 offsetTop 相等（不换行）、无横向溢出；9 个文字标签
+  // （格式刷/插入/三按钮/格式/任务/结构/主题）全部可见（不再随 ≤1536 降级隐藏）。
+  const lineTops = await toolbar
+    .locator('> *')
+    .evaluateAll((els) => [...new Set(els.map((e) => (e as HTMLElement).offsetTop))]);
+  expect(lineTops, '工具栏必须单行（全部直接子元素等 offsetTop）').toHaveLength(1);
+  const overflow = await toolbar.evaluate((el) => el.scrollWidth > el.clientWidth);
+  expect(overflow, '工具栏不得横向溢出').toBe(false);
+  const labels = toolbar.locator('.toolbar-btn-label');
+  await expect(labels).toHaveCount(9);
+  for (let i = 0; i < (await labels.count()); i++) {
+    await expect(labels.nth(i)).toBeVisible();
+  }
 });
 
 test('工具栏：图标按钮均带内联 svg 与 title 提示；上级/子级/同级为文字钮', async ({ page }) => {

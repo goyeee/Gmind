@@ -174,43 +174,32 @@ body.painter-active .editor-canvas svg {
   min-width: 78px;
   text-align: left;
 }
-/* 窄视口收缩（M7a-K1 #1，≤1080px）：标题输入 min-width:120px 使标题组内容无法随
-   min-width:0 收缩而外溢，压住视图 Tab/星标/保存状态。窄断点内隐藏标题组保存状态
-   文案、放开标题最小宽并以省略号截断；≥1080px 维持现状。只命中编辑态标题组
-   （.toolbar-group-title 内），移动只读分支直接挂在工具栏下的 save-status 不动。 */
+/* 窄视口收缩（M7a-K1 #1，≤1080px）：标题组内容随 min-width:0 收缩，压住视图
+   Tab/星标/保存状态。窄断点内隐藏标题组保存状态文案与星标（低频降级）；
+   ≥1080px 维持现状。只命中编辑态标题组（.toolbar-group-title 内），移动只读
+   分支直接挂在工具栏下的 save-status 不动。
+   2026-09-30 需求方反馈任务 2 修订：文字标签不再随窄断点隐藏（工具栏按钮文字
+   所有宽度常显——需求方原话「否则鼠标放上去才知道是啥」）；宽度不足由 flex-wrap
+   换行兜底（单行承诺仅 1440/1280）。标题输入宽度沿用 ≤1536 断点的 120px。 */
 @media (max-width: 1080px) {
   .toolbar-group-title .save-status {
     display: none;
-  }
-  .editor-toolbar .title-input {
-    width: 140px;
   }
   /* K1-R 回归：900px 残留 .star-toggle × view-tab 相交一处，窄断点一并隐藏星标 */
   .editor-toolbar .star-toggle {
     display: none;
   }
-  /* M7b-K5 修订：窄断点文字标签隐藏（按钮回 28px 图标态），压缩工具栏总宽 */
-  .editor-toolbar .toolbar-btn-label {
-    display: none;
-  }
-  .editor-toolbar .toolbar-btn.toolbar-btn-text {
-    width: 28px;
-    padding: 0;
-  }
-  .editor-toolbar .toolbar-btn.toolbar-btn-text .toolbar-btn-label {
-    display: none;
-  }
 }
 
-/* 单行收敛（2026-09-30 需求方反馈任务 1：1440/1280 视口工具栏恒单行、不横向
-   滚动）——原 ≤1080 断点的「藏标签/缩标题」手段提前至 ≤1536（1440 视口若不
-   收敛，未压缩总宽 ≈1660px 必换行）：插入/格式刷/格式/任务/结构/主题降为图标
-   +title（hover 有文字提示，功能零删减）；企微三按钮（上级/子级/同级，无图标）
-   保留文字并收窄 padding；标题输入收窄、间距压缩。flex-wrap 保留作为 <1280
-   视口的兜底（更窄视口仍由 ≤1080 断点接管）。 */
+/* 单行收敛（2026-09-30 需求方反馈任务 2 修订：1440/1280 视口工具栏恒单行、文字
+   标签常显）——移除本断点原「文字标签降图标」降级（需求方：否则鼠标放上去才
+   知道是啥），压缩预算改为：标题输入 140→120px、文字钮水平 padding 10→6px、
+   图标-文字间距 8→6px、工具栏 gap 2→1px、头像栏贴紧。1440/1280 实测单行且无
+   横向溢出（见 gui-test-screenshots/f9-toolbar-*.png 与 e2e 锚点用例）。
+   flex-wrap 保留作 <1280 视口的换行兜底；≤1080 断点仍隐藏星标/保存状态。 */
 @media (max-width: 1536px) {
   .editor-toolbar {
-    gap: 2px;
+    gap: 1px;
     padding: 6px 8px;
   }
   .toolbar-group {
@@ -220,30 +209,22 @@ body.painter-active .editor-canvas svg {
     gap: 4px;
   }
   .editor-toolbar .title-input {
-    width: 140px;
+    width: 120px;
   }
-  .editor-toolbar .toolbar-btn-label {
-    display: none;
-  }
+  /* 文字钮收窄水平 padding + 图标-文字间距（文字常显后的宽度预算） */
   .editor-toolbar .toolbar-btn.toolbar-btn-text {
-    width: 28px;
-    min-width: 28px;
-    padding: 0;
-  }
-  /* 企微三按钮纯文字、无图标可显：保留文字（toolbar-add-node 在 TSX 侧挂类），
-     只收水平 padding；label 恢复内联且去掉图标间距（无图标） */
-  .editor-toolbar .toolbar-btn.toolbar-btn-text.toolbar-add-node {
-    width: auto;
-    min-width: 0;
     padding: 0 6px;
   }
+  .editor-toolbar .toolbar-btn-label {
+    margin-left: 2px;
+  }
+  /* 企微三按钮纯文字、无图标可显：label 恢复 margin 0（无图标不吃间距） */
   .editor-toolbar .toolbar-btn.toolbar-btn-text.toolbar-add-node .toolbar-btn-label {
-    display: inline;
     margin-left: 0;
   }
   .avatar-bar {
-    margin-left: 4px;
-    gap: 3px;
+    margin-left: 2px;
+    gap: 2px;
   }
 }
 /* 工具栏星标切换（M3b 清偿包，FR-FIL-004）：未加星空心灰、加星金色。
@@ -716,6 +697,15 @@ body.painter-active .editor-canvas svg {
    图片）——标记面板已重做为企微式锚定弹出层（挂本 wrap 下，marker-panel.css）。
    定位对齐 .export-menu（absolute 于 relative 的 .insert-wrap，顶距 4px）。 */
 .insert-wrap {
+  position: relative;
+}
+
+/* 结构/主题面板锚定 wrap（2026-09-30 需求方反馈任务 1 企微式改版）：按钮各包一层
+   relative 容器，面板 absolute 挂其下贴按钮下拉（top=按钮底+6px、left 对齐按钮
+   左缘，structure/theme-panel.css 定位）——定位模式同 .insert-wrap/.export-wrap
+   （M7b-W3 起的贴按钮下拉先例），不再是 fixed 右上浮层。 */
+.structure-wrap,
+.theme-wrap {
   position: relative;
 }
 .insert-dropdown {

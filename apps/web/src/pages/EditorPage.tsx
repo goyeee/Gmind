@@ -318,6 +318,12 @@ export function EditorPage() {
   // 结构切换面板开合（2026-09-30 任务 3，仿 ThemePanel）：structure-toggle 打开，
   // 关闭通道=套用即收 / × 钮 / Esc / 外点（统一外点监听豁免 .structure-panel）。
   const [structurePanelOpen, setStructurePanelOpen] = useState(false);
+  // 结构/主题面板锚定 wrap（2026-09-30 需求方四条反馈任务 1）：两面板从 fixed 右上
+  // 改为企微式「按钮正下方贴靠下拉」——按钮包一层 relative wrap，面板 absolute 挂
+  // wrap 下（同 insert-wrap/export-wrap 贴按钮下拉先例）。ref 供渲染期实测 wrap
+  // 屏幕坐标做右缘越界钳制（见 anchoredOffsetLeft）。
+  const structureWrapRef = useRef<HTMLDivElement | null>(null);
+  const themeWrapRef = useRef<HTMLDivElement | null>(null);
   // 格式刷（M6 Task 7，企微对标）：null = 未激活。state 驱动按钮 active / body
   // 光标 class 渲染；painterRef 供事件处理器同步读——双击序列里 click#2 退出与
   // dblclick 粘滞重进之间不等 React 提交，读 state 会拿到滞后一拍的旧值。
@@ -601,10 +607,13 @@ export function EditorPage() {
       // 插入/导出菜单内部（含「链接/图片」等右列联动菜单项）豁免：菜单项点击的
       // pointerdown 若在此收掉 formatOpen，紧随的 click 再开会出现一帧收-开抖动，
       // 且聚焦时序与互斥语义纠缠（E3 回归修复）——菜单自身的开合由各自监听管理。
+      // 结构/主题面板 wrap（2026-09-30 任务 1）：面板已挂 .structure-wrap/.theme-wrap
+      // 下，wrap 整体豁免（面板根类 .structure-panel/.theme-panel 亦在下方豁免清单，
+      // 双保险防 wrap 与面板之间的 6px 间隙点击误收）。
       if (
         el.closest('[data-popover-toggle]') ||
         el.closest(
-          '.editor-right, .editor-mobile-comments, .theme-panel, .structure-panel, .activity-panel, .help-panel, .find-bar, .member-panel, .version-panel',
+          '.editor-right, .editor-mobile-comments, .theme-panel, .structure-panel, .theme-wrap, .structure-wrap, .activity-panel, .help-panel, .find-bar, .member-panel, .version-panel',
         ) ||
         insertWrapRef.current?.contains(el) ||
         exportWrapRef.current?.contains(el)
@@ -2138,6 +2147,22 @@ export function EditorPage() {
       ? window.innerWidth - 8 - MARKER_PANEL_WIDTH - markerPanel.anchor.left
       : 0;
 
+  // —— 结构/主题面板锚定坐标（2026-09-30 需求方四条反馈任务 1）——
+  // 两面板改企微式贴按钮下拉（absolute 挂各自 wrap 下、left 对齐按钮左缘）。
+  // wrap 位于工具栏中部偏右，窄视口（≤1280 或右列挤压）下面板可能越过视口右缘：
+  // 渲染期实测 wrap 屏幕左缘做右缘钳制（负 left 左移收回视口），宽视口为 0 直落
+  // 左对齐。同 markerOffsetLeft 的渲染期一次性量测模式（仅开启时读，零常开销）。
+  const STRUCT_PANEL_WIDTH = 320;
+  const anchoredOffsetLeft = (wrapEl: HTMLElement | null, open: boolean): number => {
+    if (!open || !wrapEl) return 0;
+    const anchorLeft = wrapEl.getBoundingClientRect().left;
+    return anchorLeft + STRUCT_PANEL_WIDTH > window.innerWidth - 8
+      ? window.innerWidth - 8 - STRUCT_PANEL_WIDTH - anchorLeft
+      : 0;
+  };
+  const structureOffsetLeft = anchoredOffsetLeft(structureWrapRef.current, structurePanelOpen);
+  const themeOffsetLeft = anchoredOffsetLeft(themeWrapRef.current, themePanelOpen);
+
   // —— 迷你选盘派生（M7b-W3 #4）：目标节点快照 + 视口内钳制的弹出坐标 ——
   const pickerSnapshot = markerPicker && doc ? getNode(doc, markerPicker.nodeId) : null;
   const pickerLeft = markerPicker ? Math.min(markerPicker.x + 6, window.innerWidth - 262) : 0;
@@ -2848,18 +2873,11 @@ export function EditorPage() {
             </button>
             {insertOpen && (
               <div className="insert-dropdown" role="menu" aria-label="插入">
+                {/* 任务 3（2026-09-30 需求方四条反馈）：插入菜单去 × ——外点/Esc
+                    关闭不变已兜底，头部只留「插入」标题文字；导出菜单/结构/主题
+                    面板的 × 不动（对齐企微下拉浮层无关闭钮形态）。 */}
                 <div className="popover-head">
                   <span className="popover-head-title">插入</span>
-                  <button
-                    type="button"
-                    data-testid="insert-close"
-                    className="popover-close"
-                    title="关闭"
-                    aria-label="关闭插入菜单"
-                    onClick={() => closeInsertLayer()}
-                  >
-                    ×
-                  </button>
                 </div>
                 <button
                   data-testid="insert-icons"
@@ -3016,39 +3034,75 @@ export function EditorPage() {
             适配为 structure-toggle + structure-panel）。
             「格式」样式面板现为右列常驻面板（M3b 裁决），不设工具栏按钮、此位留空。 */}
         <div className="toolbar-group">
-          <button
-            data-testid="structure-toggle"
-            data-popover-toggle="structure-toggle"
-            className={structurePanelOpen ? 'toolbar-btn toolbar-btn-text active' : 'toolbar-btn toolbar-btn-text'}
-            title="结构"
-            aria-label="结构"
-            aria-haspopup="true"
-            aria-expanded={structurePanelOpen}
-            onClick={() => {
-              setStructurePanelOpen((v) => !v);
-              setThemePanelOpen(false); // 相邻两面板互斥（同 format/task 组惯例）
-            }}
-          >
-            <StructureIcon />
-            <span className="toolbar-btn-label">结构</span>
-          </button>
-          {/* 主题入口（M7b-W2 #6 需求方裁定）：只留面板按钮（右侧缩略图画廊），
-              原 theme-select 下拉移除——双入口重复； THEME_OPTIONS/ThemePanel 不动 */}
-          <button
-            data-testid="theme-panel-toggle"
-            data-popover-toggle="theme-panel-toggle"
-            className="toolbar-btn toolbar-btn-text"
-            title="主题"
-            aria-label="主题"
-            aria-expanded={themePanelOpen}
-            onClick={() => {
-              setThemePanelOpen((v) => !v);
-              setStructurePanelOpen(false); // 相邻两面板互斥（同 format/task 组惯例）
-            }}
-          >
-            <ThemeIcon />
-            <span className="toolbar-btn-label">主题</span>
-          </button>
+          {/* 结构面板锚定 wrap（2026-09-30 需求方反馈任务 1 企微式改版）：relative
+              容器包按钮，面板 absolute 挂其下——按钮正下方贴靠下拉（top=按钮底+6px、
+              左缘对齐），不再是 fixed 右上浮层；右缘越界由 offsetLeft 钳制。 */}
+          <div className="structure-wrap" ref={structureWrapRef}>
+            <button
+              data-testid="structure-toggle"
+              data-popover-toggle="structure-toggle"
+              className={structurePanelOpen ? 'toolbar-btn toolbar-btn-text active' : 'toolbar-btn toolbar-btn-text'}
+              title="结构"
+              aria-label="结构"
+              aria-haspopup="true"
+              aria-expanded={structurePanelOpen}
+              onClick={() => {
+                setStructurePanelOpen((v) => !v);
+                setThemePanelOpen(false); // 相邻两面板互斥（同 format/task 组惯例）
+              }}
+            >
+              <StructureIcon />
+              <span className="toolbar-btn-label">结构</span>
+            </button>
+            {/* 结构切换面板（2026-09-30 任务 3，仿 ThemePanel）：应用 = setDocMeta
+                structureType（原 select 同一写链路，可撤销）+ afterUserWrite，应用后收起 */}
+            <StructurePanel
+              open={structurePanelOpen}
+              current={(meta?.structureType ?? 'mindmap') as StructureTypeValue}
+              offsetLeft={structureOffsetLeft}
+              onClose={() => setStructurePanelOpen(false)}
+              onApply={(value) => {
+                setStructurePanelOpen(false);
+                if (!doc || value === meta?.structureType) return;
+                setDocMeta(doc, { structureType: value }, ORIGIN_USER);
+                afterUserWrite();
+              }}
+            />
+          </div>
+          {/* 主题面板锚定 wrap（2026-09-30 任务 1，同结构 wrap）：企微式贴按钮下拉。
+              主题入口（M7b-W2 #6 需求方裁定）：只留面板按钮，原 theme-select 下拉
+              移除——双入口重复。 */}
+          <div className="theme-wrap" ref={themeWrapRef}>
+            <button
+              data-testid="theme-panel-toggle"
+              data-popover-toggle="theme-panel-toggle"
+              className="toolbar-btn toolbar-btn-text"
+              title="主题"
+              aria-label="主题"
+              aria-expanded={themePanelOpen}
+              onClick={() => {
+                setThemePanelOpen((v) => !v);
+                setStructurePanelOpen(false); // 相邻两面板互斥（同 format/task 组惯例）
+              }}
+            >
+              <ThemeIcon />
+              <span className="toolbar-btn-label">主题</span>
+            </button>
+            {/* 主题缩略图选择面板（M6 Task 4）：套用 = setDocMeta themeId（与 select
+                同一写链路，可撤销）+ afterUserWrite，套用后关闭抽屉 */}
+            <ThemePanel
+              open={themePanelOpen}
+              currentId={themeId}
+              offsetLeft={themeOffsetLeft}
+              onClose={() => setThemePanelOpen(false)}
+              onApply={(id) => {
+                setThemePanelOpen(false);
+                if (!doc || id === themeId) return;
+                setDocMeta(doc, { themeId: id }, ORIGIN_USER);
+                afterUserWrite();
+              }}
+            />
+          </div>
         </div>
         {/* 导出组（M4 Task 5，FR-IO-004）：XMind + PNG/JPG（Task 9 就地追加，
             不改动既有 XMind 项）。文件名与 header 标题同源 getMeta(doc).title。 */}
@@ -3586,32 +3640,8 @@ export function EditorPage() {
         focusUserId={membersFocus}
       />
       <HelpPanel open={helpOpen} onClose={() => setHelpOpen(false)} />
-      {/* 主题缩略图选择面板（M6 Task 4）：套用 = setDocMeta themeId（与 select 同一
-          写链路，可撤销）+ afterUserWrite，套用后关闭抽屉 */}
-      <ThemePanel
-        open={themePanelOpen}
-        currentId={themeId}
-        onClose={() => setThemePanelOpen(false)}
-        onApply={(id) => {
-          setThemePanelOpen(false);
-          if (!doc || id === themeId) return;
-          setDocMeta(doc, { themeId: id }, ORIGIN_USER);
-          afterUserWrite();
-        }}
-      />
-      {/* 结构切换面板（2026-09-30 任务 3，仿 ThemePanel）：应用 = setDocMeta
-          structureType（原 select 同一写链路，可撤销）+ afterUserWrite，应用后收起 */}
-      <StructurePanel
-        open={structurePanelOpen}
-        current={(meta?.structureType ?? 'mindmap') as StructureTypeValue}
-        onClose={() => setStructurePanelOpen(false)}
-        onApply={(value) => {
-          setStructurePanelOpen(false);
-          if (!doc || value === meta?.structureType) return;
-          setDocMeta(doc, { structureType: value }, ORIGIN_USER);
-          afterUserWrite();
-        }}
-      />
+      {/* 主题/结构面板已迁入工具栏各自锚定 wrap（2026-09-30 需求方反馈任务 1：
+          企微式按钮正下方贴靠下拉），此处的 fixed 右上挂载点随之移除。 */}
       {/* 查找替换条（M6 Task 3）：画布顶部浮层，开关/键位在页面侧；定位复用 locateNode
           （selectOnly + 展开折叠祖先，与评论面板同一语义）；移动端只读不装配；
           表格视图隐藏（查找需求由表格筛选条承接，M7a-T4） */}
