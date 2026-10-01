@@ -240,8 +240,8 @@ export function RichPanel(props: RichPanelProps): ReactElement {
       {styleSection(snap)}
 
       {/* 描述（M7c-C1）：受控草稿 + 失焦提交（未变更零写入），字数沿用
-          MAX_DESCRIPTION_LENGTH 上限。画布上的第二编辑入口见 EditorPage
-          描述编辑浮层（新建提交后 Tab 直填，2026-10-01 需求方反馈任务 1）。 */}
+          MAX_DESCRIPTION_LENGTH 上限。画布上的第二编辑入口见编辑浮层双框形态
+          （标题框下方描述框，2026-10-01 需求方反馈二批）。 */}
       <h3>描述</h3>
       <label className="field">
         <span>描述</span>

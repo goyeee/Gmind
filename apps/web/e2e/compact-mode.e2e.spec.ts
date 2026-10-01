@@ -66,7 +66,8 @@ test('简洁模式：切换隐藏描述/状态条/任务行并内联进度、盒
   await pressFirstCharToOpen(page);
   await page.keyboard.press('Backspace'); // 清占位首键
   await page.keyboard.insertText('写周报');
-  await page.keyboard.press('Enter');
+  await page.keyboard.press('Enter'); // 标题框 Enter → 切描述框（此刻仍详细模式=双框）
+  await page.keyboard.press('Enter'); // 描述框留空 → 提交两者
   await expect(page.locator('.gm-text-editor')).toHaveCount(0);
 
   await fillTaskFields(page);
@@ -112,4 +113,22 @@ test('简洁模式：切换隐藏描述/状态条/任务行并内联进度、盒
   await expect(nodeAfterReload.locator('text.gm-task-progress-inline')).toHaveText('50%');
   await expect(nodeAfterReload.locator('text.gm-desc')).toHaveCount(0);
   await expect(nodeAfterReload.locator('rect.gm-task-bar')).toHaveCount(0);
+});
+
+// 简洁模式下的行内编辑只有标题框（2026-10-01 双框改版的单框形态）：无描述框、
+// 标题框 Enter 直接提交（无双框流转）——与详细模式的双框行为互为对照。
+test('简洁模式：行内编辑只有标题框（无描述框），Enter 直接提交', async ({ page }) => {
+  await openSeedDoc(page, '本周计划');
+  await page.getByTestId('compact-toggle').click();
+  await expect(page.getByTestId('compact-toggle')).toHaveAttribute('aria-pressed', 'true');
+  // root 默认选中：Tab 惰性新建 → 敲字补开编辑框
+  await page.keyboard.press('Tab');
+  await pressFirstCharToOpen(page);
+  await page.keyboard.press('Backspace');
+  await page.keyboard.insertText('简洁节点');
+  await expect(page.locator('.gm-text-editor')).toBeVisible();
+  await expect(page.locator('.gm-desc-editor')).toHaveCount(0); // 单框形态：无描述框
+  await page.keyboard.press('Enter'); // 单框：Enter 直接提交（不切描述框）
+  await expect(page.locator('.gm-text-editor')).toHaveCount(0);
+  await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '简洁节点' })).toBeVisible();
 });

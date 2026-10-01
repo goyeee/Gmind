@@ -87,7 +87,8 @@ async function addChildNode(page: Page, text: string): Promise<void> {
   await pressFirstCharToOpen(page);
   await page.keyboard.press('Backspace'); // 清占位首键
   await page.keyboard.insertText(text); // 与 IME 提交同路径
-  await page.keyboard.press('Enter');
+  await page.keyboard.press('Enter'); // 标题框 Enter → 切描述框（双框流转）
+  await page.keyboard.press('Enter'); // 描述框留空 → 提交两者
   await expect(editor).toHaveCount(0);
 }
 
@@ -153,7 +154,8 @@ test('右键菜单增删节点：node_add/node_delete 的 via=context', async ({
   await pressFirstCharToOpen(page);
   await page.keyboard.press('Backspace');
   await page.keyboard.insertText('右键新节点'); // 与 IME 提交同路径
-  await page.keyboard.press('Enter');
+  await page.keyboard.press('Enter'); // 标题框 → 描述框（双框流转）
+  await page.keyboard.press('Enter'); // 描述框留空 → 提交两者
   await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '右键新节点' })).toBeVisible();
 
   const added = events.filter((e) => e.type === 'node_add');

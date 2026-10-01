@@ -45,9 +45,11 @@ async function pressFirstCharToOpen(page: Page): Promise<void> {
 }
 
 /**
- * 用例 2 的创建流程（2026-09-28 惰性编辑语义）：Tab **立即创建**文本为「新主题」的
- * 节点并选中，但**不**立刻打开行内编辑框；敲下首个可打印字符时编辑框才出现
- * （打开即全选默认文本，首字符替换之、其余追加），Enter 提交。
+ * 用例 2 的创建流程（2026-09-28 惰性编辑语义 + 2026-10-01 双框改版）：Tab **立即
+ * 创建**文本为「新主题」的节点并选中，但**不**立刻打开行内编辑框；敲下首个可打印
+ * 字符时编辑框才出现（打开即全选默认文本，首字符替换之、其余追加）。双框形态：
+ * 标题框 Enter 切描述框（非简洁模式恒渲染），描述框留空再 Enter 一并提交
+ * （setDescription('') 同值守卫零写入）。
  */
 async function createNewNodeViaKeyboard(page: Page): Promise<void> {
   await page.keyboard.press('Tab'); // root 为默认选中：立即落位「新主题」节点（惰性，不开框）
@@ -59,7 +61,8 @@ async function createNewNodeViaKeyboard(page: Page): Promise<void> {
   await expect(editor).toBeFocused();
   await page.keyboard.press('Backspace'); // 清占位首键
   await page.keyboard.insertText('新节点'); // 与 IME 提交同路径
-  await page.keyboard.press('Enter');
+  await page.keyboard.press('Enter'); // 标题框 Enter → 切描述框（双框流转）
+  await page.keyboard.press('Enter'); // 描述框 Enter → 提交两者（描述留空）
   await expect(editor).toHaveCount(0);
 }
 
@@ -104,44 +107,55 @@ test('编辑器：惰性创建——Tab 立即落位新主题节点、敲字才�
   await page.keyboard.press('Escape');
   await expect(page.locator('.gm-text-editor')).toHaveCount(0);
   await expect(groups).toHaveCount(before);
-  // 再次新建：敲字补开编辑框 → Enter 提交路径仍工作
+  // 再次新建：敲字补开编辑框 → 双框 Enter 提交路径仍工作
   await page.keyboard.press('Tab');
   await expect(groups).toHaveCount(before + 1);
   await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '新主题' })).toBeVisible();
   await pressFirstCharToOpen(page);
   await page.keyboard.press('Backspace');
   await page.keyboard.insertText('落位节点');
-  await page.keyboard.press('Enter');
+  await page.keyboard.press('Enter'); // 标题框 → 描述框
+  await page.keyboard.press('Enter'); // 描述框 → 提交两者
   await expect(page.locator('.gm-text-editor')).toHaveCount(0);
+  await expect(page.locator('.gm-desc-editor')).toHaveCount(0);
   await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '落位节点' })).toBeVisible();
   await expect(groups).toHaveCount(before + 1);
 });
 
-// 用例 2c（2026-10-01 需求方反馈任务 1）：新建提交文本后按 Tab → 描述编辑浮层
-// （复用 .gm-text-editor，锚定节点盒下一行；仅非简洁模式）——Enter 写入 Y.Doc
-// description；该次 Tab 不再新建子主题（节点数不增，日常 Tab 建子语义不受影响）。
-test('编辑器：新建提交后 Tab 打开描述浮层，Enter 写入描述', async ({ page }) => {
+// 用例 2c（2026-10-01 需求方反馈二批·双框编辑）：非简洁模式行内编辑呈现标题+描述
+// 双框——标题框 Tab/Enter 切描述框（替代旧「提交后 Tab 直填描述」机制），描述框
+// 空时占位「填写描述…」、高度随内容自适应（80+ 字长描述多行撑高不被裁剪）、Enter
+// 一次提交标题+描述（一次事务 setText+setDescription）。该次 Tab 在编辑框内消费，
+// 不再新建子主题。
+test('编辑器：双框编辑——标题 Tab 切描述框，长描述自适应撑高、Enter 一并提交', async ({ page }) => {
   await openSeedDoc(page, '本周计划');
   await expect(page.locator('.editor-canvas svg .gm-text')).toHaveCount(7); // 种子 root+3子+3孙
-  // 新建（惰性）→ 敲字补开编辑框 → Enter 提交文本（提交后挂一次「Tab 直填描述」机会）
+  // 新建（惰性）→ 敲字补开编辑框 → 键入标题
   await page.keyboard.press('Tab');
   await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '新主题' })).toBeVisible();
   await pressFirstCharToOpen(page);
   await page.keyboard.press('Backspace');
   await page.keyboard.insertText('需求评审');
-  await page.keyboard.press('Enter');
-  await expect(page.locator('.gm-text-editor')).toHaveCount(0);
-  // Tab：打开描述编辑浮层（不是新建子主题——文本总数仍 8）
+  const title = page.locator('.gm-text-editor');
+  const desc = page.locator('.gm-desc-editor');
+  await expect(desc).toBeVisible(); // 双框：描述框贴标题框下（非简洁模式恒渲染）
+  await expect(desc).toHaveAttribute('placeholder', '填写描述…');
+  // Tab：标题框 → 描述框聚焦（不是新建子主题——文本总数仍 8）
   await page.keyboard.press('Tab');
-  const desc = page.locator('.gm-text-editor');
-  await expect(desc).toBeVisible();
   await expect(desc).toBeFocused();
   await expect(page.locator('.editor-canvas svg .gm-text')).toHaveCount(8);
-  await page.keyboard.insertText('一句话任务描述');
-  await page.keyboard.press('Enter');
+  // 80+ 字长描述：高度随内容自适应（多行撑高，远超单行，不裁剪）
+  const longDesc = '描'.repeat(80);
+  await page.keyboard.insertText(longDesc);
+  const box = await desc.boundingBox();
+  expect(box, '描述框必须已渲染').toBeTruthy();
+  expect(box!.height!).toBeGreaterThan(40); // 单行约 23px：>40 即多行撑高
+  await page.keyboard.press('Enter'); // 描述框 Enter：一次提交标题+描述
+  await expect(title).toHaveCount(0);
   await expect(desc).toHaveCount(0);
+  await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '需求评审' })).toBeVisible();
   await expect(page.getByTestId('save-status')).toHaveText(/已保存/);
-  // Y.Doc description 断言：保存后的 docState 反解，新节点 description 已写入
+  // Y.Doc description 断言：保存后的 docState 反解，新节点 text + description 均已写入
   const token = await page.evaluate(() => localStorage.getItem('gmind.token'));
   const fileId = page.url().split('/').pop() ?? '';
   const res = await page.request.get(`/api/files/${fileId}`, {
@@ -159,7 +173,35 @@ test('编辑器：新建提交后 Tab 打开描述浮层，Enter 写入描述', 
   const rootKids = ((nodes.get('root')?.get('children') as Y.Array<string>)?.toArray() ?? []);
   const newId = rootKids.find((id) => textOf(id) === '需求评审');
   expect(newId).toBeTruthy();
-  expect(String(nodes.get(newId as string)?.get('description') ?? '')).toBe('一句话任务描述');
+  expect(textOf(newId as string)).toBe('需求评审');
+  expect(String(nodes.get(newId as string)?.get('description') ?? '')).toBe(longDesc);
+});
+
+// 用例 2c-2（双框编辑·既有节点）：双击既有节点 → 描述框预填现有描述；Esc 取消
+// 两框均不写入（描述框 Esc=取消整个编辑，与标题框 Esc 同语义）。
+test('编辑器：双框编辑既有节点时描述框预填，Esc 取消不写入', async ({ page }) => {
+  await openSeedDoc(page, '本周计划');
+  // 先经双框给「周一」写入描述（标题不动 → 同值守卫零写入）
+  await page.locator('.editor-canvas svg .gm-text', { hasText: '周一' }).dblclick();
+  const title = page.locator('.gm-text-editor');
+  const desc = page.locator('.gm-desc-editor');
+  await expect(title).toBeVisible();
+  await page.keyboard.press('Tab'); // 标题不动直接切描述框
+  await expect(desc).toBeFocused();
+  await page.keyboard.insertText('周一的描述');
+  await page.keyboard.press('Enter'); // 描述框 Enter：一次提交标题+描述
+  await expect(title).toHaveCount(0);
+  await expect(page.getByTestId('save-status')).toHaveText(/已保存/, { timeout: 15000 });
+  // 再次双击：描述框预填刚写入的描述
+  await page.locator('.editor-canvas svg .gm-text', { hasText: '周一' }).dblclick();
+  await expect(page.locator('.gm-text-editor')).toBeVisible();
+  await expect(desc).toHaveValue('周一的描述');
+  // Esc 取消：两框的修改都不写入
+  await page.keyboard.insertText('被取消的修改');
+  await page.keyboard.press('Escape');
+  await expect(desc).toHaveCount(0);
+  await expect(title).toHaveCount(0);
+  await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '周一' })).toBeVisible();
 });
 
 // 用例 3：保存后刷新页面，「新节点」仍在（持久化闭环）
@@ -290,7 +332,8 @@ test('编辑器：编辑后立即返回工作台，卸载冲刷保存持久化',
   const editor = page.locator('.gm-text-editor');
   await expect(editor).toBeVisible();
   await page.keyboard.type('周一改'); // 覆盖全选文本
-  await page.keyboard.press('Enter');
+  await page.keyboard.press('Enter'); // 标题框 → 描述框（双框流转）
+  await page.keyboard.press('Enter'); // 描述框留空 → 提交两者
   await page.getByTestId('back-btn').click(); // 2s 防抖窗口内离开 → 触发卸载冲刷
   await expect(page).toHaveURL(/\/workspace/);
   await page.waitForTimeout(800); // 冲刷 PUT 落库
@@ -349,7 +392,8 @@ test('编辑器：选中节点按 F2 进入编辑态并提交生效', async ({ p
   await expect(editor).toBeVisible();
   await expect(editor).toBeFocused();
   await page.keyboard.type('周一改'); // 打开即全选：键入直接覆盖
-  await page.keyboard.press('Enter');
+  await page.keyboard.press('Enter'); // 标题框 → 描述框（双框流转）
+  await page.keyboard.press('Enter'); // 描述框留空 → 提交两者
   await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '周一改' })).toBeVisible();
 });
 
@@ -395,13 +439,15 @@ test('编辑器：复制节点后选中另一节点 Ctrl+V 粘贴为其子级', 
 /**
  * 惰性待编辑节点补开编辑框后覆写提交为指定文本：pressFirstCharToOpen 首键（ASCII，
  * 带盒就绪重试）打开即全选，fill 整值覆写（不依赖首键落了几枚占位字符，确定性
- * 文本供 docState 精确断言），Enter 提交（overlay 吞 Enter，画布映射不再响应）。
+ * 文本供 docState 精确断言），双框 Enter×2 提交（标题框 Enter 切描述框、描述框
+ * Enter 提交两者——overlay 吞 Enter，画布映射不再响应）。
  */
 async function commitLazyNodeText(page: Page, text: string): Promise<void> {
   const editor = page.locator('.gm-text-editor');
   await pressFirstCharToOpen(page);
   await editor.fill(text);
-  await page.keyboard.press('Enter');
+  await page.keyboard.press('Enter'); // 标题框 → 描述框
+  await page.keyboard.press('Enter'); // 描述框 → 提交两者
   await expect(editor).toHaveCount(0);
 }
 

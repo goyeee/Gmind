@@ -412,6 +412,23 @@ body.painter-active .editor-canvas svg {
   box-shadow: none !important;
 }
 
+/* 2026-10-01 双框编辑（需求方反馈：描述缺单独输入框 + 长文本被裁剪）：描述框
+   （engine texteditor 双框形态，贴标题框正下方）与标题框同视觉——半透明白底、
+   选中描边 #3370ff、圆角随主题节点圆角。engine 以内联样式落白底/蓝边（packages/
+   engine texteditor.ts），内联优先级高于普通声明，故 !important（.gm-text-editor
+   同款裁定）。 */
+.gm-desc-editor {
+  background: rgba(255, 255, 255, 0.88) !important;
+  border: 2px solid #3370ff !important;
+  border-radius: var(--gm-node-radius, 8px) !important;
+  box-shadow: none !important;
+}
+
+/* 双框编辑的占位提示（描述框空态「填写描述…」）：跟随描述框次要文字层级弱化 */
+.gm-desc-editor::placeholder {
+  color: #9aa0a8;
+}
+
 .editor-bottombar {
   flex: none;
   display: flex;

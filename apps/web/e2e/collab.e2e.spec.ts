@@ -96,11 +96,9 @@ async function addChildNode(page: Page, text: string): Promise<void> {
   await pressFirstCharToOpen(page);
   await page.keyboard.press('Backspace'); // 清占位首键
   await page.keyboard.insertText(text); // 与 IME 提交同路径
-  await page.keyboard.press('Enter');
+  await page.keyboard.press('Enter'); // 标题框 Enter → 切描述框（双框流转）
+  await page.keyboard.press('Enter'); // 描述框留空 → 提交两者（无残留一次性机会，无需再 Esc）
   await expect(editor).toHaveCount(0);
-  // 清掉「新建提交后 Tab 直填描述」的一次性机会（2026-10-01 需求方反馈任务 1）：
-  // 连续 addChildNode 的下一个 Tab 需要照常建子，Esc 只清除机会、无其他副作用
-  await page.keyboard.press('Escape');
 }
 
 // 用例 1 三态：编辑 →「保存中」→「已保存 HH:MM」（WS persisted ack 驱动；与 M1 的

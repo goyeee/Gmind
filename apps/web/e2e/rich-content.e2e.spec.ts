@@ -197,7 +197,8 @@ test('富内容：右键菜单插入子级可用', async ({ page }) => {
   await expect(editor).toBeVisible();
   await page.keyboard.press('Backspace');
   await page.keyboard.insertText('右键子节点');
-  await page.keyboard.press('Enter');
+  await page.keyboard.press('Enter'); // 标题框 → 描述框（双框流转）
+  await page.keyboard.press('Enter'); // 描述框留空 → 提交两者
   await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '右键子节点' })).toBeVisible();
 });
 

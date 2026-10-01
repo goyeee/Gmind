@@ -28,13 +28,14 @@ async function registerAndLogin(page: Page): Promise<void> {
   await expect(page.locator('.file-list li')).toHaveCount(3);
 }
 
-/** 双击节点进编辑态 → 覆盖键入 → Enter 提交，等待「已保存」（WS persisted ack）。 */
+/** 双击节点进编辑态 → 覆盖键入 → 双框 Enter×2 提交，等待「已保存」（WS persisted ack）。 */
 async function renameNode(page: Page, from: string, to: string): Promise<void> {
   await page.locator('.editor-canvas svg .gm-text', { hasText: from }).dblclick();
   const editor = page.locator('.gm-text-editor');
   await expect(editor).toBeVisible();
   await page.keyboard.type(to); // 覆盖全选文本
-  await page.keyboard.press('Enter');
+  await page.keyboard.press('Enter'); // 标题框 → 描述框（双框流转）
+  await page.keyboard.press('Enter'); // 描述框留空 → 提交两者
   await expect(page.getByTestId('save-status')).toHaveText(/已保存/, { timeout: 15000 });
 }
 

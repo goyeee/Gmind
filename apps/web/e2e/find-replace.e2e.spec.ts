@@ -55,7 +55,7 @@ test('查找替换：Ctrl+F 打开 → 计数/循环定位 → 替换当前 → 
   await openSeedDoc(page, '本周计划');
 
   // 建 3 个含「节点」的子节点（每次先选 root 再 Tab——惰性创建落位「新主题」节点，
-  // 敲字才开编辑框；选中态由 Enter 提交后消费，避免上一次新建的选中串位）。
+  // 敲字才开编辑框；选中态由双框 Enter×2 提交后消费，避免上一次新建的选中串位）。
   // 补开首键纪律见 editor.e2e pressFirstCharToOpen：ASCII 首键带重试，退格清占位、
   // insertText 写入中文。
   for (const label of ['节点甲', '节点乙', '节点丙']) {
@@ -71,7 +71,8 @@ test('查找替换：Ctrl+F 打开 → 计数/循环定位 → 替换当前 → 
     await expect(editor).toBeVisible();
     await page.keyboard.press('Backspace');
     await page.keyboard.insertText(label);
-    await page.keyboard.press('Enter');
+    await page.keyboard.press('Enter'); // 标题框 → 描述框（双框流转）
+    await page.keyboard.press('Enter'); // 描述框留空 → 提交两者
     await expect(editor).toHaveCount(0);
   }
   await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '节点丙' })).toBeVisible();

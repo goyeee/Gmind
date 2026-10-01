@@ -311,12 +311,6 @@ export function EditorPage() {
   // 还原）。ref 而非 state：keydown 监听同步读，不等 React 提交。
   const pendingEditRef = useRef<string | null>(null);
   const pendingCancelRef = useRef<(() => void) | null>(null);
-  // 描述直填一次机会（2026-10-01 需求方反馈任务 1）：新建节点提交文本后挂该节点
-  // id，紧随的 Tab 不再新建子主题而是打开描述编辑浮层（复用 TextEditorOverlay，
-  // 锚定节点盒下一行）；任何其他按键/点击即清除（防误触发，日常 Tab 建子不受影响）。
-  // 仅非简洁模式挂载/触发（简洁模式描述不渲染，直填无落点）。ref 而非 state：
-  // keydown 监听同步读，不等 React 提交（pendingEditRef 同款裁定）。
-  const pendingDescRef = useRef<string | null>(null);
   // 当前挂 gm-editing 类的节点 id（任务 4 编辑重影根治）：编辑覆盖层单例，换节点
   // 编辑时先摘旧再挂新（helper setEditingClass 统一收口）。
   const editingNodeIdRef = useRef<string | null>(null);
@@ -1248,7 +1242,11 @@ export function EditorPage() {
     }
   };
 
-  /** 打开既有节点编辑覆盖层（双击/后续交互入口）。 */
+  /**
+   * 打开既有节点编辑覆盖层（双击/后续交互入口）。2026-10-01 双框改版（需求方
+   * 反馈「描述没有单独输入框」）：非简洁模式下编辑浮层带描述框（预填现有描述、
+   * 空时占位「填写描述…」），标题 Enter/Tab 切描述框、描述框 Enter 提交两者。
+   */
   const openNodeEditor = (id: string): void => {
     if (!doc) return;
     const vp = viewportRef.current;
@@ -1276,10 +1274,25 @@ export function EditorPage() {
       ),
       scale: vp.scale,
       value: snap.text,
-      onCommit: (text) => {
+      // 双框形态（非简洁模式）：描述预填 + 上限走 core 同值常量（引擎截断兜底）
+      description: compactRef.current
+        ? undefined
+        : {
+            value: snap.description ?? '',
+            maxLength: MAX_DESCRIPTION_LENGTH,
+            placeholder: '填写描述…',
+            onTruncated: () =>
+              showToast(`描述长度已达上限（最多 ${MAX_DESCRIPTION_LENGTH} 字），请精简后再保存`),
+          },
+      onCommit: (text, desc) => {
         setEditingClass(null);
         try {
-          setText(doc, id, text, ORIGIN_USER);
+          // 一次事务 setText+setDescription（组合原子操作包外层事务，撤销一笔）；
+          // 两写各有同值守卫——描述未改/同值时零写入（core setDescription 内部消化）
+          withTransaction(doc, ORIGIN_USER, () => {
+            setText(doc, id, text, ORIGIN_USER);
+            setDescription(doc, id, desc.trim(), ORIGIN_USER); // 空文本=清空（幂等）
+          });
           afterUserWrite();
         } catch (e) {
           showToast(e instanceof Error ? e.message : '保存失败');
@@ -1391,10 +1404,13 @@ export function EditorPage() {
   /**
    * 补开惰性待编辑节点（keydown effect 命中可打印字符时）：锚定装配仿 openNode
    * Editor（panNodeIntoView + 真实盒 + clampAnchorRect），差异在提交语义——
-   * onCommit 空文本 → pendingCancelRef 回收（「新建后敲字又全删」→ 删节点，与
-   * 旧「空提交=取消」语义一致）；非空 → setText + afterUserWrite。onCancel 不回
-   * 收：取消时文本未变（有改动走 blur=commit 到不了 onCancel），保留「新主题」
-   * 现状；回收闭包在关闭路径一律作废（提交后节点已是常驻节点，不可再被回收）。
+   * onCommit 空标题 → pendingCancelRef 回收（「新建后敲字又全删」→ 删节点，与
+   * 旧「空提交=取消」语义一致；已键入的描述随节点一并废弃）；非空 → setText +
+   * setDescription 同一笔事务（描述框留空= setDescription('') 同值守卫零写入）。
+   * onCancel 不回收：取消时文本未变（有改动走 blur=commit 到不了 onCancel），保留
+   * 「新主题」现状；回收闭包在关闭路径一律作废（提交后节点已是常驻节点，不可再
+   * 被回收）。双框形态（非简洁模式）：描述框随编辑浮层一并打开，空时占位
+   * 「填写描述…」（2026-10-01 需求方「描述单独输入框」）。
    *
    * **时序契约**：由 document keydown **同步**调用且不 preventDefault——overlay
    * .open 内部同步 appendChild+focus+selectAll，随后的浏览器默认文本插入/IME 组
@@ -1425,21 +1441,33 @@ export function EditorPage() {
       ),
       scale: vp.scale,
       value: snap.text,
-      onCommit: (text) => {
+      // 双框形态（非简洁模式）：新建节点描述默认空串，占位「填写描述…」引导填写
+      description: compactRef.current
+        ? undefined
+        : {
+            value: snap.description ?? '',
+            maxLength: MAX_DESCRIPTION_LENGTH,
+            placeholder: '填写描述…',
+            onTruncated: () =>
+              showToast(`描述长度已达上限（最多 ${MAX_DESCRIPTION_LENGTH} 字），请精简后再保存`),
+          },
+      onCommit: (text, desc) => {
         setEditingClass(null);
         const cancel = pendingCancelRef.current; // 回收闭包一次性：无论提交为何都作废
         pendingCancelRef.current = null;
         if (!doc) return;
         if (text.trim() === '') {
-          cancel?.(); // 空提交 = 回收新建节点（敲了字又全删）
+          cancel?.(); // 空标题提交 = 回收新建节点（敲了字又全删；描述随节点废弃）
           return;
         }
         try {
-          setText(doc, nodeId, text, ORIGIN_USER);
+          // 一次事务 setText+setDescription（撤销一笔）；描述同值/空值零写入由
+          // core setDescription 同值守卫消化
+          withTransaction(doc, ORIGIN_USER, () => {
+            setText(doc, nodeId, text, ORIGIN_USER);
+            setDescription(doc, nodeId, desc.trim(), ORIGIN_USER);
+          });
           afterUserWrite();
-          // 非简洁模式：新建节点文本落定后给一次「Tab 直填描述」机会（任务 1）；
-          // 其他按键/点击会清掉它，日常 Tab 建子不受影响。简洁模式描述不渲染不挂。
-          if (!compactRef.current) pendingDescRef.current = nodeId;
         } catch (e) {
           showToast(e instanceof Error ? e.message : '保存失败');
         }
@@ -1453,64 +1481,6 @@ export function EditorPage() {
     });
     selectionRef.current?.selectOnly(nodeId);
     setEditingClass(nodeId);
-    return true;
-  };
-
-  /**
-   * 打开节点描述编辑浮层（2026-10-01 需求方反馈任务 1）：复用 TextEditorOverlay
-   * 单例（与文本编辑同 class/键盘语义——Enter 提交、Esc 取消、blur 提交），差异在
-   * 锚定与提交语义——
-   * - 锚定矩形：节点盒**下一行**（y = 盒底 + 2px 间距、宽同盒宽、scale 换算同
-   *   openPendingEditor；高传 20 单行——overlay 内部有同值行高下限兜底），节点文本
-   *   保持可见，故不挂 gm-editing（那会隐掉底层节点文字）；
-   * - onCommit：setDescription（trim 后提交，与 RichPanel/TaskPanel 描述编辑同
-   *   语义）——空文本=清空描述（setDescription('') 经同值守卫幂等零变更），超 200
-   *   字由 core 校验抛 DESCRIPTION_TOO_LONG（两段式文案 toast）；
-   * - onCancel：不动文档（Esc 关闭不提交）。
-   * 浮层无 placeholder 支持（engine texteditor 不带该能力）——以 textarea title
-   * 提示代替（按任务口径不加 placeholder）。
-   * 返回是否真正打开：盒子未进 boxesRef（极速按键）返回 false，调用侧保留
-   * pendingDesc 待下一键重试（openPendingEditor 同款就绪语义）。
-   */
-  const openDescriptionEditor = (nodeId: string): boolean => {
-    if (!doc) return false;
-    const vp = viewportRef.current;
-    const svgEl = svgRef.current;
-    const box = boxesRef.current.find((b) => b.id === nodeId);
-    if (!vp || !svgEl || !box) return false;
-    const snap = getNode(doc, nodeId);
-    if (!snap || snap.deleted) return false;
-    panNodeIntoView(nodeId);
-    const rect = svgEl.getBoundingClientRect();
-    const p = vp.toScreen(box.x, box.y);
-    const ta = overlay.open({
-      anchorRect: clampAnchorRect(
-        {
-          x: rect.left + window.scrollX + p.x,
-          // 盒底下移一行：锚 y = 盒 y + 盒高 + 2（页面坐标，scale 换算同 openPendingEditor）
-          y: rect.top + window.scrollY + p.y + box.h * vp.scale + 2,
-          w: box.w * vp.scale,
-          h: 20, // 单行高（= engine MIN_HEIGHT_PX 同值，overlay 内部下限兜底）
-        },
-        vp.scale,
-      ),
-      scale: vp.scale,
-      value: snap.description ?? '',
-      onCommit: (text) => {
-        if (!doc) return;
-        try {
-          setDescription(doc, nodeId, text.trim(), ORIGIN_USER); // 空文本=清空（幂等）
-          afterUserWrite();
-        } catch (e) {
-          showToast(e instanceof Error ? e.message : '保存失败');
-        }
-      },
-      onCancel: () => undefined, // Esc：不动文档
-      onTruncated: () =>
-        showToast(`描述长度已达上限（最多 ${MAX_DESCRIPTION_LENGTH} 字），请精简后再保存`),
-    });
-    ta.title = '节点描述：Enter 保存，Esc 取消'; // 无 placeholder 支持：title 提示代替
-    selectionRef.current?.selectOnly(nodeId);
     return true;
   };
 
@@ -1540,16 +1510,6 @@ export function EditorPage() {
     const d = doc; // 门内已收窄非空：监听闭包统一用局部别名
     pendingEditRef.current = null;
     pendingCancelRef.current = null;
-    pendingDescRef.current = null; // 文件切换/只读切换重挂：上一文档的描述直填机会一并作废
-
-    // 描述直填清除（任务 1 防误触发）：任何点击（pointerdown 先清早场、click 兜
-    // 底清晚场——文本框 blur 提交发生在 mousedown 默认动作期，晚于 pointerdown 早
-    // 场、早于 click 兜底，两道都清才能盖住「点开别处又 blur 提交」的序列）。
-    const clearPendingDesc = (): void => {
-      pendingDescRef.current = null;
-    };
-    document.addEventListener('pointerdown', clearPendingDesc);
-    document.addEventListener('click', clearPendingDesc);
 
     // 捕获层——空格通道（含空格平移手势退役）。
     const onSpaceKeyDownCapture = (e: KeyboardEvent): void => {
@@ -1601,31 +1561,6 @@ export function EditorPage() {
     };
 
     const onKeyDown = (e: KeyboardEvent): void => {
-      // 描述直填（任务 1）：新建提交文本后的一次性 Tab——拦截（preventDefault，
-      // keyboardMap 的 Tab 建子因 overlay 已同步打开经 isEditorOpen 让路）改开描述
-      // 浮层；任何其他按键清除该机会（防误触发，日常 Tab 建子语义不变）。
-      const pendingDesc = pendingDescRef.current;
-      if (pendingDesc) {
-        if (
-          e.key === 'Tab' &&
-          !e.shiftKey &&
-          !e.ctrlKey &&
-          !e.metaKey &&
-          !e.altKey &&
-          !compactRef.current &&
-          !overlay.isOpen &&
-          !isEditableTarget(e.target) &&
-          viewRef.current !== 'table'
-        ) {
-          e.preventDefault();
-          // 盒未就绪（创建同帧极速按键）保留待重试（openPendingEditor 同语义）
-          if (openDescriptionEditor(pendingDesc)) {
-            pendingDescRef.current = null;
-          }
-          return;
-        }
-        pendingDescRef.current = null; // 其他按键：描述直填机会作废，走常规键位
-      }
       const pending = pendingEditRef.current;
       if (!pending) {
         onDirectEditPrintable(e);
@@ -1672,8 +1607,6 @@ export function EditorPage() {
     return () => {
       document.removeEventListener('keydown', onSpaceKeyDownCapture, true);
       document.removeEventListener('keydown', onKeyDown, false);
-      document.removeEventListener('pointerdown', clearPendingDesc);
-      document.removeEventListener('click', clearPendingDesc);
     };
     // openPendingEditor / openNodeEditor 每渲染重建但只读 ref/closure（同 locateNode
     // 通知深链裁定），不入依赖。
