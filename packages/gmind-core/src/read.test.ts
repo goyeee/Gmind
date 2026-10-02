@@ -3,13 +3,13 @@ import * as Y from 'yjs';
 import { ROOT_NODE_ID, countNodes, createTemplateDoc, docFromState, docToState } from './doc';
 import { GmindCoreError } from './errors';
 import { childrenIds, countAlive, countAliveReachable, countCollapsedWithChildren, getLastEditor, getMeta, getNode, isAlive, markLastEditor, pathToRoot, requireAliveNode, setDocMeta, subtreeIds } from './read';
-import { deleteNodes, setCollapsed } from './operations';
+import { deleteNodes, setCollapsed, setCustomColumns, setCustomField } from './operations';
 import { ORIGIN_USER, createUndoManager, undo } from './undo';
 
 describe('getMeta / setDocMeta', () => {
   it('读取模板文档 meta 完整', () => {
     const doc = createTemplateDoc({ title: 'T', structure: 'org', theme: 't2', children: [{ text: 'A' }] });
-    expect(getMeta(doc)).toEqual({ title: 'T', structureType: 'org', themeId: 't2' });
+    expect(getMeta(doc)).toEqual({ title: 'T', structureType: 'org', themeId: 't2', customColumns: [] });
   });
 
   it('setDocMeta 只写入提供的键且可指定 origin', () => {
@@ -19,6 +19,76 @@ describe('getMeta / setDocMeta', () => {
     expect(getMeta(doc).structureType).toBe('mindmap');
     const meta = doc.getMap('meta');
     expect(meta.get('title')).toBe('T2');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 表格自定义列读取防御（DocMeta.customColumns 透传 / NodeSnapshot.custom 归一）：
+// 读取侧只做形状防御，schema 外列键保留原样（清理是 repair 的职责）。
+// ---------------------------------------------------------------------------
+
+describe('自定义列读取防御（getMeta.customColumns / NodeSnapshot.custom）', () => {
+  it('customColumns：非数组→[]；非法项剔除（非对象/id 空/重复 id/name 空/type 非法），合法项透传', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [] });
+    doc.getMap('meta').set('customColumns', 'bad');
+    expect(getMeta(doc).customColumns).toEqual([]);
+    doc.getMap('meta').set('customColumns', 42);
+    expect(getMeta(doc).customColumns).toEqual([]);
+    doc.getMap('meta').set('customColumns', [
+      { id: 'c1', name: '文本', type: 'text' },
+      { id: 'c1', name: '重复', type: 'date' }, // 重复 id：保首剔后
+      { id: '', name: 'x', type: 'text' }, // id 空
+      { id: 'c2', name: '', type: 'text' }, // name 空
+      { id: 'c3', name: '超长'.repeat(16), type: 'text' }, // name >30
+      { id: 'c4', name: '坏类型', type: 'number' }, // type 非法
+      'junk', // 非对象项
+      { id: 'c5', name: '日期', type: 'date' }, // 合法：保留
+    ]);
+    expect(getMeta(doc).customColumns).toEqual([
+      { id: 'c1', name: '文本', type: 'text' },
+      { id: 'c5', name: '日期', type: 'date' },
+    ]);
+    // 键缺失读取为 []（模板文档缺省）
+    const fresh = createTemplateDoc({ title: 'T', children: [] });
+    expect(getMeta(fresh).customColumns).toEqual([]);
+    expect(fresh.getMap('meta').get('customColumns')).toBeUndefined();
+  });
+
+  it('NodeSnapshot.custom：缺 custom 键不出现该字段；显式写入经 setCustomField 读回', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
+    const aId = childrenIds(doc, ROOT_NODE_ID)[0]!;
+    expect(getNode(doc, aId)!.custom).toBeUndefined();
+    expect('custom' in (getNode(doc, aId)!)).toBe(false);
+    setCustomColumns(doc, [{ id: 't1', name: '文本列', type: 'text' }]);
+    setCustomField(doc, aId, 't1', '值');
+    expect(getNode(doc, aId)!.custom).toEqual({ t1: '值' });
+  });
+
+  it('custom 非 Y.Map（字符串/数组）防御为无 custom；schema 外列键保留原样（repair 清理）', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
+    const aId = childrenIds(doc, ROOT_NODE_ID)[0]!;
+    const rawNode = doc.getMap('nodes').get(aId) as Y.Map<unknown>;
+    rawNode.set('custom', 'bad');
+    expect(getNode(doc, aId)!.custom).toBeUndefined();
+    rawNode.set('custom', ['bad']);
+    expect(getNode(doc, aId)!.custom).toBeUndefined();
+    // schema 外列键：读取不据 meta 过滤，原样透传
+    const custom = new Y.Map<unknown>();
+    custom.set('unknown-col', '值');
+    rawNode.set('custom', custom);
+    expect(getNode(doc, aId)!.custom).toEqual({ 'unknown-col': '值' });
+  });
+
+  it('Y.Array 值读为纯数组、Y.Map 值不入快照（crafted 形状防御）', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
+    const aId = childrenIds(doc, ROOT_NODE_ID)[0]!;
+    const rawNode = doc.getMap('nodes').get(aId) as Y.Map<unknown>;
+    const custom = new Y.Map<unknown>();
+    custom.set('p1', Y.Array.from(['U1', 'U2']));
+    custom.set('weird', new Y.Map());
+    custom.set('g1', 50);
+    rawNode.set('custom', custom);
+    expect(getNode(doc, aId)!.custom).toEqual({ p1: ['U1', 'U2'], g1: 50 });
   });
 });
 

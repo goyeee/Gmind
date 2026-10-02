@@ -496,3 +496,174 @@ table.tt-table {
   background: #e5e6eb;
   margin: 4px 8px;
 }
+
+/* —— 自定义列（列头管理 + 单元格编辑）—— */
+/* 加列按钮格（最后一列后唯一入口：无列文档零额外 UI 噪音） */
+.tt-col-add-th {
+  width: 36px;
+  padding: 4px 6px;
+}
+.tt-col-add {
+  width: 22px;
+  height: 22px;
+  border: 1px dashed #c9cdd4;
+  border-radius: 6px;
+  background: none;
+  color: #86909c;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+}
+.tt-col-add:hover:not(:disabled) {
+  border-color: #3370ff;
+  color: #3370ff;
+  background: #e8f3ff;
+}
+/* 上限 20 列置灰（title 提示在按钮上） */
+.tt-col-add:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+/* 加列浮层：纵向表单（名称 + 类型四选 + 添加） */
+.tt-col-add-pop {
+  flex-direction: column;
+  align-items: stretch;
+  min-width: 230px;
+  gap: 8px;
+}
+.tt-col-add-name {
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid #e5e6eb;
+  border-radius: 6px;
+  font-size: 12px;
+  color: #1f2329;
+  outline: none;
+}
+.tt-col-add-name:focus {
+  border-color: #3370ff;
+}
+.tt-col-add-types {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+/* 类型四选：label 即单选 chip（原生 radio 视觉隐藏，保留可访问性） */
+.tt-col-type {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 10px;
+  border: 1px solid #e5e6eb;
+  border-radius: 12px;
+  font-size: 12px;
+  color: #4e5969;
+  cursor: pointer;
+  user-select: none;
+}
+.tt-col-type input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+.tt-col-type:hover {
+  background: #f2f3f5;
+}
+.tt-col-type.active {
+  color: #3370ff;
+  border-color: #3370ff;
+  background: #e8f3ff;
+}
+.tt-col-add-submit {
+  align-self: flex-end;
+  padding: 4px 16px;
+  border: none;
+  border-radius: 6px;
+  background: #3370ff;
+  color: #fff;
+  font-size: 12px;
+  cursor: pointer;
+}
+.tt-col-add-submit:hover:not(:disabled) {
+  background: #2b5fd9;
+}
+.tt-col-add-submit:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+/* 自定义列头：类型小标记 + 列名 + 悬停 ⋯ 管理钮 */
+.tt-custom-col {
+  position: relative;
+}
+.tt-col-type-mark {
+  display: inline-block;
+  margin-right: 4px;
+  padding: 0 3px;
+  border: 1px solid #e5e6eb;
+  border-radius: 3px;
+  color: #86909c;
+  font-size: 10px;
+  line-height: 14px;
+  vertical-align: 1px;
+}
+.tt-col-menu-btn {
+  margin-left: 4px;
+  border: none;
+  background: none;
+  color: #86909c;
+  font-size: 13px;
+  cursor: pointer;
+  padding: 0 2px;
+  border-radius: 4px;
+  opacity: 0;
+}
+.tt-custom-col:hover .tt-col-menu-btn {
+  opacity: 1;
+}
+.tt-col-menu-btn:hover {
+  color: #3370ff;
+  background: #f2f3f5;
+}
+/* 列头行内重命名输入 */
+.tt-col-rename-input {
+  width: 96px;
+  height: 22px;
+  padding: 0 5px;
+  border: 1px solid #3370ff;
+  border-radius: 4px;
+  font-size: 12px;
+  color: #1f2329;
+  outline: none;
+}
+/* 自定义单元格：空值占位灰字（填写…/选择成员/双击填写） */
+.tt-custom-empty {
+  color: #86909c;
+  font-size: 11px;
+}
+.tt-custom-text {
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  border: none;
+  background: none;
+  padding: 2px 4px;
+  border-radius: 4px;
+  font-size: 12px;
+  color: #1f2329;
+  cursor: pointer;
+  text-align: left;
+}
+.tt-custom-text:hover {
+  background: #f2f3f5;
+}
+.tt-custom-text-input {
+  width: 130px;
+  height: 22px;
+  padding: 0 5px;
+  border: 1px solid #3370ff;
+  border-radius: 4px;
+  font-size: 12px;
+  outline: none;
+}

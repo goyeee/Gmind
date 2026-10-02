@@ -15,7 +15,7 @@ import {
   withTransaction,
 } from '@gmind/core';
 import { effectiveProgress } from '@gmind/shared';
-import { deriveNodesOfDoc, SmartDateInput } from './TaskFields';
+import { CustomFieldInput, deriveNodesOfDoc, SmartDateInput } from './TaskFields';
 
 /**
  * 任务字段公共控件（M7c-C3/C4 抽公共）纯函数单测：deriveNodesOfDoc 的快照映射
@@ -122,6 +122,82 @@ describe('SmartDateInput 外部值同步守卫（Kimi P2 回归）', () => {
       });
       renderBoth('2026-04-01', null);
       expect(first.value).toBe('2026-03-15');
+    } finally {
+      act(() => {
+        root.unmount();
+      });
+      container.remove();
+    }
+  });
+});
+
+describe('CustomFieldInput（自定义属性单字段，任务 2 公共控件）', () => {
+  it('按列类型渲染：text 占位+初值 / person 空值占位+成员 chips / progress 0-100 初值 / date 直染 SmartDateInput', () => {
+    (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    const memberIndex = new Map([
+      ['u1', { userId: 'u1', nickname: '甲' }],
+      ['u2', { userId: 'u2', nickname: '乙' }],
+    ]);
+    const onCommit = (): void => undefined;
+    try {
+      act(() => {
+        root.render(
+          createElement(
+            'div',
+            null,
+            createElement(CustomFieldInput, {
+              def: { id: 'c1', name: '备注', type: 'text' },
+              value: '初值',
+              memberIndex,
+              onCommit,
+              testIdPrefix: 'cf',
+            }),
+            createElement(CustomFieldInput, {
+              def: { id: 'c2', name: '复核人', type: 'person' },
+              value: null,
+              memberIndex,
+              onCommit,
+              testIdPrefix: 'cf',
+            }),
+            createElement(CustomFieldInput, {
+              def: { id: 'c3', name: '权重', type: 'progress' },
+              value: 60,
+              memberIndex,
+              onCommit,
+              testIdPrefix: 'cf',
+            }),
+            createElement(CustomFieldInput, {
+              def: { id: 'c4', name: '截止', type: 'date' },
+              value: '2026-10-01',
+              memberIndex,
+              onCommit,
+              testIdPrefix: 'cf',
+            }),
+          ),
+        );
+      });
+      // text：单行输入，初值 + 「填写…」占位
+      const text = container.querySelector<HTMLInputElement>('input[data-testid="cf-c1"]');
+      expect(text).toBeTruthy();
+      expect(text!.value).toBe('初值');
+      expect(text!.placeholder).toBe('填写…');
+      // person：空值占位「选择成员」+ 成员 chips（MemberMultiSelect，testid 前缀拼接）
+      expect(container.textContent).toContain('选择成员');
+      expect(container.querySelector('[data-testid="cf-c2-member-u1"]')).toBeTruthy();
+      expect(container.querySelector('[data-testid="cf-c2-member-u2"]')).toBeTruthy();
+      // progress：0-100 数字输入带初值
+      const progress = container.querySelector<HTMLInputElement>('input[data-testid="cf-c3"]');
+      expect(progress).toBeTruthy();
+      expect(progress!.value).toBe('60');
+      expect(progress!.max).toBe('100');
+      // date：复用 SmartDateInput（data-smart-date 标记 + testid 透传）
+      const date = container.querySelector<HTMLInputElement>('input[data-testid="cf-c4"]');
+      expect(date).toBeTruthy();
+      expect(date!.getAttribute('data-smart-date')).toBe('1');
+      expect(date!.value).toBe('2026-10-01');
     } finally {
       act(() => {
         root.unmount();

@@ -1,6 +1,6 @@
 import { useMemo, type ReactElement } from 'react';
 import type * as Y from 'yjs';
-import { getNode, setIcon, setNodeTask, type IconGroup } from '@gmind/core';
+import { getMeta, getNode, setCustomField, setIcon, setNodeTask, type IconGroup } from '@gmind/core';
 import { MARKER_CATALOG, type MarkerGlyphDef } from '@gmind/engine';
 import {
   childrenOf,
@@ -13,6 +13,7 @@ import {
 import type { PresenceMember } from './collab';
 import { MarkerChip } from './MarkerPanel';
 import {
+  CustomFieldInput,
   deriveNodesOfDoc,
   MemberMultiSelect,
   ProgressField,
@@ -30,7 +31,8 @@ import './task-panel.css';
  *
  * 内容：状态四选（色点）/ 负责人（成员多选）/ 优先级九徽（MARKER_CATALOG.priority
  * 复用）/ 常用图标一行（other 组 ✓✕★⚠?💡 六枚）+「更多」跳标记面板 / 三日期
- * （SmartDateInput）/ 进度（叶子数字输入、父级 Σ 只读）。
+ * （SmartDateInput）/ 进度（叶子数字输入、父级 Σ 只读）/ 自定义属性（表格自
+ * 定义列逐列渲染 CustomFieldInput，即改即存）。
  *
  * 写纪律：全部走 core op（setNodeTask / setIcon）+ afterUserWrite——即点即存、
  * 无「保存」按钮；异常两段式 toast。Esc/外点关闭由页面侧统一监听（同
@@ -65,6 +67,8 @@ export function TaskQuickCard(props: TaskQuickCardProps): ReactElement | null {
     props;
   const snap = getNode(doc, nodeId);
   const alive = !!snap && !snap.deleted;
+  /** 自定义列 schema（meta.customColumns；无列不渲染小节——零噪音）。 */
+  const customColumns = getMeta(doc).customColumns;
 
   const deriveNodes = useMemo(() => deriveNodesOfDoc(doc), [doc, docVersion]);
   const docOwnerIds = useMemo(() => {
@@ -261,6 +265,27 @@ export function TaskQuickCard(props: TaskQuickCardProps): ReactElement | null {
             onCommit={(v) => commitTask({ progress: v })}
           />
         </div>
+        {/* 自定义属性（表格自定义列消费侧）：任务字段之后按 meta.customColumns 逐列
+            渲染 CustomFieldInput（同款编辑器/空值占位），即改即存 setCustomField。 */}
+        {customColumns.length > 0 && (
+          <div data-testid="quickcard-custom-section">
+            <span className="task-field-label">自定义属性</span>
+            {customColumns.map((col) => (
+              <div className="task-date-row" key={col.id} data-testid="quickcard-custom-row">
+                <span className="task-field-label">{col.name}</span>
+                <CustomFieldInput
+                  def={col}
+                  value={snap.custom?.[col.id]}
+                  memberIndex={memberIndex}
+                  onCommit={(v) =>
+                    write(() => setCustomField(doc, nodeId, col.id, v), '自定义属性保存失败，请调整后重试')
+                  }
+                  testIdPrefix="quickcard-custom"
+                />
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );

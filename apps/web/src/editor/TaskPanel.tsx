@@ -2,7 +2,9 @@ import { useEffect, useMemo, useState, type ReactElement } from 'react';
 import type * as Y from 'yjs';
 import {
   MAX_DESCRIPTION_LENGTH,
+  getMeta,
   setDescription,
+  setCustomField,
   setNodeTask,
   type NodeSnapshot,
 } from '@gmind/core';
@@ -18,6 +20,7 @@ import {
 import type { PresenceMember } from './collab';
 import { MarkerChip } from './MarkerPanel';
 import {
+  CustomFieldInput,
   deriveNodesOfDoc,
   MemberMultiSelect,
   ProgressField,
@@ -36,7 +39,8 @@ import './task-panel.css';
  * 内容（纵向分节，与 RichPanel 同族样式）：标题（只读展示）/ 描述（textarea，
  * 200 上限计数，失焦提交）/ 负责人（成员多选，同快速卡）/ 状态四选 / 优先级·标记
  * （当前标记回显 +「在标记面板中编辑」跳转）/ 三日期（SmartDateInput）/ 进度
- * （叶子可编、父级 Σ 只读）/ 删除节点（危险红，confirm 二次确认复用现有机制）。
+ * （叶子可编、父级 Σ 只读）/ 自定义属性（表格自定义列逐列渲染 CustomFieldInput，
+ * 即改即存）/ 删除节点（危险红，confirm 二次确认复用现有机制）。
  *
  * 写纪律：全部走 core op（setDescription / setNodeTask / setIcon）+ afterUserWrite，
  * 即改即存；异常两段式 toast；全部控件 data-testid `task-panel-*`。
@@ -74,6 +78,8 @@ export function TaskPanel(props: TaskPanelProps): ReactElement {
   }, [nodeId]);
 
   const deriveNodes = useMemo(() => deriveNodesOfDoc(doc), [doc, docVersion]);
+  /** 自定义列 schema（meta.customColumns；无列不渲染小节——零噪音）。 */
+  const customColumns = getMeta(doc).customColumns;
   const docOwnerIds = useMemo(() => {
     const ids: string[] = [];
     for (const n of deriveNodes) for (const o of n.task?.owners ?? []) if (!ids.includes(o)) ids.push(o);
@@ -275,6 +281,28 @@ export function TaskPanel(props: TaskPanelProps): ReactElement {
           onCommit={(v) => commitTask({ progress: v })}
         />
       </section>
+
+      {/* 自定义属性（表格自定义列消费侧）：任务字段之后按 meta.customColumns 逐列
+          渲染 CustomFieldInput（同款编辑器/空值占位），即改即存 setCustomField。 */}
+      {customColumns.length > 0 && (
+        <section className="task-panel-section" data-testid="task-panel-custom-section">
+          <span className="task-field-label">自定义属性</span>
+          {customColumns.map((col) => (
+            <div className="task-date-row" key={col.id} data-testid="task-panel-custom-row">
+              <span className="task-field-label">{col.name}</span>
+              <CustomFieldInput
+                def={col}
+                value={snap.custom?.[col.id]}
+                memberIndex={memberIndex}
+                onCommit={(v) =>
+                  write(() => setCustomField(doc, snap.id, col.id, v), '自定义属性保存失败，请调整后重试')
+                }
+                testIdPrefix="task-panel-custom"
+              />
+            </div>
+          ))}
+        </section>
+      )}
 
       <section className="task-panel-section">
         <button

@@ -20,6 +20,8 @@ import {
   redo as coreRedo,
   removeSummary,
   ROOT_NODE_ID,
+  sanitizeCustomForDoc,
+  setCustomField,
   setDocMeta,
   setDescription,
   setHref,
@@ -3859,5 +3861,15 @@ function handleOf(d: Y.Doc): IDocHandle {
     setIcon: (id, group, value, origin) =>
       setIcon(d, id, group as IconGroup, value, origin ?? ORIGIN_USER),
     setStyle: (id, patch, origin) => setStyle(d, id, patch, origin ?? ORIGIN_USER),
+    // custom 透传（engine 剪贴板粘贴路径）：先按目标文档 schema 过滤（未知列/类型
+    // 不符静默丢弃——core sanitizeCustomForDoc 单源，页面不做目录判断），再逐键经
+    // setCustomField 落写（过滤后必合法不抛，粘贴不因跨文档未知列半途失败）。
+    setCustomFields: (id, custom, origin) => {
+      const sanitized = sanitizeCustomForDoc(d, custom);
+      if (sanitized === null) return;
+      for (const [colId, value] of Object.entries(sanitized)) {
+        setCustomField(d, id, colId, value, origin ?? ORIGIN_USER);
+      }
+    },
   };
 }

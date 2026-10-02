@@ -2,6 +2,10 @@ import * as Y from 'yjs';
 import { ulid } from 'ulid';
 import { applyStatusRules, type DeriveNode, type TaskPatch } from '@gmind/shared';
 import {
+  CUSTOM_COLUMN_LIMIT,
+  CUSTOM_COLUMN_NAME_MAX,
+  CUSTOM_COLUMN_TYPES,
+  CUSTOM_TEXT_MAX_LENGTH,
   ICON_GROUPS,
   MARKER_GROUP_MODE,
   MARKER_MULTI_MAX,
@@ -12,11 +16,15 @@ import {
   TASK_OWNER_MAX_LENGTH,
   TASK_OWNER_MIN_LENGTH,
   TASK_STATUSES,
+  canonicalCustomColumns,
   iconValuesOf,
   isValidDateStr,
+  type CustomColumnDef,
+  type CustomColumnType,
+  type CustomFieldValue,
   type IconGroup,
 } from './constants';
-import { GmindCoreError } from './errors';
+import { GmindCoreError, type GmindCoreErrorCode } from './errors';
 import { ROOT_NODE_ID } from './doc';
 import { getNode, requireAliveNode, subtreeIds, type NodeImage } from './read';
 import { normalizeTree, normalizeTreeFor, deriveNormalizeDirty } from './repair';
@@ -677,6 +685,286 @@ function writeTaskPatch(node: Y.Map<unknown>, patch: TaskPatch): void {
     if (v === null) task.delete(key);
     else task.set(key, v);
   }
+}
+
+// ══ 表格自定义列（doc 级 schema + 节点 custom 值）════════════════════════════
+
+/**
+ * 整表替换自定义列 schema（增删改名重排一次写入；便捷面裁定——core 只做整表替换 +
+ * 单字段写入两个 op，保持 API 面 minimal，页面侧自管编辑态草稿后一次提交）。
+ *
+ * 数据口径：meta.customColumns = CustomColumnDef[]（普通 JSON 数组存 meta Y.Map）；
+ * 列 schema 是 doc 级，不随复制/粘贴/导入子树携带（见 clipboard.ts 透传裁定）。
+ *
+ * 校验（先于事务，任一违规即抛、零变更，错误码 CUSTOM_COLUMN_*、文案两段式）：
+ * - 入参为数组，否则 CUSTOM_COLUMN_INVALID；
+ * - 每项：id 非空字符串且不重复（重复抛 CUSTOM_COLUMN_INVALID）、name 非空且
+ *   ≤ CUSTOM_COLUMN_NAME_MAX(30) 字、type ∈ CUSTOM_COLUMN_TYPES(文本/人员/进度/日期)；
+ * - 总数 ≤ CUSTOM_COLUMN_LIMIT(20)，超出抛 CUSTOM_COLUMN_OVERFLOW。
+ *
+ * 同值守卫（M7c-E4）：现 schema 按防御口径规范化后与入参 JSON 全同 → 零事务
+ * （空清单对无键/空 schema 文档同为零变更）。
+ *
+ * 删列清孤儿（数据不留孤儿键）：被移除的列 id 在**同一事务**内从全部节点（含墓碑
+ * ——撤销同事务整体回滚，与 icons 收敛同覆盖裁定）的 custom Y.Map 中删除该键；
+ * 事务外只读推导被删 id 集合（校验先于事务纪律）。
+ */
+export function setCustomColumns(
+  doc: Y.Doc,
+  columns: CustomColumnDef[],
+  origin: WriteOrigin = ORIGIN_USER,
+): void {
+  // —— 校验（先于事务；任一违规即抛，零变更）——
+  if (!Array.isArray(columns)) {
+    throw new GmindCoreError('CUSTOM_COLUMN_INVALID', '自定义列清单必须是数组，请刷新后重试');
+  }
+  const seen = new Set<string>();
+  for (const col of columns) {
+    if (col === null || typeof col !== 'object') {
+      throw new GmindCoreError('CUSTOM_COLUMN_INVALID', '自定义列定义非法，请刷新后重试');
+    }
+    if (typeof col.id !== 'string' || col.id === '') {
+      throw new GmindCoreError('CUSTOM_COLUMN_INVALID', '自定义列 id 须为非空字符串，请刷新后重试');
+    }
+    if (seen.has(col.id)) {
+      throw new GmindCoreError(
+        'CUSTOM_COLUMN_INVALID',
+        `自定义列 id 重复（${col.id}），请勿重复添加同名列`,
+      );
+    }
+    if (typeof col.name !== 'string' || col.name === '') {
+      throw new GmindCoreError(
+        'CUSTOM_COLUMN_INVALID',
+        `列名不能为空，请输入 1-${CUSTOM_COLUMN_NAME_MAX} 字的名称`,
+      );
+    }
+    if (col.name.length > CUSTOM_COLUMN_NAME_MAX) {
+      throw new GmindCoreError(
+        'CUSTOM_COLUMN_INVALID',
+        `列名长度已达上限（最多 ${CUSTOM_COLUMN_NAME_MAX} 字），请精简后再保存`,
+      );
+    }
+    if (!(CUSTOM_COLUMN_TYPES as readonly string[]).includes(col.type)) {
+      throw new GmindCoreError(
+        'CUSTOM_COLUMN_INVALID',
+        `列类型非法（${JSON.stringify(String(col.type))}），仅支持文本/人员/进度/日期`,
+      );
+    }
+    seen.add(col.id);
+  }
+  if (columns.length > CUSTOM_COLUMN_LIMIT) {
+    throw new GmindCoreError(
+      'CUSTOM_COLUMN_OVERFLOW',
+      `自定义列最多 ${CUSTOM_COLUMN_LIMIT} 列，请先删除不需要的列再新增`,
+    );
+  }
+
+  // 同值守卫：现 schema 规范化后与入参 JSON 相等 → 零事务。
+  const current = canonicalCustomColumns(doc.getMap('meta').get('customColumns'));
+  if (JSON.stringify(current) === JSON.stringify(columns)) return;
+
+  // 删列孤儿清理计划（事务外只读推导）：被移除的列 id → 同事务从全部节点清除。
+  const keptIds = new Set(columns.map((c) => c.id));
+  const removedIds = current.filter((c) => !keptIds.has(c.id)).map((c) => c.id);
+
+  withTransaction(doc, origin, () => {
+    doc.getMap('meta').set('customColumns', columns.map((c) => ({ ...c })));
+    if (removedIds.length === 0) return;
+    for (const node of nodesMap(doc).values()) {
+      const custom = node.get('custom');
+      if (!(custom instanceof Y.Map)) continue;
+      for (const colId of removedIds) {
+        if (custom.has(colId)) custom.delete(colId);
+      }
+    }
+  });
+}
+
+/** 内部：custom 值校验/归一结果——ok 时 value 为写入值（person 去重保序）；违规时
+ *  携带错误码与两段式文案（setCustomField 抛出用；clipboard 粘贴过滤按 ok 静默丢弃）。 */
+interface CustomValueCheck {
+  ok: boolean;
+  value?: string | string[] | number;
+  code?: GmindCoreErrorCode;
+  message?: string;
+}
+
+/** 内部：按列类型校验 custom 值（单源：setCustomField 抛错口径 + 粘贴过滤口径）。
+ *  null/undefined（删键方向）恒 ok；person 复用任务 owners 规则（每项 1-64 字符、
+ *  去重保序、≤MAX_TASK_OWNERS）；progress 整数 0-100；date 日历合法（isValidDateStr）。 */
+function checkCustomValue(type: CustomColumnType, value: unknown): CustomValueCheck {
+  if (value === null || value === undefined) return { ok: true }; // 删键方向，无值校验
+  switch (type) {
+    case 'text':
+      if (typeof value !== 'string') {
+        return {
+          ok: false,
+          code: 'CUSTOM_FIELD_INVALID_VALUE',
+          message: '文本列的值必须是字符串，请检查后重试',
+        };
+      }
+      if (value.length > CUSTOM_TEXT_MAX_LENGTH) {
+        return {
+          ok: false,
+          code: 'CUSTOM_FIELD_TEXT_TOO_LONG',
+          message: `文本列内容长度已达上限（最多 ${CUSTOM_TEXT_MAX_LENGTH} 字），请精简后再保存`,
+        };
+      }
+      return { ok: true, value };
+    case 'person': {
+      if (!Array.isArray(value)) {
+        return {
+          ok: false,
+          code: 'CUSTOM_FIELD_INVALID_VALUE',
+          message: '人员列的值必须是用户ID数组，请重新选择成员',
+        };
+      }
+      for (const item of value) {
+        if (
+          typeof item !== 'string' ||
+          item.length < TASK_OWNER_MIN_LENGTH ||
+          item.length > TASK_OWNER_MAX_LENGTH
+        ) {
+          return {
+            ok: false,
+            code: 'CUSTOM_FIELD_INVALID_VALUE',
+            message: `人员列的值非法（每项须为 ${TASK_OWNER_MIN_LENGTH}-${TASK_OWNER_MAX_LENGTH} 字符的用户ID），请重新选择成员`,
+          };
+        }
+      }
+      const deduped = [...new Set(value as string[])]; // 去重保序（与 owners 存储口径一致）
+      if (deduped.length > MAX_TASK_OWNERS) {
+        return {
+          ok: false,
+          code: 'CUSTOM_FIELD_INVALID_VALUE',
+          message: `人员列最多 ${MAX_TASK_OWNERS} 人（去重后），请精简后重试`,
+        };
+      }
+      return { ok: true, value: deduped };
+    }
+    case 'progress':
+      if (typeof value !== 'number' || !Number.isInteger(value) || value < 0 || value > 100) {
+        return {
+          ok: false,
+          code: 'CUSTOM_FIELD_INVALID_VALUE',
+          message: '进度列的值必须是 0-100 的整数，请调整后重试',
+        };
+      }
+      return { ok: true, value };
+    case 'date':
+      if (typeof value !== 'string' || !isValidDateStr(value)) {
+        return {
+          ok: false,
+          code: 'CUSTOM_FIELD_INVALID_VALUE',
+          message: '日期列的值须为 YYYY-MM-DD 或留空，请重新选择日期',
+        };
+      }
+      return { ok: true, value };
+  }
+}
+
+/** 内部：读节点 custom Y.Map（只读口径；缺失/形状不符返回 undefined）。 */
+function customMapOf(node: Y.Map<unknown>): Y.Map<unknown> | undefined {
+  const custom = node.get('custom');
+  return custom instanceof Y.Map ? (custom as Y.Map<unknown>) : undefined;
+}
+
+/** 内部：取/建节点 custom Y.Map（缺失或形状不符时新建覆盖，需在事务内调用；与
+ *  taskMapOf/iconsMapOf 同款约定）。 */
+function ensureCustomMap(node: Y.Map<unknown>): Y.Map<unknown> {
+  let custom = node.get('custom');
+  if (!(custom instanceof Y.Map)) {
+    custom = new Y.Map<unknown>();
+    node.set('custom', custom);
+  }
+  return custom as Y.Map<unknown>;
+}
+
+/**
+ * 设置节点自定义列值（右键任务设置/表格单元格的写入口）。
+ *
+ * 数据口径：node.custom Y.Map<colId, 值>——text=string / person=用户ID string[]
+ * （复用任务 owners 校验：每项 1-64 字符、写入前去重保序、≤MAX_TASK_OWNERS）/
+ * progress=0-100 整数 / date='YYYY-MM-DD'。**整值替换**（person 无元素级 toggle，
+ * 与 task.owners 的 LWW 存储口径一致）；custom 值是普通字段，不参与任务派生
+ * （@gmind/shared derive 不消费——进度列不并入 effectiveProgress 聚合，独立字段）。
+ *
+ * 校验（先于事务，拒绝即零变更）：colId 在当前 schema 中（防御读取坏 meta 按 []
+ * 处理），否则 CUSTOM_FIELD_UNKNOWN_COL；值按列类型校验（checkCustomValue 单源），
+ * 错误码 CUSTOM_FIELD_INVALID_VALUE / CUSTOM_FIELD_TEXT_TOO_LONG（文案两段式）。
+ *
+ * null/undefined（值合法的删键方向）= 删键；同值守卫（deep equal，零事务）：
+ * 删键方向且键本就缺失 / 写入值与现存储值 JSON 全同（person 按去重后的写入口径
+ * 比）→ 不开事务。
+ */
+export function setCustomField(
+  doc: Y.Doc,
+  id: string,
+  colId: string,
+  value: CustomFieldValue | undefined,
+  origin: WriteOrigin = ORIGIN_USER,
+): void {
+  // schema 校验：colId 必须在当前自定义列 schema 中
+  const schema = canonicalCustomColumns(doc.getMap('meta').get('customColumns'));
+  const col = schema.find((c) => c.id === colId);
+  if (col === undefined) {
+    throw new GmindCoreError(
+      'CUSTOM_FIELD_UNKNOWN_COL',
+      `列 ${colId} 不存在或已删除，请刷新表格后重试`,
+    );
+  }
+  const check = checkCustomValue(col.type, value);
+  if (!check.ok) throw new GmindCoreError(check.code as GmindCoreErrorCode, check.message as string);
+
+  const node = requireAliveNode(doc, id);
+
+  // 同值守卫（deep equal，零事务）：现值含 Y 类型（crafted 状态）时守卫不命中，
+  // 走写入路径以整形（ensureCustomMap/整值覆写）。
+  const current = customMapOf(node)?.get(colId);
+  if (value === null || value === undefined) {
+    if (current === undefined) return; // 键本就缺失：已是删键态
+  } else if (
+    current !== undefined &&
+    !(current instanceof Y.Map) &&
+    !(current instanceof Y.Array) &&
+    JSON.stringify(current) === JSON.stringify(check.value)
+  ) {
+    return; // 同值：零变更
+  }
+
+  withTransaction(doc, origin, () => {
+    if (value === null || value === undefined) {
+      ensureCustomMap(node).delete(colId);
+      return;
+    }
+    ensureCustomMap(node).set(colId, check.value);
+  });
+}
+
+/**
+ * 粘贴透传的 custom 值过滤（clipboard.insertSpec 用）：按目标文档**当前** schema
+ * 逐键校验，未知列（列 schema 是 doc 级、粘贴不建列）或值与目标列类型不符的键
+ * 静默丢弃（跨文档粘贴的合理降级，与 repair 的孤儿清理口径一致），返回可安全经
+ * setCustomField 写入的子集（无可写键返回 null）。
+ */
+export function sanitizeCustomForDoc(
+  doc: Y.Doc,
+  custom: Record<string, unknown>,
+): Record<string, string | string[] | number> | null {
+  const schema = canonicalCustomColumns(doc.getMap('meta').get('customColumns'));
+  if (schema.length === 0) return null;
+  const typeById = new Map(schema.map((c) => [c.id, c.type] as const));
+  let out: Record<string, string | string[] | number> | null = null;
+  for (const [colId, value] of Object.entries(custom)) {
+    if (value === null || value === undefined) continue; // 删键方向对粘贴无意义
+    const type = typeById.get(colId);
+    if (type === undefined) continue; // 目标文档无此列：丢弃
+    const check = checkCustomValue(type, value);
+    if (!check.ok || check.value === undefined) continue; // 值形状不符目标列类型：丢弃
+    if (out === null) out = {};
+    out[colId] = check.value;
+  }
+  return out;
 }
 
 /**

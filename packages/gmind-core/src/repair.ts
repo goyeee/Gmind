@@ -7,8 +7,11 @@ import {
   MARKER_MULTI_MAX,
   MAX_DESCRIPTION_LENGTH,
   PRIORITY_LEGACY_MAP,
+  canonicalCustomColumns,
   iconValuesOf,
+  isValidCustomValueOfType,
   progressStageOf,
+  type CustomColumnDef,
   type IconGroup,
 } from './constants';
 import { ORIGIN_SYSTEM } from './undo';
@@ -31,6 +34,9 @@ import { applySummaryRepair, planSummaryRepair } from './summary';
  *  ⑦ 概要收敛（M6 Task 6）：`summaries` Y.Map 各条目的 nodeIds 片段断裂（成员删除/
  *    换父/移出父序）→ 全部消失删条目、部分收敛存活子段（最长连续段，label 不动）；
  *    由 summary.ts 的 planSummaryRepair/applySummaryRepair 提供，与①-⑥同一事务应用。
+ *  ⑧ 自定义列收敛（表格自定义列）：meta.customColumns 非法项剔除（含非数组归 []、
+ *    重复 id 保首、超 CUSTOM_COLUMN_LIMIT 截断）；节点 custom 键——非 Y.Map 删键、
+ *    schema 外列键删（孤儿清理）、值形状与列类型不符删键（口径见 planCustomRepair）。
  *
  * 冻结不变量：墓碑节点的 children 数组是撤销/快照还原依据（deleteNodes 保留不动），
  * 本函数绝不写墓碑节点的 children，也不向墓碑父级追加子节点。
@@ -253,6 +259,14 @@ export function normalizeTree(doc: Y.Doc, origin: string = ORIGIN_SYSTEM): numbe
   const sidePlan = planSideRepair(doc);
   repairs += sidePlan.length;
 
+  // ── 自定义列收敛（表格自定义列，规则⑧）：meta 非法项剔除 + 节点孤儿/坏形状键
+  //    清理（口径见 planCustomRepair 头注）。与树修复/概要/图标同一事务应用。
+  const customPlan = planCustomRepair(doc);
+  repairs +=
+    (customPlan.columns !== null ? 1 : 0) +
+    customPlan.dropCustom.length +
+    customPlan.dropFields.length;
+
   // ── 事务纪律：无修复不开事务、零写入；有修复则在单个 origin 事务内统一应用。
   if (repairs === 0) return 0;
   doc.transact(() => {
@@ -305,6 +319,7 @@ export function normalizeTree(doc: Y.Doc, origin: string = ORIGIN_SYSTEM): numbe
     applyIconRepair(doc, iconPlan); // 图标三组制收敛（M7a-T1）：同事务统一应用
     applyDescriptionRepair(doc, descPlan); // 描述归一（M7c-C1）：同事务统一应用
     applySideRepair(doc, sidePlan); // 侧别归一（逆时针定侧）：同事务统一应用
+    applyCustomRepair(doc, customPlan); // 自定义列收敛（表格自定义列）：同事务统一应用
   }, origin);
   return repairs;
 }
@@ -403,7 +418,7 @@ export function deriveNormalizeDirty(doc: Y.Doc, tr: Y.Transaction): Set<string>
       continue;
     }
     if (item.parentSub === null) return null; // 未知嵌套数组 → 全量安全阀
-    // 其余嵌套 Y.Map（icons/style 子 Map 等）：非结构键，无脏区
+    // 其余嵌套 Y.Map（icons/style/custom 子 Map 等）：非结构键，无脏区
   }
   // 防御纵深：本事务删除的 children 条目对应节点加入 ⑤ 候选——覆盖「仅改数组、
   // 不同步 parentId/墓碑」的裸事务形状（与全量扫描同判：存活且父数组缺位 → 追加）。
@@ -774,6 +789,85 @@ export function planSideRepair(doc: Y.Doc): string[] {
 export function applySideRepair(doc: Y.Doc, plan: string[]): void {
   const nodes = nodesMap(doc);
   for (const nodeId of plan) nodes.get(nodeId)?.delete('side');
+}
+
+// ══ 自定义列收敛（表格自定义列，随全量 normalizeTree 执行）════════════════════
+
+/** 自定义列修复计划（planCustomRepair 产物；applyCustomRepair 在调用方已开启的
+ *  事务内应用）。 */
+export interface CustomRepairPlan {
+  /** meta.customColumns 的规范化替换值（null = 无需替换）。 */
+  columns: CustomColumnDef[] | null;
+  /** custom 键整体删除的节点 id（值非 Y.Map）。 */
+  dropCustom: string[];
+  /** 节点 custom 内需删除的列键（schema 外孤儿 / 值形状与列类型不符）。 */
+  dropFields: Array<{ nodeId: string; colId: string }>;
+}
+
+/**
+ * 规划自定义列收敛（文档状态纯函数，replica 一致，幂等）：
+ * - meta.customColumns：键**存在**且与 canonicalCustomColumns 规范化结果不同
+ *   （非数组 / 形状非法项 / 重复 id / 超 CUSTOM_COLUMN_LIMIT）→ 整体替换为规范化
+ *   数组；键缺失不补写——干净文档零修复、零写入、字节级不变（「normalize 返回 0」
+ *   契约不破，与 planDescriptionRepair 同款缺省裁定）；
+ * - 节点 custom：非 Y.Map → 删键；schema（规范化后）外的列键 → 删（孤儿清理，
+ *   覆盖 meta 截断/剔除产生的落榜列）；值形状与列类型不符（text 非串 / person 非
+ *   串数组 / progress 非法整数 / date 非法串，isValidCustomValueOfType 单源）→ 删键。
+ *   **只删不改**：合法值不做去重/长度/上限收敛（写入口已归一，crafted 残留不违背
+ *   读取契约，读取侧自行防御——保持修复面最小，与 icons 的 canonicalIconValues
+ *   收敛强度不同是有意为之：custom 值是整值替换语义、无组内目录可言）。
+ *
+ * 覆盖范围：全部节点（含墓碑——撤销/快照可复活，children 冻结不变量不涉及 custom；
+ * 与 planIconRepair/planDescriptionRepair/planSideRepair 相同的覆盖裁定）。
+ * 仅接入全量 normalizeTree：产品流新写经 setCustomColumns/setCustomField 校验不再
+ * 制造坏值（删列清孤儿已在 op 事务内完成），增量路径（normalizeTreeFor）脏区推导
+ * 不含 custom 子 Map（deriveNormalizeDirty：非结构键无脏区），与图标/描述/侧别
+ * 收敛同一「外部状态直入入口（docFromState / 第 64 写摊销清扫 / 安全阀）」口径。
+ */
+export function planCustomRepair(doc: Y.Doc): CustomRepairPlan {
+  const plan: CustomRepairPlan = { columns: null, dropCustom: [], dropFields: [] };
+  const meta = doc.getMap('meta');
+  const rawColumns = meta.get('customColumns');
+  let schema: CustomColumnDef[];
+  if (rawColumns === undefined) {
+    schema = []; // 键缺失：不补写（零修复契约），但节点侧仍按空 schema 清孤儿
+  } else {
+    schema = canonicalCustomColumns(rawColumns);
+    if (JSON.stringify(schema) !== JSON.stringify(rawColumns)) plan.columns = schema;
+  }
+  const typeById = new Map(schema.map((c) => [c.id, c.type] as const));
+  const nodes = nodesMap(doc);
+  for (const [nodeId, node] of nodes.entries()) {
+    const custom = node.get('custom');
+    if (custom === undefined) continue;
+    if (!(custom instanceof Y.Map)) {
+      plan.dropCustom.push(nodeId);
+      continue;
+    }
+    for (const colId of [...custom.keys()]) {
+      const type = typeById.get(colId);
+      if (type === undefined || !isValidCustomValueOfType(type, custom.get(colId))) {
+        plan.dropFields.push({ nodeId, colId });
+      }
+    }
+  }
+  return plan;
+}
+
+/** 应用自定义列收敛计划（必须在调用方已开启的事务内执行）：meta 整体替换 +
+ *  节点 custom 键/列键删除。 */
+export function applyCustomRepair(doc: Y.Doc, plan: CustomRepairPlan): void {
+  if (plan.columns !== null) {
+    doc.getMap('meta').set('customColumns', plan.columns.map((c) => ({ ...c })));
+  }
+  const nodes = nodesMap(doc);
+  for (const nodeId of plan.dropCustom) {
+    nodes.get(nodeId)?.delete('custom');
+  }
+  for (const drop of plan.dropFields) {
+    const custom = nodes.get(drop.nodeId)?.get('custom');
+    if (custom instanceof Y.Map) custom.delete(drop.colId);
+  }
 }
 
 // ══ 远端事务收敛接线（M2 准入清单 §1）══════════════════════════════════════

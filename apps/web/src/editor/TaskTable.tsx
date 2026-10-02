@@ -3,19 +3,28 @@ import type * as Y from 'yjs';
 import {
   addChild,
   countAliveReachable,
+  CUSTOM_COLUMN_LIMIT,
+  CUSTOM_COLUMN_NAME_MAX,
+  CUSTOM_COLUMN_TYPES,
+  CUSTOM_TEXT_MAX_LENGTH,
   deleteNodes,
+  getMeta,
   getNode,
   moveNode,
   ORIGIN_SYSTEM,
   ORIGIN_USER,
   ROOT_NODE_ID,
   setCollapsed,
+  setCustomColumns,
+  setCustomField,
   setDescription,
   setNodeTask,
   setText,
   subtreeIds,
   toggleCollapse,
   withTransaction,
+  type CustomColumnDef,
+  type CustomColumnType,
   type NodeSnapshot,
 } from '@gmind/core';
 import {
@@ -35,6 +44,7 @@ import type { PresenceMember } from './collab';
 import {
   Avatar,
   chipActive,
+  MemberMultiSelect,
   SmartDateInput,
   STATUS_KEYS,
   STATUS_META,
@@ -55,8 +65,14 @@ import './task-table.css';
  * 折叠天然同源，无需共享 UI state。
  *
  * 写纪律：全部写走 gmind-core op（setNodeTask/setText/addChild/deleteNodes/moveNode/
- * toggleCollapse/setCollapsed）+ afterUserWrite（capUndoStack/lastEditor/编辑中广播），
- * 禁止直写 Yjs；校验异常经 showToast 两段式透出。
+ * toggleCollapse/setCollapsed/setCustomColumns/setCustomField）+ afterUserWrite
+ * （capUndoStack/lastEditor/编辑中广播），禁止直写 Yjs；校验异常经 showToast
+ * 两段式透出。
+ *
+ * 自定义列（M7c 消费侧）：内置列后渲染 meta.customColumns 动态列（按类型分派
+ * 单元格编辑器）；列头右键/悬停 ⋯ 管理（加列浮层在最后一列后「+」，上限 20 列
+ * 置灰）；增删改名重排在页面侧组好新数组一次 setCustomColumns 提交（删列孤儿
+ * 清理 core 同事务做）；无列文档零 UI 噪音（只有「+」钮）。
  *
  * 已知口径（速度优先形态版）：
  * - 「更新时间」列 = 会话内观察到的最后修改时刻（observeDeep 记录，含远端），未观察
@@ -68,7 +84,8 @@ import './task-table.css';
 /** 状态元数据（企微浅色系）与子组件（Avatar/SmartDateInput/chipActive）已抽至
  *  TaskFields.tsx（M7c-C3/C4 抽公共）：TaskTable 改为共用，交互/类名/testid 零改动。 */
 
-/** 列定义：与 <td> 顺序一一对应（右键菜单按命中列决定排序方式）；首列行号不参与排序。 */
+/** 列定义：与 <td> 顺序一一对应（右键菜单按命中列决定排序方式）；首列行号不参与排序。
+ *  自定义列不进此枚举（不可排序；右键命中自定义列的 field 回落 'title'）。 */
 type SortField =
   | 'title'
   | 'owners'
@@ -81,6 +98,20 @@ type SortField =
 
 const COL_FIELDS = ['#', 'title', 'owners', 'status', 'progress', 'startDate', 'dueDate', 'doneDate', 'updatedAt'];
 const COL_LABELS = ['序号', '任务', '负责人', '状态', '进度', '开始日期', '预期日期', '完成日期', '更新时间'];
+
+/** 自定义列类型 → 展示标记/标签（列头小图标 + 添加浮层四选；目录单源 core）。 */
+const CUSTOM_TYPE_META: Record<CustomColumnType, { mark: string; label: string }> = {
+  text: { mark: 'T', label: '文本' },
+  person: { mark: '人', label: '人员' },
+  progress: { mark: '%', label: '进度' },
+  date: { mark: '日', label: '日期' },
+};
+
+/** 新自定义列 id：crypto.randomUUID()（core 只约束非空唯一；web 未依赖 ulid 包
+ *  ——与 api/events.ts 的 sid 同款裁定，不为此引入新依赖）。 */
+function newColumnId(): string {
+  return crypto.randomUUID();
+}
 
 interface Filters {
   keyword: string;
@@ -99,10 +130,12 @@ const EMPTY_FILTERS: Filters = {
 };
 
 /** 表格行节点：DeriveNode（shared 派生规则输入）+ 标记（标题列展示，M7b-W1 多值数组）
- *  + 描述（M7c-C1：双击标题的两行式行内编辑初值；不进派生规则）。 */
+ *  + 描述（M7c-C1：双击标题的两行式行内编辑初值；不进派生规则）+ 自定义列值
+ *  （custom 透传消费：colId → plain 值，不进派生规则）。 */
 interface RowNode extends DeriveNode {
   icons: Record<string, string[]>;
   description: string;
+  custom: Record<string, unknown>;
 }
 
 interface Row {
@@ -169,6 +202,20 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
   /** 进度列行内编辑（仅叶子）。 */
   const [progressEditId, setProgressEditId] = useState<string | null>(null);
 
+  // —— 自定义列（doc 级 schema meta.customColumns；编辑入口仅非只读）——
+  /** 加列浮层开合 + 草稿（名称/类型四选）。 */
+  const [colAddOpen, setColAddOpen] = useState(false);
+  const [addName, setAddName] = useState('');
+  const [addType, setAddType] = useState<CustomColumnType>('text');
+  /** 列头管理菜单（右键/悬停 ⋯ 钮；colId 命中列）。 */
+  const [colMenu, setColMenu] = useState<{ x: number; y: number; colId: string } | null>(null);
+  /** 列头行内重命名（th 变输入框；Enter/失焦提交、Esc 取消）。 */
+  const [renameCol, setRenameCol] = useState<string | null>(null);
+  /** 自定义 text/progress 单元格行内编辑（点击/双击进入）。 */
+  const [customEdit, setCustomEdit] = useState<{ nodeId: string; colId: string } | null>(null);
+  /** 自定义 person 单元格弹层锚点（nodeId+colId）。 */
+  const [customPersonOpen, setCustomPersonOpen] = useState<{ nodeId: string; colId: string } | null>(null);
+
   // —— 会话内节点最后修改时刻（「更新时间」列；见文件头已知口径） ——
   const updatedRef = useRef<Map<string, number>>(new Map());
   useEffect(() => {
@@ -228,6 +275,7 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
         task: { ...snap.task, owners: [...snap.task.owners] },
         icons: { ...snap.icons },
         description: snap.description,
+        custom: { ...(snap.custom ?? {}) },
       });
     }
     return out;
@@ -237,6 +285,9 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
     () => getNode(doc, ROOT_NODE_ID)?.collapsed === true,
     [doc, docVersion],
   );
+
+  /** 自定义列 schema（meta.customColumns；恒数组，旧文档 []——无列时零 UI 噪音，只剩「+」钮）。 */
+  const customColumns = useMemo(() => getMeta(doc).customColumns, [doc, docVersion]);
 
   /** userId → 展示信息（collaborators ∪ presence ∪ 文档内既有 ID）。 */
   const memberIndex = useMemo(() => {
@@ -333,7 +384,7 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
   const sortMark = (field: SortField): string =>
     sort?.field === field ? (sort.dir === 1 ? ' ↑' : ' ↓') : '';
 
-  // Esc 关闭全部浮层（菜单/弹层/筛选下拉）
+  // Esc 关闭全部浮层（菜单/弹层/筛选下拉/列管理浮层）
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
       if (e.key !== 'Escape') return;
@@ -341,6 +392,9 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
       setOwnerCellOpen(null);
       setOwnerFilterOpen(false);
       setStatusFilterOpen(false);
+      setColAddOpen(false);
+      setColMenu(null);
+      setCustomPersonOpen(null);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -355,6 +409,62 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
     } catch (e) {
       showToast(e instanceof Error ? e.message : '任务字段保存失败，请调整后重试');
     }
+  };
+
+  // —— 自定义列写动作（schema 整表替换 / 单字段写；core 校验两段式文案 toast 透出）——
+
+  /** 列 schema 提交：增/删/改名/重排在页面侧组好新数组后一次替换（删列孤儿清理由
+   *  core 同事务完成，撤销一体回滚）。 */
+  const commitColumns = (next: CustomColumnDef[]): void => {
+    try {
+      setCustomColumns(doc, next);
+      afterUserWrite();
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : '自定义列保存失败，请调整后重试');
+    }
+  };
+
+  /** 单元格自定义值写入（null=清空；即改即存 + afterUserWrite）。 */
+  const commitCustomField = (
+    id: string,
+    colId: string,
+    value: string | string[] | number | null,
+  ): void => {
+    try {
+      setCustomField(doc, id, colId, value);
+      afterUserWrite();
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : '自定义列保存失败，请调整后重试');
+    }
+  };
+
+  /** 加列：追加到末尾（名称/类型经 core 校验，空名/超限由 toast 透出）。 */
+  const addColumn = (): void => {
+    const name = addName.trim();
+    if (name === '') return;
+    commitColumns([...customColumns, { id: newColumnId(), name, type: addType }]);
+    setAddName('');
+    setColAddOpen(false);
+  };
+
+  /** 删列：confirm 二次确认（文案说明将清除该列所有节点的值），孤儿值清理由 core
+   *  在同一事务完成（可用 Ctrl+Z 整体撤销）。 */
+  const removeColumn = (col: CustomColumnDef): void => {
+    if (!window.confirm(`确定删除自定义列「${col.name}」？该列所有节点的值将被一并清除（可用 Ctrl+Z 撤销）`)) {
+      return;
+    }
+    commitColumns(customColumns.filter((c) => c.id !== col.id));
+  };
+
+  /** 重排：与左/右邻位列交换（整表替换一次提交）。越界（首列左移/末列右移）静默忽略。 */
+  const moveCustomColumn = (colId: string, delta: -1 | 1): void => {
+    const idx = customColumns.findIndex((c) => c.id === colId);
+    const to = idx + delta;
+    if (idx < 0 || to < 0 || to >= customColumns.length) return;
+    const next = [...customColumns];
+    const [moved] = next.splice(idx, 1);
+    next.splice(to, 0, moved);
+    commitColumns(next);
   };
 
   const toggleRow = (id: string): void => {
@@ -615,9 +725,12 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
         </span>
       </div>
 
-      {/* 表体 */}
+      {/* 表体（自定义列按列数扩 min-width，避免挤压内置列） */}
       <div className="tt-scroll">
-        <table className="tt-table">
+        <table
+          className="tt-table"
+          style={customColumns.length > 0 ? { minWidth: 1120 + customColumns.length * 130 } : undefined}
+        >
           <thead>
             <tr>
               <th className="tt-rownum" title="行号">
@@ -640,6 +753,158 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
                   {sortMark(field)}
                 </th>
               ))}
+              {/* 自定义列：列头 = 类型小标记 + 列名；右键/悬停 ⋯ 开列管理菜单（非只读）。
+                  重命名行内输入态由 renameCol 驱动（Enter/失焦提交、Esc 取消）。 */}
+              {customColumns.map((col) => {
+                const meta = CUSTOM_TYPE_META[col.type];
+                return (
+                  <th
+                    key={col.id}
+                    className="tt-custom-col"
+                    data-testid="table-custom-col-header"
+                    data-col-id={col.id}
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      if (!readOnly) setColMenu({ x: e.clientX, y: e.clientY, colId: col.id });
+                    }}
+                  >
+                    {renameCol === col.id && !readOnly ? (
+                      <input
+                        className="tt-col-rename-input"
+                        data-testid="table-col-rename-input"
+                        defaultValue={col.name}
+                        maxLength={CUSTOM_COLUMN_NAME_MAX}
+                        aria-label="重命名自定义列"
+                        autoFocus
+                        onFocus={(e) => e.target.select()}
+                        onClick={(e) => e.stopPropagation()}
+                        onBlur={(e) => {
+                          setRenameCol(null);
+                          const next = e.target.value.trim();
+                          if (next !== '' && next !== col.name) {
+                            commitColumns(customColumns.map((c) => (c.id === col.id ? { ...c, name: next } : c)));
+                          } // 空名/未变更零写入（core 校验兜底由提交侧透出）
+                        }}
+                        onKeyDown={(e) => {
+                          e.stopPropagation();
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            (e.target as HTMLInputElement).blur();
+                          } else if (e.key === 'Escape') {
+                            e.preventDefault();
+                            setRenameCol(null); // 取消：不提交
+                          }
+                        }}
+                      />
+                    ) : (
+                      <>
+                        <span className="tt-col-type-mark" title={meta.label}>
+                          {meta.mark}
+                        </span>
+                        <span className="tt-col-name" title={col.name}>
+                          {col.name}
+                        </span>
+                        {!readOnly && (
+                          <button
+                            type="button"
+                            className="tt-col-menu-btn"
+                            data-testid="table-col-menu-btn"
+                            title="列管理（重命名/排序/删除）"
+                            aria-label={`管理自定义列 ${col.name}`}
+                            onClick={(e) => {
+                              const r = e.currentTarget.getBoundingClientRect();
+                              setColMenu({ x: r.left, y: r.bottom + 2, colId: col.id });
+                            }}
+                          >
+                            ⋯
+                          </button>
+                        )}
+                      </>
+                    )}
+                  </th>
+                );
+              })}
+              {/* 加列入口：无自定义列的文档也只此一处 UI（零额外噪音）；上限 20 列置灰 */}
+              {!readOnly && (
+                <th className="tt-col-add-th">
+                  <span className="tt-pop-anchor">
+                    <button
+                      type="button"
+                      className="tt-col-add"
+                      data-testid="table-col-add"
+                      title={
+                        customColumns.length >= CUSTOM_COLUMN_LIMIT
+                          ? `自定义列最多 ${CUSTOM_COLUMN_LIMIT} 列，请先删除不需要的列`
+                          : '添加自定义列（文本/人员/进度/日期）'
+                      }
+                      aria-label="添加自定义列"
+                      disabled={customColumns.length >= CUSTOM_COLUMN_LIMIT}
+                      onClick={() => setColAddOpen((v) => !v)}
+                    >
+                      +
+                    </button>
+                    {colAddOpen && (
+                      <>
+                        <div
+                          className="tt-overlay"
+                          onClick={() => setColAddOpen(false)}
+                          onContextMenu={(e) => {
+                            e.preventDefault();
+                            setColAddOpen(false);
+                          }}
+                        />
+                        <div className="tt-popover tt-col-add-pop">
+                          <input
+                            className="tt-col-add-name"
+                            data-testid="table-col-add-name"
+                            placeholder={`列名称（最多 ${CUSTOM_COLUMN_NAME_MAX} 字）`}
+                            aria-label="自定义列名称"
+                            value={addName}
+                            maxLength={CUSTOM_COLUMN_NAME_MAX}
+                            autoFocus
+                            onChange={(e) => setAddName(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                e.preventDefault();
+                                addColumn();
+                              } else if (e.key === 'Escape') {
+                                e.preventDefault();
+                                setColAddOpen(false);
+                              }
+                            }}
+                          />
+                          <div className="tt-col-add-types" role="radiogroup" aria-label="自定义列类型">
+                            {CUSTOM_COLUMN_TYPES.map((t) => (
+                              <label
+                                key={t}
+                                className={addType === t ? 'tt-col-type active' : 'tt-col-type'}
+                                data-testid={`table-col-add-type-${t}`}
+                              >
+                                <input
+                                  type="radio"
+                                  name="tt-col-add-type"
+                                  checked={addType === t}
+                                  onChange={() => setAddType(t)}
+                                />
+                                {CUSTOM_TYPE_META[t].label}
+                              </label>
+                            ))}
+                          </div>
+                          <button
+                            type="button"
+                            className="tt-col-add-submit"
+                            data-testid="table-col-add-submit"
+                            disabled={addName.trim() === ''}
+                            onClick={addColumn}
+                          >
+                            添加
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </span>
+                </th>
+              )}
             </tr>
           </thead>
           <tbody>
@@ -912,12 +1177,194 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
                   <td className="tt-updated" data-testid={`table-cell-${node.id}-updatedAt`}>
                     {fmtUpdated(node.updatedAt ?? 0)}
                   </td>
+                  {/* 自定义列单元格：按类型分派编辑器（text=点击变输入框 blur 提交、
+                      person=弹层复用 MemberMultiSelect、progress=双击 ProgressEditor、
+                      date=SmartDateInput）；custom 值不参与派生（父级无 Σ，全部可编）。 */}
+                  {customColumns.map((col) => {
+                    const value = node.custom[col.id];
+                    const editing = customEdit?.nodeId === node.id && customEdit.colId === col.id;
+                    const personOpen =
+                      customPersonOpen?.nodeId === node.id && customPersonOpen.colId === col.id;
+                    return (
+                      <td
+                        key={col.id}
+                        className="tt-custom-cell"
+                        data-testid="table-custom-cell"
+                        data-col-id={col.id}
+                        title={col.name}
+                        onDoubleClick={(e) => {
+                          // 进度列双击进入编辑；其余自定义格双击只拦行折叠（不打扰编辑）
+                          e.stopPropagation();
+                          if (!readOnly && col.type === 'progress') {
+                            setCustomEdit({ nodeId: node.id, colId: col.id });
+                          }
+                        }}
+                      >
+                        {col.type === 'text' &&
+                          (readOnly ? (
+                            <span className="tt-date-text">
+                              {typeof value === 'string' && value !== '' ? value : '—'}
+                            </span>
+                          ) : editing ? (
+                            <input
+                              className="tt-custom-text-input"
+                              data-testid="table-custom-text-input"
+                              defaultValue={typeof value === 'string' ? value : ''}
+                              maxLength={CUSTOM_TEXT_MAX_LENGTH}
+                              placeholder="填写…"
+                              aria-label={`填写 ${col.name}`}
+                              autoFocus
+                              onFocus={(e) => e.target.select()}
+                              onClick={(e) => e.stopPropagation()}
+                              onBlur={(e) => {
+                                setCustomEdit(null);
+                                const next = e.target.value.trim();
+                                if (next === (typeof value === 'string' ? value : '')) return; // 未变更零写入
+                                commitCustomField(node.id, col.id, next === '' ? null : next); // 空 = 清空
+                              }}
+                              onKeyDown={(e) => {
+                                e.stopPropagation();
+                                if (e.key === 'Enter') {
+                                  e.preventDefault();
+                                  (e.target as HTMLInputElement).blur();
+                                } else if (e.key === 'Escape') {
+                                  e.preventDefault();
+                                  setCustomEdit(null); // 取消：不提交
+                                }
+                              }}
+                            />
+                          ) : (
+                            <button
+                              type="button"
+                              className="tt-custom-text"
+                              data-testid="table-custom-text"
+                              title="点击填写"
+                              onClick={() => setCustomEdit({ nodeId: node.id, colId: col.id })}
+                            >
+                              {typeof value === 'string' && value !== '' ? (
+                                value
+                              ) : (
+                                <span className="tt-custom-empty">填写…</span>
+                              )}
+                            </button>
+                          ))}
+                        {col.type === 'person' &&
+                          (() => {
+                            const selected =
+                              Array.isArray(value) && value.every((v) => typeof v === 'string')
+                                ? (value as string[])
+                                : [];
+                            return readOnly ? (
+                              <span className="tt-date-text">
+                                {selected.length > 0 ? selected.map(nicknameOf).join('、') : '—'}
+                              </span>
+                            ) : (
+                              <span className="tt-pop-anchor">
+                                <button
+                                  type="button"
+                                  className="tt-owners-btn"
+                                  title="点击选择成员（可多选）"
+                                  onClick={() =>
+                                    setCustomPersonOpen(
+                                      personOpen ? null : { nodeId: node.id, colId: col.id },
+                                    )
+                                  }
+                                >
+                                  {selected.length === 0 ? (
+                                    <span className="tt-custom-empty">选择成员</span>
+                                  ) : (
+                                    <>
+                                      <span className="tt-avatars">
+                                        {selected.slice(0, 3).map((o) => (
+                                          <Avatar key={o} userId={o} nickname={nicknameOf(o)} />
+                                        ))}
+                                      </span>
+                                      <span className="tt-owner-names">
+                                        {selected.slice(0, 2).map(nicknameOf).join('、')}
+                                        {selected.length > 2 && (
+                                          <span style={{ color: '#86909c' }}> +{selected.length - 2}</span>
+                                        )}
+                                      </span>
+                                    </>
+                                  )}
+                                </button>
+                                {personOpen && (
+                                  <>
+                                    <div
+                                      className="tt-overlay"
+                                      onClick={() => setCustomPersonOpen(null)}
+                                      onContextMenu={(e) => {
+                                        e.preventDefault();
+                                        setCustomPersonOpen(null);
+                                      }}
+                                    />
+                                    <div className="tt-popover">
+                                      <MemberMultiSelect
+                                        memberIndex={memberIndex}
+                                        selected={selected}
+                                        onToggle={(userId) => {
+                                          const next = selected.includes(userId)
+                                            ? selected.filter((o) => o !== userId)
+                                            : [...selected, userId];
+                                          commitCustomField(
+                                            node.id,
+                                            col.id,
+                                            next.length > 0 ? next : null, // 清空到 0 人 = 删键
+                                          );
+                                        }}
+                                        testIdPrefix="table-custom-member"
+                                      />
+                                    </div>
+                                  </>
+                                )}
+                              </span>
+                            );
+                          })()}
+                        {col.type === 'progress' &&
+                          (readOnly ? (
+                            <span className="tt-date-text">
+                              {typeof value === 'number' ? `${value}%` : '—'}
+                            </span>
+                          ) : editing ? (
+                            <ProgressEditor
+                              value={typeof value === 'number' ? value : 0}
+                              onCommit={(v) => {
+                                setCustomEdit(null);
+                                if (v !== (typeof value === 'number' ? value : -1)) {
+                                  commitCustomField(node.id, col.id, v);
+                                }
+                              }}
+                              onClose={() => setCustomEdit(null)}
+                            />
+                          ) : typeof value === 'number' ? (
+                            <MiniBar value={value} />
+                          ) : (
+                            <span className="tt-custom-empty" title="双击设置进度">
+                              双击填写
+                            </span>
+                          ))}
+                        {col.type === 'date' &&
+                          (readOnly ? (
+                            <span className="tt-date-text">{typeof value === 'string' ? value : '—'}</span>
+                          ) : (
+                            <SmartDateInput
+                              value={typeof value === 'string' ? value : null}
+                              onCommit={(v) => {
+                                if (v !== (typeof value === 'string' ? value : null)) {
+                                  commitCustomField(node.id, col.id, v);
+                                }
+                              }}
+                            />
+                          ))}
+                      </td>
+                    );
+                  })}
                 </tr>
               );
             })}
             {rows.length === 0 && (
               <tr>
-                <td colSpan={9} className="tt-empty">
+                <td colSpan={9 + customColumns.length + (readOnly ? 0 : 1)} className="tt-empty">
                   {rootCollapsed ? (
                     '中心主题已折叠，展开后显示任务'
                   ) : filtering ? (
@@ -1045,6 +1492,79 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
           </div>
         </>
       )}
+
+      {/* 自定义列列头管理菜单（右键列头 / 悬停 ⋯ 钮；重命名→行内输入、左移右移→重排、
+          删除→confirm（文案说明将清除该列所有节点的值，孤儿清理 core 同事务做）） */}
+      {colMenu && (() => {
+        const idx = customColumns.findIndex((c) => c.id === colMenu.colId);
+        if (idx < 0) return null; // 列已被删（远端并发）：菜单无目标即收
+        const col = customColumns[idx];
+        return (
+          <>
+            <div
+              className="tt-overlay"
+              onClick={() => setColMenu(null)}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                setColMenu(null);
+              }}
+            />
+            <div
+              className="context-menu"
+              data-testid="table-col-menu"
+              role="menu"
+              aria-label="自定义列管理"
+              style={{
+                left: Math.min(colMenu.x, window.innerWidth - 200),
+                top: Math.min(colMenu.y, window.innerHeight - 220),
+              }}
+            >
+              <button
+                data-testid="table-col-menu-rename"
+                onClick={() => {
+                  setRenameCol(col.id);
+                  setColMenu(null);
+                }}
+              >
+                重命名「{col.name}」
+              </button>
+              <div className="tt-menu-sep" />
+              <button
+                data-testid="table-col-menu-left"
+                disabled={idx === 0}
+                title={idx === 0 ? '已是最左列' : undefined}
+                onClick={() => {
+                  moveCustomColumn(col.id, -1);
+                  setColMenu(null);
+                }}
+              >
+                左移
+              </button>
+              <button
+                data-testid="table-col-menu-right"
+                disabled={idx === customColumns.length - 1}
+                title={idx === customColumns.length - 1 ? '已是最右列' : undefined}
+                onClick={() => {
+                  moveCustomColumn(col.id, 1);
+                  setColMenu(null);
+                }}
+              >
+                右移
+              </button>
+              <div className="tt-menu-sep" />
+              <button
+                data-testid="table-col-menu-delete"
+                onClick={() => {
+                  setColMenu(null);
+                  removeColumn(col);
+                }}
+              >
+                删除列「{col.name}」…
+              </button>
+            </div>
+          </>
+        );
+      })()}
     </div>
   );
 }

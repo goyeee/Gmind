@@ -4,7 +4,7 @@
  * 在 core 的剪贴板数据层（subtreeToOutlineText / outlineToSpec / insertSpec）之上，
  * 提供浏览器侧的复制 / 粘贴 / 剪切与系统剪贴板读写：
  * - 内部格式：结构化 payload（v:1 森林，含 text/note/description(M7c-C1)/href/image/
- *   icons/style 富内容），同应用粘贴重建全部富字段，id 全部新建。
+ *   icons/style/custom(自定义列值) 富内容），同应用粘贴重建全部富字段，id 全部新建。
  * - 文本格式：Tab 缩进大纲纯文本（跨应用；粘贴走 outlineToSpec → addChild 镜像
  *   core insertSpec 的 cursor 语义与 ≤500 预校验）。
  *
@@ -52,6 +52,14 @@ export interface PayloadNode {
   /** 图标组值数组（M7b-W1 多值；组键 ∈ core ICON_GROUPS）。 */
   icons: Record<string, string[]>;
   style: Record<string, string>;
+  /**
+   * 表格自定义列值（Record<colId, 值>；副本带值透传）：复制读 getNode().custom
+   * 普通对象化；粘贴经 IDocHandle.setCustomFields 由宿主按**目标文档**当前 schema
+   * 过滤后落写（core sanitizeCustomForDoc——跨文档未知列/类型不符静默丢弃，列
+   * schema 是 doc 级、不随粘贴创建，同 core SpecNode.custom 契约）。缺省 = 无该
+   * 键（旧版本 payload / 无值节点零键面）。
+   */
+  custom?: Record<string, unknown>;
   children: PayloadNode[];
 }
 
@@ -69,6 +77,14 @@ export interface IDocHandle extends DocReader {
   setImage(id: string, image: { key: string; w: number; h: number } | null, origin?: string): void;
   setIcon(id: string, group: string, value: string | null, origin?: string): void;
   setStyle(id: string, patch: Record<string, string | number | null>, origin?: string): void;
+  /**
+   * 自定义列值批量写回（粘贴透传，custom 键非空时恰调一次）：宿主实现须按目标
+   * 文档当前 schema 过滤（core sanitizeCustomForDoc——未知列/值类型不符静默丢弃，
+   * 判断单源在 core，engine/页面绑定不自做目录校验）后逐键 setCustomField。
+   * 整批而非逐键的契约原因：逐键 setCustomField 对未知列抛错会把粘贴截断成
+   * 半途失败（pasteNodes 无法回滚已建节点），过滤必须先于写入整体完成。
+   */
+  setCustomFields(id: string, custom: Record<string, unknown>, origin?: string): void;
 }
 
 /** 复制结果：internal（同应用结构化）+ text（跨应用纯文本大纲）。 */
@@ -138,8 +154,30 @@ function payloadFromSnapshot(reader: DocReader, snap: NodeSnapshotLike): Payload
     image: snap.image ? { key: snap.image.key, w: snap.image.w, h: snap.image.h } : null,
     icons: copyIcons(snap.icons),
     style: snap.style ? { ...snap.style } : {},
+    custom: copyCustom(snap),
     children,
   };
+}
+
+/**
+ * 内部：custom 值普通对象化（复制侧）。core NodeSnapshot.custom 已是防御归一后的
+ * plain 值（Y.Array → 数组、非 plain 值不入快照），此处浅拷贝脱钩 + 形状收敛
+ * （string / number / string[] 之外的非 plain 值防御性丢弃，镜像 copyIcons 纪律）
+ * ，并保证空值不携带键（旧文档零键面）。types.ts 的 NodeSnapshotLike 未声明
+ * custom（契约面按需只增），以结构兼容读取——core/测试桩快照均已携带。
+ */
+function copyCustom(snap: NodeSnapshotLike): Record<string, unknown> | undefined {
+  const custom = (snap as { custom?: Record<string, unknown> }).custom;
+  if (!custom) return undefined;
+  const out: Record<string, unknown> = {};
+  for (const [colId, value] of Object.entries(custom)) {
+    if (typeof value === 'string' || typeof value === 'number') {
+      out[colId] = value;
+    } else if (Array.isArray(value) && value.every((v) => typeof v === 'string')) {
+      out[colId] = [...value];
+    } // 其余形状（crafted 快照遗留）确定性丢弃
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 /** 内部：icons 收敛为 Record<string,string[]>（DocReader 里放宽为 unknown；M7b-W1
@@ -223,6 +261,14 @@ function assertPayloadNodeValid(node: PayloadNode): void {
   if (!Array.isArray(node.children)) {
     throw new TypeError('pasteNodes: payload.children 必须为数组');
   }
+  // custom 形状预校验（镜像 core insertSpec 的 assertSpecValid：非对象抛 TypeError，
+  // 拒绝即零写入；键值合法性不在此判——宿主绑定按目标 schema 过滤，单源在 core）
+  if (
+    node.custom !== undefined &&
+    (typeof node.custom !== 'object' || node.custom === null || Array.isArray(node.custom))
+  ) {
+    throw new TypeError('pasteNodes: payload.custom 必须为对象');
+  }
   for (const child of node.children) assertPayloadNodeValid(child);
 }
 
@@ -292,6 +338,11 @@ async function pastePayloadNode(
     }
   }
   if (Object.keys(node.style).length > 0) doc.setStyle(id, node.style, origin);
+  // 自定义列值透传（副本带值）：整批交宿主绑定按目标文档 schema 过滤后落写
+  //（core sanitizeCustomForDoc——未知列/类型不符静默丢弃，engine 不判目录）。
+  if (node.custom !== undefined && Object.keys(node.custom).length > 0) {
+    doc.setCustomFields(id, node.custom, origin);
+  }
   for (const child of node.children) {
     await pastePayloadNode(doc, id, undefined, child, ids, origin, remap);
   }

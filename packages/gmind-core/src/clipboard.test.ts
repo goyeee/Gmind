@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 import * as Y from 'yjs';
 import { ROOT_NODE_ID, countNodes, createTemplateDoc } from './doc';
 import { GmindCoreError } from './errors';
-import { addChild, deleteNodes } from './operations';
-import { childrenIds, countAlive, getNode } from './read';
+import { addChild, deleteNodes, setCustomColumns } from './operations';
+import { childrenIds, countAlive, getMeta, getNode } from './read';
 import { MAX_TEXT_LENGTH } from './constants';
 import { insertSpec, outlineToSpec, subtreeToOutlineText, type SpecNode } from './clipboard';
 
@@ -245,5 +245,62 @@ describe('往返：导出 → 解析 → 粘贴', () => {
     ]);
     expectSameShape(docA, aId!, docB, ids[0]!);
     expectSameShape(docA, bId!, docB, ids[4]!);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 自定义列透传（表格自定义列）：SpecNode.custom 副本带值，insertSpec 按目标文档
+// schema 过滤落写（未知列/值类型不符静默丢弃）；列 schema 是 doc 级、粘贴不建列。
+// ---------------------------------------------------------------------------
+
+describe('自定义列透传（SpecNode.custom → insertSpec）', () => {
+  it('spec.custom 随粘贴写入目标文档（列在目标 schema 中，副本带值）', () => {
+    const doc = createTemplateDoc({ title: '中心', children: [] });
+    setCustomColumns(doc, [
+      { id: 't1', name: '文本列', type: 'text' },
+      { id: 'p1', name: '人员列', type: 'person' },
+    ]);
+    const ids = insertSpec(doc, ROOT_NODE_ID, 0, [
+      {
+        text: 'P',
+        children: [{ text: 'P-1', children: [], custom: { t1: '子节点文本', p1: ['U2'] } }],
+        custom: { t1: '父节点文本', p1: ['U1'] },
+      },
+    ]);
+    expect(getNode(doc, ids[0]!)!.custom).toEqual({ t1: '父节点文本', p1: ['U1'] });
+    expect(getNode(doc, ids[1]!)!.custom).toEqual({ t1: '子节点文本', p1: ['U2'] });
+  });
+
+  it('目标文档无该列 → 值静默丢弃且 schema 不变（列 schema 是 doc 级不动）', () => {
+    const doc = createTemplateDoc({ title: '中心', children: [] }); // 无任何自定义列
+    const ids = insertSpec(doc, ROOT_NODE_ID, 0, [
+      { text: 'P', children: [], custom: { t1: '外来值' } },
+    ]);
+    expect(getNode(doc, ids[0]!)!.custom).toBeUndefined();
+    expect(getMeta(doc).customColumns).toEqual([]); // 粘贴不建列
+    expect(doc.getMap('meta').get('customColumns')).toBeUndefined(); // 也不写空 schema 键
+  });
+
+  it('值与目标列类型不符 → 丢弃该键，其余合法键照常写入', () => {
+    const doc = createTemplateDoc({ title: '中心', children: [] });
+    setCustomColumns(doc, [
+      { id: 't1', name: '文本列', type: 'text' },
+      { id: 'g1', name: '进度列', type: 'progress' },
+    ]);
+    const ids = insertSpec(doc, ROOT_NODE_ID, 0, [
+      { text: 'P', children: [], custom: { t1: '保留', g1: '不是数字' } },
+    ]);
+    expect(getNode(doc, ids[0]!)!.custom).toEqual({ t1: '保留' });
+  });
+
+  it('spec.custom 非对象 → TypeError 预校验，零写入', () => {
+    const doc = createTemplateDoc({ title: '中心', children: [] });
+    const aliveBefore = countAlive(doc);
+    expect(() =>
+      insertSpec(doc, ROOT_NODE_ID, 0, [
+        { text: 'P', children: [], custom: 'bad' as never },
+      ]),
+    ).toThrow(TypeError);
+    expect(countAlive(doc)).toBe(aliveBefore);
   });
 });

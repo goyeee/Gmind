@@ -250,3 +250,76 @@ export function isValidDateStr(s: string): boolean {
   const dt = new Date(y, m - 1, d);
   return dt.getFullYear() === y && dt.getMonth() === m - 1 && dt.getDate() === d;
 }
+
+/* ── 表格自定义列约束（doc 级 schema + 节点 custom 值；setCustomColumns /
+ *    setCustomField 校验、read 防御读取、repair 收敛的口径单源）────────────── */
+
+/** 列类型目录（需求方原话「可以自定义文本、人员、进度、日期类型的列」）。 */
+export const CUSTOM_COLUMN_TYPES = ['text', 'person', 'progress', 'date'] as const;
+export type CustomColumnType = (typeof CUSTOM_COLUMN_TYPES)[number];
+
+/** doc 级 schema 上限：最多 20 列，超出写入口抛 CUSTOM_COLUMN_OVERFLOW。 */
+export const CUSTOM_COLUMN_LIMIT = 20;
+
+/** 列名长度：非空且 ≤30 字（写入口 CUSTOM_COLUMN_INVALID 拒绝空/超长）。 */
+export const CUSTOM_COLUMN_NAME_MAX = 30;
+
+/** text 列值上限：与节点文本 MAX_TEXT_LENGTH(500) 同口径。 */
+export const CUSTOM_TEXT_MAX_LENGTH = MAX_TEXT_LENGTH;
+
+/**
+ * 自定义列定义（meta.customColumns 数组项）：id 由调用方生成（ULID 或 8 位随机
+ * 均可，写入口只约束非空唯一）；name 1-30 字；type ∈ CUSTOM_COLUMN_TYPES。
+ */
+export interface CustomColumnDef {
+  id: string;
+  name: string;
+  type: CustomColumnType;
+}
+
+/** 节点 custom 值联合：text=string、person=用户ID string[]（复用任务 owners 的
+ *  项长/去重/上限规则）、progress=0-100 整数、date='YYYY-MM-DD'；null=删键（无键）。 */
+export type CustomFieldValue = string | string[] | number | null;
+
+/**
+ * meta.customColumns 防御读取/规范化（纯函数）：read.getMeta 透传、operations 两个
+ * op 的 schema 查找、repair.planCustomRepair 的替换判定共用此单源。
+ * 规则：非数组 → []；逐项形状防御（非对象 / id 非空串 / name 非空且 ≤30 字 /
+ * type ∈ 目录，任一不符剔除该项）；重复 id 保留首项；超 CUSTOM_COLUMN_LIMIT
+ * 截断前 20 项。写入口（setCustomColumns）按严格校验拒绝，此处只兜远端坏数据
+ * / crafted doc_state（同 isValidDateStr 的「校验器 + 防御器」分层）。
+ */
+export function canonicalCustomColumns(raw: unknown): CustomColumnDef[] {
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set<string>();
+  const out: CustomColumnDef[] = [];
+  for (const item of raw) {
+    if (item === null || typeof item !== 'object') continue;
+    const { id, name, type } = item as Record<string, unknown>;
+    if (typeof id !== 'string' || id === '') continue;
+    if (seen.has(id)) continue;
+    if (typeof name !== 'string' || name === '' || name.length > CUSTOM_COLUMN_NAME_MAX) continue;
+    if (!(CUSTOM_COLUMN_TYPES as readonly string[]).includes(type as string)) continue;
+    seen.add(id);
+    out.push({ id, name, type: type as CustomColumnType });
+    if (out.length >= CUSTOM_COLUMN_LIMIT) break;
+  }
+  return out;
+}
+
+/** custom 值与列类型的**形状**判定（repair 删键口径）：text=串、person=串数组、
+ *  progress=0-100 整数、date=日历合法串。只判形状不做值域收敛（text 长度/person
+ *  去重上限不在此处——写入口已归一，repair 保持「只删不改」的最小修复面，见
+ *  planCustomRepair 头注）。 */
+export function isValidCustomValueOfType(type: CustomColumnType, value: unknown): boolean {
+  switch (type) {
+    case 'text':
+      return typeof value === 'string';
+    case 'person':
+      return Array.isArray(value) && value.every((v) => typeof v === 'string');
+    case 'progress':
+      return typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= 100;
+    case 'date':
+      return typeof value === 'string' && isValidDateStr(value);
+  }
+}

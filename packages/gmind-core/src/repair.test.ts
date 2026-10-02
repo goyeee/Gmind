@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 import * as Y from 'yjs';
 import type { Transaction } from 'yjs';
 import { ROOT_NODE_ID, createTemplateDoc, docFromState, docToState } from './doc';
-import { ORIGIN_SYSTEM, ORIGIN_USER, addChild, deleteNodes, moveNode, setDescription, setText, withTransaction } from './operations';
-import { childrenIds, getNode, subtreeIds } from './read';
+import { ORIGIN_SYSTEM, ORIGIN_USER, addChild, deleteNodes, moveNode, setCustomColumns, setDescription, setText, withTransaction } from './operations';
+import { childrenIds, getMeta, getNode, subtreeIds } from './read';
 import type { NodeSnapshot } from './read';
 import { normalizeTree } from './repair';
 
@@ -718,5 +718,156 @@ describe('侧别 side 归一（逆时针定侧）', () => {
     rawSetSide(base, a, 'top');
     const doc = docFromState(docToState(base));
     expect(getNode(doc, a)!.side).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 自定义列归一（表格自定义列，随 normalizeTree 全量执行）：meta 非法项剔除 +
+// 节点 custom 孤儿键/坏形状清理。覆盖含墓碑（撤销可复活）；增量路径不接入
+//（custom 是非结构键，deriveNormalizeDirty 无脏区——与图标/描述/侧别同口径）。
+// ---------------------------------------------------------------------------
+
+describe('自定义列归一（表格自定义列，随 normalizeTree 全量执行）', () => {
+  /** 裸写节点 custom（绕过 setCustomField 校验，模拟远端坏数据 / crafted doc_state）。 */
+  function nodeWithRawCustom(
+    doc: Y.Doc,
+    parentId: string,
+    text: string,
+    entries: Record<string, unknown> | unknown,
+  ): string {
+    const id = addChild(doc, parentId, { text });
+    doc.transact(() => {
+      if (entries !== null && typeof entries === 'object' && !Array.isArray(entries)) {
+        const map = new Y.Map<unknown>();
+        for (const [k, v] of Object.entries(entries)) map.set(k, v);
+        rawNode(doc, id).set('custom', map);
+      } else {
+        rawNode(doc, id).set('custom', entries);
+      }
+    });
+    return id;
+  }
+
+  /** 裸写 meta.customColumns。 */
+  function rawSetColumns(doc: Y.Doc, raw: unknown): void {
+    doc.transact(() => {
+      doc.getMap('meta').set('customColumns', raw);
+    });
+  }
+
+  it('schema 外孤儿列键删除、值形状与列类型不符删键（text 非串/person 非串数组/progress 非法/date 非法）', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [] });
+    setCustomColumns(doc, [
+      { id: 't1', name: '文本列', type: 'text' },
+      { id: 'p1', name: '人员列', type: 'person' },
+      { id: 'g1', name: '进度列', type: 'progress' },
+      { id: 'd1', name: '日期列', type: 'date' },
+    ]);
+    const id = nodeWithRawCustom(doc, ROOT_NODE_ID, 'A', {
+      t1: 42, // text 非串
+      p1: 'U1', // person 非串数组
+      g1: 1.5, // progress 非法整数
+      d1: '2026-02-30', // date 非法串
+      orphan: 'x', // schema 外孤儿键
+    });
+    expect(normalizeTree(doc)).toBe(5); // 逐键各计 1
+    expect(getNode(doc, id)!.custom).toBeUndefined(); // 全部违规：custom 清空
+    expect(normalizeTree(doc)).toBe(0); // 幂等
+  });
+
+  it('合法值零修复：形状与列类型相符的键原样保留（含 person 串数组）', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [] });
+    setCustomColumns(doc, [
+      { id: 't1', name: '文本列', type: 'text' },
+      { id: 'p1', name: '人员列', type: 'person' },
+      { id: 'g1', name: '进度列', type: 'progress' },
+      { id: 'd1', name: '日期列', type: 'date' },
+    ]);
+    const id = nodeWithRawCustom(doc, ROOT_NODE_ID, 'A', {
+      t1: '文本',
+      p1: ['U1', 'U2'],
+      g1: 100,
+      d1: '2026-10-01',
+    });
+    const state = docToState(doc);
+    expect(normalizeTree(doc)).toBe(0);
+    expect(Buffer.from(docToState(doc)).equals(Buffer.from(state))).toBe(true);
+    expect(getNode(doc, id)!.custom).toEqual({
+      t1: '文本',
+      p1: ['U1', 'U2'],
+      g1: 100,
+      d1: '2026-10-01',
+    });
+  });
+
+  it('custom 非 Y.Map（字符串/数组/数字）→ 删键', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [] });
+    const a = nodeWithRawCustom(doc, ROOT_NODE_ID, 'A', 'bad');
+    const b = nodeWithRawCustom(doc, ROOT_NODE_ID, 'B', ['bad']);
+    const c = nodeWithRawCustom(doc, ROOT_NODE_ID, 'C', 42);
+    expect(normalizeTree(doc)).toBe(3);
+    expect(getNode(doc, a)!.custom).toBeUndefined();
+    expect(getNode(doc, b)!.custom).toBeUndefined();
+    expect(getNode(doc, c)!.custom).toBeUndefined();
+    expect(normalizeTree(doc)).toBe(0); // 幂等
+  });
+
+  it('meta.customColumns 非法项剔除：非数组→[]、形状非法/重复 id 剔除、超 20 截断（孤儿键随之清理）', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [] });
+    // 21 个合法列 + 1 个非法项：canonical 截前 20、剔非法，第 21 列 id 变孤儿
+    const cols = Array.from({ length: 21 }, (_, i) => ({ id: `c${i}`, name: `列${i}`, type: 'text' }));
+    cols.push({ id: 'bad', name: '', type: 'text' }); // name 空：剔除
+    rawSetColumns(doc, cols);
+    const id = nodeWithRawCustom(doc, ROOT_NODE_ID, 'A', {
+      c0: '保留',
+      c20: '落榜列', // 截断后 schema 外 → 孤儿清理
+    });
+    expect(normalizeTree(doc)).toBe(2); // meta 替换 1 + 孤儿键 1
+    const meta = doc.getMap('meta');
+    expect((meta.get('customColumns') as Array<{ id: string }>).map((c) => c.id)).toEqual(
+      Array.from({ length: 20 }, (_, i) => `c${i}`),
+    );
+    expect(getNode(doc, id)!.custom).toEqual({ c0: '保留' });
+    expect(normalizeTree(doc)).toBe(0); // 幂等
+  });
+
+  it('meta 无 customColumns 键不补写（干净文档零修复契约）；有键但合法零替换', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
+    const state = docToState(doc);
+    expect(normalizeTree(doc)).toBe(0);
+    expect(Buffer.from(docToState(doc)).equals(Buffer.from(state))).toBe(true);
+    expect(doc.getMap('meta').get('customColumns')).toBeUndefined(); // 不补写
+
+    setCustomColumns(doc, [{ id: 'c1', name: '文本', type: 'text' }]);
+    const state2 = docToState(doc);
+    expect(normalizeTree(doc)).toBe(0); // 合法 schema 零替换
+    expect(Buffer.from(docToState(doc)).equals(Buffer.from(state2))).toBe(true);
+  });
+
+  it('无 schema 但节点带 custom 键（crafted）：全部按孤儿清理', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [] });
+    const id = nodeWithRawCustom(doc, ROOT_NODE_ID, 'A', { any: 'x' });
+    expect(normalizeTree(doc)).toBe(1);
+    expect(getNode(doc, id)!.custom).toBeUndefined();
+  });
+
+  it('墓碑节点同样收敛（撤销可复活孤儿/坏值；children 冻结不变量不受影响）', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [] });
+    setCustomColumns(doc, [{ id: 't1', name: '文本列', type: 'text' }]);
+    const id = nodeWithRawCustom(doc, ROOT_NODE_ID, 'X', { t1: 42 });
+    deleteNodes(doc, [id]);
+    expect(getNode(doc, id)!.deleted).toBe(true);
+    expect(normalizeTree(doc)).toBe(1); // 墓碑 custom 坏值收敛
+    expect(getNode(doc, id)!.custom).toBeUndefined();
+    expect(getNode(doc, id)!.deleted).toBe(true);
+  });
+
+  it('docFromState（导入即收敛）同样归一 meta 非法项与节点坏键', () => {
+    const base = createTemplateDoc({ title: 'T', children: [] });
+    rawSetColumns(base, [{ id: 'c1', name: '文本列', type: 'text' }, 'junk']);
+    const id = nodeWithRawCustom(base, ROOT_NODE_ID, 'A', { c1: '留', orphan: '清' });
+    const doc = docFromState(docToState(base));
+    expect(getMeta(doc).customColumns).toEqual([{ id: 'c1', name: '文本列', type: 'text' }]);
+    expect(getNode(doc, id)!.custom).toEqual({ c1: '留' });
   });
 });

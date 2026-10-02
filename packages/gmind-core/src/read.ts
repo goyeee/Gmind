@@ -1,7 +1,14 @@
 import * as Y from 'yjs';
 import type { StructureType } from '@gmind/shared';
 import { ROOT_NODE_ID } from './doc';
-import { isValidDateStr, ICON_GROUPS, TASK_STATUSES, type IconGroup } from './constants';
+import {
+  canonicalCustomColumns,
+  ICON_GROUPS,
+  TASK_STATUSES,
+  isValidDateStr,
+  type CustomColumnDef,
+  type IconGroup,
+} from './constants';
 import { GmindCoreError } from './errors';
 // undo 是叶子模块（仅依赖 yjs），此导入不构成新环（无 cycle 风险，评审轮已核）。
 import { ORIGIN_SYSTEM, ORIGIN_USER, type WriteOrigin } from './undo';
@@ -10,6 +17,13 @@ export interface DocMeta {
   title: string;
   structureType: StructureType;
   themeId: string;
+  /**
+   * 表格自定义列 schema（doc 级）：恒为数组（防御归一——非数组/非法项剔除/重复 id
+   * 保首/超限截断，见 constants.canonicalCustomColumns）；缺键文档读取为 []。
+   * 写入唯一入口是 operations.setCustomColumns（校验/删列清孤儿/撤销一体），
+   * setDocMeta 不受理该键。
+   */
+  customColumns: CustomColumnDef[];
 }
 
 export interface NodeImage {
@@ -70,6 +84,15 @@ export interface NodeSnapshot {
    * 缺省（含旧文档无 side 键）= 无持久侧，布局按文档序计数规则兜底。
    */
   side?: string;
+  /**
+   * 自定义列值（表格自定义列，M 表格轨）：Record<colId, 值>——text=string /
+   * person=string[] / progress=number / date='YYYY-MM-DD'。防御归一：custom 非
+   * Y.Map → 无该键；**schema 外的列键保留原样**（清理是 repair 的职责，读取侧
+   * 不据 schema 过滤——保证读取是节点状态的纯函数）；Y.Array 值转纯数组、其余
+   * 非 plain 值（Y.Map 等 crafted 形状）不入快照。缺省（无 custom 键/空 Map）=
+   * 无该字段，旧文档快照零新增键面。写入走 operations.setCustomField。
+   */
+  custom?: Record<string, unknown>;
 }
 
 function nodesMap(doc: Y.Doc): Y.Map<Y.Map<unknown>> {
@@ -86,11 +109,18 @@ export function getMeta(doc: Y.Doc): DocMeta {
     title: asString(meta.get('title')),
     structureType: (meta.get('structureType') as StructureType | undefined) ?? 'mindmap',
     themeId: asString(meta.get('themeId'), 'gmind-light'),
+    customColumns: canonicalCustomColumns(meta.get('customColumns')),
   };
 }
 
-/** 仅写入提供的键；默认 user origin（改名/结构切换可撤销，FR-EDT-012）。 */
-export function setDocMeta(doc: Y.Doc, patch: Partial<DocMeta>, origin: WriteOrigin = ORIGIN_USER): void {
+/** 仅写入提供的键；默认 user origin（改名/结构切换可撤销，FR-EDT-012）。
+ *  customColumns 不在本 patch 受理面——自定义列 schema 的唯一写入口是
+ *  operations.setCustomColumns（校验/删列清孤儿/撤销一体），类型上以 Omit 排除。 */
+export function setDocMeta(
+  doc: Y.Doc,
+  patch: Partial<Omit<DocMeta, 'customColumns'>>,
+  origin: WriteOrigin = ORIGIN_USER,
+): void {
   doc.transact(() => {
     const meta = doc.getMap('meta');
     if (patch.title !== undefined) meta.set('title', patch.title);
@@ -158,6 +188,27 @@ function readIcons(raw: unknown): Partial<Record<IconGroup, string[]>> {
   return out;
 }
 
+/**
+ * 读取侧自定义列值归一化：custom Y.Map 的各键值读取为 plain 值——Y.Array →
+ * 纯数组（person 形状），string/number 原样，其余（Y.Map/undefined 等 crafted
+ * 形状）不入快照（repair 删键兜底）。schema 外列键**保留原样**（读取不据 meta
+ * 过滤，repair 负责清理）；空 Map/非 Y.Map → undefined（快照零新增键面）。
+ */
+function readCustom(raw: unknown): Record<string, unknown> | undefined {
+  if (!(raw instanceof Y.Map)) return undefined;
+  const out: Record<string, unknown> = {};
+  for (const [colId, value] of raw.entries()) {
+    if (value instanceof Y.Array) {
+      out[colId] = value.toArray();
+    } else if (value instanceof Y.Map) {
+      continue; // crafted 形状：不入快照（repair 删键兜底）
+    } else {
+      out[colId] = value;
+    }
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
 export function getNode(doc: Y.Doc, id: string): NodeSnapshot | null {
   const node = nodesMap(doc).get(id);
   if (!node) return null;
@@ -166,6 +217,8 @@ export function getNode(doc: Y.Doc, id: string): NodeSnapshot | null {
   const image = node.get('image') as NodeImage | undefined;
   // 侧别透传（防御非法值归 undefined；键缺失不出现——旧文档快照零新增键面）
   const side = node.get('side');
+  // 自定义列值透传（防御归一见 readCustom；无键/空 Map 不出现该字段）
+  const custom = readCustom(node.get('custom'));
   return {
     id,
     text: asString(node.get('text')),
@@ -181,6 +234,7 @@ export function getNode(doc: Y.Doc, id: string): NodeSnapshot | null {
     collapsed: node.get('collapsed') === true,
     deleted: node.get('deleted') === true,
     ...(side === 'left' || side === 'right' ? { side } : {}),
+    ...(custom !== undefined ? { custom } : {}),
   };
 }
 

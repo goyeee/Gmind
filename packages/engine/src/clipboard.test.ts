@@ -39,6 +39,8 @@ interface StubNode {
   image: { key: string; w: number; h: number } | null;
   icons: Record<string, string[]>;
   style: Record<string, string>;
+  /** 自定义列值（custom 透传测试桩：快照/setCustomFields 普通对象存取）。 */
+  custom?: Record<string, unknown>;
   collapsed: boolean;
   deleted: boolean;
 }
@@ -102,6 +104,8 @@ class StubDoc implements IDocHandle {
       image: n.image ? { ...n.image } : null,
       icons: { ...n.icons },
       style: { ...n.style },
+      // custom 无值不带键（镜像 core read：缺省无该字段，旧文档零键面）
+      ...(n.custom && Object.keys(n.custom).length > 0 ? { custom: { ...n.custom } } : {}),
     };
   }
 
@@ -176,6 +180,15 @@ class StubDoc implements IDocHandle {
       if (v === null) delete n.style[k];
       else n.style[k] = String(v);
     }
+  }
+
+  /** custom 透传桩：整批记录 + 落值（不做 schema 过滤——过滤是宿主绑定
+   *  （core sanitizeCustomForDoc）的职责，engine 只透传）。 */
+  setCustomFields(id: string, custom: Record<string, unknown>, origin?: string): void {
+    this.calls.push({ op: 'setCustomFields', args: [id, custom, origin] });
+    const n = this.nodes.get(id);
+    if (!n) return;
+    n.custom = { ...custom };
   }
 
   /** 页面传入 cutNodes 的 deleteFn 替身（墓碑 + 摘出父 children，镜像 core deleteNodes 行为）。 */
@@ -650,6 +663,66 @@ describe('fix round 1：copyNodes 冗余子树裁剪（祖先+后代 id 集，�
     expect(deleteFn).toHaveBeenCalledTimes(1);
     expect(deleteFn).toHaveBeenCalledWith(['a', 'a1']); // 删除侧原 ids
     expect(doc.getNode('a1')?.deleted).toBe(true);
+  });
+});
+
+// ─────────────────────────── custom（自定义列值）透传 ───────────────────────────
+
+/**
+ * 自定义列值往返（M7c 自定义列）：copyNodes 读 getNode().custom 普通对象化进
+ * payload（含子树逐层、非 plain 形状防御丢弃、无值零键面）；pasteNodes 经
+ * IDocHandle.setCustomFields 整批落写（schema 过滤是宿主绑定职责——core
+ * sanitizeCustomForDoc 按**目标**文档过滤未知列/类型不符键，engine 不判目录）。
+ */
+describe('custom 透传：copy 普通对象化 → paste setCustomFields（往返一致）', () => {
+  it('带值子树往返：payload.custom 逐层携带；粘贴新节点 setCustomFields 落值一致', async () => {
+    const src = new StubDoc();
+    src.addNode({ id: 'root' });
+    src.addNode({
+      id: 'a',
+      parentId: 'root',
+      text: 'A',
+      custom: { colText: '文本值', colPerson: ['u1', 'u2'], colProgress: 60, colDate: '2026-10-01' },
+    });
+    src.addNode({ id: 'a1', parentId: 'a', text: 'A1', custom: { colText: '子层值' } });
+    src.addNode({ id: 'b', parentId: 'root', text: 'B' }); // 无值节点
+
+    const { internal } = copyNodes(src, ['a', 'b']);
+    // 复制侧：普通对象化逐层携带；无值节点不带 custom 键（零键面）
+    expect(internal.roots[0].custom).toEqual({
+      colText: '文本值',
+      colPerson: ['u1', 'u2'],
+      colProgress: 60,
+      colDate: '2026-10-01',
+    });
+    expect(internal.roots[0].children[0].custom).toEqual({ colText: '子层值' });
+    expect(internal.roots[1].custom).toBeUndefined();
+
+    // 粘贴侧：每个带值节点恰一次 setCustomFields（整批、参数原样），无值节点零调用
+    const dst = new StubDoc();
+    dst.addNode({ id: 'root' });
+    dst.addNode({ id: 'p', parentId: 'root', text: 'P' });
+    const ids = await pasteNodes(dst, 'p', 0, internal, 'user');
+    expect(ids).toHaveLength(3);
+    expect(dst.nodes.get(ids[0])!.custom).toEqual(internal.roots[0].custom);
+    expect(dst.nodes.get(ids[1])!.custom).toEqual({ colText: '子层值' });
+    expect(dst.nodes.get(ids[2])!.custom).toBeUndefined();
+    const customCalls = dst.calls.filter((c) => c.op === 'setCustomFields');
+    expect(customCalls).toHaveLength(2); // A 与 A1；B 无值不调
+    expect(customCalls[0].args).toEqual([ids[0], internal.roots[0].custom, 'user']); // origin 透传
+  });
+
+  it('快照 custom 携带非 plain 形状（对象/混杂数组）→ 复制侧防御丢弃不抛错', () => {
+    const src = new StubDoc();
+    src.addNode({ id: 'root' });
+    src.addNode({
+      id: 'a',
+      parentId: 'root',
+      text: 'A',
+      custom: { ok: '值', junkObj: { x: 1 }, junkArr: ['u1', 42] as unknown[] },
+    });
+    const { internal } = copyNodes(src, ['a']);
+    expect(internal.roots[0].custom).toEqual({ ok: '值' }); // 仅 plain 形状存活
   });
 });
 

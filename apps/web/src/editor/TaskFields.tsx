@@ -1,6 +1,13 @@
 import { useEffect, useMemo, useRef, useState, type ReactElement, type CSSProperties } from 'react';
 import type * as Y from 'yjs';
-import { getNode, ROOT_NODE_ID, subtreeIds, type NodeSnapshot } from '@gmind/core';
+import {
+  CUSTOM_TEXT_MAX_LENGTH,
+  getNode,
+  ROOT_NODE_ID,
+  subtreeIds,
+  type CustomColumnDef,
+  type NodeSnapshot,
+} from '@gmind/core';
 import type { DeriveNode, TaskStatus } from '@gmind/shared';
 import { colorForUser } from '@gmind/engine';
 import { api } from '../api/client';
@@ -10,7 +17,8 @@ import './task-table.css';
 /**
  * 任务字段公共控件（M7c-C3/C4 抽公共）：TaskTable 与快速设置弹层/右侧任务面板
  * 三处共用的最小件——状态元数据、成员头像、智能日期输入、成员多选、文档派生
- * 节点构建与成员候选装配。
+ * 节点构建与成员候选装配；自定义属性单字段输入（CustomFieldInput，表格自定义
+ * 列消费侧）供快速卡/任务面板两处共用。
  *
  * 抽公共裁决（速度优先）：
  * - STATUS_META / Avatar / SmartDateInput 自 TaskTable 原样迁出（类名/testid
@@ -301,6 +309,167 @@ export function SmartDateInput({
           provisional.current = null;
           setLocal('');
         }
+      }}
+    />
+  );
+}
+
+// ───────────────────── 自定义属性字段（表格自定义列消费侧，任务 2）─────────────────────
+
+/**
+ * 自定义属性单字段输入（TaskQuickCard / TaskPanel「自定义属性」小节共用）：按列
+ * 类型渲染同族编辑器——text=单行输入（placeholder「填写…」，空提交=清空删键）/
+ * person=MemberMultiSelect（空值占位「选择成员」，清空到 0 人提交 null）/
+ * progress=0-100 数字输入（Enter/失焦提交，钳 0-100 取整，空=清空）/
+ * date=SmartDateInput。即改即存：onCommit 由调用方接 core setCustomField +
+ * afterUserWrite，GmindCoreError 两段式文案在调用方 toast（TaskPanel write 模式）。
+ *
+ * 值口径：value 读自 getNode(doc,id).custom?.[colId]（防御归一后的 plain 值），
+ * 非本列类型形状（crafted 遗留）按空值处理；未变更零提交（onCommit 内不重复写）。
+ */
+export function CustomFieldInput({
+  def,
+  value,
+  memberIndex,
+  onCommit,
+  testIdPrefix,
+}: {
+  def: CustomColumnDef;
+  value: unknown;
+  memberIndex: Map<string, MemberOption>;
+  onCommit: (v: string | string[] | number | null) => void;
+  testIdPrefix: string;
+}): ReactElement {
+  const testId = `${testIdPrefix}-${def.id}`;
+  switch (def.type) {
+    case 'text':
+      return (
+        <CustomTextField def={def} value={value} onCommit={onCommit} testId={testId} />
+      );
+    case 'person': {
+      const selected =
+        Array.isArray(value) && value.every((v) => typeof v === 'string') ? (value as string[]) : [];
+      return (
+        <span className="task-custom-person" data-testid={testId}>
+          {selected.length === 0 && <span className="task-custom-placeholder">选择成员</span>}
+          <MemberMultiSelect
+            memberIndex={memberIndex}
+            selected={selected}
+            onToggle={(userId) => {
+              const next = selected.includes(userId)
+                ? selected.filter((o) => o !== userId)
+                : [...selected, userId];
+              onCommit(next.length > 0 ? next : null); // 清空到 0 人 = 删键（null）
+            }}
+            testIdPrefix={`${testId}-member`}
+          />
+        </span>
+      );
+    }
+    case 'progress':
+      return (
+        <CustomProgressField def={def} value={value} onCommit={onCommit} testId={testId} />
+      );
+    case 'date':
+      return (
+        <SmartDateInput
+          testId={testId}
+          value={typeof value === 'string' ? value : null}
+          onCommit={(v) => {
+            if (v !== (typeof value === 'string' ? value : null)) onCommit(v); // 未变更零写入
+          }}
+        />
+      );
+  }
+}
+
+/** text 列：单行受控输入（外部值同步守卫同 SmartDateInput——自身聚焦中不被远端
+ *  值打断）；Enter/失焦提交，trim 后空串=清空（null），未变更零提交。 */
+function CustomTextField({
+  def,
+  value,
+  onCommit,
+  testId,
+}: {
+  def: CustomColumnDef;
+  value: unknown;
+  onCommit: (v: string | string | null) => void;
+  testId: string;
+}): ReactElement {
+  const current = typeof value === 'string' ? value : '';
+  const [local, setLocal] = useState(current);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  useEffect(() => {
+    // 外部值变化同步（远端协同/撤销）：焦点不在本输入框时落值，编辑中不打断
+    if (document.activeElement !== inputRef.current) setLocal(current);
+  }, [current]);
+  const commit = (): void => {
+    const next = local.trim();
+    if (next === current) return; // 未变更零写入
+    onCommit(next === '' ? null : next);
+  };
+  return (
+    <input
+      ref={inputRef}
+      className="task-custom-input"
+      data-testid={testId}
+      value={local}
+      maxLength={CUSTOM_TEXT_MAX_LENGTH}
+      placeholder="填写…"
+      aria-label={`自定义属性 ${def.name}`}
+      onChange={(e) => setLocal(e.target.value)}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          (e.target as HTMLInputElement).blur();
+        }
+      }}
+      onBlur={commit}
+    />
+  );
+}
+
+/** progress 列：0-100 数字输入（ProgressField 同款失焦提交 + key 重挂同步外部值；
+ *  无父级 Σ 语义——custom 值不参与任务派生，独立字段）。空串=清空（null）。 */
+function CustomProgressField({
+  def,
+  value,
+  onCommit,
+  testId,
+}: {
+  def: CustomColumnDef;
+  value: unknown;
+  onCommit: (v: number | null) => void;
+  testId: string;
+}): ReactElement {
+  const num = typeof value === 'number' ? value : null;
+  return (
+    <input
+      type="number"
+      min={0}
+      max={100}
+      defaultValue={num ?? undefined}
+      key={num === null ? 'empty' : num}
+      data-testid={testId}
+      className="task-progress-input task-custom-progress"
+      aria-label={`自定义属性 ${def.name}`}
+      placeholder="0-100"
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          (e.target as HTMLInputElement).blur();
+        }
+      }}
+      onBlur={(e) => {
+        const raw = e.target.value.trim();
+        if (raw === '') {
+          if (num !== null) onCommit(null); // 清空 = 删键；本就空零写入
+          return;
+        }
+        const n = Math.round(Number(raw));
+        if (!Number.isFinite(n)) return; // 非法输入不提交（key 重挂兜底回显）
+        const clamped = Math.max(0, Math.min(100, n));
+        if (clamped !== num) onCommit(clamped);
       }}
     />
   );

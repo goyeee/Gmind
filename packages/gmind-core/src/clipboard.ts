@@ -1,6 +1,6 @@
 import type * as Y from 'yjs';
 import { getNode, requireAliveNode } from './read';
-import { addChild, type AddChildOptions } from './operations';
+import { addChild, sanitizeCustomForDoc, setCustomField, type AddChildOptions } from './operations';
 import { ORIGIN_USER, type WriteOrigin } from './undo';
 import { MAX_TEXT_LENGTH } from './constants';
 import { GmindCoreError } from './errors';
@@ -15,6 +15,13 @@ import { GmindCoreError } from './errors';
 export interface SpecNode {
   text: string;
   children: SpecNode[];
+  /**
+   * 自定义列值（表格自定义列，结构化格式专用）：Record<colId, 值>——副本带值
+   * 透传；粘贴时按**目标文档**当前 schema 过滤（未知列/值类型不符静默丢弃，
+   * sanitizeCustomForDoc），列 schema 是 doc 级、不随粘贴创建。大纲纯文本路径
+   * （subtreeToOutlineText → outlineToSpec）不携带本字段（文本行无法承载）。
+   */
+  custom?: Record<string, unknown>;
 }
 
 /**
@@ -78,7 +85,7 @@ export function outlineToSpec(text: string): SpecNode[] {
  * 返回全部新建节点 id（先序）。校验先于任何写入、拒绝即零变更——parent 校验同 addChild
  * （缺失 NODE_NOT_FOUND / 墓碑 NODE_DELETED），并对整个 spec 递归预校验
  * （任一节点 text 超 MAX_TEXT_LENGTH 抛 TEXT_TOO_LONG，同 setText 规则；children
- * 非数组抛 TypeError）。全量预校验后逐点 addChild：循环内仅剩不可能失败的写入，
+ * 非数组 / custom 非对象抛 TypeError）。全量预校验后逐点 addChild：循环内仅剩不可能失败的写入，
  * 从而整次插入 all-or-nothing。index 为首个 spec 根在 parent children 中的位置，
  * 后续兄弟 spec 依次紧随其后。
  */
@@ -99,13 +106,19 @@ export function insertSpec(
   return ids;
 }
 
-/** 内部：递归预校验 spec 节点（text 长度、children 为数组）；违规即抛，未做任何写入。 */
+/** 内部：递归预校验 spec 节点（text 长度、children/custom 形状）；违规即抛，未做任何写入。 */
 function assertSpecValid(spec: SpecNode): void {
   if (spec.text.length > MAX_TEXT_LENGTH) {
     throw new GmindCoreError('TEXT_TOO_LONG', '节点文本长度已达上限');
   }
   if (spec.children !== undefined && !Array.isArray(spec.children)) {
     throw new TypeError('insertSpec: spec.children 必须为数组');
+  }
+  if (
+    spec.custom !== undefined &&
+    (typeof spec.custom !== 'object' || spec.custom === null || Array.isArray(spec.custom))
+  ) {
+    throw new TypeError('insertSpec: spec.custom 必须为对象');
   }
   for (const child of spec.children ?? []) assertSpecValid(child);
 }
@@ -122,6 +135,16 @@ function insertSpecNode(
   const opts: AddChildOptions = { index, text: spec.text };
   const id = addChild(doc, parentId, opts, origin);
   ids.push(id);
+  // 自定义列值透传（副本带值）：按目标文档 schema 过滤后经 setCustomField 落写
+  //（过滤保证后续不抛——未知列/值类型不符已静默丢弃，与 repair 孤儿清理口径一致）。
+  if (spec.custom !== undefined) {
+    const sanitized = sanitizeCustomForDoc(doc, spec.custom);
+    if (sanitized !== null) {
+      for (const [colId, value] of Object.entries(sanitized)) {
+        setCustomField(doc, id, colId, value, origin);
+      }
+    }
+  }
   let childCursor = 0;
   for (const childSpec of spec.children ?? []) {
     childCursor = insertSpecNode(doc, id, childCursor, childSpec, ids, origin);

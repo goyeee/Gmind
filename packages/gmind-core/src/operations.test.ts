@@ -3,7 +3,7 @@ import * as Y from 'yjs';
 import type { Transaction } from 'yjs';
 import { ROOT_NODE_ID, createTemplateDoc, docToState } from './doc';
 import { GmindCoreError } from './errors';
-import { childrenIds, countAlive, getNode } from './read';
+import { childrenIds, countAlive, getMeta, getNode } from './read';
 import {
   addChild,
   applyStyle,
@@ -11,6 +11,8 @@ import {
   moveNode,
   setImage,
   setIcon,
+  setCustomColumns,
+  setCustomField,
   setNodeTask,
   setNote,
   setDescription,
@@ -25,7 +27,18 @@ import {
   ORIGIN_USER,
 } from './operations';
 import { createUndoManager, redo, undo } from './undo';
-import { MARKER_MULTI_MAX, MAX_DESCRIPTION_LENGTH, MAX_NOTE_LENGTH, OTHER_VALUES, type IconGroup } from './constants';
+import {
+  CUSTOM_COLUMN_LIMIT,
+  CUSTOM_COLUMN_NAME_MAX,
+  CUSTOM_TEXT_MAX_LENGTH,
+  MARKER_MULTI_MAX,
+  MAX_DESCRIPTION_LENGTH,
+  MAX_NOTE_LENGTH,
+  MAX_TASK_OWNERS,
+  OTHER_VALUES,
+  type CustomColumnDef,
+  type IconGroup,
+} from './constants';
 
 /** 按文本查节点 id（测试辅助；模板生成的 ULID 不可预知）。 */
 function findIdByText(doc: Y.Doc, text: string): string {
@@ -1155,5 +1168,278 @@ describe('逆时针定侧（root 级 side 字段）', () => {
     expect(getNode(doc, aId)!.side).toBe('left');
     // 重排前序：root children=[B, A, C] → 移除 A 再插 index 2 → [B, C, A]
     expect(childrenIds(doc, ROOT_NODE_ID)).toEqual([findIdByText(doc, 'B'), cId, aId]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 表格自定义列（doc 级 schema + 节点 custom 值）：setCustomColumns 整表替换
+// （删列同事务清孤儿键）、setCustomField 单字段写入（值按列类型校验）。
+// 断言口径：getMeta(doc).customColumns / getNode(doc, id)!.custom。
+// ---------------------------------------------------------------------------
+
+describe('setCustomColumns（自定义列 schema 整表替换）', () => {
+  it('写入读回：按入参顺序透传（增/删/改名/重排一次写入）；无键文档读取为 []', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [] });
+    expect(getMeta(doc).customColumns).toEqual([]);
+    setCustomColumns(doc, [
+      { id: 'c1', name: '负责人', type: 'person' },
+      { id: 'c2', name: '截止', type: 'date' },
+    ]);
+    expect(getMeta(doc).customColumns).toEqual([
+      { id: 'c1', name: '负责人', type: 'person' },
+      { id: 'c2', name: '截止', type: 'date' },
+    ]);
+    // 重排 + 改名走同一整表替换
+    setCustomColumns(doc, [
+      { id: 'c2', name: '截止日', type: 'date' },
+      { id: 'c1', name: '负责人', type: 'person' },
+    ]);
+    expect(getMeta(doc).customColumns).toEqual([
+      { id: 'c2', name: '截止日', type: 'date' },
+      { id: 'c1', name: '负责人', type: 'person' },
+    ]);
+    // 清空 = 删除全部列
+    setCustomColumns(doc, []);
+    expect(getMeta(doc).customColumns).toEqual([]);
+  });
+
+  it('校验矩阵（拒绝即零变更）：非数组/id 空/id 重复/name 空/name 超长/type 非法 → CUSTOM_COLUMN_INVALID', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [] });
+    setCustomColumns(doc, [{ id: 'c1', name: 'A', type: 'text' }]);
+    const before = JSON.stringify(getMeta(doc).customColumns);
+    const bad: Array<[unknown, string]> = [
+      [['x' as never], '数组形状'],
+      [[{ id: '', name: 'A', type: 'text' }], 'id 空'],
+      [[{ id: 'c1', name: 'A', type: 'text' }, { id: 'c1', name: 'B', type: 'date' }], 'id 重复'],
+      [[{ id: 'c2', name: '', type: 'text' }], 'name 空'],
+      [[{ id: 'c2', name: '长'.repeat(CUSTOM_COLUMN_NAME_MAX + 1), type: 'text' }], 'name 超长'],
+      [[{ id: 'c2', name: 'A', type: 'number' as never }], 'type 非法'],
+      [[null as never], '非对象项'],
+    ];
+    for (const [input, label] of bad) {
+      try {
+        setCustomColumns(doc, input as CustomColumnDef[]);
+        expect.unreachable(`${label} 应被拒绝`);
+      } catch (e) {
+        expect(e, label).toBeInstanceOf(GmindCoreError);
+        expect((e as GmindCoreError).code, label).toBe('CUSTOM_COLUMN_INVALID');
+      }
+    }
+    expect(JSON.stringify(getMeta(doc).customColumns)).toBe(before); // 全部拒绝：零变更
+  });
+
+  it(`上限 ${CUSTOM_COLUMN_LIMIT} 列：恰好合法，第 ${CUSTOM_COLUMN_LIMIT + 1} 列抛 CUSTOM_COLUMN_OVERFLOW（两段式文案）`, () => {
+    const doc = createTemplateDoc({ title: 'T', children: [] });
+    const full = Array.from({ length: CUSTOM_COLUMN_LIMIT }, (_, i) => ({
+      id: `c${i}`,
+      name: `列${i}`,
+      type: 'text' as const,
+    }));
+    setCustomColumns(doc, full);
+    expect(getMeta(doc).customColumns).toHaveLength(CUSTOM_COLUMN_LIMIT);
+    try {
+      setCustomColumns(doc, [...full, { id: 'cx', name: '超', type: 'text' }]);
+      expect.unreachable();
+    } catch (e) {
+      expect(e).toBeInstanceOf(GmindCoreError);
+      expect((e as GmindCoreError).code).toBe('CUSTOM_COLUMN_OVERFLOW');
+      expect((e as GmindCoreError).message).toBe(
+        `自定义列最多 ${CUSTOM_COLUMN_LIMIT} 列，请先删除不需要的列再新增`,
+      );
+    }
+    expect(getMeta(doc).customColumns).toHaveLength(CUSTOM_COLUMN_LIMIT); // 拒绝：零变更
+  });
+
+  it('同值守卫：同清单重复提交零事务；空清单对无键文档零事务（M7c-E4）', () => {
+    let n = 0;
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
+    doc.on('afterTransaction', () => {
+      n += 1;
+    });
+    setCustomColumns(doc, []); // 空清单对无键文档 = 零变更
+    expect(n).toBe(0);
+    const cols: CustomColumnDef[] = [{ id: 'c1', name: '文本', type: 'text' }];
+    setCustomColumns(doc, cols);
+    expect(n).toBe(1);
+    setCustomColumns(doc, [{ id: 'c1', name: '文本', type: 'text' }]); // 同值守卫
+    expect(n).toBe(1);
+    setCustomColumns(doc, [{ id: 'c1', name: '改名', type: 'text' }]);
+    expect(n).toBe(2);
+  });
+
+  it('删列清孤儿：同一事务清理全部节点（含墓碑）该列键，保留列的值不动', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }, { text: 'B' }] });
+    setCustomColumns(doc, [
+      { id: 't1', name: '备注列', type: 'text' },
+      { id: 'g1', name: '进度列', type: 'progress' },
+    ]);
+    const [aId, bId] = childrenIds(doc, ROOT_NODE_ID);
+    setCustomField(doc, aId!, 't1', '甲的文本');
+    setCustomField(doc, aId!, 'g1', 40);
+    setCustomField(doc, bId!, 't1', '乙的文本');
+    deleteNodes(doc, [bId!]); // 墓碑节点也携带孤儿键
+
+    setCustomColumns(doc, [{ id: 'g1', name: '进度列', type: 'progress' }]); // 删除 t1
+    expect(getMeta(doc).customColumns).toEqual([{ id: 'g1', name: '进度列', type: 'progress' }]);
+    expect(getNode(doc, aId!)!.custom).toEqual({ g1: 40 }); // 保留列不动
+    expect(getNode(doc, bId!)!.custom).toBeUndefined(); // 墓碑孤儿键同事务清理
+  });
+
+  it('可撤销：undo 整体回滚 schema 与被清的节点值（同一事务）；redo 复原', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
+    const aId = childrenIds(doc, ROOT_NODE_ID)[0]!;
+    const um = createUndoManager(doc);
+    setCustomColumns(doc, [{ id: 'c1', name: '文本', type: 'text' }]);
+    um.stopCapturing(); // 隔离 captureTimeout，三笔写各自成撤销单元（栈深测试同款）
+    setCustomField(doc, aId, 'c1', 'v');
+    um.stopCapturing();
+    setCustomColumns(doc, []); // 删列 + 清值（同事务）
+    expect(getMeta(doc).customColumns).toEqual([]);
+    expect(getNode(doc, aId)!.custom).toBeUndefined();
+
+    undo(um);
+    expect(getMeta(doc).customColumns).toEqual([{ id: 'c1', name: '文本', type: 'text' }]);
+    expect(getNode(doc, aId)!.custom).toEqual({ c1: 'v' }); // 值随同一撤销单元恢复
+    undo(um);
+    expect(getNode(doc, aId)!.custom).toBeUndefined();
+    undo(um);
+    expect(getMeta(doc).customColumns).toEqual([]);
+    redo(um);
+    expect(getMeta(doc).customColumns).toEqual([{ id: 'c1', name: '文本', type: 'text' }]);
+  });
+});
+
+describe('setCustomField（节点自定义列值）', () => {
+  function docWithCols(): { doc: Y.Doc; nodeId: string } {
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
+    setCustomColumns(doc, [
+      { id: 't1', name: '文本列', type: 'text' },
+      { id: 'p1', name: '人员列', type: 'person' },
+      { id: 'g1', name: '进度列', type: 'progress' },
+      { id: 'd1', name: '日期列', type: 'date' },
+    ]);
+    return { doc, nodeId: childrenIds(doc, ROOT_NODE_ID)[0]! };
+  }
+
+  it('四类型合法写入读回（getNode().custom 透传；缺省节点无 custom 字段）', () => {
+    const { doc, nodeId } = docWithCols();
+    expect('custom' in (getNode(doc, nodeId)!)).toBe(false);
+    setCustomField(doc, nodeId, 't1', '一句话');
+    setCustomField(doc, nodeId, 'p1', ['U1', 'U2']);
+    setCustomField(doc, nodeId, 'g1', 65);
+    setCustomField(doc, nodeId, 'd1', '2026-10-01');
+    expect(getNode(doc, nodeId)!.custom).toEqual({
+      t1: '一句话',
+      p1: ['U1', 'U2'],
+      g1: 65,
+      d1: '2026-10-01',
+    });
+    // 整值替换（person 无 toggle 语义）
+    setCustomField(doc, nodeId, 'p1', ['U3']);
+    expect(getNode(doc, nodeId)!.custom!.p1).toEqual(['U3']);
+  });
+
+  it('person 去重保序（[U1,U2,U1] → [U1,U2]，与 owners 存储口径一致）', () => {
+    const { doc, nodeId } = docWithCols();
+    setCustomField(doc, nodeId, 'p1', ['U1', 'U2', 'U1']);
+    expect(getNode(doc, nodeId)!.custom!.p1).toEqual(['U1', 'U2']);
+  });
+
+  it('null/undefined 删键；对缺键 null 幂等', () => {
+    const { doc, nodeId } = docWithCols();
+    setCustomField(doc, nodeId, 't1', 'v');
+    setCustomField(doc, nodeId, 't1', null);
+    expect(getNode(doc, nodeId)!.custom).toBeUndefined();
+    setCustomField(doc, nodeId, 't1', undefined); // 缺键删键：幂等 no-op
+    expect(getNode(doc, nodeId)!.custom).toBeUndefined();
+    setCustomField(doc, nodeId, 'd1', '2026-01-31');
+    setCustomField(doc, nodeId, 'd1', undefined);
+    expect(getNode(doc, nodeId)!.custom).toBeUndefined();
+  });
+
+  it('colId 不在 schema → CUSTOM_FIELD_UNKNOWN_COL（两段式文案，零变更）', () => {
+    const { doc, nodeId } = docWithCols();
+    try {
+      setCustomField(doc, nodeId, 'nope', 'x');
+      expect.unreachable();
+    } catch (e) {
+      expect(e).toBeInstanceOf(GmindCoreError);
+      expect((e as GmindCoreError).code).toBe('CUSTOM_FIELD_UNKNOWN_COL');
+      expect((e as GmindCoreError).message).toBe('列 nope 不存在或已删除，请刷新表格后重试');
+    }
+    expect(getNode(doc, nodeId)!.custom).toBeUndefined();
+  });
+
+  it('非法矩阵（拒绝即零变更）：text 非串/超长、person 非数组/坏项/超上限、progress 小数/越界/NaN、date 非法', () => {
+    const { doc, nodeId } = docWithCols();
+    setCustomField(doc, nodeId, 't1', '占位');
+    const before = JSON.stringify(getNode(doc, nodeId)!.custom);
+    const cases: Array<[string, unknown, string]> = [
+      ['t1', 42, 'text 非串'],
+      ['t1', '长'.repeat(CUSTOM_TEXT_MAX_LENGTH + 1), 'text 超长'],
+      ['p1', 'U1', 'person 非数组'],
+      ['p1', ['U1', 42], 'person 坏项'],
+      ['p1', [''], 'person 空串项'],
+      ['p1', Array.from({ length: MAX_TASK_OWNERS + 1 }, (_, i) => `U${i}`), 'person 超上限'],
+      ['g1', 1.5, 'progress 小数'],
+      ['g1', -1, 'progress 负数'],
+      ['g1', 101, 'progress 越界'],
+      ['g1', Number.NaN, 'progress NaN'],
+      ['g1', '50', 'progress 串'],
+      ['d1', '2026-02-30', 'date 非日历日'],
+      ['d1', '2026-1-1', 'date 非补零形状'],
+      ['d1', 20261001, 'date 非串'],
+    ];
+    for (const [colId, value, label] of cases) {
+      try {
+        setCustomField(doc, nodeId, colId, value as never);
+        expect.unreachable(`${label} 应被拒绝`);
+      } catch (e) {
+        expect(e, label).toBeInstanceOf(GmindCoreError);
+        const code = (e as GmindCoreError).code;
+        expect(
+          code === 'CUSTOM_FIELD_INVALID_VALUE' ||
+            code === 'CUSTOM_FIELD_TEXT_TOO_LONG',
+          `${label} 错误码`,
+        ).toBe(true);
+      }
+    }
+    expect(JSON.stringify(getNode(doc, nodeId)!.custom)).toBe(before); // 全部拒绝：零变更
+  });
+
+  it('同值守卫：同值零事务、null 对缺键零事务、person 去重后同值零事务（M7c-E4）', () => {
+    let n = 0;
+    const { doc, nodeId } = docWithCols();
+    doc.on('afterTransaction', () => {
+      n += 1;
+    });
+    setCustomField(doc, nodeId, 'g1', null); // 缺键删键：零事务
+    expect(n).toBe(0);
+    setCustomField(doc, nodeId, 'g1', 50);
+    expect(n).toBe(1);
+    setCustomField(doc, nodeId, 'g1', 50); // 同值：零事务
+    expect(n).toBe(1);
+    setCustomField(doc, nodeId, 'p1', ['U1', 'U2']);
+    expect(n).toBe(2);
+    setCustomField(doc, nodeId, 'p1', ['U1', 'U2', 'U1']); // 去重后同值：零事务
+    expect(n).toBe(2);
+  });
+
+  it('节点缺失/墓碑 → NODE_NOT_FOUND / NODE_DELETED（零变更）', () => {
+    const { doc, nodeId } = docWithCols();
+    expect(() => setCustomField(doc, 'nope', 't1', 'x')).toThrow(GmindCoreError);
+    try {
+      setCustomField(doc, 'nope', 't1', 'x');
+      expect.unreachable();
+    } catch (e) {
+      expect((e as GmindCoreError).code).toBe('NODE_NOT_FOUND');
+    }
+    deleteNodes(doc, [nodeId]);
+    try {
+      setCustomField(doc, nodeId, 't1', 'x');
+      expect.unreachable();
+    } catch (e) {
+      expect((e as GmindCoreError).code).toBe('NODE_DELETED');
+    }
   });
 });
