@@ -24,9 +24,14 @@
  */
 import { markerCountOf } from './markers';
 import { measureNodeBox } from './measure';
-// 概要标签避让（M7b）：字号/基线偏移与渲染单源（render 不反向依赖本模块，无环；
-// export.ts 同款先例——导出边界也消费 render 常量）。
-import { SUMMARY_FONT_SIZE, SUMMARY_LABEL_BASELINE } from './render';
+// 概要标签避让/chip 几何（M7b → 2026-10-01 反馈任务 1）：字号/基线偏移/chip 矩形
+// 尺寸与渲染单源（render 不反向依赖本模块，无环；export.ts 同款先例——导出边界也
+// 消费 render 常量）。
+import {
+  SUMMARY_CHIP_H,
+  SUMMARY_CHIP_PAD_X,
+  SUMMARY_FONT_SIZE,
+} from './render';
 import { taskRowSlotsOf } from './taskvisual';
 import { themeTextStyleOf } from './themes';
 import type {
@@ -321,87 +326,166 @@ function buildEdges(node: LayoutNode, structure: StructureType, out: EdgeRoute[]
   }
 }
 
-/** 概要 bracket 几何常量（M6 Task 6，企微对标）：片段盒下方 12px、每侧外扩 8px。 */
+/**
+ * 概要几何常量。
+ * - 横括线（bracket 形态，M6 Task 6；跨侧概要 / org 结构沿用）：片段盒下方 12px、
+ *   每侧外扩 8px。
+ * - 竖向花括号（brace 形态，2026-10-01 需求方反馈任务 1 企微对标；同侧概要）：
+ *   V_EXTEND=带上下各外扩 6px（成员盒带跨度含外扩）；BRACE_GAP=同侧最外成员盒缘
+ *   到括号脊线的间隙 6px；BRACE_DEPTH=脊线到尖端探出深 10px。
+ * - 标签 chip：LABEL_GAP_OUT=尖端到 chip 矩形的间隙 6px（chip 尺寸常量单源在
+ *   render.ts：SUMMARY_CHIP_H / SUMMARY_CHIP_PAD_X）。
+ */
 const SUMMARY_GAP_Y = 12;
 const SUMMARY_OUT_X = 8;
-
-/**
- * 概要标签避让几何常量（M7b，只增不改）：同侧概要标签外置到 bracket 背离节点列
- * 的一端（右列概要 → 右端外侧、左列镜像），不再落回列内——节点层绘制在概要层
- * 之上（createScene 三层序），居中标签在全右布局（逆时针定侧后一级 0-2 恒右）
- * 会落进下一兄弟的盒内被遮挡（tspan intercepts pointer events，e2e summary 实锤）。
- * - GAP_OUT：标签距 bracket 端子的间隙（bracket 自身已外扩 8，再留 6 呼吸位）。
- * - ASCENT/DESCENT：12px 字号字形带的上伸/下延保守值（略宽于字体真实度量，
- *   让位判定宁可多让一线，与 Playwright 命中口径留余量）。
- */
+const SUMMARY_V_EXTEND = 6;
+const SUMMARY_BRACE_GAP = 6;
+const SUMMARY_BRACE_DEPTH = 10;
 const SUMMARY_LABEL_GAP_OUT = 6;
-const SUMMARY_LABEL_ASCENT = 11;
-const SUMMARY_LABEL_DESCENT = 3;
 
 /**
- * 标签外置占位带与全部节点盒求交（M7b）：返回与 [l,r]×[top,bottom] 相交的节点盒
- * （浮点比较用严格不等，边界相接不算相交——与 selection 的「完全让位」同口径）。
+ * 占位矩形与节点盒求交（M7b 引入，R9c 让位循环共用判定）：返回与 [l,r]×[top,bottom]
+ * 相交的节点盒（浮点比较用严格不等，边界相接不算相交——与 selection 的「完全让位」
+ * 同口径）。
  */
 function summaryLabelHits(boxes: NodeBox[], l: number, r: number, top: number, bottom: number): NodeBox[] {
   return boxes.filter((b) => b.y < bottom && b.y + b.h > top && b.x < r && b.x + b.w > l);
 }
 
+/** 外向让位公共骨架：占位带 [l,r]×[top,bottom] 与节点盒相交则沿 dir 跳过遮挡盒
+ *  外缘再留 gap，循环至完全让位。每次迭代至少越过一盒边缘、盒数有限必终止；防御
+ *  性 guard（next 不再前进时原地收手）保证浮点异常下输出仍确定。 */
+function yieldOutward(
+  start: number,
+  dir: 'left' | 'right',
+  width: number,
+  top: number,
+  bottom: number,
+  boxes: NodeBox[],
+  gap: number,
+): number {
+  let pos = start;
+  for (;;) {
+    const l = dir === 'right' ? pos : pos - width;
+    const r = dir === 'right' ? pos + width : pos;
+    const blocking = summaryLabelHits(boxes, l, r, top, bottom);
+    if (blocking.length === 0) break;
+    const next =
+      dir === 'right'
+        ? Math.max(...blocking.map((b) => b.x + b.w)) + gap
+        : Math.min(...blocking.map((b) => b.x)) - gap;
+    if (dir === 'right' ? next <= pos : next >= pos) break;
+    pos = next;
+  }
+  return pos;
+}
+
 /**
- * 同侧概要标签外置（M7b，只增不改）：成员盒全右 → 标签锚在 bracket 右端外侧
- * （anchor=start、向右延伸）；全左 → 镜像（anchor=end、向左延伸）；跨侧概要与
- * org（side='down'，无左右列概念）维持旧居中口径——不返回任何新字段。
- *
- * 让位：标签带（基线 SUMMARY_LABEL_BASELINE 上伸/下延）×文本实测宽与任何节点盒
- * 相交时，沿外向跳过遮挡盒右/左缘再留 GAP_OUT，循环至完全让位（每次至少越过一
- * 个盒的边缘，盒数有限必终止；防御性 guard 保证浮点异常时原地收手，输出仍确定）。
- * 文本宽用测量适配器按概要标签样式实测（字号单源 SUMMARY_FONT_SIZE；字族取主题
- * 根级 token 近似——只影响让位距离的精度，GAP_OUT 吸收误差，不影响确定性）。
+ * 同侧概要的企微竖向花括号几何（2026-10-01 需求方反馈任务 1）：
+ * - 带（括号高度）：成员盒 y 极差上下各外扩 SUMMARY_V_EXTEND；
+ * - 括号：脊线起于同侧最外成员盒缘 + SUMMARY_BRACE_GAP，深 SUMMARY_BRACE_DEPTH
+ *   （右列 → 脊线贴锚定盒 x=0、尖端 x=w；左列镜像，绘制范围恒 [x, x+w]）；
+ * - 标签 chip：挂在尖端外侧 SUMMARY_LABEL_GAP_OUT 处，垂直居中于带；文本宽经
+ *   测量适配器实测（字号单源 SUMMARY_FONT_SIZE、字族取主题根级 token 近似），
+ *   chip 全宽 = labelW + 2×SUMMARY_CHIP_PAD_X；
+ * - 碰撞让位（R9c 外向循环同款）：括号带与 chip 矩形各自沿外向逐盒让位至与任何
+ *   节点盒不相交（更深层节点横向压过外置位时外推，见 yieldOutward）。
+ * 输出：brace 朝向 + 锚定盒 (x,y,w,h) + chip 文本锚（labelX/labelAnchor/labelW）。
  */
-function outwardLabelOf(
-  box: SummaryBox,
+function braceSummaryOf(
+  s: { id: string; label: string },
   members: NodeBox[],
+  side: 'left' | 'right',
   boxes: NodeBox[],
   measure: MeasureAdapter,
   theme: ThemeTokens,
 ): SummaryBox {
-  const side = members[0]?.side;
-  if ((side !== 'left' && side !== 'right') || members.some((m) => m.side !== side)) return box;
-  const labelW = measure.measureTextLine(box.label, {
+  const top = Math.min(...members.map((b) => b.y)) - SUMMARY_V_EXTEND;
+  const bottom = Math.max(...members.map((b) => b.y + b.h)) + SUMMARY_V_EXTEND;
+  const h = bottom - top;
+  const labelW = measure.measureTextLine(s.label, {
     fontSize: SUMMARY_FONT_SIZE,
     fontWeight: 400,
     fontFamily: theme.rootFontFamily,
   });
-  // 标签字形带（绝对坐标）：基线 = bracket 横线 y + 行下偏移（与渲染同源常量）。
-  const top = box.y + SUMMARY_LABEL_BASELINE - SUMMARY_LABEL_ASCENT;
-  const bottom = box.y + SUMMARY_LABEL_BASELINE + SUMMARY_LABEL_DESCENT;
+  const chipW = labelW + SUMMARY_CHIP_PAD_X * 2;
+  const chipTop = (top + bottom) / 2 - SUMMARY_CHIP_H / 2;
+  const chipBottom = (top + bottom) / 2 + SUMMARY_CHIP_H / 2;
   if (side === 'right') {
-    let start = box.x + box.w + SUMMARY_LABEL_GAP_OUT;
-    for (;;) {
-      const blocking = summaryLabelHits(boxes, start, start + labelW, top, bottom);
-      if (blocking.length === 0) break;
-      const next = Math.max(...blocking.map((b) => b.x + b.w)) + SUMMARY_LABEL_GAP_OUT;
-      if (next <= start) break;
-      start = next;
-    }
-    return { ...box, labelX: start - box.x, labelAnchor: 'start', labelW };
+    // 右列概要：括号在成员右侧、开口朝左（尖朝右），chip 在括号右旁。
+    const spine = yieldOutward(
+      Math.max(...members.map((b) => b.x + b.w)) + SUMMARY_BRACE_GAP,
+      'right',
+      SUMMARY_BRACE_DEPTH,
+      top,
+      bottom,
+      boxes,
+      SUMMARY_BRACE_GAP,
+    );
+    const chipLeft = yieldOutward(
+      spine + SUMMARY_BRACE_DEPTH + SUMMARY_LABEL_GAP_OUT,
+      'right',
+      chipW,
+      chipTop,
+      chipBottom,
+      boxes,
+      SUMMARY_LABEL_GAP_OUT,
+    );
+    return {
+      id: s.id,
+      x: spine,
+      y: top,
+      w: SUMMARY_BRACE_DEPTH,
+      h,
+      label: s.label,
+      brace: 'right',
+      labelX: chipLeft + SUMMARY_CHIP_PAD_X - spine,
+      labelAnchor: 'start',
+      labelW,
+    };
   }
-  let end = box.x - SUMMARY_LABEL_GAP_OUT;
-  for (;;) {
-    const blocking = summaryLabelHits(boxes, end - labelW, end, top, bottom);
-    if (blocking.length === 0) break;
-    const next = Math.min(...blocking.map((b) => b.x)) - SUMMARY_LABEL_GAP_OUT;
-    if (next >= end) break;
-    end = next;
-  }
-  return { ...box, labelX: end - box.x, labelAnchor: 'end', labelW };
+  // 左列镜像：括号在成员左侧、开口朝右（尖朝左），chip 在括号左旁。
+  const spine = yieldOutward(
+    Math.min(...members.map((b) => b.x)) - SUMMARY_BRACE_GAP,
+    'left',
+    SUMMARY_BRACE_DEPTH,
+    top,
+    bottom,
+    boxes,
+    SUMMARY_BRACE_GAP,
+  );
+  const chipRight = yieldOutward(
+    spine - SUMMARY_BRACE_DEPTH - SUMMARY_LABEL_GAP_OUT,
+    'left',
+    chipW,
+    chipTop,
+    chipBottom,
+    boxes,
+    SUMMARY_LABEL_GAP_OUT,
+  );
+  return {
+    id: s.id,
+    x: spine - SUMMARY_BRACE_DEPTH,
+    y: top,
+    w: SUMMARY_BRACE_DEPTH,
+    h,
+    label: s.label,
+    brace: 'left',
+    labelX: chipRight - SUMMARY_CHIP_PAD_X - (spine - SUMMARY_BRACE_DEPTH),
+    labelAnchor: 'end',
+    labelW,
+  };
 }
 
 /**
- * 概要 bracket 盒（M6 Task 6，只增不改）：成员盒（缺失/折叠隐藏的成员跳过）的
- * 包围盒外扩——x=左-8、w=宽+16、y=底+12；成员盒全缺 → 不输出。输出按 id 升序
- * （确定性；输入顺序不影响结果）。
- * 同侧概要（M7b）标签外置：见 outwardLabelOf——右列概要标签在 bracket 右端外侧、
- * 左列镜像，且与任何节点盒不相交；跨侧/org 维持居中（无新字段，输出逐字节不变）。
+ * 概要盒（M6 Task 6 → 2026-10-01 需求方反馈任务 1 企微对标改版）：按成员盒侧别
+ * 分派形态——
+ * - 成员盒全左/全右（同侧概要）→ braceSummaryOf 竖向花括号（企微式：括号在成员
+ *   列外侧、尖端旁挂标签 chip，双外向让位循环）；
+ * - 跨侧概要（成员跨左右列）/ org（side='down'，无左右列概念）→ 旧横括线退化
+ *   形态（片段包围盒外扩：x=左-8、w=宽+16、y=底+12），标签居中（无锚点字段，
+ *   输出与旧版逐字节一致）。取舍见 types.ts SummaryBox 头注。
+ * 成员盒全缺（墓碑/折叠隐藏）→ 不输出；输出按 id 升序（确定性）。
  */
 function buildSummaries(
   reader: DocReader,
@@ -420,17 +504,23 @@ function buildSummaries(
       if (b) members.push(b);
     }
     if (members.length === 0) continue;
+    const side = members[0]?.side;
+    const sameSide =
+      side === 'left' || side === 'right' ? (members.every((m) => m.side === side) ? side : null) : null;
+    if (sameSide !== null) {
+      out.push(braceSummaryOf(s, members, sameSide, boxes, measure, theme));
+      continue;
+    }
     const minX = Math.min(...members.map((b) => b.x));
     const maxR = Math.max(...members.map((b) => b.x + b.w));
     const maxB = Math.max(...members.map((b) => b.y + b.h));
-    const box: SummaryBox = {
+    out.push({
       id: s.id,
       x: minX - SUMMARY_OUT_X,
       y: maxB + SUMMARY_GAP_Y,
       w: maxR - minX + SUMMARY_OUT_X * 2,
       label: s.label,
-    };
-    out.push(outwardLabelOf(box, members, boxes, measure, theme));
+    });
   }
   out.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   return out;
@@ -496,8 +586,8 @@ export function layout(reader: DocReader, opts: LayoutOptions): LayoutResult {
   const edges: EdgeRoute[] = [];
   buildEdges(root, structure, edges);
 
-  // 概要 bracket（M6 T6，只增不改）：bbox 仍只按节点盒计算（bracket 不扩画布边界）。
-  // M7b 起同侧概要标签外置避让（标签宽度经测量适配器实测），见 buildSummaries。
+  // 概要（M6 T6 横括线 → 2026-10-01 反馈任务 1 同侧改企微竖向花括号）：bbox 仍只
+  // 按节点盒计算（概要不扩画布边界）。形态分派与避让见 buildSummaries。
   const summaries = buildSummaries(reader, nodes, measure, theme);
 
   let minX = Infinity;

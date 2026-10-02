@@ -28,7 +28,7 @@ import {
   type TaskPatch,
   type TaskStatus,
 } from '@gmind/shared';
-import { MARKER_ROW_ORDER, colorForUser, markerChipText } from '@gmind/engine';
+import { MARKER_ROW_ORDER, colorForUser, drawMarkerBadge, markerChipText, markerDefOf } from '@gmind/engine';
 import { api } from '../api/client';
 import { track } from '../api/events';
 import type { PresenceMember } from './collab';
@@ -697,45 +697,56 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
                         }}
                       />
                     ) : (
-                      <div className="tt-title-line" style={{ paddingLeft: depth * 22 }}>
-                        {hasChildren ? (
-                          <button
-                            type="button"
-                            className="tt-caret"
-                            aria-label={node.collapsed ? '展开' : '折叠'}
-                            onClick={() => toggleRow(node.id)}
+                      <>
+                        <div className="tt-title-line" style={{ paddingLeft: depth * 22 }}>
+                          {hasChildren ? (
+                            <button
+                              type="button"
+                              className="tt-caret"
+                              aria-label={node.collapsed ? '展开' : '折叠'}
+                              onClick={() => toggleRow(node.id)}
+                            >
+                              {node.collapsed ? '▸' : '▾'}
+                            </button>
+                          ) : (
+                            <span className="tt-caret-space" />
+                          )}
+                          <span className="tt-dot" style={{ background: statusMeta.color }} />
+                          <NodeMarkers icons={node.icons} />
+                          <span
+                            className="tt-title-text"
+                            title={node.title}
+                            onClick={() => onSelectNode(node.id)}
                           >
-                            {node.collapsed ? '▸' : '▾'}
-                          </button>
-                        ) : (
-                          <span className="tt-caret-space" />
-                        )}
-                        <span className="tt-dot" style={{ background: statusMeta.color }} />
-                        <NodeMarkers icons={node.icons} />
-                        <span
-                          className="tt-title-text"
-                          title={node.title}
-                          onClick={() => onSelectNode(node.id)}
-                        >
-                          {node.title || '（未命名）'}
-                        </span>
-                        {overdue && (
-                          <span className="tt-overdue-badge" title={`预期 ${task?.dueDate} 已逾期`}>
-                            逾
+                            {node.title || '（未命名）'}
                           </span>
+                          {overdue && (
+                            <span className="tt-overdue-badge" title={`预期 ${task?.dueDate} 已逾期`}>
+                              逾
+                            </span>
+                          )}
+                          {!readOnly && (
+                            <button
+                              type="button"
+                              className="tt-add-child"
+                              title="添加子任务"
+                              aria-label="添加子任务"
+                              onClick={() => addChildTo(node.id)}
+                            >
+                              +
+                            </button>
+                          )}
+                        </div>
+                        {/* 描述第二行（2026-10-01 需求方反馈任务 2，对齐 mindgrid
+                            TreeTable：标题行下方 12px 灰字、单行省略、title 悬停看
+                            全文；有描述才渲染，无独立描述列）。缩进 35px = 折叠钮
+                            18 + gap 5 + 状态点 7 + gap 5，对齐标题文本起点。 */}
+                        {node.description !== '' && (
+                          <div className="tt-title-desc" style={{ paddingLeft: depth * 22 + 35 }} title={node.description}>
+                            {node.description}
+                          </div>
                         )}
-                        {!readOnly && (
-                          <button
-                            type="button"
-                            className="tt-add-child"
-                            title="添加子任务"
-                            aria-label="添加子任务"
-                            onClick={() => addChildTo(node.id)}
-                          >
-                            +
-                          </button>
-                        )}
-                      </div>
+                      </>
                     )}
                   </td>
                   <td data-testid={`table-cell-${node.id}-owners`}>
@@ -1074,6 +1085,13 @@ function NodeMarkers({ icons }: { icons: Record<string, string[]> }): React.Reac
         );
         continue;
       }
+      if (chip.kind === 'progressNone') {
+        // 「未开始」绿环+播放三角（2026-10-01 需求方反馈任务 3）：字形只有 SVG 版
+        // （引擎 drawMarkerBadge 单一来源，同 MarkerPanel chip 几何），表格侧经 ref
+        // 挂载同一徽章，避免手写 CSS 副本漂移。
+        chips.push(<ProgressNoneChip key={`${group}-${value}`} value={value} />);
+        continue;
+      }
       if (chip.kind === 'circleText' || chip.kind === 'squareText' || chip.kind === 'triangle') {
         chips.push(
           <span
@@ -1101,6 +1119,36 @@ function NodeMarkers({ icons }: { icons: Record<string, string[]> }): React.Reac
   }
   if (chips.length === 0) return null;
   return <span className="tt-markers">{chips}</span>;
+}
+
+/**
+ * 「未开始」进度徽章（2026-10-01 需求方反馈任务 3）：直接复用 engine drawMarkerBadge
+ * 的 SVG 徽章（绿环+播放三角，MarkerChip 同款挂载方式）——面板/画布/表格三处单一
+ * 来源；def 经 markerDefOf 取目录原件（悬停 title=中文 label 与面板同源）。
+ */
+function ProgressNoneChip({ value }: { value: string }): React.ReactElement {
+  const def = markerDefOf('progress', value);
+  return (
+    <span
+      className="tt-icon-mark"
+      style={{ width: 14, height: 14, display: 'inline-block', flex: 'none' }}
+      title={value}
+      aria-hidden
+      ref={(el) => {
+        if (!el || el.firstElementChild || !def) return;
+        const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        svg.setAttribute('viewBox', '0 0 14 14');
+        svg.setAttribute('width', '14');
+        svg.setAttribute('height', '14');
+        const badge = drawMarkerBadge(def);
+        if (badge) {
+          badge.removeAttribute('class');
+          svg.appendChild(badge);
+        }
+        el.appendChild(svg);
+      }}
+    />
+  );
 }
 
 /** 进度迷你条（danger=逾期红；auto=父级 Σ 自动值）。 */

@@ -132,8 +132,9 @@ test('标记面板：旗帜写入渲染与 pressed 回显，再点同值取消',
 });
 
 // 用例 2b（2026-10-01 需求方反馈任务 3/4）：进度组首位「未开始」（none）写入 →
-// 画布 0% 空心环徽章；组名「进度」与按钮悬停标题（目录中文 label）齐备。
-test('标记面板：进度组「未开始」写入空心环徽章，组名与悬停标题齐备', async ({ page }) => {
+// 画布绿环+播放三角徽章（2026-10-01 需求方反馈任务 3 改版：旧 0% 空心环退役）；
+// 组名「进度」与按钮悬停标题（目录中文 label）齐备。
+test('标记面板：进度组「未开始」写入绿环播放三角徽章，组名与悬停标题齐备', async ({ page }) => {
   await openSeedDoc(page, '本周计划');
   await selectNodeByText(page, '周一');
   const panel = await openMarkerPanel(page);
@@ -146,6 +147,9 @@ test('标记面板：进度组「未开始」写入空心环徽章，组名与�
   await expect(badge).toHaveCount(1);
   // 徽章悬停标题：SVG <title> 子元素 = 原生 tooltip（与面板按钮 title 同源 label）
   await expect(badge.locator('title')).toHaveText('进度 未开始');
+  // 参考图样式：绿描边圆环 + 内部绿色实心播放三角（polygon）
+  await expect(badge.locator('circle[stroke="#34c724"][fill="none"]')).toHaveCount(1);
+  await expect(badge.locator('polygon[fill="#34c724"]')).toHaveCount(1);
 });
 
 // 用例 3：回显按节点独立——换选另一节点后原 pressed 不串台；异组并存（优先级+旗帜）。

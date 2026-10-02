@@ -68,6 +68,7 @@ import {
   resolveNodeStyle,
   resolveThemeId,
   type SceneRoot,
+  type SummaryBox,
   type TextStyle,
   siblingEnd,
   SelectionModel,
@@ -1753,35 +1754,64 @@ export function EditorPage() {
   };
 
   /**
-   * 打开概要标签行内编辑器：输入框锚定 bracket 标签位置（svg 相对坐标 → .editor-canvas
-   * 内绝对定位）。锚点优先取布局产出的 bracket 盒（既有概要）；创建流尚无盒时按
-   * engine 同式几何（片段盒下方 12px + label 基线 14px、每侧外扩 8px）预置。
+   * 打开概要标签行内编辑器：输入框锚定标签/chip 位置（svg 相对坐标 → .editor-canvas
+   * 内绝对定位）。锚点优先取布局产出的概要盒（既有概要）：竖向花括号形态（企微式，
+   * 2026-10-01 反馈任务 1）锚在 chip 中心、旧横括线形态锚在横线下 label 基线处；
+   * 创建流尚无盒时按 engine 同式几何预置（括号形态 = 外缘+6 脊线 +10 尖端 +6 chip
+   * 缘 + chip 半宽；括线形态 = 片段盒下方 12px + label 基线 14px、每侧外扩 8px）。
    */
   const openSummaryEditor = (
     summaryId: string | null,
     nodeIds: string[],
     label: string,
-    anchor?: { x: number; y: number; w: number },
+    anchor?: SummaryBox,
   ): void => {
     const vp = viewportRef.current;
     if (!vp) return;
-    const box =
-      anchor ?? (layoutRef.current?.summaries ?? []).find((s) => s.id === summaryId);
+    const box = anchor ?? (layoutRef.current?.summaries ?? []).find((s) => s.id === summaryId);
     let sceneX: number;
     let sceneY: number;
+    const members = nodeIds
+      .map((id) => boxesRef.current.find((b) => b.id === id))
+      .filter((b): b is NodeBox => b !== undefined);
     if (box) {
-      sceneX = box.x + box.w / 2;
-      sceneY = box.y + 14;
+      if (box.brace !== undefined) {
+        // 竖括号形态：chip 中心（文本锚 labelX ± labelW/2，垂直居中于成员带 h）。
+        // chip 内边距对中心无贡献，不参与计算。
+        const half = (box.labelW ?? 0) / 2;
+        sceneX = box.x + (box.labelX ?? 0) + (box.labelAnchor === 'end' ? -half : half);
+        sceneY = box.y + (box.h ?? 0) / 2;
+      } else {
+        sceneX = box.x + box.w / 2;
+        sceneY = box.y + 14;
+      }
     } else {
-      const members = nodeIds
-        .map((id) => boxesRef.current.find((b) => b.id === id))
-        .filter((b): b is NodeBox => b !== undefined);
       if (members.length === 0) return;
-      const minX = Math.min(...members.map((b) => b.x));
-      const maxR = Math.max(...members.map((b) => b.x + b.w));
-      const maxB = Math.max(...members.map((b) => b.y + b.h));
-      sceneX = minX - 8 + (maxR - minX + 16) / 2; // 与 engine SUMMARY_OUT_X=8 同式
-      sceneY = maxB + 12 + 14; // 与 engine SUMMARY_GAP_Y=12 + label 基线 14 同式
+      const sides = new Set(members.map((b) => b.side));
+      if (sides.size === 1 && (sides.has('right') || sides.has('left'))) {
+        // 创建流预置（竖括号形态，与 engine 常量同式：V_EXTEND=6 / BRACE_GAP=6 /
+        // BRACE_DEPTH=10 / LABEL_GAP_OUT=6；文本宽按 label 逐字符 12px 近似——仅
+        // 影响初始锚点，布局盒出现后再编辑即取盒锚点）。
+        const side = sides.values().next().value as 'left' | 'right';
+        const top = Math.min(...members.map((b) => b.y)) - 6;
+        const bottom = Math.max(...members.map((b) => b.y + b.h)) + 6;
+        const chipHalf = (label.length * 12 + 16) / 2; // chip 全宽 = labelW + 2×8
+        const outer =
+          side === 'right'
+            ? Math.max(...members.map((b) => b.x + b.w))
+            : Math.min(...members.map((b) => b.x));
+        const tip = outer + (side === 'right' ? 6 + 10 : -6 - 10);
+        sceneX = tip + (side === 'right' ? 6 + chipHalf : -6 - chipHalf);
+        sceneY = (top + bottom) / 2;
+      } else {
+        // 跨侧/org（旧横括线形态）：与 engine SUMMARY_OUT_X=8、SUMMARY_GAP_Y=12
+        // + label 基线 14 同式。
+        const minX = Math.min(...members.map((b) => b.x));
+        const maxR = Math.max(...members.map((b) => b.x + b.w));
+        const maxB = Math.max(...members.map((b) => b.y + b.h));
+        sceneX = minX - 8 + (maxR - minX + 16) / 2;
+        sceneY = maxB + 12 + 14;
+      }
     }
     const p = vp.toScreen(sceneX, sceneY);
     summaryEditCancelled.current = false;

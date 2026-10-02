@@ -96,13 +96,51 @@ const BADGE_H = 18;
 const BADGE_RX = 9;
 const BADGE_FONT_SIZE = 12;
 
-/** 概要 bracket 几何（M6 Task 6，确定性常量）：端子上挑 6px、label 12px 居中行下。 */
+/** 概要横括线几何（M6 Task 6，确定性常量；跨侧概要 / org 结构沿用）：端子上挑 6px、label 12px 居中行下。 */
 const SUMMARY_TICK = 6;
 /** 概要标签字号（单源）：layout 标签避让测量同值消费（M7b 概要标签避让）。 */
 export const SUMMARY_FONT_SIZE = 12;
 /** label 基线相对 bracket 横线的行下偏移（= bracket 视觉下缘）。导出边界外扩消费
  *  （export.ts，M6 终审修复）——引擎内单源，不再手抄。 */
 export const SUMMARY_LABEL_BASELINE = 14;
+
+// —— 概要标签 chip（2026-10-01 需求方反馈任务 1，企微对标）——
+// brace 形态（同侧概要竖向花括号）尖端旁的圆角标签 chip。布局层的 chip 外向让位
+// 需要矩形尺寸做碰撞判定（chipW/H 参与命中带计算），故常量导出供 layout.ts 单源
+// 消费（同 SUMMARY_FONT_SIZE 先例——render 不反向依赖 layout，无环）。
+/** chip 高度（12px 文本上下各留 4px）。 */
+export const SUMMARY_CHIP_H = 20;
+/** chip 水平内边距（文本两侧各 8px；chip 全宽 = labelW + 2×此值）。 */
+export const SUMMARY_CHIP_PAD_X = 8;
+/** chip 圆角半径。 */
+export const SUMMARY_CHIP_RX = 6;
+/** chip 底色/描边/文字色（企微概要标签同款浅橙系，固定值不随主题——12 套主题
+ *  均为浅底，橙 chip 与各主题括号线色并列即企微观感；暗色模式裁定不做）。 */
+export const SUMMARY_CHIP_BG = '#fff7e6';
+export const SUMMARY_CHIP_BORDER = '#ff8800';
+export const SUMMARY_CHIP_FG = '#ff8800';
+
+/**
+ * 概要竖向花括号 path（2026-10-01 需求方反馈任务 1，企微对标）。
+ *
+ * 基准形（右列概要）：脊线（臂端竖列）贴局部 x=0、尖端探出至 x=depth、高 h。
+ * 四段三次贝塞尔：上臂自端点水平外勾（控制点 0.55d/0）→ 内收至 0.4d；再内探
+ * （0.26d）后外挥贯至尖端（d, h/2），尖端处入/出切线为 (0.12d, ±0.1h) 对顶——
+ * 形成朝外的尖角；下臂按中点镜像。左列概要（mirrored）整形沿竖轴镜像：脊线贴
+ * 局部 x=depth、尖端 x=0（镜像由本函数内 X() 变换承担，渲染层只传参）。
+ */
+function summaryBraceD(depth: number, h: number, mirrored: boolean): string {
+  const x = (v: number): number => (mirrored ? depth - v : v);
+  const p = (vx: number, vy: number): string => `${fmt(x(vx))} ${fmt(vy)}`;
+  const d = depth;
+  return [
+    `M ${p(0, 0)}`,
+    `C ${p(d * 0.55, 0)} ${p(d * 0.62, h * 0.12)} ${p(d * 0.4, h * 0.28)}`,
+    `C ${p(d * 0.26, h * 0.4)} ${p(d * 0.88, h * 0.4)} ${p(d, h * 0.5)}`,
+    `C ${p(d * 0.88, h * 0.6)} ${p(d * 0.26, h * 0.6)} ${p(d * 0.4, h * 0.72)}`,
+    `C ${p(d * 0.62, h * 0.88)} ${p(d * 0.55, h)} ${p(0, h)}`,
+  ].join(' ');
+}
 
 /** 角标（note/link）基线与右内边距。 */
 const CORNER_BADGE_BASELINE = 12;
@@ -166,10 +204,15 @@ export interface EdgeEntry {
   path: SVGPathElement;
 }
 
-/** 概要协调条目（M6 Task 6）：g + 下括弧 path + 居中 label。 */
+/**
+ * 概要协调条目（M6 Task 6；2026-10-01 反馈任务 1 起双形态）：g + 形态 path
+ * （brace=竖花括号 / bracket=旧横括线）+ chip 底 rect（仅 brace 形态）+ label。
+ */
 export interface SummaryEntry {
   g: SVGGElement;
   path: SVGPathElement;
+  /** 标签 chip 底（brace 形态必在；bracket 形态恒 null——形态互转时随字段增删）。 */
+  chip: SVGRectElement | null;
   label: SVGTextElement;
   /** 上次渲染的 label（textContent 仅在变化时回写）。 */
   lastLabel: string;
@@ -765,14 +808,19 @@ function applyEdge(scene: SceneRoot, route: EdgeRoute, theme: ThemeTokens): void
 }
 
 /**
- * 单概要协调（M6 Task 6）：不存在则创建 <g data-summary-id class="gm-summary">，
- * 存在则就地改属性（引用恒定）。下括弧 path（局部坐标）：端子上挑 SUMMARY_TICK、
- * 横线贴 y=0；label 基线行下 SUMMARY_LABEL_BASELINE。
+ * 单概要协调（M6 Task 6；2026-10-01 需求方反馈任务 1 企微对标改版）：不存在则创建
+ * <g data-summary-id class="gm-summary">，存在则就地改属性（引用恒定）。双形态：
  *
- * 标签定位（M7b 概要标签避让）：布局层对同侧概要给出外置锚点 labelX + labelAnchor
- * （右列概要 → bracket 右端外侧 anchor=start，左列镜像 anchor=end），渲染层只消费；
- * 缺省（跨侧概要 / org）保持旧居中口径 x=w/2 + anchor=middle。x/anchor 每次协调
- * 重算——概要成员增删引发同侧↔跨侧互转时，标签就地跟随布局结果（元素引用不变）。
+ * - **brace 形态**（s.brace 给出，同侧概要）：竖向花括号 path（summaryBraceD，
+ *   局部 [0..w]×[0..h]，脊线/尖端朝向随 brace 镜像）+ 尖端旁标签 chip（圆角 rect
+ *   浅橙底 + 文本，rect 插在 label 之前保证文字在上；点击 rect/label 都落在
+ *   g[data-summary-id] 上，页面层编辑/删除交互不变）。
+ * - **bracket 形态**（跨侧/org）：旧下括弧 path（端子上挑 SUMMARY_TICK、横线贴
+ *   y=0），label 基线行下 SUMMARY_LABEL_BASELINE。
+ *
+ * 标签定位：布局层给出锚点 labelX + labelAnchor（brace 形态 = chip 文本锚并已让位；
+ * bracket 形态缺省 = 旧居中口径 x=w/2 + anchor=middle）。x/anchor/y 每次协调重算
+ * ——概要成员增删引发形态/朝向互转时，标签就地跟随布局结果（元素引用不变）。
  */
 function applySummary(scene: SceneRoot, s: SummaryBox, theme: ThemeTokens): void {
   let entry = scene.summaryEntries.get(s.id);
@@ -787,18 +835,52 @@ function applySummary(scene: SceneRoot, s: SummaryBox, theme: ThemeTokens): void
     g.appendChild(path);
     g.appendChild(label);
     scene.summariesLayer.appendChild(g);
-    entry = { g, path, label, lastLabel: '' };
+    entry = { g, path, chip: null, label, lastLabel: '' };
     scene.summaryEntries.set(s.id, entry);
   }
   const { g, path, label } = entry;
   g.setAttribute('transform', `translate(${fmt(s.x)}, ${fmt(s.y)})`);
-  path.setAttribute('d', `M 0 ${fmt(-SUMMARY_TICK)} L 0 0 L ${fmt(s.w)} 0 L ${fmt(s.w)} ${fmt(-SUMMARY_TICK)}`);
   path.setAttribute('stroke', theme.edgeColor);
   path.setAttribute('stroke-width', fmt(theme.edgeWidth));
-  label.setAttribute('x', fmt(s.labelX ?? s.w / 2));
-  label.setAttribute('text-anchor', s.labelAnchor ?? 'middle');
-  label.setAttribute('y', fmt(SUMMARY_LABEL_BASELINE));
-  label.setAttribute('fill', theme.edgeColor);
+  if (s.brace !== undefined) {
+    // —— brace 形态（企微竖向花括号 + 尖端旁圆角标签 chip）——
+    const h = s.h ?? 0;
+    path.setAttribute('d', summaryBraceD(s.w, h, s.brace === 'left'));
+    // chip 底 rect：文本锚 labelX ± 内边距圈出全宽（anchor=end 文本向左延伸）。
+    // 插入到 label 之前——chip 是底、文字在上；引用随形态增删（bracket 形态无 chip）。
+    if (!entry.chip) {
+      const chip = el('rect', { class: 'gm-summary-chip' });
+      g.insertBefore(chip, label);
+      entry.chip = chip;
+    }
+    const labelW = s.labelW ?? 0;
+    const anchor = s.labelAnchor ?? 'start';
+    const labelX = s.labelX ?? 0;
+    entry.chip.setAttribute('x', fmt(anchor === 'end' ? labelX - labelW - SUMMARY_CHIP_PAD_X : labelX - SUMMARY_CHIP_PAD_X));
+    entry.chip.setAttribute('y', fmt(h / 2 - SUMMARY_CHIP_H / 2));
+    entry.chip.setAttribute('width', fmt(labelW + SUMMARY_CHIP_PAD_X * 2));
+    entry.chip.setAttribute('height', fmt(SUMMARY_CHIP_H));
+    entry.chip.setAttribute('rx', fmt(SUMMARY_CHIP_RX));
+    entry.chip.setAttribute('fill', SUMMARY_CHIP_BG);
+    entry.chip.setAttribute('stroke', SUMMARY_CHIP_BORDER);
+    entry.chip.setAttribute('stroke-width', '1');
+    label.setAttribute('x', fmt(labelX));
+    label.setAttribute('text-anchor', anchor);
+    // 12px 文本垂直居中于 chip（行中心 = 带中点；基线偏移与全库 0.35em 口径一致）。
+    label.setAttribute('y', fmt(h / 2 + SUMMARY_FONT_SIZE * 0.35));
+    label.setAttribute('fill', SUMMARY_CHIP_FG);
+  } else {
+    // —— bracket 形态（跨侧 / org，旧横括线逐字节沿用）——
+    if (entry.chip) {
+      entry.chip.remove();
+      entry.chip = null;
+    }
+    path.setAttribute('d', `M 0 ${fmt(-SUMMARY_TICK)} L 0 0 L ${fmt(s.w)} 0 L ${fmt(s.w)} ${fmt(-SUMMARY_TICK)}`);
+    label.setAttribute('x', fmt(s.labelX ?? s.w / 2));
+    label.setAttribute('text-anchor', s.labelAnchor ?? 'middle');
+    label.setAttribute('y', fmt(SUMMARY_LABEL_BASELINE));
+    label.setAttribute('fill', theme.edgeColor);
+  }
   if (entry.lastLabel !== s.label) {
     label.textContent = s.label;
     entry.lastLabel = s.label;

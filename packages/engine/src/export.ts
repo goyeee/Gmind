@@ -17,6 +17,7 @@ import { layout } from './layout';
 import {
   createScene,
   renderScene,
+  SUMMARY_CHIP_PAD_X,
   SUMMARY_LABEL_BASELINE,
   type NodeVisual,
 } from './render';
@@ -92,21 +93,37 @@ export function exportSceneSvg(
 
   // 导出边界：minX/minY 可为负，viewBox 平移到原点；宽高向上取整为正整数
   // （空文档退化为 1×1，不产生 0 尺寸 svg）。基准 = contentBounds（只按节点盒，
-  // M6 T6 裁决「bracket 不扩画布边界」——画布 fit-to-view 口径不变）；但导出是
-  // 静态整图截图，概要 bracket（y=片段底+12、label 基线再 +14、每侧外扩 8）是
-  // 画面内容，被裁即丢——按布局结果的 summaries 自行外扩（镜像 renderScene 消费
-  // layout.summaries 的口径，不重读 reader）。无概要时外扩恒零，产物逐字节不变。
+  // M6 T6 裁决「概要不扩画布边界」——画布 fit-to-view 口径不变）；但导出是
+  // 静态整图截图，概要是画面内容，被裁即丢——按布局结果的 summaries 自行外扩
+  // （镜像 renderScene 消费 layout.summaries 的口径，不重读 reader）。无概要时
+  // 外扩恒零，产物逐字节不变。
   const bounds = contentBounds(result);
   let minX = bounds.minX;
   const minY = bounds.minY;
   let maxX = bounds.minX + bounds.width;
   let maxY = bounds.minY + bounds.height;
   for (const s of result.summaries) {
+    // 括号本体绘制范围恒为 [s.x, s.x+s.w]（brace 形态锚定盒两种朝向同口径；
+    // bracket 形态 = 旧横括线 x..x+w）。
     minX = Math.min(minX, s.x);
     maxX = Math.max(maxX, s.x + s.w);
-    // 标签外置（M7b 概要标签避让）：同侧概要标签锚在 bracket 端子外侧（labelX/
-    // labelAnchor，宽为布局实测 labelW），横向也要纳入包围盒，否则整图截图裁掉
-    // 外置标签。anchor=end 文本自锚点向左延伸、middle 居中（防御分支，布局不产）。
+    if (s.brace !== undefined) {
+      // brace 形态（2026-10-01 反馈任务 1）：竖括号带 y..y+h 全高入包围盒；外置
+      // chip（文本锚 labelX、实测宽 labelW）两端各加 chip 内边距（render 的
+      // SUMMARY_CHIP_PAD_X 单源）——否则整图截图裁掉 chip 边框。chip 垂直居中于
+      // 带（带高 ≥ 36 > chip 高 20），y 向被带覆盖，无需额外外扩。
+      if (s.labelX !== undefined && s.labelW !== undefined) {
+        const left =
+          s.labelAnchor === 'end' ? s.labelX - s.labelW - SUMMARY_CHIP_PAD_X : s.labelX - SUMMARY_CHIP_PAD_X;
+        minX = Math.min(minX, s.x + left);
+        maxX = Math.max(maxX, s.x + left + s.labelW + SUMMARY_CHIP_PAD_X * 2);
+      }
+      maxY = Math.max(maxY, s.y + (s.h ?? 0));
+      continue;
+    }
+    // bracket 形态（跨侧 / org）：标签外置锚点横向纳入（labelX/labelAnchor，
+    // 宽为布局实测 labelW）。anchor=end 文本自锚点向左延伸、middle 居中（防御
+    // 分支，布局不产）。
     if (s.labelX !== undefined && s.labelW !== undefined) {
       const left =
         s.labelAnchor === 'end'

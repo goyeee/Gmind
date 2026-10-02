@@ -455,10 +455,12 @@ describe('layout 不变量（5 树 × 3 结构）', () => {
 });
 
 // ---------------------------------------------------------------------------
-// 概要 bracket 几何（M6 Task 6，企微对标）：只增不改——无概要时 summaries=[]
+// 概要几何（M6 Task 6 横括线 → 2026-10-01 需求方反馈任务 1 企微竖向花括号改版）：
+// 同侧概要 = 竖括号形态（成员列外侧、尖端旁 chip）；跨侧概要 / org = 旧横括线
+// 退化形态（逐字节沿用）。无概要时 summaries=[]。
 // ---------------------------------------------------------------------------
 
-/** 固定片段树：root → [s1, s2, s3, s4]（叶）。M6 概要几何与 M7b 标签避让共用。 */
+/** 固定片段树：root → [s1, s2, s3, s4]（叶）。M6 概要几何与标签避让共用。 */
 const SEG_DEFS: Record<string, PlainNode> = {
   root: { text: '根', children: ['s1', 's2', 's3', 's4'] },
   s1: { text: '周一' },
@@ -467,33 +469,58 @@ const SEG_DEFS: Record<string, PlainNode> = {
   s4: { text: '周日' },
 };
 
-describe('layout 概要 bracket（M6 Task 6）', () => {
+describe('layout 概要几何（横括线形态：跨侧 / org 退化沿用）', () => {
 
-  it('三节点片段：y=片段底+12、x=片段左-8、w=片段宽+16、label 原样透传', () => {
-    for (const structure of STRUCTURES) {
-      const reader = makeReader(SEG_DEFS, [
-        { id: 'sm1', nodeIds: ['s1', 's2', 's3'], label: '上半周' },
-      ]);
-      const result = layout(reader, { structure, theme, measure: stubAdapter, styleOf });
-      expect(result.summaries).toHaveLength(1);
-      const sum = result.summaries[0] as { id: string; x: number; y: number; w: number; label: string };
-      expect(sum.id).toBe('sm1');
-      expect(sum.label).toBe('上半周');
-      const boxes = ['s1', 's2', 's3'].map((id) => boxOf(result, id));
-      const minX = Math.min(...boxes.map((b) => b.x));
-      const maxR = Math.max(...boxes.map((b) => b.x + b.w));
-      const maxB = Math.max(...boxes.map((b) => b.y + b.h));
-      expect(sum.x).toBe(minX - 8); // 每侧外扩 8
-      expect(sum.w).toBe(maxR - minX + 16); // 片段宽 + 16
-      expect(sum.y).toBe(maxB + 12); // 片段底 + 12
-    }
+  it('org 结构：y=片段底+12、x=片段左-8、w=片段宽+16、label 原样透传（旧口径逐字节不变）', () => {
+    const reader = makeReader(SEG_DEFS, [
+      { id: 'sm1', nodeIds: ['s1', 's2', 's3'], label: '上半周' },
+    ]);
+    const result = layout(reader, { structure: 'org', theme, measure: stubAdapter, styleOf });
+    expect(result.summaries).toHaveLength(1);
+    const sum = result.summaries[0] as SummaryBox;
+    expect(sum.id).toBe('sm1');
+    expect(sum.label).toBe('上半周');
+    const boxes = ['s1', 's2', 's3'].map((id) => boxOf(result, id));
+    const minX = Math.min(...boxes.map((b) => b.x));
+    const maxR = Math.max(...boxes.map((b) => b.x + b.w));
+    const maxB = Math.max(...boxes.map((b) => b.y + b.h));
+    expect(sum.x).toBe(minX - 8); // 每侧外扩 8
+    expect(sum.w).toBe(maxR - minX + 16); // 片段宽 + 16
+    expect(sum.y).toBe(maxB + 12); // 片段底 + 12
+    expect(sum.brace).toBeUndefined(); // 横括线形态无 brace/h 字段
+  });
+
+  it('跨侧概要（mindmap 成员分属左右列）→ 横括线退化形态：无 brace/h/labelX 字段', () => {
+    // s1（index 0 → 右）+ s4（index 3 → 左）成员分属两列（连续性校验在 core，布局只算几何）。
+    const cross = layout(makeReader(SEG_DEFS, [{ id: 'sm1', nodeIds: ['s1', 's4'], label: 'L' }]), {
+      structure: 'mindmap',
+      theme,
+      measure: stubAdapter,
+      styleOf,
+    });
+    expect(cross.summaries).toHaveLength(1);
+    const sum = cross.summaries[0] as SummaryBox;
+    expect(sum.brace).toBeUndefined();
+    expect(sum.h).toBeUndefined();
+    expect(sum.labelX).toBeUndefined();
+    expect(sum.labelAnchor).toBeUndefined();
+    expect(sum.labelW).toBeUndefined();
+    // 几何 = 成员包围盒外扩（旧口径）
+    const boxes = [boxOf(cross, 's1'), boxOf(cross, 's4')];
+    const minX = Math.min(...boxes.map((b) => b.x));
+    const maxR = Math.max(...boxes.map((b) => b.x + b.w));
+    const maxB = Math.max(...boxes.map((b) => b.y + b.h));
+    expect(sum.x).toBe(minX - 8);
+    expect(sum.w).toBe(maxR - minX + 16);
+    expect(sum.y).toBe(maxB + 12);
   });
 
   it('成员盒缺失（墓碑/折叠隐藏）→ 以现存盒收敛；全缺 → 概要不出盒', () => {
-    // s2 删除（core repair 后 nodeIds 已收敛，此处钉引擎对缺盒成员的确定性处理）
+    // s2 删除（core repair 后 nodeIds 已收敛，此处钉引擎对缺盒成员的确定性处理）。
+    // org 结构（横括线形态口径）钉 x 收敛公式。
     const defs = { ...SEG_DEFS, s2: { text: '周三', deleted: true } };
     const partial = layout(makeReader(defs, [{ id: 'sm1', nodeIds: ['s1', 's3'], label: 'L' }]), {
-      structure: 'logic',
+      structure: 'org',
       theme,
       measure: stubAdapter,
       styleOf,
@@ -551,104 +578,124 @@ describe('layout 概要 bracket（M6 Task 6）', () => {
   });
 });
 
+/** s1+s2 概要的最小读者（mindmap，两成员 index 0/1 恒右列）。 */
+function result_s1(): LayoutResult {
+  return layout(makeReader(SEG_DEFS, [{ id: 'sm1', nodeIds: ['s1', 's2'], label: '上半周' }]), {
+    structure: 'mindmap',
+    theme,
+    measure: stubAdapter,
+    styleOf,
+  });
+}
+
 // ---------------------------------------------------------------------------
-// 概要标签避让（M7b，只增不改）：同侧概要标签外置到 bracket 背离节点列的一端
-// （右列 → 右端外侧 anchor=start；左列镜像 anchor=end），并沿外向逐盒让位至与
-// 任何节点盒不相交——逆时针定侧（index 0-2 恒右）后全右布局的居中标签会落进
-// 下一兄弟盒内被遮挡（节点层在概要层之上），e2e summary 点击拦截实锤。
-// 跨侧概要 / org（side='down'）无左右列语义，维持旧居中口径（无新字段）。
+// 概要竖向花括号（2026-10-01 需求方反馈任务 1，企微对标）：同侧概要 = 竖括号形态
+// ——括号带 = 成员盒 y 极差上下各外扩 6、脊线起于同侧最外成员盒缘 + 6、深 10；
+// 标签 chip 锚在尖端外 6 + 文本锚内缩 8，垂直居中于带。括号带与 chip 矩形与任何
+// 节点盒不相交（R9c 外向让位循环，更深层节点压过外置位时外推）。
 // ---------------------------------------------------------------------------
 
-describe('layout 概要标签避让（M7b）', () => {
-  /** 标签占位带与结果内节点盒求交（镜像 layout 私有判定：上伸 11 / 下延 3；
-   *  labelX 为 bracket 局部坐标，先加 sum.x 转绝对再比）。 */
-  function labelHits(result: LayoutResult, sum: SummaryBox, labelW: number): NodeBox[] {
-    const top = sum.y + 14 - 11; // SUMMARY_LABEL_BASELINE=14、ASCENT=11（同源常量镜像）
-    const bottom = sum.y + 14 + 3; // DESCENT=3
-    const localLeft = sum.labelAnchor === 'end' ? (sum.labelX as number) - labelW : (sum.labelX as number);
-    const left = sum.x + localLeft;
+describe('layout 概要竖向花括号（2026-10-01 反馈任务 1，同侧形态）', () => {
+  /** chip 占位带与结果内节点盒求交（镜像 layout 私有判定：chip 高 20、内边距 8；
+   *  labelX 为锚定盒局部坐标，先加 sum.x 转绝对再比）。 */
+  function chipHits(result: LayoutResult, sum: SummaryBox): NodeBox[] {
+    const chipH = 20; // SUMMARY_CHIP_H（render 单源镜像）
+    const pad = 8; // SUMMARY_CHIP_PAD_X
+    const labelW = sum.labelW as number;
+    const leftAbs =
+      sum.labelAnchor === 'end'
+        ? sum.x + (sum.labelX as number) - labelW - pad
+        : sum.x + (sum.labelX as number) - pad;
+    const top = sum.y + sum.h! / 2 - chipH / 2;
+    const bottom = sum.y + sum.h! / 2 + chipH / 2;
     return result.nodes.filter(
-      (b) => b.y < bottom && b.y + b.h > top && b.x < left + labelW && b.x + b.w > left,
+      (b) => b.y < bottom && b.y + b.h > top && b.x < leftAbs + labelW + pad * 2 && b.x + b.w > leftAbs,
     );
   }
 
-  it('同侧（全右）概要：标签锚 bracket 右端外 6px（anchor=start），无遮挡时不让位', () => {
+  /** 括号带 [x, x+w]×[y, y+h] 与节点盒求交（镜像渲染绘制范围）。 */
+  function braceHits(result: LayoutResult, sum: SummaryBox): NodeBox[] {
+    return result.nodes.filter(
+      (b) => b.y < sum.y + sum.h! && b.y + b.h > sum.y && b.x < sum.x + sum.w && b.x + b.w > sum.x,
+    );
+  }
+
+  it('同侧（全右）概要：brace=right、带=成员 y 极差±6、脊线=最外盒缘+6、深 10、chip 锚尖端外 6+8', () => {
     // 逆时针定侧：s1/s2/s3（index 0-2）恒右、s4 左；s1+s2 概要 = 同侧右。
-    // 右列兄弟等宽（两字文本），标签起点在列右缘之外 → s3 纵向同带但不横向相交。
-    const reader = makeReader(SEG_DEFS, [{ id: 'sm1', nodeIds: ['s1', 's2'], label: '上半周' }]);
-    const result = layout(reader, { structure: 'mindmap', theme, measure: stubAdapter, styleOf });
+    // 右列兄弟等宽（两字文本），括号/ chip 起点在列右缘之外 → s3 纵向同带但不横向相交。
+    const result = result_s1();
     const sum = result.summaries[0] as SummaryBox;
+    const [b1, b2] = [boxOf(result, 's1'), boxOf(result, 's2')];
+    const outer = Math.max(b1.x + b1.w, b2.x + b2.w);
+    const top = Math.min(b1.y, b2.y) - 6;
+    const bottom = Math.max(b1.y + b1.h, b2.y + b2.h) + 6;
+    expect(sum.brace).toBe('right');
+    expect(sum.y).toBe(top);
+    expect(sum.h).toBe(bottom - top);
+    expect(sum.x).toBe(outer + 6); // 脊线 = 最外盒缘 + BRACE_GAP=6（未触发让位）
+    expect(sum.w).toBe(10); // BRACE_DEPTH（脊线→尖端）
     expect(sum.labelAnchor).toBe('start');
     expect(sum.labelW).toBe('上半周'.length * 10); // stubAdapter：每字符 10px
-    expect(sum.labelX).toBe(sum.w + 6); // bracket 右端 + GAP_OUT=6，未触发让位
-    expect(labelHits(result, sum, sum.labelW as number)).toEqual([]);
+    expect(sum.labelX).toBe(10 + 6 + 8); // 深 10 + 尖端→chip 间隙 6 + chip 内边距 8（未触发让位）
+    expect(braceHits(result, sum)).toEqual([]);
+    expect(chipHits(result, sum)).toEqual([]);
   });
 
-  it('同侧（全左）概要：镜像锚 bracket 左端外 6px（anchor=end）', () => {
-    // 四个一级子全部持久 side=left → 全左列；标签向左延伸，列左缘外无盒 → 精确 -6。
+  it('同侧（全左）概要：brace=left 镜像——锚定盒 x=脊线-10、chip 文本锚 -(10+6+8)、anchor=end', () => {
+    // 四个一级子全部持久 side=left → 全左列；括号/ chip 在列左缘外，无盒 → 精确初值。
     const defs = Object.fromEntries(
       Object.entries(SEG_DEFS).map(([id, def]) => [id, id === 'root' ? def : { ...def, side: 'left' }]),
     );
     const reader = makeReader(defs, [{ id: 'sm1', nodeIds: ['s1', 's2'], label: '上半周' }]);
     const result = layout(reader, { structure: 'mindmap', theme, measure: stubAdapter, styleOf });
     const sum = result.summaries[0] as SummaryBox;
+    const [b1, b2] = [boxOf(result, 's1'), boxOf(result, 's2')];
+    const outer = Math.min(b1.x, b2.x);
+    expect(sum.brace).toBe('left');
+    expect(sum.x).toBe(outer - 6 - 10); // 脊线（盒缘-6）- 深 10 = 锚定盒左缘
+    expect(sum.w).toBe(10);
+    expect(sum.h).toBe(Math.max(b1.y + b1.h, b2.y + b2.h) + 6 - (Math.min(b1.y, b2.y) - 6));
     expect(sum.labelAnchor).toBe('end');
-    expect(sum.labelX).toBe(-6);
-    expect(labelHits(result, sum, sum.labelW as number)).toEqual([]);
+    expect(sum.labelX).toBe(-(6 + 8)); // 局部坐标原点=尖端：尖端→chip 间隙 6 + 内边距 8（向左为负）
+    expect(braceHits(result, sum)).toEqual([]);
+    expect(chipHits(result, sum)).toEqual([]);
   });
 
-  it('跨侧概要 / org 结构：无 labelX/labelAnchor/labelW 字段（旧居中口径逐字节不变）', () => {
-    // 跨侧：s1（index 0 → 右）+ s4（index 3 → 左）成员分属两列（连续性校验在 core，布局只算几何）。
-    const cross = layout(makeReader(SEG_DEFS, [{ id: 'sm1', nodeIds: ['s1', 's4'], label: 'L' }]), {
-      structure: 'mindmap',
-      theme,
-      measure: stubAdapter,
-      styleOf,
-    });
-    expect(cross.summaries[0]).toMatchObject({ id: 'sm1', x: expect.any(Number), w: expect.any(Number) });
-    expect(cross.summaries[0]?.labelX).toBeUndefined();
-    expect(cross.summaries[0]?.labelAnchor).toBeUndefined();
-    expect(cross.summaries[0]?.labelW).toBeUndefined();
-    // org：成员 side 全 'down'，无左右列概念 → 维持居中。
-    const org = layout(makeReader(SEG_DEFS, [{ id: 'sm1', nodeIds: ['s1', 's2'], label: 'L' }]), {
-      structure: 'org',
-      theme,
-      measure: stubAdapter,
-      styleOf,
-    });
-    expect(org.summaries[0]?.labelX).toBeUndefined();
-    expect(org.summaries[0]?.labelAnchor).toBeUndefined();
-    expect(org.summaries[0]?.labelW).toBeUndefined();
+  it('logic 结构（全右列）同款竖括号：与 mindmap 全右布局同规则', () => {
+    const reader = makeReader(SEG_DEFS, [{ id: 'sm1', nodeIds: ['s1', 's2'], label: 'L' }]);
+    const result = layout(reader, { structure: 'logic', theme, measure: stubAdapter, styleOf });
+    const sum = result.summaries[0] as SummaryBox;
+    expect(sum.brace).toBe('right');
+    const [b1, b2] = [boxOf(result, 's1'), boxOf(result, 's2')];
+    const outer = Math.max(b1.x + b1.w, b2.x + b2.w);
+    expect(sum.x).toBe(outer + 6);
+    expect(sum.labelX).toBe(10 + 6 + 8);
+    expect(braceHits(result, sum)).toEqual([]);
+    expect(chipHits(result, sum)).toEqual([]);
   });
 
-  it('外向让位：右端外空位被更深层节点盒占据 → 标签跳到该盒右缘外 6px，仍与任何盒不相交', () => {
-    // s3（index 2 → 右，下一带兄弟）挂一个超宽子节点 s3c：其盒横向压过标签起点、
-    // 纵向居中外扩伸进标签带 → 触发让位，标签被推到 s3c 右缘 + 6。
-    const longText = '超'.repeat(60); // stubAdapter 60×10=600 > maxTextWidth=240 → 多行高盒
+  it('外向让位：外置位被更深层节点盒占据 → 括号跳到该盒外缘+6，chip 随新尖端就位', () => {
+    // s2 宽文本把「同侧最外盒缘」推到 s1 右侧较远处；s1 的子节点 s1c（10 字宽盒）
+    // 右缘伸过括号外置位 → 括号让位到 s1c 右缘外 6；chip 锚在新尖端 +10+6+8
+    // （已越过 s1c，无需再让——chip 让位共用 yieldOutward 同款循环）。
     const defs: Record<string, PlainNode> = {
-      root: { text: '根', children: ['s1', 's2', 's3'] },
-      s1: { text: '周一' },
-      s2: { text: '周三' },
-      s3: { text: '周五', children: ['s3c'] },
-      s3c: { text: longText },
+      root: { text: '根', children: ['s1', 's2'] },
+      s1: { text: '周一', children: ['s1c'] },
+      s1c: { text: '一二三四五六七八九十' },
+      s2: { text: '周三周五周六周日周一周二' },
     };
     const reader = makeReader(defs, [{ id: 'sm1', nodeIds: ['s1', 's2'], label: '上半周' }]);
     const result = layout(reader, { structure: 'mindmap', theme, measure: stubAdapter, styleOf });
     const sum = result.summaries[0] as SummaryBox;
-    const s3c = boxOf(result, 's3c');
-    expect(sum.labelAnchor).toBe('start');
-    expect(sum.labelX).toBeGreaterThan(sum.w + 6); // 越过了最小外置位（发生了让位）
-    expect(sum.labelX).toBe(s3c.x + s3c.w + 6 - sum.x); // 精确落在遮挡盒右缘外 6px
-    expect(labelHits(result, sum, sum.labelW as number)).toEqual([]);
-  });
-
-  it('logic 结构（全右列）同款外置：与 mindmap 全右布局同规则', () => {
-    const reader = makeReader(SEG_DEFS, [{ id: 'sm1', nodeIds: ['s1', 's2'], label: 'L' }]);
-    const result = layout(reader, { structure: 'logic', theme, measure: stubAdapter, styleOf });
-    const sum = result.summaries[0] as SummaryBox;
-    expect(sum.labelAnchor).toBe('start');
-    expect(sum.labelX).toBe(sum.w + 6);
-    expect(labelHits(result, sum, sum.labelW as number)).toEqual([]);
+    const s1c = boxOf(result, 's1c');
+    const [b1, b2] = [boxOf(result, 's1'), boxOf(result, 's2')];
+    const outer = Math.max(b1.x + b1.w, b2.x + b2.w);
+    expect(sum.brace).toBe('right');
+    expect(sum.x).toBeGreaterThan(outer + 6); // 越过了最小外置位（发生了让位）
+    expect(sum.x).toBe(s1c.x + s1c.w + 6); // 精确落在遮挡盒右缘外 BRACE_GAP=6
+    expect(sum.labelX).toBe(10 + 6 + 8); // chip 文本锚 = 让位后尖端 + 间隙 6 + 内边距 8
+    expect(braceHits(result, sum)).toEqual([]);
+    expect(chipHits(result, sum)).toEqual([]);
   });
 });
 
@@ -678,8 +725,11 @@ function serialize(result: LayoutResult): string {
         y: s.y,
         w: s.w,
         label: s.label,
-        // M7b 标签避让起金样含外置锚点（undefined 字段被 JSON 丢弃——跨侧/org 输出
-        // 逐字节不变；同侧外置字段随概要出现才被锁定）。
+        // 2026-10-01 反馈任务 1 起金样含 brace 形态字段（undefined 字段被 JSON
+        // 丢弃——跨侧/org 旧横括线输出逐字节不变；同侧竖括号字段随概要出现才被
+        // 锁定）。
+        ...(s.brace !== undefined ? { brace: s.brace } : {}),
+        ...(s.h !== undefined ? { h: s.h } : {}),
         ...(s.labelX !== undefined ? { labelX: s.labelX } : {}),
         ...(s.labelAnchor !== undefined ? { labelAnchor: s.labelAnchor } : {}),
         ...(s.labelW !== undefined ? { labelW: s.labelW } : {}),

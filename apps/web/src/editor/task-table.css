@@ -201,6 +201,20 @@ table.tt-table {
 .tt-title-text:hover {
   color: #3370ff;
 }
+/* 描述第二行（2026-10-01 需求方反馈任务 2）：标题行下方小号灰字，视觉同画布
+   gm-desc（12px #86909c）；单行省略 + title 悬停看全文（对齐 mindgrid TreeTable
+   的标题格内第二行形态，不设独立描述列）。缩进由行内样式按深度补齐。 */
+.tt-title-desc {
+  margin-top: 1px;
+  font-size: 12px;
+  line-height: 16px;
+  color: #86909c;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 460px;
+  user-select: none;
+}
 .tt-table tbody tr[data-depth='0'] .tt-title-text {
   font-weight: 600;
 }

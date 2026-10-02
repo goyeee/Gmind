@@ -30,7 +30,8 @@ export type MarkerBadgeKind =
   | 'squareText' // 彩色圆角方块 + 白字（日历 31）
   | 'triangle' // 彩色三角 + 白字（注意 !）
   | 'text' // 彩色字符（箭头/+/⚑/★/♥/emoji 本色字符）
-  | 'pie' // 绿色饼图（进度：none=0% 空心环、1/8-7/8；done=满圆+白✓）
+  | 'pie' // 绿色饼图（进度：1/8-7/8；done=满圆+白✓）
+  | 'progressNone' // 进度「未开始」专用形：绿描边圆环 + 内部实心播放三角（2026-10-01 需求方反馈任务 3）
   | 'pieIcon' // 其他组的饼图（3/4 饼 + 分离象限）
   | 'star' // 五角星
   | 'heart' // 心（heartbroken 加白裂纹）
@@ -105,7 +106,7 @@ const ARROW_DEFS: MarkerGlyphDef[] = [
   { value: 'leftright', label: '箭头 左右', kind: 'arrow', color: C.arrowBlue, variant: 4, text: '↔', chipFg: 'color' },
 ];
 
-/** 进度组档位（绿色饼图：未开始空心环 + 1/8→7/8 + 完成；组名 2026-10-01 起「进度」）。 */
+/** 进度组档位（绿色饼图：1/8→7/8 + 完成；组名 2026-10-01 起「进度」）。 */
 const PROGRESS_FRACTIONS: Array<[string, number, string]> = [
   ['p12', 0.125, '进度 1/8'],
   ['p25', 0.25, '进度 1/4'],
@@ -115,10 +116,16 @@ const PROGRESS_FRACTIONS: Array<[string, number, string]> = [
   ['p75', 0.75, '进度 3/4'],
   ['p87', 0.875, '进度 7/8'],
 ];
+/**
+ * 进度主色（2026-10-01 需求方反馈任务 3：未开始徽章参考图取色，企微绿 #34c724，
+ * 与 web 表格 MiniBar 完成态同源）。仅「未开始」专用形使用；饼图档位维持组内
+ * 既有企微转录绿 C.green（色板一致性，改动需两处同步）。
+ */
+const PROGRESS_NONE_GREEN = '#34c724';
 const PROGRESS_DEFS: MarkerGlyphDef[] = [
-  // 首位「未开始」（core PROGRESS_VALUES[0]='none' 对齐，2026-10-01 需求方反馈任务 3）：
-  // fraction=0 → drawMarkerBadge 只画空心环（无扇形）。
-  { value: 'none', label: '进度 未开始', kind: 'pie', color: C.green, fraction: 0 },
+  // 首位「未开始」（core PROGRESS_VALUES[0]='none' 对齐）：需求方参考图样式 = 绿色
+  // 圆环 + 内部绿色实心播放三角（旧 0% 空心环退役，见 drawMarkerBadge 'progressNone'）。
+  { value: 'none', label: '进度 未开始', kind: 'progressNone', color: PROGRESS_NONE_GREEN },
   ...PROGRESS_FRACTIONS.map(([value, fraction, label]) => ({
     value,
     label,
@@ -375,11 +382,18 @@ export function drawMarkerBadge(def: MarkerGlyphDef): SVGGElement | null {
         text(def.text ?? '✓', { x: 7, y: 10.1, 'font-size': 7.6, 'font-weight': 700, fill: '#ffffff' });
       } else {
         g.appendChild(el('circle', { cx: 7, cy: 7, r: 6.1, fill: 'none', stroke: def.color, 'stroke-width': 1.1 }));
-        // fraction=0（未开始）只画空心环：零扇形的路径是零面积退化形，跳过不落。
         if (frac > 0) {
           g.appendChild(el('path', { d: pieWedgePath(7, 7, 6.1, frac), fill: def.color }));
         }
       }
+      break;
+    }
+    case 'progressNone': {
+      // 「未开始」参考图样式（2026-10-01 需求方反馈任务 3）：绿色描边圆环（r=6，
+      // 14×14 槽内含 1.4 描边恰满格）+ 内部绿色实心播放三角（顶点 5,4 / 5,10 / 10,7，
+      // 三顶点均在环内半径内；形心 x≈6.67 略偏右补偿三角视觉重心，无需额外平移）。
+      g.appendChild(el('circle', { cx: 7, cy: 7, r: 6, fill: 'none', stroke: def.color, 'stroke-width': 1.4 }));
+      g.appendChild(el('polygon', { points: '5,4 5,10 10,7', fill: def.color }));
       break;
     }
     case 'pieIcon': {

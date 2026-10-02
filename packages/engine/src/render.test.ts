@@ -4,7 +4,7 @@ import { MARKER_CATALOG } from './markers';
 import type { NodeVisual, SceneInput } from './render';
 import { resolveNodeStyle, THEMES } from './themes';
 import { colorForUser } from './cursors';
-import type { EdgeRoute, LayoutResult, NodeBox, ResolvedNodeStyle, ThemeTokens } from './types';
+import type { EdgeRoute, LayoutResult, NodeBox, ResolvedNodeStyle, SummaryBox, ThemeTokens } from './types';
 
 // ---------------------------------------------------------------------------
 // 固定桩：手工构造 LayoutResult（渲染器只吃布局数据，不依赖 layout()）。
@@ -158,17 +158,21 @@ describe('renderScene：初次渲染', () => {
     expect(nodeG('c')?.querySelectorAll('.gm-marker-badge').length).toBe(0);
   });
 
-  it('进度组「未开始」（2026-10-01 需求方反馈任务 3）：none 画 0% 空心环徽章（无扇形路径）', () => {
+  it('进度组「未开始」（2026-10-01 需求方反馈任务 3）：none 画绿环+播放三角徽章（无扇形）', () => {
     const data = baseData();
     data.set('b', { text: 'x', icons: { progress: ['none'] } });
     renderScene(createScene(svg), makeInput(baseLayout(), data));
     const badge = nodeG('b')?.querySelector('.gm-marker-badge');
     expect(badge).not.toBeNull();
     expect(badge?.getAttribute('data-marker-value')).toBe('none');
-    // 空心环：stroke 圆（fill=none）+ 无扇形 path（fraction=0 不落零面积退化路径）
+    // 参考图样式：绿色描边圆环（fill=none）+ 内部绿色实心播放三角（polygon）；
+    // 不再是 0% 空心环（旧扇形路径恒不落）。
     const ring = badge?.querySelector('circle');
     expect(ring?.getAttribute('fill')).toBe('none');
-    expect(ring?.getAttribute('stroke')).toBe('#47a26b');
+    expect(ring?.getAttribute('stroke')).toBe('#34c724');
+    const play = badge?.querySelector('polygon');
+    expect(play?.getAttribute('fill')).toBe('#34c724');
+    expect(play?.getAttribute('points')).toBe('5,4 5,10 10,7');
     expect(badge?.querySelector('path')).toBeNull();
   });
 
@@ -601,49 +605,112 @@ describe('renderScene：清理与幂等', () => {
 });
 
 // ---------------------------------------------------------------------------
-// 概要 bracket 渲染（M6 Task 6，企微对标）：只增不改——g[data-summary-id] +
-// 下括弧 path（片段盒下方 12px，两侧端子上挑 6px）+ 居中 label。
+// 概要渲染（M6 Task 6 → 2026-10-01 需求方反馈任务 1 企微竖向花括号改版）：
+// brace 形态（同侧）= 竖花括号 path + 尖端旁圆角 chip（浅橙底/描边/文字）；
+// bracket 形态（跨侧/org）= 旧下括弧 + 居中 label（逐字节沿用）。
 // ---------------------------------------------------------------------------
 
-describe('renderScene：概要 bracket（M6 Task 6）', () => {
+describe('renderScene：概要（企微竖向花括号 / 旧横括线）', () => {
   function summaryLayout(
-    summaries: Array<{ id: string; x: number; y: number; w: number; label: string; labelX?: number; labelAnchor?: 'start' | 'end' | 'middle' }>,
+    summaries: Array<SummaryBox>,
   ): LayoutResult {
     return { ...baseLayout(), summaries };
   }
 
-  it('渲染 g[data-summary-id]：transform=(x,y)、下括弧 path（M 0 -6 L 0 0 L w 0 L w -6）、label 居中在行下方', () => {
-    renderScene(createScene(svg), makeInput(summaryLayout([{ id: 'sm1', x: 40, y: 80, w: 100, label: '上半周' }]), baseData()));
+  it('brace=right：transform=(x,y)、竖花括号 path（脊线 x=0、尖端 x=w、高 h）、chip 浅橙圆角矩形 + 文本锚 start', () => {
+    const s: SummaryBox = { id: 'sm1', x: 40, y: 80, w: 10, h: 44, brace: 'right', label: '上半周', labelX: 30, labelAnchor: 'start', labelW: 40 };
+    renderScene(createScene(svg), makeInput(summaryLayout([s]), baseData()));
     const g = svg.querySelector('[data-summary-id="sm1"]') as SVGGElement;
     expect(g).not.toBeNull();
     expect(g.getAttribute('class')).toBe('gm-summary');
     expect(g.parentNode).toBe(svg.querySelector('.gm-summaries'));
     expect(g.getAttribute('transform')).toBe('translate(40, 80)');
     const path = g.querySelector('path.gm-summary-bracket') as SVGPathElement;
-    expect(path.getAttribute('d')).toBe('M 0 -6 L 0 0 L 100 0 L 100 -6');
+    // 竖括号 d（确定性公式锁定）：脊线贴 x=0（开口朝左 = 朝向右列成员）、尖端 x=10
+    expect(path.getAttribute('d')).toBe(
+      'M 0 0 C 5.5 0 6.2 5.28 4 12.32 C 2.6 17.6 8.8 17.6 10 22 C 8.8 26.4 2.6 26.4 4 31.68 C 6.2 38.72 5.5 44 0 44',
+    );
     expect(path.getAttribute('fill')).toBe('none');
     expect(path.getAttribute('stroke')).toBe(theme.edgeColor);
-    expect(path.getAttribute('stroke-width')).toBe(String(theme.edgeWidth));
+    const chip = g.querySelector('rect.gm-summary-chip') as SVGRectElement;
+    expect(chip.getAttribute('x')).toBe('22'); // labelX 30 - 内边距 8
+    expect(chip.getAttribute('y')).toBe('12'); // h/2 - chip 高 20/2
+    expect(chip.getAttribute('width')).toBe('56'); // labelW 40 + 2×8
+    expect(chip.getAttribute('height')).toBe('20');
+    expect(chip.getAttribute('rx')).toBe('6');
+    expect(chip.getAttribute('fill')).toBe('#fff7e6');
+    expect(chip.getAttribute('stroke')).toBe('#ff8800');
+    // chip 是底、文字在上（DOM 序：path → chip → label）
+    expect([...g.children].indexOf(chip)).toBeLessThan([...g.children].indexOf(g.querySelector('text.gm-summary-label') as SVGTextElement));
     const label = g.querySelector('text.gm-summary-label') as SVGTextElement;
     expect(label.textContent).toBe('上半周');
+    expect(label.getAttribute('x')).toBe('30');
+    expect(label.getAttribute('text-anchor')).toBe('start');
+    expect(label.getAttribute('y')).toBe('26.2'); // h/2 + 12×0.35（chip 内垂直居中）
+    expect(label.getAttribute('fill')).toBe('#ff8800');
+  });
+
+  it('brace=left：path 整形镜像（脊线 x=w、尖端 x=0）、chip/文本锚向左延伸（anchor=end）', () => {
+    const s: SummaryBox = { id: 'sm1', x: 40, y: 80, w: 10, h: 44, brace: 'left', label: '上半周', labelX: -14, labelAnchor: 'end', labelW: 40 };
+    renderScene(createScene(svg), makeInput(summaryLayout([s]), baseData()));
+    const g = svg.querySelector('[data-summary-id="sm1"]') as SVGGElement;
+    const path = g.querySelector('path.gm-summary-bracket') as SVGPathElement;
+    // 镜像 d：逐点 x' = w − x（脊线贴 x=10、尖端 x=0，开口朝右 = 朝向左列成员）
+    expect(path.getAttribute('d')).toBe(
+      'M 10 0 C 4.5 0 3.8 5.28 6 12.32 C 7.4 17.6 1.2 17.6 0 22 C 1.2 26.4 7.4 26.4 6 31.68 C 3.8 38.72 4.5 44 10 44',
+    );
+    const chip = g.querySelector('rect.gm-summary-chip') as SVGRectElement;
+    expect(chip.getAttribute('x')).toBe('-62'); // labelX -14 - labelW 40 - 内边距 8
+    const label = g.querySelector('text.gm-summary-label') as SVGTextElement;
+    expect(label.getAttribute('x')).toBe('-14');
+    expect(label.getAttribute('text-anchor')).toBe('end');
+  });
+
+  it('bracket 形态（跨侧/org）：旧下括弧 path 与居中 label 逐字节沿用、无 chip', () => {
+    renderScene(createScene(svg), makeInput(summaryLayout([{ id: 'sm1', x: 40, y: 80, w: 100, label: '归纳' }]), baseData()));
+    const g = svg.querySelector('[data-summary-id="sm1"]') as SVGGElement;
+    const path = g.querySelector('path.gm-summary-bracket') as SVGPathElement;
+    expect(path.getAttribute('d')).toBe('M 0 -6 L 0 0 L 100 0 L 100 -6');
+    expect(g.querySelector('rect.gm-summary-chip')).toBeNull();
+    const label = g.querySelector('text.gm-summary-label') as SVGTextElement;
     expect(label.getAttribute('x')).toBe('50'); // w/2 居中
     expect(label.getAttribute('text-anchor')).toBe('middle');
     expect(Number(label.getAttribute('y'))).toBeGreaterThan(0); // 行下方基线
   });
 
-  it('协调更新：label 变化就地更新；几何变化重算 transform/d；概要消失元素移除', () => {
+  it('协调更新：label 变化就地更新；几何变化重算 transform/d/chip；形态互转 chip 增删且引用恒定', () => {
     const scene = createScene(svg);
-    renderScene(scene, makeInput(summaryLayout([{ id: 'sm1', x: 40, y: 80, w: 100, label: 'A' }]), baseData()));
+    const right: SummaryBox = { id: 'sm1', x: 40, y: 80, w: 10, h: 44, brace: 'right', label: 'A', labelX: 30, labelAnchor: 'start', labelW: 20 };
+    renderScene(scene, makeInput(summaryLayout([right]), baseData()));
     const g = svg.querySelector('[data-summary-id="sm1"]') as SVGGElement;
+    const path = g.querySelector('path.gm-summary-bracket') as SVGPathElement;
     const label = g.querySelector('text.gm-summary-label') as SVGTextElement;
+    const chip = g.querySelector('rect.gm-summary-chip') as SVGRectElement;
     // label 变化 + 几何变化：元素引用恒定，属性重算
-    renderScene(scene, makeInput(summaryLayout([{ id: 'sm1', x: 60, y: 120, w: 140, label: 'B' }]), baseData()));
+    const moved: SummaryBox = { ...right, x: 60, y: 120, h: 64, label: 'B', labelX: 34 };
+    renderScene(scene, makeInput(summaryLayout([moved]), baseData()));
     expect(svg.querySelector('[data-summary-id="sm1"]')).toBe(g);
     expect(g.getAttribute('transform')).toBe('translate(60, 120)');
-    expect(g.querySelector('path.gm-summary-bracket')?.getAttribute('d')).toBe('M 0 -6 L 0 0 L 140 0 L 140 -6');
+    expect(g.querySelector('path.gm-summary-bracket')).toBe(path);
+    expect(path.getAttribute('d')).toBe(
+      'M 0 0 C 5.5 0 6.2 7.68 4 17.92 C 2.6 25.6 8.8 25.6 10 32 C 8.8 38.4 2.6 38.4 4 46.08 C 6.2 56.32 5.5 64 0 64',
+    );
+    expect(g.querySelector('rect.gm-summary-chip')).toBe(chip);
+    expect(chip.getAttribute('y')).toBe('22'); // 64/2 - 10
     expect(g.querySelector('text.gm-summary-label')).toBe(label);
     expect(label.textContent).toBe('B');
+    // brace → bracket 互转：chip 摘除、path 回旧横括线；引用（g/path/label）恒定
+    const bracket: SummaryBox = { id: 'sm1', x: 40, y: 200, w: 140, label: 'C' };
+    renderScene(scene, makeInput(summaryLayout([bracket]), baseData()));
+    expect(g.querySelector('path.gm-summary-bracket')).toBe(path);
+    expect(path.getAttribute('d')).toBe('M 0 -6 L 0 0 L 140 0 L 140 -6');
+    expect(g.querySelector('rect.gm-summary-chip')).toBeNull();
     expect(label.getAttribute('x')).toBe('70');
+    expect(label.getAttribute('text-anchor')).toBe('middle');
+    expect(label.getAttribute('fill')).toBe(theme.edgeColor);
+    // bracket → brace 回转：chip 重新出现
+    renderScene(scene, makeInput(summaryLayout([right]), baseData()));
+    expect(g.querySelector('rect.gm-summary-chip')).not.toBeNull();
     // 概要消失 → 元素移除
     renderScene(scene, makeInput(summaryLayout([]), baseData()));
     expect(svg.querySelector('[data-summary-id="sm1"]')).toBeNull();
@@ -655,34 +722,12 @@ describe('renderScene：概要 bracket（M6 Task 6）', () => {
     renderScene(scene, makeInput(summaryLayout([]), baseData()));
     const gB = svg.querySelector('[data-node-id="b"]') as SVGGElement;
     const edgePath = svg.querySelector('[data-edge-id="a->b"]') as SVGPathElement;
-    renderScene(scene, makeInput(summaryLayout([{ id: 'sm1', x: 0, y: 0, w: 50, label: 'x' }]), baseData()));
+    renderScene(scene, makeInput(summaryLayout([{ id: 'sm1', x: 0, y: 0, w: 10, h: 44, brace: 'right', label: 'x' }]), baseData()));
     expect(svg.querySelector('[data-node-id="b"]')).toBe(gB);
     expect(svg.querySelector('[data-edge-id="a->b"]')).toBe(edgePath);
     renderScene(scene, makeInput(summaryLayout([]), baseData()));
     expect(svg.querySelector('[data-node-id="b"]')).toBe(gB);
     expect(svg.querySelector('[data-edge-id="a->b"]')).toBe(edgePath);
-  });
-
-  // M7b 概要标签避让：同侧概要由布局层给出外置锚点（labelX + labelAnchor），渲染
-  // 层只消费；字段缺省回退旧居中口径（w/2 + middle），同侧↔跨侧互转时属性就地跟随。
-  it('labelX/labelAnchor：外置锚点逐字段消费；缺省回退居中；互转就地更新且引用恒定', () => {
-    const scene = createScene(svg);
-    // 外置（右列概要：bracket 右端外 6px，anchor=start）
-    renderScene(scene, makeInput(summaryLayout([{ id: 'sm1', x: 40, y: 80, w: 100, label: '工作日', labelX: 106, labelAnchor: 'start' }]), baseData()));
-    const label = svg.querySelector('text.gm-summary-label') as SVGTextElement;
-    expect(label.getAttribute('x')).toBe('106');
-    expect(label.getAttribute('text-anchor')).toBe('start');
-    expect(label.getAttribute('y')).toBe('14'); // 基线偏移不受外置影响
-    // 缺省字段（跨侧/org）：回退 w/2 + middle，元素引用恒定
-    renderScene(scene, makeInput(summaryLayout([{ id: 'sm1', x: 40, y: 80, w: 100, label: '工作日' }]), baseData()));
-    expect(svg.querySelector('text.gm-summary-label')).toBe(label);
-    expect(label.getAttribute('x')).toBe('50');
-    expect(label.getAttribute('text-anchor')).toBe('middle');
-    // 左列镜像（anchor=end）：锚点在 bracket 左端外侧，引用仍恒定
-    renderScene(scene, makeInput(summaryLayout([{ id: 'sm1', x: 40, y: 80, w: 100, label: '工作日', labelX: -6, labelAnchor: 'end' }]), baseData()));
-    expect(svg.querySelector('text.gm-summary-label')).toBe(label);
-    expect(label.getAttribute('x')).toBe('-6');
-    expect(label.getAttribute('text-anchor')).toBe('end');
   });
 });
 
