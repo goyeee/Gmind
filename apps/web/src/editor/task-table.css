@@ -203,22 +203,9 @@ table.tt-table {
   gap: 3px;
   flex: none;
 }
-.tt-pri {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 14px;
-  height: 14px;
-  border-radius: 3px;
-  color: #fff;
-  font-size: 9px;
-  font-weight: 700;
-  line-height: 1;
-}
-.tt-icon-mark {
-  font-size: 11px;
-  line-height: 1;
-}
+/* 标记 chip：几何单源化后（2026-10-01 需求方反馈任务 1）由 MarkerPanel 的
+   MarkerChip 渲染（engine drawMarkerBadge SVG，内联定宽高 14 + flex:none 防压缩），
+   手写 .tt-pri/.tt-icon-mark 圆/文本 chip 样式随之移除——圆形图标不再被压扁。 */
 .tt-title-text {
   cursor: pointer;
   overflow: hidden;

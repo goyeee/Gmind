@@ -40,10 +40,11 @@ import {
   type TaskPatch,
   type TaskStatus,
 } from '@gmind/shared';
-import { MARKER_ROW_ORDER, colorForUser, drawMarkerBadge, markerChipText, markerDefOf } from '@gmind/engine';
+import { MARKER_ROW_ORDER, colorForUser, markerDefOf } from '@gmind/engine';
 import { api } from '../api/client';
 import { track } from '../api/events';
 import type { PresenceMember } from './collab';
+import { MarkerChip } from './MarkerPanel';
 import {
   Avatar,
   chipActive,
@@ -826,11 +827,10 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
             data-col-key={col.key}
             className={pinned || undefined}
             style={pinSt}
-            onDoubleClick={(e) => {
-              e.stopPropagation(); // 双击任务名 = 行内编辑，不触发行折叠
-              if (!readOnly) setCellEdit({ id: node.id, isNew: false });
-            }}
           >
+            {/* 双击编辑入口仅挂标题文字 span（2026-10-01 需求方反馈任务 5）：标题格
+                空白/状态点/标记区域与行其他区域双击一律无操作——此前 handler 挂整个
+                td，双击格内任意位置都会进编辑，误触频发。 */}
             {cellEdit?.id === node.id ? (
               <TitleCellEditor
                 initial={node.title}
@@ -871,7 +871,17 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
                   )}
                   <span className="tt-dot" style={{ background: statusMeta.color }} />
                   <NodeMarkers icons={node.icons} />
-                  <span className="tt-title-text" title={node.title} onClick={() => onSelectNode(node.id)}>
+                  <span
+                    className="tt-title-text"
+                    title={node.title}
+                    onClick={() => onSelectNode(node.id)}
+                    onDoubleClick={(e) => {
+                      // 双击标题文字 = 行内编辑（2026-10-01 需求方反馈任务 5 收窄口径：
+                      // 仅此处触发；「（未命名）」占位文本也在 span 内，仍可双击进编辑）。
+                      e.stopPropagation();
+                      if (!readOnly) setCellEdit({ id: node.id, isNew: false });
+                    }}
+                  >
                     {node.title || '（未命名）'}
                   </span>
                   {overdue && (
@@ -1657,13 +1667,13 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
           <tbody>
             {rows.map(({ node, depth, hasChildren, dimmed }, rowIndex) => {
               return (
+                // 行级双击折叠已移除（2026-10-01 需求方反馈任务 5）：行其他区域双击
+                // 一律无操作（折叠走 ▸/▾ 折叠钮或右键菜单），避免抢「双击标题文字
+                // 进编辑」的事件；右键菜单/单击选中等其余行交互不变。
                 <tr
                   key={node.id}
                   data-depth={depth}
                   className={dimmed ? 'tt-dimmed' : undefined}
-                  onDoubleClick={() => {
-                    if (hasChildren) toggleRow(node.id);
-                  }}
                   onContextMenu={(e) => {
                     e.preventDefault();
                     // 列 key 直读 data-col-key（统一列模型下列序/显隐可变，位置映射不再
@@ -1921,101 +1931,35 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
 // Avatar/SmartDateInput 等跨视图共用件已抽至 TaskFields.tsx，M7c-C3/C4 同源）
 // ---------------------------------------------------------------------------
 
-/** 八组标记展示（M7b-W1 多值数组；chip 目录与 MarkerPanel/engine 同源
- *  MARKER_CATALOG，固定组序 MARKER_ROW_ORDER，目录外值忽略）。 */
+/** 八组标记展示（M7b-W1 多值数组；组序 MARKER_ROW_ORDER，目录外值忽略）。
+ *  chip 几何 2026-10-01 需求方反馈任务 1 起单源化：全部经 MarkerPanel 的
+ *  MarkerChip（engine drawMarkerBadge SVG 徽章，<svg viewBox="0 0 14 14"> 包裹
+ *  + 定宽高 14 + flex:none 防压缩）渲染，与画布/面板同一字形来源。此前表格手写
+ *  CSS chip（tt-icon-mark 文本 + conic-gradient 圆）与 M7b-R1 面板同病：无自定义
+ *  kind 分支（star/heart/bulb/mood 等回落纯文本字符）、无定宽高（tt-mark-round
+ *  类在 CSS 中不存在，圆徽靠 11px 文本撑高被压扁）。外层经 markerGroup/
+ *  markerValue 透传 data-marker-* 属性（与画布 g.gm-marker-badge 同名，e2e 同口径
+ *  定位）；悬停 title=目录中文 label（与徽章 SVG <title> 同文案）。 */
 function NodeMarkers({ icons }: { icons: Record<string, string[]> }): React.ReactElement | null {
   const chips: React.ReactElement[] = [];
   for (const group of MARKER_ROW_ORDER) {
     for (const value of icons[group] ?? []) {
-      const chip = markerChipText(group, value);
-      if (!chip) continue; // 目录外值（未收敛窗口期）：确定性忽略
-      if (chip.kind === 'pie' && chip.fraction !== undefined && chip.fraction < 1) {
-        const deg = Math.round(chip.fraction * 360);
-        chips.push(
-          <span
-            key={`${group}-${value}`}
-            className="tt-icon-mark tt-mark-round"
-            style={{
-              background: `conic-gradient(${chip.color} 0deg ${deg}deg, #ffffff ${deg}deg 360deg)`,
-              boxShadow: `inset 0 0 0 1.5px ${chip.color}`,
-            }}
-            title={value}
-          />,
-        );
-        continue;
-      }
-      if (chip.kind === 'pie') {
-        chips.push(
-          <span key={`${group}-${value}`} className="tt-icon-mark tt-mark-round" style={{ background: chip.color, color: '#fff' }} title={value}>
-            ✓
-          </span>,
-        );
-        continue;
-      }
-      if (chip.kind === 'progressNone') {
-        // 「未开始」绿环+播放三角（2026-10-01 需求方反馈任务 3）：字形只有 SVG 版
-        // （引擎 drawMarkerBadge 单一来源，同 MarkerPanel chip 几何），表格侧经 ref
-        // 挂载同一徽章，避免手写 CSS 副本漂移。
-        chips.push(<ProgressNoneChip key={`${group}-${value}`} value={value} />);
-        continue;
-      }
-      if (chip.kind === 'circleText' || chip.kind === 'squareText' || chip.kind === 'triangle') {
-        chips.push(
-          <span
-            key={`${group}-${value}`}
-            className="tt-icon-mark tt-mark-round"
-            style={{ background: chip.color, color: '#fff', borderRadius: chip.kind === 'squareText' ? 3 : '50%' }}
-            title={value}
-          >
-            {chip.text}
-          </span>,
-        );
-        continue;
-      }
+      const def = markerDefOf(group, value);
+      if (!def) continue; // 目录外值（未收敛窗口期）：确定性忽略
       chips.push(
-        <span
+        <MarkerChip
           key={`${group}-${value}`}
-          className="tt-icon-mark"
-          style={chip.fg === 'color' ? { color: chip.color } : undefined}
-          title={value}
-        >
-          {chip.text}
-        </span>,
+          def={def}
+          size={14}
+          title={def.label}
+          markerGroup={group}
+          markerValue={value}
+        />,
       );
     }
   }
   if (chips.length === 0) return null;
   return <span className="tt-markers">{chips}</span>;
-}
-
-/**
- * 「未开始」进度徽章（2026-10-01 需求方反馈任务 3）：直接复用 engine drawMarkerBadge
- * 的 SVG 徽章（绿环+播放三角，MarkerChip 同款挂载方式）——面板/画布/表格三处单一
- * 来源；def 经 markerDefOf 取目录原件（悬停 title=中文 label 与面板同源）。
- */
-function ProgressNoneChip({ value }: { value: string }): React.ReactElement {
-  const def = markerDefOf('progress', value);
-  return (
-    <span
-      className="tt-icon-mark"
-      style={{ width: 14, height: 14, display: 'inline-block', flex: 'none' }}
-      title={value}
-      aria-hidden
-      ref={(el) => {
-        if (!el || el.firstElementChild || !def) return;
-        const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-        svg.setAttribute('viewBox', '0 0 14 14');
-        svg.setAttribute('width', '14');
-        svg.setAttribute('height', '14');
-        const badge = drawMarkerBadge(def);
-        if (badge) {
-          badge.removeAttribute('class');
-          svg.appendChild(badge);
-        }
-        el.appendChild(svg);
-      }}
-    />
-  );
 }
 
 /** 进度迷你条（danger=逾期红；auto=父级 Σ 自动值）。 */
