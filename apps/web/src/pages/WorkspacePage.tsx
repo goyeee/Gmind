@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { FileListItemDetailed, FolderItem } from '@gmind/shared';
-import { api, apiDel, apiPatch, apiPost, apiPut } from '../api/client';
+import { api, apiDel, apiPatch, apiPost, apiPut, clearToken } from '../api/client';
 import { GUIDE_DONE_KEY, GuideOverlay, type GuideStep } from './GuideOverlay';
 import { degradedSummary, importXmindFile } from '../editor/xmind-import';
 import { onNotifyEvent, type NotifyItem } from '../notify';
@@ -466,6 +466,18 @@ export function WorkspacePage() {
               账号管理
             </button>
           )}
+          {/* 退出登录（需求方 2026-10-04）：服务端会话作废（POST /api/auth/logout）+
+              本地 token 清除后回登录页；失败也照常登出（会话最迟随过期失效） */}
+          <button
+            data-testid="logout-button"
+            onClick={() => {
+              void api('/auth/logout', { method: 'POST' }).catch(() => undefined);
+              clearToken();
+              navigate('/login');
+            }}
+          >
+            退出登录
+          </button>
           <button data-testid="import-button" onClick={() => importInputRef.current?.click()}>
             导入
           </button>

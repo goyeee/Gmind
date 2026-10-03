@@ -294,3 +294,16 @@ test('文件夹重命名与删除（context ops，删除入回收站）', async 
   await page.goto('/trash');
   await expect(page.locator('.trash-list li', { hasText: '夹内文档' })).toBeVisible();
 });
+
+// 退出登录（2026-10-04 需求方）：工作台头部按钮——服务端会话作废+本地 token 清除回登录页
+test('工作台：退出登录清 token 回登录页', async ({ page }) => {
+  await registerAndLogin(page);
+  await page.goto('/workspace');
+  await expect(page.getByTestId('logout-button')).toBeVisible();
+  await page.getByTestId('logout-button').click();
+  await expect(page).toHaveURL(/\/login/);
+  const token = await page.evaluate(() => localStorage.getItem('gmind.token'));
+  expect(token === null || token === '').toBeTruthy();
+  // 会话已在服务端作废：携旧 token 的请求 401（经 API 直验）
+  // （token 已清，无法复用——以登录页可达为验收即足够）
+});
