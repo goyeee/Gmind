@@ -323,3 +323,109 @@ export function isValidCustomValueOfType(type: CustomColumnType, value: unknown)
       return typeof value === 'string' && isValidDateStr(value);
   }
 }
+
+/* ── 表格视图列体系（meta.tableView；统一列模型：内置列 + 自定义列同列清单）──── */
+
+/**
+ * 内置列固定 key（需求方 2026-10-01「自定义列能挪进固定列中间」）：与自定义列
+ * colId 同处一个有序清单。'owner' 与 shared sortValue 的排序键同名（读取侧零映射），
+ * 与节点 task.owners 字段名差一个 s——web 渲染侧负责对应（testid 仍用 -owners）。
+ */
+export const TABLE_BUILTIN_COLUMN_KEYS = [
+  'title',
+  'owner',
+  'status',
+  'progress',
+  'startDate',
+  'dueDate',
+  'doneDate',
+  'updatedAt',
+] as const;
+
+/** 任务名不可隐藏（需求方列体系升级，core 层裁定）：行锚点列，隐藏后行失去识别
+ *  与标题编辑入口——canonical 层恒从 hidden 剔除，UI 复选框置灰只作展示。 */
+export const TABLE_UNHIDABLE_COLUMN_KEYS: readonly string[] = ['title'];
+
+/** 表格视图持久态（meta.tableView）：统一列序 order（全列 key 完整排列，缺省=
+ *  内置序+自定义列尾）/ 隐藏 hidden / 固定（冻结左侧）pinned / 显示层排序 sort。 */
+export interface TableViewSort {
+  /** 排序列 key（内置 key 或自定义列 colId）。 */
+  key: string;
+  /** 1=升序、-1=降序。 */
+  dir: 1 | -1;
+}
+
+export interface TableViewMeta {
+  /** 全列 key 的完整排列（canonical 补全后恒覆盖 内置∪当前自定义列 的每个 key）。 */
+  order: string[];
+  /** 隐藏列 key 集（'title' 恒被剔除，见 TABLE_UNHIDABLE_COLUMN_KEYS）。 */
+  hidden: string[];
+  /** 固定（冻结）到表格左侧的列 key 集（渲染相对序仍按 order）。 */
+  pinned: string[];
+  /** 显示层排序态（不动树结构）；null=无排序（树序）。 */
+  sort: TableViewSort | null;
+}
+
+/** 列 key 合法集：内置 key ∪ 当前自定义列 id。 */
+function validColumnKeys(customColumns: CustomColumnDef[]): Set<string> {
+  const set = new Set<string>(TABLE_BUILTIN_COLUMN_KEYS);
+  for (const c of customColumns) set.add(c.id);
+  return set;
+}
+
+/** 缺省列序：内置序在前、自定义列按 schema 序追加在后。 */
+function defaultColumnOrder(customColumns: CustomColumnDef[]): string[] {
+  return [...TABLE_BUILTIN_COLUMN_KEYS, ...customColumns.map((c) => c.id)];
+}
+
+/** 字符串数组防御：非数组→fallback；过滤合法 key、去重保首（in-place 语义纯函数）。 */
+function canonicalKeyArray(raw: unknown, valid: Set<string>): string[] {
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const key of raw) {
+    if (typeof key !== 'string' || key === '' || seen.has(key) || !valid.has(key)) continue;
+    seen.add(key);
+    out.push(key);
+  }
+  return out;
+}
+
+/**
+ * meta.tableView 防御读取/规范化（纯函数，canonicalCustomColumns 同款分层）：
+ * read.getMeta 透传 + operations.setTableView 写入归一共用此单源。规则：
+ * - raw 非对象（含 undefined/数组）→ undefined（缺省，消费侧按默认列序处理）；
+ * - order 非字符串数组 → 缺省序（内置+自定义尾）；否则过滤合法 key、去重保首、
+ *   缺失 key 按缺省序追加补全（恒为 内置∪自定义 的完整排列——新加列自动落尾、
+ *   已删列的残留 key 剔除）；
+ * - hidden/pinned 非字符串数组 → []；过滤 + 去重；hidden 恒剔 'title'（不可隐藏）；
+ * - sort 非 {key,dir} 形状（key 不在合法集 / dir 非 ±1）→ null。
+ * 写入口按同规则归一后落盘，远端坏数据/crafted doc_state 只影响读取、不抛错。
+ */
+export function canonicalTableView(
+  raw: unknown,
+  customColumns: CustomColumnDef[],
+): TableViewMeta | undefined {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const rec = raw as Record<string, unknown>;
+  const valid = validColumnKeys(customColumns);
+  const order = canonicalKeyArray(rec.order, valid);
+  const missing = defaultColumnOrder(customColumns).filter((k) => !order.includes(k));
+  const hidden = canonicalKeyArray(rec.hidden, valid).filter(
+    (k) => !TABLE_UNHIDABLE_COLUMN_KEYS.includes(k),
+  );
+  const pinned = canonicalKeyArray(rec.pinned, valid);
+  const sortRaw = rec.sort;
+  const sort: TableViewSort | null =
+    sortRaw !== null && typeof sortRaw === 'object' && !Array.isArray(sortRaw)
+      ? (() => {
+          const s = sortRaw as Record<string, unknown>;
+          const key = typeof s.key === 'string' ? s.key : '';
+          const dir = s.dir;
+          return valid.has(key) && (dir === 1 || dir === -1)
+            ? { key, dir: dir as 1 | -1 }
+            : null;
+        })()
+      : null;
+  return { order: [...order, ...missing], hidden, pinned, sort };
+}

@@ -3,11 +3,13 @@ import type { StructureType } from '@gmind/shared';
 import { ROOT_NODE_ID } from './doc';
 import {
   canonicalCustomColumns,
+  canonicalTableView,
   ICON_GROUPS,
   TASK_STATUSES,
   isValidDateStr,
   type CustomColumnDef,
   type IconGroup,
+  type TableViewMeta,
 } from './constants';
 import { GmindCoreError } from './errors';
 // undo 是叶子模块（仅依赖 yjs），此导入不构成新环（无 cycle 风险，评审轮已核）。
@@ -24,6 +26,15 @@ export interface DocMeta {
    * setDocMeta 不受理该键。
    */
   customColumns: CustomColumnDef[];
+  /**
+   * 表格视图列体系持久态（doc 级，需求方 2026-10-01 列体系升级）：统一列序 order
+   * （内置列+自定义列同清单）/ 隐藏 hidden / 固定 pinned / 显示层排序 sort。
+   * 防御读取（canonicalTableView 单源）：非对象 → undefined（缺省=内置序+自定义列尾、
+   * 无隐藏/固定/排序）；合法对象恒归一为完整形状（order 补全、非法 key 剔除、'title'
+   * 恒不隐藏）。写入唯一入口是 operations.setTableView（同值守卫、视图态 system
+   * origin 不进撤销栈），setDocMeta 不受理该键。
+   */
+  tableView?: TableViewMeta;
 }
 
 export interface NodeImage {
@@ -105,20 +116,23 @@ function asString(v: unknown, fallback = ''): string {
 
 export function getMeta(doc: Y.Doc): DocMeta {
   const meta = doc.getMap('meta');
+  const customColumns = canonicalCustomColumns(meta.get('customColumns'));
   return {
     title: asString(meta.get('title')),
     structureType: (meta.get('structureType') as StructureType | undefined) ?? 'mindmap',
     themeId: asString(meta.get('themeId'), 'gmind-light'),
-    customColumns: canonicalCustomColumns(meta.get('customColumns')),
+    customColumns,
+    tableView: canonicalTableView(meta.get('tableView'), customColumns),
   };
 }
 
 /** 仅写入提供的键；默认 user origin（改名/结构切换可撤销，FR-EDT-012）。
- *  customColumns 不在本 patch 受理面——自定义列 schema 的唯一写入口是
- *  operations.setCustomColumns（校验/删列清孤儿/撤销一体），类型上以 Omit 排除。 */
+ *  customColumns / tableView 不在本 patch 受理面——二者的唯一写入口分别是
+ *  operations.setCustomColumns / setTableView（校验/归一/同值守卫一体），
+ *  类型上以 Omit 排除。 */
 export function setDocMeta(
   doc: Y.Doc,
-  patch: Partial<Omit<DocMeta, 'customColumns'>>,
+  patch: Partial<Omit<DocMeta, 'customColumns' | 'tableView'>>,
   origin: WriteOrigin = ORIGIN_USER,
 ): void {
   doc.transact(() => {

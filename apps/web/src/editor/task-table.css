@@ -85,7 +85,11 @@
 table.tt-table {
   width: 100%;
   min-width: 1120px;
-  border-collapse: collapse;
+  /* separate+0 间距（需求方 2026-10-01 固定列）：collapse 模式下边框属于表格网格，
+     sticky 单元格滚动时不携带边框（竖线消失）；separate 让边框归属单元格、随粘附
+     移动。全表仅横向 border-bottom，视觉与 collapse 无差。 */
+  border-collapse: separate;
+  border-spacing: 0;
   font-size: 12px;
   color: #1f2329;
 }
@@ -107,6 +111,29 @@ table.tt-table {
 }
 .tt-table thead th.tt-sortable:hover {
   color: #3370ff;
+}
+/* —— 固定列（冻结左侧，需求方 2026-10-01 列体系升级）——
+   sticky left 偏移由 JS 实测列宽内联写入（pinStyle）；此处负责粘附定位/遮底
+   背景/层级。表头 sticky top 与 sticky left 同元素叠加（左上角不穿帮）。 */
+.tt-table .tt-pinned-cell {
+  position: sticky;
+  z-index: 2;
+  background: #fff; /* 遮住横向滚动穿过的底层单元格 */
+}
+.tt-table thead th.tt-pinned-cell {
+  z-index: 6; /* 高于其余表头（z=5）与表体固定格（z=2）：左上角交叉处最上层 */
+  background: #f7f8fa;
+}
+.tt-table tbody tr:hover .tt-pinned-cell {
+  background: #f7f8fa; /* 行 hover 高亮在固定格上保持（td 自有背景盖住 tr 背景） */
+}
+.tt-table tbody tr.tt-dimmed .tt-pinned-cell {
+  opacity: inherit; /* 淡化行整体透明（opacity 作用在 tr 上已覆盖，防御性声明） */
+}
+/* 末位固定列右缘分隔线（box-shadow 随粘附移动；不用 border-right 是避免与
+   separate 模式既有 1px 底线叠加形成视觉双线） */
+.tt-table .tt-pinned-cell.tt-pinned-edge {
+  box-shadow: 1px 0 0 #e5e6eb;
 }
 .tt-table tbody td {
   padding: 5px 10px;
@@ -619,7 +646,8 @@ table.tt-table {
   border-radius: 4px;
   opacity: 0;
 }
-.tt-custom-col:hover .tt-col-menu-btn {
+/* 悬停显形：任意列头（内置/自定义同款，2026-10-01 列体系升级统一入口） */
+.tt-table thead th:hover .tt-col-menu-btn {
   opacity: 1;
 }
 .tt-col-menu-btn:hover {
@@ -666,4 +694,65 @@ table.tt-table {
   border-radius: 4px;
   font-size: 12px;
   outline: none;
+}
+
+/* 列名 span 对齐（内置/自定义统一列头结构） */
+.tt-table thead th .tt-col-name {
+  vertical-align: middle;
+}
+
+/* —— 列设置浮层（筛选条「列设置」→ 全列显隐勾选清单） —— */
+.tt-col-settings-pop {
+  flex-direction: column;
+  align-items: stretch;
+  min-width: 200px;
+  max-height: 320px;
+  overflow-y: auto;
+  gap: 2px;
+}
+.tt-col-settings-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #1f2329;
+  padding: 2px 4px 6px;
+  border-bottom: 1px solid #e5e6eb;
+  margin-bottom: 4px;
+}
+.tt-col-setting-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+  border-radius: 6px;
+  font-size: 12px;
+  color: #1f2329;
+  cursor: pointer;
+  user-select: none;
+}
+.tt-col-setting-row:hover {
+  background: #f2f3f5;
+}
+.tt-col-setting-row input[type='checkbox'] {
+  accent-color: #3370ff;
+  margin: 0;
+}
+.tt-col-setting-row:has(input:disabled) {
+  cursor: not-allowed;
+  color: #86909c;
+}
+.tt-col-setting-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 已固定列的「固」小标（列设置清单内提示固定态） */
+.tt-col-setting-pin {
+  flex: none;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: #e8f3ff;
+  color: #3370ff;
+  font-size: 10px;
+  line-height: 14px;
 }

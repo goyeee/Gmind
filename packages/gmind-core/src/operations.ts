@@ -17,12 +17,14 @@ import {
   TASK_OWNER_MIN_LENGTH,
   TASK_STATUSES,
   canonicalCustomColumns,
+  canonicalTableView,
   iconValuesOf,
   isValidDateStr,
   type CustomColumnDef,
   type CustomColumnType,
   type CustomFieldValue,
   type IconGroup,
+  type TableViewMeta,
 } from './constants';
 import { GmindCoreError, type GmindCoreErrorCode } from './errors';
 import { ROOT_NODE_ID } from './doc';
@@ -777,6 +779,53 @@ export function setCustomColumns(
         if (custom.has(colId)) custom.delete(colId);
       }
     }
+  });
+}
+
+// ══ 表格视图列体系（meta.tableView：统一列序/隐藏/固定/排序）══════════════════
+
+/**
+ * 整体写入表格视图持久态（需求方 2026-10-01 列体系升级；setCustomColumns 同款
+ * 「doc 级结构化数据 → 专属 op」裁定——setDocMeta 的 patch 面保持哑写不掺跨键
+ * canonical，故 tableView 走本 op 而非并入 setDocMeta）。
+ *
+ * 数据口径：meta.tableView = TableViewMeta（plain JSON 对象存 meta Y.Map）；统一
+ * 列清单 = 内置列（TABLE_BUILTIN_COLUMN_KEYS 固定 key）∪ 当前 meta.customColumns
+ * 的 colId，自定义列可排进内置列中间。
+ *
+ * 归一（canonicalTableView 单源，先于事务）：入参非对象抛 TABLE_VIEW_INVALID；
+ * order/hidden/pinned 过滤到合法 key 集合（多余 key 剔除——含已删自定义列残留）、
+ * 去重保首，order 再按缺省序补全缺失 key（恒为完整排列）；hidden 恒剔 'title'
+ * （任务名不可隐藏裁定）；sort 形状非法归 null。
+ *
+ * 同值守卫：现值 canonical 后与入参归一结果 JSON 全同 → 零事务。
+ *
+ * origin 默认 system（与 collapsed 折叠态同裁定）：列序/隐藏/固定/排序是视图级
+ * 偏好而非内容编辑，不进撤销栈（Ctrl+Z 不回滚视图态），随 Yjs 正常协同同步。
+ * setCustomColumns 删列**不**顺带清 tableView（读取侧 canonical 剔除已删 colId
+ * 即可）——保留原始 order 使「删列→Ctrl+Z 恢复」后列位复原，且避免给既有撤销
+ * 语义掺入视图写。
+ */
+export function setTableView(
+  doc: Y.Doc,
+  tableView: TableViewMeta,
+  origin: WriteOrigin = ORIGIN_SYSTEM,
+): void {
+  if (tableView === null || typeof tableView !== 'object' || Array.isArray(tableView)) {
+    throw new GmindCoreError('TABLE_VIEW_INVALID', '表格视图配置必须是对象，请刷新后重试');
+  }
+  // 归一（先于事务）：合法 key 集 = 内置 ∪ 当前自定义列 schema（canonical 读）。
+  const customColumns = canonicalCustomColumns(doc.getMap('meta').get('customColumns'));
+  const next = canonicalTableView(tableView, customColumns);
+  if (next === undefined) {
+    throw new GmindCoreError('TABLE_VIEW_INVALID', '表格视图配置非法，请刷新后重试');
+  }
+  // 同值守卫：现值（防御读）与归一结果全同 → 零事务。
+  const current = canonicalTableView(doc.getMap('meta').get('tableView'), customColumns);
+  if (current !== undefined && JSON.stringify(current) === JSON.stringify(next)) return;
+
+  withTransaction(doc, origin, () => {
+    doc.getMap('meta').set('tableView', next);
   });
 }
 

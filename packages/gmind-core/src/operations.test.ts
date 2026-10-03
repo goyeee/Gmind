@@ -21,6 +21,7 @@ import {
   setNodeSide,
   setStyle,
   setText,
+  setTableView,
   toggleCollapse,
   withTransaction,
   ORIGIN_SYSTEM,
@@ -36,8 +37,10 @@ import {
   MAX_NOTE_LENGTH,
   MAX_TASK_OWNERS,
   OTHER_VALUES,
+  TABLE_BUILTIN_COLUMN_KEYS,
   type CustomColumnDef,
   type IconGroup,
+  type TableViewSort,
 } from './constants';
 
 /** 按文本查节点 id（测试辅助；模板生成的 ULID 不可预知）。 */
@@ -1441,5 +1444,83 @@ describe('setCustomField（节点自定义列值）', () => {
     } catch (e) {
       expect((e as GmindCoreError).code).toBe('NODE_DELETED');
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 表格视图列体系（meta.tableView 统一列序/隐藏/固定/排序）：setTableView 整体
+// 写入（canonical 归一 + 同值守卫 + 默认 system origin 不进撤销栈）。
+// ---------------------------------------------------------------------------
+
+describe('setTableView（表格视图持久态整体写入）', () => {
+  it('写入读回：order/hidden/pinned/sort 一次落盘，getMeta 防御读回 canonical 形状', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [] });
+    setCustomColumns(doc, [{ id: 'c1', name: '备注', type: 'text' }]);
+    setTableView(doc, {
+      order: ['c1', 'owner', 'status', 'progress', 'startDate', 'dueDate', 'doneDate', 'updatedAt', 'title'],
+      hidden: ['owner'],
+      pinned: ['title'],
+      sort: { key: 'c1', dir: -1 },
+    });
+    expect(getMeta(doc).tableView).toEqual({
+      order: ['c1', 'owner', 'status', 'progress', 'startDate', 'dueDate', 'doneDate', 'updatedAt', 'title'],
+      hidden: ['owner'],
+      pinned: ['title'],
+      sort: { key: 'c1', dir: -1 },
+    });
+  });
+
+  it('入参归一：多余 key 剔除、order 补全缺失 key、hidden 剔 title、sort 形状非法归 null（不抛）', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [] });
+    setCustomColumns(doc, [{ id: 'c1', name: '备注', type: 'text' }]);
+    setTableView(doc, {
+      order: ['ghost', 'status'] as string[],
+      hidden: ['title', 'status', 'status'],
+      pinned: ['ghost', 'status'],
+      sort: { key: 'ghost', dir: 2 } as unknown as TableViewSort,
+    });
+    expect(getMeta(doc).tableView).toEqual({
+      order: ['status', 'title', 'owner', 'progress', 'startDate', 'dueDate', 'doneDate', 'updatedAt', 'c1'],
+      hidden: ['status'],
+      pinned: ['status'],
+      sort: null,
+    });
+  });
+
+  it('非对象入参抛 TABLE_VIEW_INVALID 且零变更', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [] });
+    for (const bad of ['x', 42, [], null]) {
+      try {
+        setTableView(doc, bad as never);
+        expect.unreachable(`raw=${JSON.stringify(bad)}`);
+      } catch (e) {
+        expect(e).toBeInstanceOf(GmindCoreError);
+        expect((e as GmindCoreError).code).toBe('TABLE_VIEW_INVALID');
+      }
+    }
+    expect(doc.getMap('meta').get('tableView')).toBeUndefined();
+  });
+
+  it('同值守卫：归一后与现值全同 → 零事务；缺字段入参按归一结果比较（非逐字段）', () => {
+    let n = 0;
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
+    doc.on('afterTransaction', () => {
+      n += 1;
+    });
+    setTableView(doc, { order: [], hidden: [], pinned: [], sort: null }); // 缺省序写入（1 次）
+    expect(n).toBe(1);
+    setTableView(doc, { order: [...TABLE_BUILTIN_COLUMN_KEYS], hidden: [], pinned: [], sort: null }); // 归一后同值：零事务
+    expect(n).toBe(1);
+    setTableView(doc, { order: [], hidden: [], pinned: [], sort: { key: 'title', dir: 1 } }); // sort 变更：1 次
+    expect(n).toBe(2);
+    expect(getMeta(doc).tableView!.sort).toEqual({ key: 'title', dir: 1 });
+  });
+
+  it('默认 system origin 不进撤销栈（视图态裁定，同 collapsed）；视图写不影响既有 user 撤销', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
+    const um = createUndoManager(doc);
+    setTableView(doc, { order: [], hidden: ['owner'], pinned: [], sort: null });
+    expect(undo(um)).toBe(false); // 无可撤销内容
+    expect(getMeta(doc).tableView!.hidden).toEqual(['owner']); // 视图态仍在
   });
 });

@@ -4,6 +4,7 @@ import { ROOT_NODE_ID, countNodes, createTemplateDoc, docFromState, docToState }
 import { GmindCoreError } from './errors';
 import { childrenIds, countAlive, countAliveReachable, countCollapsedWithChildren, getLastEditor, getMeta, getNode, isAlive, markLastEditor, pathToRoot, requireAliveNode, setDocMeta, subtreeIds } from './read';
 import { deleteNodes, setCollapsed, setCustomColumns, setCustomField } from './operations';
+import { TABLE_BUILTIN_COLUMN_KEYS } from './constants';
 import { ORIGIN_USER, createUndoManager, undo } from './undo';
 
 describe('getMeta / setDocMeta', () => {
@@ -454,5 +455,87 @@ describe('countCollapsedWithChildren（M4 Task 9，FR-IO-003 导出折叠提示�
     expect(countCollapsedWithChildren(doc)).toBe(1);
     deleteNodes(doc, [a]); // 墓碑子树整枝剪除
     expect(countCollapsedWithChildren(doc)).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 表格视图列体系防御读取（DocMeta.tableView）：非对象→undefined；合法对象经
+// canonicalTableView 归一（order 补全/非法 key 剔除/'title' 恒不隐藏/sort 形状校验）。
+// ---------------------------------------------------------------------------
+
+describe('tableView 防御读取（getMeta.tableView）', () => {
+  it('键缺失/非对象（字符串/数字/数组/null）→ undefined；既有测试 toEqual 语义不受影响', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [] });
+    expect(getMeta(doc).tableView).toBeUndefined();
+    for (const bad of ['x', 42, [], null]) {
+      doc.getMap('meta').set('tableView', bad);
+      expect(getMeta(doc).tableView, `raw=${JSON.stringify(bad)}`).toBeUndefined();
+    }
+  });
+
+  it('order：非字符串数组→缺省序（内置序+自定义列尾）；合法序列过滤非法 key、去重、补缺失 key', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [] });
+    setCustomColumns(doc, [
+      { id: 'c1', name: '备注', type: 'text' },
+      { id: 'c2', name: '复核', type: 'person' },
+    ]);
+    // order 非字符串数组 → 缺省完整序
+    doc.getMap('meta').set('tableView', { order: 'bad', hidden: [], pinned: [], sort: null });
+    expect(getMeta(doc).tableView).toEqual({
+      order: [...TABLE_BUILTIN_COLUMN_KEYS, 'c1', 'c2'],
+      hidden: [],
+      pinned: [],
+      sort: null,
+    });
+    // 自定义列挪进内置列中间：非法 key（ghost）/重复 key 剔除，缺失 key（title/
+    // updatedAt）按缺省序追加补全 → 恒为完整排列
+    doc.getMap('meta').set('tableView', { order: ['c1', 'status', 'c1', 'ghost', 'owner'] });
+    expect(getMeta(doc).tableView!.order).toEqual([
+      'c1',
+      'status',
+      'owner',
+      'title',
+      'progress',
+      'startDate',
+      'dueDate',
+      'doneDate',
+      'updatedAt',
+      'c2',
+    ]);
+  });
+
+  it('hidden：非字符串数组→[]；过滤非法 key；title 恒被剔除（任务名不可隐藏裁定）', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [] });
+    setCustomColumns(doc, [{ id: 'c1', name: '备注', type: 'text' }]);
+    doc.getMap('meta').set('tableView', { hidden: ['title', 'owner', 'ghost', 'owner', 'c1'] });
+    expect(getMeta(doc).tableView!.hidden).toEqual(['owner', 'c1']);
+    doc.getMap('meta').set('tableView', { hidden: 'bad' });
+    expect(getMeta(doc).tableView!.hidden).toEqual([]);
+  });
+
+  it('pinned：非字符串数组→[]；过滤 + 去重；已删自定义列残留 key 全字段剔除', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [] });
+    setCustomColumns(doc, [{ id: 'c1', name: '备注', type: 'text' }]);
+    doc.getMap('meta').set('tableView', { pinned: ['c1', 'title', 'c1', 'ghost'] });
+    expect(getMeta(doc).tableView!.pinned).toEqual(['c1', 'title']);
+    // 删列后残留：canonical 按 内置∪当前 schema 剔除 colId（order/hidden/pinned/sort 同口径）
+    setCustomColumns(doc, []);
+    expect(getMeta(doc).tableView!.pinned).toEqual(['title']);
+    expect(getMeta(doc).tableView!.order).toEqual([...TABLE_BUILTIN_COLUMN_KEYS]);
+  });
+
+  it('sort：{key,dir} 形状校验——key 非法/dir 非 ±1/非对象 → null，合法透传', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [] });
+    setCustomColumns(doc, [{ id: 'c1', name: '备注', type: 'text' }]);
+    doc.getMap('meta').set('tableView', { sort: { key: 'ghost', dir: 1 } });
+    expect(getMeta(doc).tableView!.sort).toBeNull();
+    doc.getMap('meta').set('tableView', { sort: { key: 'title', dir: 0 } });
+    expect(getMeta(doc).tableView!.sort).toBeNull();
+    doc.getMap('meta').set('tableView', { sort: { key: 'title' } });
+    expect(getMeta(doc).tableView!.sort).toBeNull();
+    doc.getMap('meta').set('tableView', { sort: 'bad' });
+    expect(getMeta(doc).tableView!.sort).toBeNull();
+    doc.getMap('meta').set('tableView', { sort: { key: 'c1', dir: -1 } });
+    expect(getMeta(doc).tableView!.sort).toEqual({ key: 'c1', dir: -1 });
   });
 });
