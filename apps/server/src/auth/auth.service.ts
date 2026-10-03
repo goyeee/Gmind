@@ -1,4 +1,4 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, UnauthorizedException } from '@nestjs/common';
 import { hash } from 'bcryptjs';
 import { InviteService } from '../share/invite.service';
 import { SessionService } from '../session/session.service';
@@ -28,6 +28,9 @@ export class AuthService {
       }
       await this.files.createSeedFiles(user.id);
     }
+    // 停用闸（账号管理，移植 mindgrid）：已停用账号拒绝登录（401，文案两段式）。
+    // 新建号恒为 active 不受影响；登录成功不改动 systemRole/status（角色只在建号/管理端点变化）。
+    if (user.status === 'disabled') throw new UnauthorizedException('账号已被停用，请联系管理员');
     // 准入 7.10 裁定：回填对已注册用户同样生效（每次登录尽力触发，天然重试）；
     // 幂等由 acceptPendingForNewUser 的 pending 过滤 + uk_invite 保证。失败隔离：
     // 事务化且捕获记录，不波及登录主流程（口径同邮件旁路）。

@@ -56,8 +56,9 @@ function highlightTitle(title: string, q: string): ReactNode {
 
 export function WorkspacePage() {
   const navigate = useNavigate();
-  // me.id（M3b 清偿包）：行菜单删除/移动的 owner-only 判定（视图无关）
-  const [me, setMe] = useState<{ id: string; nickname: string } | null>(null);
+  // me（M3b 清偿包 + 账号管理）：id 供行菜单 owner-only 判定；systemRole 供「账号管理」
+  // 入口的超管门（GET /users/me 的 fullUser 已带 systemRole，member/失败均不渲染入口）
+  const [me, setMe] = useState<{ id: string; nickname: string; systemRole?: 'super_admin' | 'member' } | null>(null);
   const [view, setView] = useState<View>('mine');
   const [items, setItems] = useState<FileListItemDetailed[]>([]);
   const [folders, setFolders] = useState<FolderItem[]>([]);
@@ -109,7 +110,7 @@ export function WorkspacePage() {
   }, []);
 
   useEffect(() => {
-    void api<{ id: string; nickname: string }>('/users/me').then(setMe).catch(() => undefined);
+    void api<{ id: string; nickname: string; systemRole?: 'super_admin' | 'member' }>('/users/me').then(setMe).catch(() => undefined);
     void loadFiles('mine').catch((e) => setError(msgOf(e)));
     void loadFolders().catch((e) => setError(msgOf(e)));
   }, [loadFiles, loadFolders]);
@@ -458,6 +459,13 @@ export function WorkspacePage() {
           <button data-testid="settings-entry" onClick={() => navigate('/settings')}>
             账号设置
           </button>
+          {/* 账号管理入口（移植 mindgrid 账号体系）：仅 super_admin 渲染——me 未就绪/
+              member/请求失败都不出按钮；member 直敲 /admin/users 由 AdminGuard 403 兜底 */}
+          {me?.systemRole === 'super_admin' && (
+            <button data-testid="admin-users-entry" onClick={() => navigate('/admin/users')}>
+              账号管理
+            </button>
+          )}
           <button data-testid="import-button" onClick={() => importInputRef.current?.click()}>
             导入
           </button>

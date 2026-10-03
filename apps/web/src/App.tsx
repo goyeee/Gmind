@@ -6,6 +6,7 @@ import { LoginPage } from './pages/LoginPage';
 import { WorkspacePage } from './pages/WorkspacePage';
 import { TrashPage } from './pages/TrashPage';
 import { SettingsPage } from './pages/SettingsPage';
+import { AdminUsersPage } from './pages/AdminUsersPage';
 import { EditorPage } from './pages/EditorPage';
 import { ShareLandingPage } from './pages/ShareLandingPage';
 
@@ -49,6 +50,16 @@ export function App() {
         element={
           <RequireAuth>
             <SettingsPage />
+          </RequireAuth>
+        }
+      />
+      {/* 账号管理（移植 mindgrid 账号体系）：入口仅 super_admin 可见；member 直敲 URL 由
+          页面内列表加载 403 兜底（服务端 AdminGuard），前端不设路由门 */}
+      <Route
+        path="/admin/users"
+        element={
+          <RequireAuth>
+            <AdminUsersPage />
           </RequireAuth>
         }
       />

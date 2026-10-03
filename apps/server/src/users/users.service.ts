@@ -70,6 +70,9 @@ export class UsersService {
     if (identity.method === 'email') user.email = identity.email ?? null;
     if (identity.method === 'wechat') user.wechatOpenid = identity.wechatOpenid ?? null;
     user.nickname = identity.nickname ?? this.defaultNickname(identity);
+    // 首注册者=super_admin（对齐 mindgrid 语义）：空库建号（count=0）即超管，其余 member。
+    // 存量库的超管由迁移升最早用户；并发首注册存在双双计 0 的竞态（本地单机规模可接受，登记）。
+    user.systemRole = (await this.repo.count()) === 0 ? 'super_admin' : 'member';
     return this.repo.save(user);
   }
 

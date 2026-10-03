@@ -135,3 +135,32 @@ button { cursor: pointer; }
 .guide-card-actions { display: flex; justify-content: space-between; align-items: center; margin-top: 4px; }
 .guide-card-actions button { padding: 8px 16px; border: 1px solid #e5e6eb; background: #fff; border-radius: 6px; }
 .guide-card-actions button.primary { border: none; background: #3370ff; color: #fff; }
+
+/* —— 账号管理（移植 mindgrid 账号体系，仅 super_admin）—— */
+.admin-users-page { max-width: 1080px; margin: 24px auto; padding: 0 16px; display: flex; flex-direction: column; gap: 12px; }
+.admin-users-page .workspace-header a { color: #3370ff; text-decoration: none; font-size: 14px; }
+.admin-users-hint { color: #86909c; font-size: 13px; }
+.admin-user-table { background: #fff; border: 1px solid #e5e6eb; border-radius: 8px; overflow: hidden; }
+.admin-table-head, .admin-table-row { display: grid; grid-template-columns: 1.3fr 1.1fr 0.95fr 0.75fr 1.5fr 0.55fr 1.9fr; gap: 8px; align-items: center; padding: 12px 16px; }
+.admin-table-head { color: #86909c; font-size: 12px; border-bottom: 1px solid #e5e6eb; }
+.admin-table-row { border-bottom: 1px solid #f2f3f5; }
+.admin-table-row:last-child { border-bottom: none; }
+.admin-table-row:hover { background: #f7f8fa; }
+.admin-table-row .cell { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.admin-table-row .cell.nickname { font-weight: 500; font-size: 14px; }
+.admin-table-row .ops { display: flex; gap: 6px; overflow: visible; }
+.admin-table-row .ops select { padding: 4px 6px; border: 1px solid #e5e6eb; border-radius: 4px; font-size: 12px; background: #fff; max-width: 110px; }
+.admin-table-row .ops button { padding: 4px 8px; border: 1px solid #e5e6eb; background: #fff; border-radius: 4px; font-size: 12px; }
+.admin-table-row .ops button.danger { color: #f53f3f; }
+.admin-table-row .ops button:disabled, .admin-table-row .ops select:disabled { color: #c9cdd4; cursor: not-allowed; background: #f7f8fa; }
+/* 角色徽标：超管蓝、成员灰 */
+.role-badge { display: inline-block; font-size: 12px; border-radius: 4px; padding: 1px 6px; }
+.role-badge.admin { color: #3370ff; background: #f0f5ff; border: 1px solid #bedaff; }
+.role-badge.member { color: #86909c; background: #f2f3f5; border: 1px solid #e5e6eb; }
+/* 状态：启用绿点、停用灰点 */
+.status-cell { display: inline-flex; align-items: center; gap: 5px; font-size: 13px; }
+.status-cell .status-dot { width: 7px; height: 7px; border-radius: 50%; }
+.status-cell.on { color: #00b42a; }
+.status-cell.on .status-dot { background: #00b42a; }
+.status-cell.off { color: #86909c; }
+.status-cell.off .status-dot { background: #c9cdd4; }
