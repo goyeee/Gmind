@@ -8,3 +8,6 @@ test-results/
 .superpowers/
 .data/
 .zcodeignore
+
+# 本地走查证据截图（会话产物，不入库）
+gui-test-screenshots/

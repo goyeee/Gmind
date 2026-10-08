@@ -133,3 +133,4 @@
 ### 9. M7c-E 轮新增挂账（2026-09-30）
 - **右键菜单无视口钳制**：菜单增至 9 项后，靠下缘节点的右键菜单底部项（删除）可能滑出视口不可点——需 viewport 钳制（同 clampAnchorRect 思路）。（e2e 走查发现，telemetry/versions 用例以 dispatchEvent 规避）
 - **惰性补开首键保留语义**：创建同帧极速按键时布局盒未就绪、首键被静默保留待下一键重试——产品语义可接受；若要求首键必开需 rAF 后补开。（e2e 以带重试首键消化）
+- **停用账号的 WS 连接不即时断开**：HTTP 侧已即时 401（UserGuard 每请求查 status），但已建立的协同 WS（Hocuspocus）持续到自然断开；连接级踢号需连接追踪基建（mindgrid disconnectUser 先例），挂账待排。
