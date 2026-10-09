@@ -96,6 +96,19 @@ const SIM_BOXES: NodeBox[] = [
 ];
 const SIM_CHILDREN: Record<string, string[]> = { r: ['x1', 'x2', 'x3'] };
 
+/**
+ * 根级左列双主题桩（顺时针落位 2026-10-09）：doc [x1(右), x3(左), x4(左)]，左列
+ * 视觉序 = 文档序倒排 [x4 顶, x3 底]（x4 是文档序在后的左列主题 → 视觉更高，与
+ * 新布局「后建的往左上角长」一致）。拖 x1 入左列：视觉位次 → 文档序插入位映射。
+ */
+const SIM2_BOXES: NodeBox[] = [
+  { id: 'x1', x: 60, y: -70, w: 100, h: 40, side: 'right', depth: 1, parentId: 'r' },
+  { id: 'x4', x: -240, y: -10, w: 100, h: 40, side: 'left', depth: 1, parentId: 'r' },
+  { id: 'x3', x: -240, y: 50, w: 100, h: 40, side: 'left', depth: 1, parentId: 'r' },
+  { id: 'r', x: -80, y: -30, w: 80, h: 60, side: 'right', depth: 0 },
+];
+const SIM2_CHILDREN: Record<string, string[]> = { r: ['x1', 'x3', 'x4'] };
+
 interface Harness {
   svg: SVGSVGElement;
   overlay: SVGGElement;
@@ -713,14 +726,17 @@ describe('resolveDropSlot 根级落点（逆时针定侧：持久侧别不再翻
     expect(onDrop).toHaveBeenLastCalledWith(['x1'], {
       kind: 'sibling',
       parentId: 'r',
-      index: 1, // 左插位 p=0 → 文档序 x3 之前（sideInsertDocIndex 映射）
-      anchorId: 'x2',
+      // 顺时针落位（2026-10-09）：左列视觉反序——「x3 视觉上方」= 文档序 x3 之后
+      // （sideInsertDocIndex 视觉序映射；旧单带下是文档序 x3 之前）。落位后 [x2,x3,x1]
+      // 左列 [x3,x1] 视觉 [x1 顶, x3 底]，x1 恰在 x3 上方，与拖放所见一致。
+      index: 2,
+      anchorId: 'x3',
       position: 'after',
       side: 'left', // 持久侧别：拖到左半 → 页面 setNodeSide 换左
     });
   });
 
-  it('空白（root 左半）→ 解析为左列末尾：槽画左列、index=文档序末尾、target.side=left', () => {
+  it('空白（root 左半）→ 解析为左列视觉底：槽画左列下方、index=左列文档序首位之前、target.side=left', () => {
     dragStart(-500, 100, { x: 110, y: -50 }, 'x1');
     // 空白（-500 < r 中线 -40 → 指针侧 left；左列门控开启 → 目标侧 left）
     const slot = slotEl();
@@ -731,11 +747,37 @@ describe('resolveDropSlot 根级落点（逆时针定侧：持久侧别不再翻
     expect(onDrop).toHaveBeenLastCalledWith(['x1'], {
       kind: 'sibling',
       parentId: 'r',
-      index: 2, // 左侧尾插 = post-removal 文档序末尾 [x2, x3] → 2
-      anchorId: 'x3',
+      // 左侧尾插 = 视觉列底（顺时针落位：文档序左列首位 x3 之前——post-removal
+      // [x2,x3] → index 1；旧单带下是文档序末尾 2）。落位后 [x2,x1,x3] 左列 [x1,x3]
+      // 视觉 [x3 顶, x1 底]，空白落在左列底部，语义不变。
+      index: 1,
+      anchorId: 'x2',
       position: 'after',
       side: 'left',
     });
+  });
+
+  it('DOM：左列双主题视觉序映射——视觉顶=文档序末位后、视觉底=文档序首位前、中间=其间', () => {
+    ({ svg, overlay, vp, onDrop, controller } = buildHarness(SIM2_BOXES, SIM2_CHILDREN, {}));
+    // 拖 x1（右列）入左列（x=-100 根左带；x4 顶 -10、x3 底 90，槽中心：顶 -20 / 中 40 / 底 110）
+    const dragToLeft = (pointerY: number, expected: { index: number; anchorId: string; position: 'before' | 'after' }): void => {
+      dragStart(-100, pointerY, { x: 110, y: -50 }, 'x1');
+      expect(slotEl()).not.toBeNull();
+      expect(slotEl()!.getAttribute('x')).toBe('-240'); // 恒画左列
+      svg.dispatchEvent(pe('pointerup', { clientX: -100, clientY: pointerY, pointerId: 1 }));
+      expect(onDrop).toHaveBeenLastCalledWith(
+        ['x1'],
+        expect.objectContaining({ kind: 'sibling', parentId: 'r', side: 'left', ...expected }),
+      );
+    };
+    // 视觉顶（x4 之上，y=-20）：post-removal [x3,x4] 插 x4 之后（index 2）→ 落位后左列
+    // [x3,x4,x1] 视觉 [x1,x4,x3]——x1 恰在列顶。
+    dragToLeft(-20, { index: 2, anchorId: 'x4', position: 'after' });
+    // 视觉中（x4 与 x3 之间，y=40）：插 x3 之后（index 1）→ 左列 [x3,x1,x4] 视觉 [x4,x1,x3]。
+    dragToLeft(40, { index: 1, anchorId: 'x3', position: 'after' });
+    // 视觉底（x3 之下，y=110——已出同级条带，走空白解析）：左列视觉尾插 = 插 x3 之前
+    // （index 0）→ 左列 [x1,x3,x4] 视觉 [x4,x3,x1]。空白路径空锚 = after 父自身。
+    dragToLeft(110, { index: 0, anchorId: 'r', position: 'after' });
   });
 
   it('门控：全右文档（无左列二级主题）拖到根左半 → 恒结算右列（logic/新文档不受影响）', () => {

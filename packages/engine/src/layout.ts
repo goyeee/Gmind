@@ -16,8 +16,11 @@
  * - mindmap 分侧（逆时针定侧，需求方 2026-09-30 裁定，高度半分逻辑退役）：root 直接
  *   子级有持久 side（core addChild/setNodeSide 写入、快照透传）→ 用持久值；无 side
  *   按文档序计数兜底（index 0-2 → right、≥3 → left，即第 1~3 个右、第 4 个起左——
- *   与 core addChild 定侧配额同值）。混合文档逐节点独立判定；一级子树在单一文档序带
- *   上自上而下排布（保序），更深后代恒与其一级祖先同侧；logic 全右、org 向下。
+ *   与 core addChild 定侧配额同值）。混合文档逐节点独立判定；更深后代恒与其一级祖先
+ *   同侧；logic 全右、org 向下。
+ * - 顺时针落位（需求方 2026-10-09 裁定）：root 一级子树左右两带各自独立垂直居中于
+ *   root 中线；右列 = 文档序自上而下，左列 = 文档序自下而上（视觉反序——先建的沉
+ *   左列底、后建的往左上角长，围绕中心顺时针）。logic 全右 = 单条右带（行为不变）。
  * - 边锚点：mindmap/logic 父侧沿父边向子偏移（钳制父盒内）、子侧取相向边中点，
  *   bezier 控制点水平外伸 max(60, dx×0.5)；org 取父下中点/子上中点，elbow。折叠节点无子边。
  * - 根盒中心恒为 (0,0)；输出 bbox 宽高为全部节点盒的极差。
@@ -232,7 +235,8 @@ function childrenWidth(children: LayoutNode[], hGap: number): number {
  *    第 4 个起左，与 core addChild 定侧配额同值——引擎不依赖 core，改动需两处同步）。
  * 旧「累计子树带高过半即翻左」的高度半分逻辑退役：侧别不再随几何漂移，布局恒
  * 尊重文档持久状态；混合文档（部分有 side）逐节点独立判定，互不影响。
- * 注意：本函数只决定侧别，不改变单一文档序带的 y 排布（保序不变，见 placeRootChildren）。
+ * 注意：本函数只决定侧别；y 排布由 placeRootChildren 按左右两带独立结算（左列视觉
+ * 反序，2026-10-09 顺时针落位）。
  */
 function assignMindmapSides(children: LayoutNode[]): Array<'left' | 'right'> {
   return children.map((child, i) => child.persistedSide ?? (i < ROOT_SIDE_RIGHT_QUOTA ? 'right' : 'left'));
@@ -250,21 +254,37 @@ function placeHorizontal(node: LayoutNode, side: 'left' | 'right', theme: ThemeT
   }
 }
 
-/** 根的一级子树：mindmap 分侧 / logic 全右；统一一条自上而下的文档序带。 */
+/**
+ * 根的一级子树：mindmap 左右两带独立垂直居中于 root 中线（顺时针落位，需求方
+ * 2026-10-09）——右列 = 文档序自上而下、左列 = 文档序自下而上（视觉反序，先建的沉
+ * 列底、后建的往列顶长）；logic 全右退化为单条右带（文档序自上而下，行为与旧共享
+ * 单带一致）。更深后代恒与一级祖先同侧（placeHorizontal 递归传导）。
+ */
 function placeRootChildren(root: LayoutNode, structure: Exclude<StructureType, 'org'>, theme: ThemeTokens): void {
   const sides =
     structure === 'logic'
       ? root.children.map((): 'left' | 'right' => 'right')
       : assignMindmapSides(root.children);
-  let cursor = root.y + root.h / 2 - childrenHeight(root.children, theme.V_GAP) / 2;
+  const rightChildren: LayoutNode[] = [];
+  const leftChildren: LayoutNode[] = [];
   root.children.forEach((child, i) => {
-    const side = sides[i] as 'left' | 'right';
+    (sides[i] === 'right' ? rightChildren : leftChildren).push(child);
+  });
+  placeRootBand(root, rightChildren, 'right', theme);
+  // 左列视觉序 = 文档序倒排（reverse 生成新数组，不动 root.children 文档序）。
+  placeRootBand(root, [...leftChildren].reverse(), 'left', theme);
+}
+
+/** 单侧一级子带：以 root 垂直中线为带心自上而下堆叠（bandChildren 已按该侧视觉序排列）。 */
+function placeRootBand(root: LayoutNode, bandChildren: LayoutNode[], side: 'left' | 'right', theme: ThemeTokens): void {
+  let cursor = root.y + root.h / 2 - childrenHeight(bandChildren, theme.V_GAP) / 2;
+  for (const child of bandChildren) {
     child.x = side === 'right' ? root.x + root.w + theme.H_GAP : root.x - theme.H_GAP - child.w;
     child.y = cursor + child.subtreeH / 2 - child.h / 2;
     child.side = side;
     placeHorizontal(child, side, theme);
     cursor += child.subtreeH + theme.V_GAP;
-  });
+  }
 }
 
 /** org：兄弟水平排布（子带以父水平中线为带心），父居子带上方，层间 V_GAP。 */

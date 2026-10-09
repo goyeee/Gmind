@@ -451,11 +451,11 @@ async function commitLazyNodeText(page: Page, text: string): Promise<void> {
   await expect(editor).toHaveCount(0);
 }
 
-// Enter/Shift+Enter 方向矩阵：mindmap 二级主题按逆时针定侧生长——左列 Enter 向上
-// （新节点占当前节点 index，参照节点后移一位）、右列 Shift+Enter 向上；root 级落点
-// 同侧保持（addChild 按右列计数自动定侧会给相反侧，openNewNodeEditor 显式
-// setNodeSide 覆写）。按服务端 docState 反解结构断言 Y.Doc index + side 持久值
-// （与 Shift+Tab 用例同一口径，不依赖渲染几何）。
+// Enter/Shift+Enter 方向矩阵（顺时针落位，需求方 2026-10-09）：二级主题文档序后插
+// （Enter）/前插（Shift+Enter）——布局左列视觉反序下涌现「右列 Enter 向下、左列
+// Enter 向上」（围绕中心顺时针）；root 级落点同侧保持（addChild 按右列计数自动定侧
+// 会给相反侧，openNewNodeEditor 显式 setNodeSide 覆写）。按服务端 docState 反解结构
+// 断言 Y.Doc index + side 持久值（与 Shift+Tab 用例同一口径，不依赖渲染几何）。
 test('编辑器：Enter 方向矩阵——左列二级主题 Enter 向上建同级且同侧，右列 Shift+Enter 向上', async ({ page }) => {
   await registerAndLogin(page);
   // 空白新文档造「3 右 1 左」：root 默认选中，Tab×4——前 3 个经 addChild 自动定侧
@@ -471,11 +471,11 @@ test('编辑器：Enter 方向矩阵——左列二级主题 Enter 向上建同�
   }
   await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '左一' })).toBeVisible();
 
-  // 左列节点敲 Enter：新节点出现在其**上方**（占据其原 index），且同侧落左
+  // 左列节点敲 Enter：文档序后插（顺时针=左列视觉上方），且同侧落左
   await page.locator('.editor-canvas svg .gm-text', { hasText: '左一' }).click();
   await page.keyboard.press('Enter');
   await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '新主题' })).toBeVisible();
-  // 右列节点敲 Shift+Enter：新节点出现在其**上方**（占其原 index），同侧保持右
+  // 右列节点敲 Shift+Enter：文档序前插（其上方），同侧保持右
   await page.locator('.editor-canvas svg .gm-text', { hasText: '右二' }).click();
   await page.keyboard.press('Shift+Enter');
   await expect(page.getByTestId('save-status')).toHaveText(/已保存/);
@@ -499,17 +499,114 @@ test('编辑器：Enter 方向矩阵——左列二级主题 Enter 向上建同�
   const textOf = (id: string): string => String(nodes.get(id)?.get('text') ?? '');
   const sideOf = (id: string): string => String(nodes.get(id)?.get('side') ?? '');
 
-  // 终序 = [右一, 新主题(Shift+Enter), 右二, 右三, 新主题(Enter), 左一]
+  // 终序 = [右一, 新主题(Shift+Enter 前插), 右二, 右三, 左一, 新主题(Enter 后插)]
   const rootKids = childIds('root');
-  expect(rootKids.map(textOf)).toEqual(['右一', '新主题', '右二', '右三', '新主题', '左一']);
+  expect(rootKids.map(textOf)).toEqual(['右一', '新主题', '右二', '右三', '左一', '新主题']);
   // 右列 Shift+Enter：新主题占右二原 index 1（其上方），右二后移到 2，同侧=right
   expect(sideOf(rootKids[1] as string)).toBe('right');
   expect(sideOf(rootKids[2] as string)).toBe('right'); // 右二（参照节点侧别不变）
-  // 左列 Enter：新主题占左一原 index（其上方，左一后移至末位），同侧=left
-  expect(sideOf(rootKids[4] as string)).toBe('left');
-  expect(sideOf(rootKids[5] as string)).toBe('left'); // 左一（参照节点侧别不变）
+  // 左列 Enter：新主题文档序后插（视觉反序带下=左一上方），同侧=left
+  expect(sideOf(rootKids[4] as string)).toBe('left'); // 左一（参照节点侧别不变）
+  expect(sideOf(rootKids[5] as string)).toBe('left');
   // 造数自证：Tab×4 的 3 右 1 左均带持久 side（右一/右三 right，非计数兜底）
   expect(sideOf(rootKids[0] as string)).toBe('right');
+  expect(sideOf(rootKids[3] as string)).toBe('right');
+});
+
+// 中心主题顺时针落位（需求方 2026-10-09）：连敲 Tab/Enter——第 1~3 个分支主题落右列
+// （第 1 个与中心垂直居中、依次往下），第 4 个起落左列且**往左上角生长**（布局左列
+// 视觉反序：文档序末位=视觉最高位）。渲染几何断言（同列 y 序）+ 侧别持久值。
+test('编辑器：中心主题连敲 Tab 顺时针落位——前 3 右列往下、第 4 个起左列往左上角长', async ({ page }) => {
+  await registerAndLogin(page);
+  await page.getByRole('button', { name: '新建脑图' }).click();
+  await page.locator('.file-list li', { hasText: '未命名脑图' }).click();
+  await expect(page).toHaveURL(/\/edit\//);
+  const rootText = page.locator('.editor-canvas svg .gm-text', { hasText: '未命名脑图' });
+  await expect(rootText).toBeVisible();
+  for (const text of ['支一', '支二', '支三', '支四', '支五']) {
+    await rootText.click(); // root 上 Tab 追加（顺时针）
+    await page.keyboard.press('Tab');
+    await commitLazyNodeText(page, text);
+  }
+  await expect(page.getByTestId('save-status')).toHaveText(/已保存/);
+  // 渲染几何：右列文档序自上而下（支一最上）；左列视觉反序——支五（文档序在后）在
+  // 支四上方，围绕中心顺时针往左上角生长。
+  const yOf = async (text: string): Promise<number> => {
+    const box = await page.locator('.editor-canvas svg .gm-text', { hasText: text }).boundingBox();
+    expect(box).not.toBeNull();
+    return box!.y;
+  };
+  expect(await yOf('支一')).toBeLessThan(await yOf('支二'));
+  expect(await yOf('支二')).toBeLessThan(await yOf('支三'));
+  expect(await yOf('支五')).toBeLessThan(await yOf('支四'));
+  // 双带各自以中心主题垂直中线为带心：右列 3 个时中间的支二与中心对齐（支一在其上）；
+  // 左列镜像——先落的支四在中心之下、后落的支五在其上（往左上角长）。
+  const centerOf = async (text: string): Promise<number> => (await yOf(text)) + 9; // 文字盒高 18，半高 9
+  const [c1, c2, c4, rootCy] = await Promise.all([
+    centerOf('支一'),
+    centerOf('支二'),
+    centerOf('支四'),
+    (async () => {
+      const box = await rootText.boundingBox();
+      expect(box).not.toBeNull();
+      return box!.y + box!.height / 2;
+    })(),
+  ]);
+  expect(Math.abs(c2 - rootCy)).toBeLessThan(2); // 带心=中心主题中线（带居中钉定）
+  expect(c1).toBeLessThan(rootCy); // 支一在中心之上（带居中的上半个槽位）
+  expect(c4).toBeGreaterThan(rootCy); // 首个左列分支沉在中心之下（左列往上长）
+});
+
+// 中心主题逆时针（Shift+Enter，需求方 2026-10-09）：左列未满 3 落左列、插到该列文档
+// 序最前（左列视觉反序 → 每个新节点沉到当前列底，左列自上往下长）；左满 3 后第 4 个
+// 落右列视觉顶。docState 反解断言 doc index + side；渲染几何断言左列纵向序。
+test('编辑器：中心主题 Shift+Enter 逆时针镜像——前 3 落左列自上往下、第 4 个去右列', async ({ page }) => {
+  await registerAndLogin(page);
+  await page.getByRole('button', { name: '新建脑图' }).click();
+  await page.locator('.file-list li', { hasText: '未命名脑图' }).click();
+  await expect(page).toHaveURL(/\/edit\//);
+  const rootText = page.locator('.editor-canvas svg .gm-text', { hasText: '未命名脑图' });
+  await expect(rootText).toBeVisible();
+  for (const text of ['逆一', '逆二', '逆三', '逆四']) {
+    await rootText.click(); // root 上 Shift+Enter（逆时针）
+    await page.keyboard.press('Shift+Enter');
+    await commitLazyNodeText(page, text);
+  }
+  await expect(page.getByTestId('save-status')).toHaveText(/已保存/);
+  // 渲染几何：左列自上往下长——先建的逆一最上（每个新节点沉列底）。
+  const yOf = async (text: string): Promise<number> => {
+    const box = await page.locator('.editor-canvas svg .gm-text', { hasText: text }).boundingBox();
+    expect(box).not.toBeNull();
+    return box!.y;
+  };
+  expect(await yOf('逆一')).toBeLessThan(await yOf('逆二'));
+  expect(await yOf('逆二')).toBeLessThan(await yOf('逆三'));
+  const rootBox = await rootText.boundingBox();
+  expect(rootBox).not.toBeNull();
+  const x4 = await page.locator('.editor-canvas svg .gm-text', { hasText: '逆四' }).boundingBox();
+  expect(x4).not.toBeNull();
+  expect(x4!.x).toBeGreaterThan(rootBox!.x + rootBox!.width); // 第 4 个在右列
+  // docState 反解：文档序 [逆三, 逆二, 逆一]（每个前插）+ [逆四]；侧别前三左、末右。
+  const token = await page.evaluate(() => localStorage.getItem('gmind.token'));
+  const fileId = page.url().split('/').pop() ?? '';
+  const res = await page.request.get(`/api/files/${fileId}`, {
+    headers: { Authorization: `Bearer ${token ?? ''}` },
+  });
+  expect(res.ok()).toBeTruthy();
+  const detail = (await res.json()) as { docState: string };
+  const doc = new Y.Doc();
+  const binary = atob(detail.docState);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  Y.applyUpdate(doc, bytes);
+  const nodes = doc.getMap('nodes') as Y.Map<Y.Map<unknown>>;
+  const rootKids = ((nodes.get('root')?.get('children') as Y.Array<string> | undefined)?.toArray() ?? []);
+  const textOf = (id: string): string => String(nodes.get(id)?.get('text') ?? '');
+  const sideOf = (id: string): string => String(nodes.get(id)?.get('side') ?? '');
+  expect(rootKids.map(textOf)).toEqual(['逆三', '逆二', '逆一', '逆四']);
+  expect(sideOf(rootKids[0] as string)).toBe('left');
+  expect(sideOf(rootKids[1] as string)).toBe('left');
+  expect(sideOf(rootKids[2] as string)).toBe('left');
   expect(sideOf(rootKids[3] as string)).toBe('right');
 });
 

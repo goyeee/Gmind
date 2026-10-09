@@ -1616,13 +1616,19 @@ export function EditorPage() {
   }, [readOnly, doc]);
 
   /**
-   * Enter/Shift+Enter 新建同级（2026-09-30 需求方方向矩阵）：Enter 默认向**下**、
-   * Shift+Enter 恒为反方向（向上）；唯一例外是 mindmap 的二级主题（parent===root）
-   * 按逆时针定侧方向生长——右列 Enter 向下/Shift+Enter 向上，**左列 Enter 向上/**
-   * Shift+Enter 向下（左列向上生长，呼应逆时针定侧）。logic（全右单侧）与 org、
-   * 更深层级维持现状（Enter 下方）。root 上 Enter 降级为新建子级（现状不变）。
-   * 同侧保持：root 级 mindmap 落点把参照节点的持久侧经 forceSide 下沉给
-   * openNewNodeEditor（addChild 按计数自动定侧可能给相反侧）。
+   * Enter/Shift+Enter 新建同级。顺时针落位（需求方 2026-10-09，替代 2026-09-30 方向
+   * 矩阵的左列分支）：
+   * - root 上 Enter/Tab 降级新建子级（现状不变）：addChild 按右列配额自动定侧——右列
+   *   未满 3 append 落右列底部，满后 append 落左列顶部（布局左列视觉反序：文档序末位
+   *   = 视觉最高位，往左上角生长，围绕中心顺时针）。
+   * - root 上 Shift+Enter（逆时针镜像）：左列未满 3 落左列、否则右列；插到该列首个
+   *   同侧子级文档位之前（左列=视觉列底自上往下长、右列=视觉列顶自下往上长——与
+   *   Enter 完全反向）。logic/org（单侧/无侧结构）维持降级现状。
+   * - 二级主题（parent===root，mindmap）：索引全层级统一——Enter=文档序后插、
+   *   Shift+Enter=前插；布局左列视觉反序下天然涌现「右列 Enter 向下/左列 Enter 向上」
+   *   （顺时针），Shift+Enter 全部反向。同侧保持：参照节点持久 side 经 forceSide 下沉
+   *   给 openNewNodeEditor（addChild 按计数自动定侧可能给相反侧）。
+   * - logic（全右单侧）与 org、更深层级维持现状（Enter 下方）。
    */
   const handleEnter = (reverse = false): void => {
     if (!doc) return;
@@ -1630,31 +1636,50 @@ export function EditorPage() {
     const snap = getNode(doc, current);
     if (!snap || snap.deleted) return;
     if (current === ROOT_NODE_ID) {
-      // root 无同级：降级为新建子级
-      openNewNodeEditor(ROOT_NODE_ID, undefined, 'child');
+      if (reverse && getMeta(doc).structureType === 'mindmap') {
+        // 逆时针：左列未满配额落左列、否则右列；插到该列首个同侧子级文档位之前。
+        const rootSnap = getNode(doc, ROOT_NODE_ID);
+        const kids = rootSnap?.childIds ?? [];
+        // 有效侧 = 持久 side ?? 文档序计数兜底（index<3 右 / ≥3 左）——与 engine
+        // assignMindmapSides / core countRightSideRootChildren 的兜底同式（配额常量
+        // 同值 3，此处为其镜像用法，改动需同步）。
+        const sideOfKid = (cid: string, i: number): NodeSide => {
+          const s = getNode(doc, cid)?.side;
+          if (s === 'left' || s === 'right') return s;
+          return i < 3 ? 'right' : 'left';
+        };
+        const leftCount = kids.filter((cid, i) => sideOfKid(cid, i) === 'left').length;
+        const side: NodeSide = leftCount < 3 ? 'left' : 'right';
+        const firstSameSide = kids.findIndex((cid, i) => sideOfKid(cid, i) === side);
+        openNewNodeEditor(
+          ROOT_NODE_ID,
+          firstSameSide === -1 ? kids.length : firstSameSide,
+          'child',
+          'keyboard',
+          undefined,
+          side,
+        );
+      } else {
+        // root 无同级：降级为新建子级（顺时针/单侧结构——addChild 自动定侧）
+        openNewNodeEditor(ROOT_NODE_ID, undefined, 'child');
+      }
       return;
     }
     const parent = getNode(doc, snap.parentId);
     if (!parent || parent.deleted) return;
     const currentIdx = parent.childIds.indexOf(current);
-    // 二级主题侧别裁决：doc 持久 side 优先（NodeSnapshot 读侧已防御非法值）；
-    // 无持久侧的旧文档按文档序计数折算有效侧——index<3 右、≥3 左，与 engine
-    // assignMindmapSides / core countRightSideRootChildren 的兜底同式（配额常量
-    // 三处同值 3，改动需同步）。无持久侧不 forceSide：新节点由 addChild 自动
-    // 定侧接管（不与计数兜底互相覆写）。
-    let index: number;
-    let forceSide: NodeSide | undefined;
-    if (parent.id === ROOT_NODE_ID && getMeta(doc).structureType === 'mindmap') {
-      const persistedSide = snap.side === 'left' || snap.side === 'right' ? snap.side : undefined;
-      const side = persistedSide ?? (currentIdx < 3 ? 'right' : 'left');
-      // 左列默认向上（index=current）、右列默认向下（index=current+1）；reverse 翻转
-      const upward = side === 'left' ? !reverse : reverse;
-      index = upward ? currentIdx : currentIdx + 1;
-      forceSide = persistedSide;
-    } else {
-      // 其余层级/结构：默认下方（现状），Shift+Enter 上方
-      index = reverse ? currentIdx : currentIdx + 1;
-    }
+    // 二级主题（root 级 mindmap）同侧保持：参照节点持久 side（NodeSnapshot 读侧已
+    // 防御非法值）下沉 forceSide；无持久侧不覆写——新节点由 addChild 自动定侧接管。
+    const forceSide: NodeSide | undefined =
+      parent.id === ROOT_NODE_ID &&
+      getMeta(doc).structureType === 'mindmap' &&
+      (snap.side === 'left' || snap.side === 'right')
+        ? snap.side
+        : undefined;
+    // 索引公式全层级统一：Enter=文档序后插（视觉下方）、Shift+Enter=前插（视觉上方）；
+    // root 级左列因布局视觉反序自然涌现「Enter 向上」（顺时针）——旧按侧分支的
+    // upward 矩阵随共享单带退役。
+    const index = reverse ? currentIdx : currentIdx + 1;
     openNewNodeEditor(parent.id, index, 'sibling', 'keyboard', undefined, forceSide);
   };
 

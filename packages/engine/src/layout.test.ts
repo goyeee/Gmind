@@ -297,7 +297,8 @@ describe('layout 不变量（5 树 × 3 结构）', () => {
       a: { text: '一支' },
       b: { text: '二支' },
       c: { text: '三支' },
-      d: { text: '四支' },
+      d: { text: '四支', children: ['da'] },
+      da: { text: '四支子叶' },
       e: { text: '五支' },
     });
     const result = layout(reader, { structure: 'mindmap', theme, measure: stubAdapter, styleOf });
@@ -318,6 +319,31 @@ describe('layout 不变量（5 树 × 3 结构）', () => {
       expect(node.side).toBe('right');
       expect(node.x).toBeGreaterThan(root2.x + root2.w);
     }
+    // 左列深层后代随一级祖先落左（d 的子叶在根左侧）。
+    const da = boxOf(result, 'da');
+    expect(da.side).toBe('left');
+    expect(da.x + da.w).toBeLessThan(root.x);
+    // 顺时针落位（需求方 2026-10-09）：左右两带独立垂直居中于 root 中线；右列文档序
+    // 自上而下，左列文档序自下而上（视觉反序——第 4 个 d 沉左列底、第 5 个 e 在其上）。
+    const [ra, rb, rc, rd, re] = ['a', 'b', 'c', 'd', 'e'].map((id) => boxOf(result, id));
+    expect(ra.y).toBeLessThan(rb.y);
+    expect(rb.y).toBeLessThan(rc.y);
+    expect(re.y).toBeLessThan(rd.y); // e（文档序在后）在 d 上方：左列往左上角生长
+    const rootCy = root.y + root.h / 2;
+    expect((ra.y + rc.y + rc.h) / 2).toBeCloseTo(rootCy); // 右带垂直居中于 root
+    expect((re.y + rd.y + rd.h) / 2).toBeCloseTo(rootCy); // 左带垂直居中于 root
+    // 右列不再被左列挤偏：纯右文档（3 个一级）与本文档右列的 y 起点一致（独立带）。
+    const onlyRight = layout(
+      makeReader({
+        root: { text: '根', children: ['a', 'b', 'c'] },
+        a: { text: '一支' },
+        b: { text: '二支' },
+        c: { text: '三支' },
+      }),
+      { structure: 'mindmap', theme, measure: stubAdapter, styleOf },
+    );
+    expect(boxOf(onlyRight, 'a').y).toBeCloseTo(ra.y);
+    expect(boxOf(onlyRight, 'c').y).toBeCloseTo(rc.y);
   });
 
   it('mindmap：持久 side 优先于计数；混合文档逐节点独立判定；非法值按缺省兜底', () => {
@@ -337,6 +363,10 @@ describe('layout 不变量（5 树 × 3 结构）', () => {
     // 深层后代恒继承一级祖先（pa 的持久 side='right' 被忽略）
     expect(boxOf(result, 'pa').side).toBe('left');
     expect(boxOf(result, 'pa').x + boxOf(result, 'pa').w).toBeLessThan(boxOf(result, 'root').x);
+    // 顺时针落位（2026-10-09）：持久 side 也遵守左列视觉反序——左列 [p1, p4]（文档序）
+    // 视觉自上而下为 [p4, p1]；右列 [p2, p3] 文档序即视觉序（p2 上 p3 下）。
+    expect(boxOf(result, 'p4').y).toBeLessThan(boxOf(result, 'p1').y);
+    expect(boxOf(result, 'p2').y).toBeLessThan(boxOf(result, 'p3').y);
   });
 
   it('mindmap：两个一级子树同落右侧（计数规则钉定；旧「等高一右一左」半分规则退役）', () => {

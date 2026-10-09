@@ -414,10 +414,11 @@ describe('navigate/siblingEnd × layout() 真实输出（T8 债：金样树 3 �
     expect(navigate('L', 'right', boxes, 'mindmap')).toBe('root');
     // 同侧纵向互达（父不参与上下方向）
     expect(navigate('l2', 'up', boxes, 'mindmap')).toBe('ll');
-    // l2 下方是右列 R/rr——跨侧排除 → null；rr 上方左列全排除，但根（side=right、
-    // 位置更高）同侧可命中——向上回根，符合「根是全列脊柱」的导航语义
+    // l2 下方是右列 R/rr——跨侧排除 → null。顺时针落位（2026-10-09）双带独立居中后
+    // 右带不再挂左子树之下：rr 与 root 大致同水平，向上无同侧候选 → null（几何诚实；
+    // 旧共享单带下 R 沉在 L 子树下方、root 高于 rr 才命中 root）。
     expect(navigate('l2', 'down', boxes, 'mindmap')).toBeNull();
-    expect(navigate('rr', 'up', boxes, 'mindmap')).toBe('root');
+    expect(navigate('rr', 'up', boxes, 'mindmap')).toBeNull();
   });
 
   it('logic：全部右侧逐层推进（同 dc 一级带取 lateral 居中者）', () => {

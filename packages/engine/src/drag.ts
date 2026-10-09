@@ -295,7 +295,8 @@ export function resolveDropSlot(args: {
   };
 
   // 文档序兄弟堆（去全组——组内任一成员现为该父子级的都移走；盒缺失跳过）。
-  // 横向布局下文档序即 y 序（布局单带堆叠）。
+  // 横向布局：非根级文档序即 y 序；根级左列视觉序 = 文档序倒排（顺时针落位
+  // 2026-10-09），槽位几何按视觉序结算（见下方 p 换算）。
   const stack = childrenIds
     .filter((id) => !groupIds.includes(id))
     .map((id) => byId.get(id))
@@ -374,10 +375,16 @@ export function resolveDropSlot(args: {
         )
       : V_GAP_FALLBACK;
 
-  // 槽所在侧的兄弟列（同父兄弟同侧；根级 = 目标侧兄弟）。
+  // 槽所在侧的兄弟列（同父兄弟同侧；根级 = 目标侧兄弟）。根级左列视觉序 = 文档序
+  // 倒排（顺时针落位 2026-10-09）：finalIndex 的文档序前缀数 p_doc 换算为视觉位次
+  // p_visual = k − p_doc（doc 前缀越多 → 视觉越高），insertCenterY 按视觉序数组取槽
+  // 几何——与 classifyDropAt 的 nearestInsertIndex（同视觉序输入）同点必同槽。
   const sideSibs = stack.filter((b) => b.side === side);
-  const p = sideSibs.filter((b) => (docPos.get(b.id) ?? 0) < finalIndex).length;
-  const centerY = insertCenterY(sideSibs, p, draggedBox.h, vGap, parentBox);
+  const isLeftVisualReversed = isRootLevel && side === 'left';
+  const visualSibs = isLeftVisualReversed ? [...sideSibs].reverse() : sideSibs;
+  const pDoc = sideSibs.filter((b) => (docPos.get(b.id) ?? 0) < finalIndex).length;
+  const p = isLeftVisualReversed ? visualSibs.length - pDoc : pDoc;
+  const centerY = insertCenterY(visualSibs, p, draggedBox.h, vGap, parentBox);
   // 水平列间距：父盒与首个同侧子级的 x 差（企微列距实测），无同侧子级兜底 60。
   const firstSib = sideSibs[0];
   const hGap = firstSib
@@ -416,23 +423,30 @@ function rootLeftEnabled(boxes: NodeBox[], rootBox: NodeBox): boolean {
 }
 
 /**
- * 同侧 y 位次 → 文档序插入位映射（逆时针定侧；classifyDropAt 索引结算用）：
- * 布局把 root 直接子级按文档序排在单一竖带上（y 序 = 文档序），「该侧第 p 个插入位」
- * 映射为文档序中该侧相邻兄弟之间的位次——p=0 取首兄弟文档位（插其前），p>0 取前一同
- * 侧兄弟文档位 +1（插其后），使落点带位恰为该侧兄弟间的最近 y 间隙；尾插（p ≥ 该侧
- * 兄弟数）取末兄弟文档位 +1。该侧无兄弟时：right → 0（右列自带顶生长）、left → 堆尾
- * （与空白解析「右顶/左尾」语义一致，logic/全右文档的左半落点由此恒落文档序末尾）。
+ * 同侧 y 位次 → 文档序插入位映射（逆时针定侧 + 顺时针落位 2026-10-09）：
+ * p 为**视觉插入位**（0 = 该侧列视觉最顶）。右列视觉序 = 文档序：「第 p 位」映射为
+ * 文档序中该侧相邻兄弟之间的位次——p=0 取首兄弟文档位（插其前）、p>0 取前一同侧
+ * 兄弟文档位 +1（插其后）、尾插取末兄弟文档位 +1。左列（仅 root 级存在）视觉序 =
+ * 文档序倒排 v（v[0] = 文档序末位 = 视觉顶）：p=0 或中位 → 落 v[p] 文档位 +1（新
+ * 节点成为新视觉顶 / 插于其间）、p=列底之外 → 落文档序首位左主题之前（视觉列底）。
+ * 该侧无兄弟时：right → 0（右列自带顶生长）、left → 堆尾（与空白解析「右顶/左尾」
+ * 语义一致，logic/全右文档的左半落点由此恒落文档序末尾）。
  */
 function sideInsertDocIndex(stack: NodeBox[], side: 'left' | 'right', p: number): number {
   const posOf = new Map(stack.map((b, i) => [b.id, i] as const));
-  const sideSibs = stack.filter((b) => b.side === side);
-  if (sideSibs.length === 0) return side === 'right' ? 0 : stack.length;
-  if (p <= 0) return posOf.get(sideSibs[0]!.id) ?? 0;
-  if (p >= sideSibs.length) {
-    const last = sideSibs[sideSibs.length - 1]!;
+  const docSibs = stack.filter((b) => b.side === side);
+  if (docSibs.length === 0) return side === 'right' ? 0 : stack.length;
+  if (side === 'left') {
+    const v = [...docSibs].reverse(); // 视觉序（v[0]=视觉顶）
+    if (p >= v.length) return posOf.get(v[v.length - 1]!.id) ?? 0; // 视觉底之下 → 文档序首位之前
+    return (posOf.get(v[p]!.id) ?? 0) + 1; // 视觉顶/其间 → v[p]（视觉下邻）文档位之后
+  }
+  if (p <= 0) return posOf.get(docSibs[0]!.id) ?? 0;
+  if (p >= docSibs.length) {
+    const last = docSibs[docSibs.length - 1]!;
     return (posOf.get(last.id) ?? stack.length - 1) + 1;
   }
-  return (posOf.get(sideSibs[p - 1]!.id) ?? 0) + 1;
+  return (posOf.get(docSibs[p - 1]!.id) ?? 0) + 1;
 }
 
 /** 第 p 个插入位的槽中心 y（同侧兄弟堆；见 resolveDropSlot 槽几何规则）。 */
@@ -802,14 +816,17 @@ export function classifyDropAt(args: {
       // 根级（逆时针定侧）：目标侧 = 指针侧（zoneSideAt/stripSideAt 的侧别），经左列
       // 门控（rootLeftEnabled，与 resolveDropSlot 同公式——logic 全右/新文档恒右）；
       // index = 该侧二级主题（按 NodeBox 当前 side 过滤）按 y 的最近插入位映射回文档序。
+      // 顺时针落位（2026-10-09）：左列视觉序 = 文档序倒排——槽位几何按视觉序结算，
+      // sideInsertDocIndex 同口径映射回文档序（同点必同果不变式保持）。
       const targetSide: 'left' | 'right' =
         side === 'left' && !rootLeftEnabled(boxes, parent) ? 'right' : side;
-      const sideSibs = stack.filter((b) => b.side === targetSide);
+      const docSibs = stack.filter((b) => b.side === targetSide);
+      const visualSibs = targetSide === 'left' ? [...docSibs].reverse() : docSibs;
       const p = nearestInsertIndex(
-        sideSibs,
+        visualSibs,
         point.y,
         dragH,
-        stackBandGap(sideSibs, bandOf),
+        stackBandGap(visualSibs, bandOf),
         parent,
       );
       return { index: sideInsertDocIndex(stack, targetSide, p), sideHint: targetSide };
@@ -1256,13 +1273,13 @@ export class DragController {
    * 空白落点解析（M7c-F 复验问题4）：企微语义「空白=挂 root」但要可预期——目标侧取
    * 指针相对 root 盒中线（右半→right、左半→left），经左列门控（rootLeftEnabled，与
    * classifyDropAt/resolveDropSlot 同公式：logic 全右/新文档恒右）；index 取该侧现有
-   * 二级主题（扣除被拖组、按 NodeBox 当前 side 过滤）的文档序末尾（sideInsertDocIndex
-   * 尾插映射——右侧文档序前段之后/左侧文档序末尾，交叠侧别时跟随该侧末兄弟）。org
-   * （root 盒 side 'down'）维持旧口径：恒文档序末尾、侧别仅作 sideHint 透传（org 槽
-   * 分支不消费）。target.side 随解析产出（页面据此调 setNodeSide）——预览与释放同一
-   * 结算，槽画在哪松手就落在哪。从节点起拖进入空白才走此路；空白**按下**的框选/
-   * 平移手势在候选登记（仅节点命中）处即已分流。root 盒缺失（协同删除窗口期）返回
-   * null → 释放回退页面层 moveNode(id,'root') 兜底。
+   * 二级主题（扣除被拖组、按 NodeBox 当前 side 过滤）的**视觉末尾**（sideInsertDocIndex
+   * 尾插映射——右列=文档序末兄弟之后、左列=视觉列底即文档序首位左主题之前，顺时针
+   * 落位 2026-10-09）。org（root 盒 side 'down'）维持旧口径：恒文档序末尾、侧别仅作
+   * sideHint 透传（org 槽分支不消费）。target.side 随解析产出（页面据此调 setNodeSide）
+   * ——预览与释放同一结算，槽画在哪松手就落在哪。从节点起拖进入空白才走此路；空白
+   * **按下**的框选/平移手势在候选登记（仅节点命中）处即已分流。root 盒缺失（协同删除
+   * 窗口期）返回 null → 释放回退页面层 moveNode(id,'root') 兜底。
    */
   private resolveBlankTarget(
     scene: Point,
