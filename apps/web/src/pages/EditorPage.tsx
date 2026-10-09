@@ -2197,24 +2197,34 @@ export function EditorPage() {
 
   // —— 右键菜单（Task 12）：动作复用与键盘相同的 core/engine 处理器 ——
 
-  const onSvgContextMenu = (e: React.MouseEvent<SVGSVGElement>): void => {
-    e.preventDefault();
-    if (justDraggedRef.current) return;
-    // 右键平移释放（需求方 2026-10-09）：Viewport 右键拖动超阈值平移后，浏览器随
-    // pointerup 合成的 contextmenu 不弹菜单（拖了就不弹）；justPanned 在任一
-    // pointerdown 复位，下一次原地右键松开照常弹菜单。
-    if (viewportRef.current?.justPanned) return;
-    if (readOnly) return; // 移动端只读：不弹右键菜单（长按 contextmenu 同拦）
-    const target = e.target as Element;
-    // 概要 bracket（M6 Task 6）：右键 → 概要菜单（删除概要），与节点菜单互斥
-    const sumG = target.closest('[data-summary-id]');
+  /** 右键待决期暂存的菜单请求（rightPendingActive 期间 contextmenu 早到，pointerup 结算）。 */
+  const pendingContextMenuRef = useRef<{
+    x: number;
+    y: number;
+    hit: { summaryId?: string; nodeId?: string };
+  } | null>(null);
+
+  /** 命中解析：优先事件 target；被指针捕获重定向（target=svg）时按坐标恢复。 */
+  const resolveContextMenuHit = (e: React.MouseEvent<SVGSVGElement>): { summaryId?: string; nodeId?: string } => {
+    const hitAtPoint = (selector: string): Element | null =>
+      document.elementFromPoint(e.clientX, e.clientY)?.closest(selector) ?? null;
+    const sumG = (e.target as Element).closest('[data-summary-id]') ?? hitAtPoint('[data-summary-id]');
     if (sumG) {
       const sid = sumG.getAttribute('data-summary-id');
-      if (sid) setContextMenu({ x: e.clientX, y: e.clientY, summaryId: sid });
+      return sid ? { summaryId: sid } : {};
+    }
+    const g = (e.target as Element).closest('[data-node-id]') ?? hitAtPoint('[data-node-id]');
+    const id = g?.getAttribute('data-node-id');
+    return id ? { nodeId: id } : {};
+  };
+
+  /** 菜单提交：概要与节点菜单互斥；节点含多选保持与单选（选中副作用随菜单一起提交）。 */
+  const commitContextMenu = (x: number, y: number, hit: { summaryId?: string; nodeId?: string }): void => {
+    if (hit.summaryId !== undefined) {
+      setContextMenu({ x, y, summaryId: hit.summaryId });
       return;
     }
-    const g = target.closest('[data-node-id]');
-    const id = g?.getAttribute('data-node-id');
+    const id = hit.nodeId;
     if (!id || !doc) {
       setContextMenu(null);
       return;
@@ -2226,8 +2236,56 @@ export function EditorPage() {
     if (!(sel && sel.selected.size > 1 && sel.selected.has(id))) {
       selectionRef.current?.selectOnly(id);
     }
-    setContextMenu({ x: e.clientX, y: e.clientY, nodeId: id });
+    setContextMenu({ x, y, nodeId: id });
   };
+
+  const onSvgContextMenu = (e: React.MouseEvent<SVGSVGElement>): void => {
+    e.preventDefault();
+    if (justDraggedRef.current) return;
+    // 右键平移释放（需求方 2026-10-09）：Viewport 右键拖动超阈值平移后，浏览器随
+    // pointerup 合成的 contextmenu 不弹菜单（拖了就不弹）；justPanned 在任一
+    // pointerdown 复位，下一次原地右键松开照常弹菜单。panning 补位（2026-10-09 右键
+    // 菜单修复）：headless/Linux Chromium 的 contextmenu 在 pointerup **之前**合成，
+    // 此时 justPanned 尚未置位，须查进行中的平移态才能拦住拖拽释放。
+    if (viewportRef.current?.justPanned || viewportRef.current?.panning) return;
+    if (readOnly) return; // 移动端只读：不弹右键菜单（长按 contextmenu 同拦）
+    // 命中恢复（2026-10-09 右键平移修复配套）：Viewport 在右键 pointerdown 即捕获
+    // 指针（保平移阈值判定期间 move/up 不丢），Chromium 随后合成的 contextmenu
+    // target 被重定向到 svg——closest 命中链断裂、菜单永不弹（与 viewport.ts 头注
+    // 「捕获会把 click 重定向」同一陷阱）。target 未命中时按坐标 elementFromPoint
+    // 恢复命中（几何查询不受指针捕获影响）。
+    const hit = resolveContextMenuHit(e);
+    // 早到的 contextmenu（Linux/headless 紧随 pointerdown 合成，早于 move/pointerup）
+    // 此刻无法预知会不会拖动——暂存到 pointerup 结算：拖拽平移丢弃、原地松开补弹
+    // （结算见下方 useEffect 的 window 冒泡 pointerup，晚于 Viewport 的 svg 层处理，
+    // justPanned 届时已准确）。macOS/Windows 的 contextmenu 在 up 后到达，直接提交。
+    if (viewportRef.current?.rightPendingActive) {
+      pendingContextMenuRef.current = { x: e.clientX, y: e.clientY, hit };
+      return;
+    }
+    commitContextMenu(e.clientX, e.clientY, hit);
+  };
+
+  // 右键菜单请求结算（2026-10-09 修复）：commitContextMenu 是渲染闭包（读 doc），
+  // 用 ref 持最新引用；监听挂 window 冒泡阶段——pointerup 从 svg 冒泡而来，Viewport
+  // 的 svg 层监听先执行（endPan/justPanned 置位完毕），结算读到的手势态是终态。
+  const commitContextMenuRef = useRef(commitContextMenu);
+  commitContextMenuRef.current = commitContextMenu;
+  useEffect(() => {
+    const settle = (): void => {
+      const pending = pendingContextMenuRef.current;
+      pendingContextMenuRef.current = null;
+      if (!pending) return;
+      if (viewportRef.current?.justPanned) return; // 拖拽平移过的手势不弹菜单
+      commitContextMenuRef.current(pending.x, pending.y, pending.hit);
+    };
+    window.addEventListener('pointerup', settle);
+    window.addEventListener('pointercancel', settle);
+    return () => {
+      window.removeEventListener('pointerup', settle);
+      window.removeEventListener('pointercancel', settle);
+    };
+  }, []);
 
   const runMenuAction = (action: string): void => {
     const menu = contextMenu;

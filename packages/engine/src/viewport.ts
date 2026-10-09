@@ -132,7 +132,7 @@ export class Viewport {
   private readonly svg: SVGSVGElement;
   private readonly sceneRoot: SVGGElement;
   private attached = false;
-  private panning = false;
+  private panningFlag = false;
   private lastPan: Point = { x: 0, y: 0 };
   /** 右键平移待决起点（按下未超 4px 阈值；超阈值转 panning，原地松开丢弃）。 */
   private rightPending: Point | null = null;
@@ -158,6 +158,27 @@ export class Viewport {
   /** 上一次手势是否发生了平移（页面层 contextmenu 防抖：右键拖拽释放不弹菜单）。 */
   get justPanned(): boolean {
     return this.justPannedFlag;
+  }
+
+  /**
+   * 平移是否进行中（页面层 contextmenu 防抖补位，2026-10-09 右键菜单修复）：合成
+   * contextmenu 的时机平台不一致——macOS 在 pointerup 后（justPanned 已置位即可拦），
+   * Linux/headless Chromium 在 pointerup **前**（此时 justPanned 尚为 false，只有本
+   * getter 能识别「拖拽已超阈值转平移、松手在即」的手势，拦截拖拽释放弹菜单）。
+   */
+  get panning(): boolean {
+    return this.panningFlag;
+  }
+
+  /**
+   * 右键按下是否处于阈值待决期（2026-10-09 右键菜单修复）：Linux/headless 的
+   * contextmenu 紧随 pointerdown 合成（早于 move/pointerup），此刻无法预知会不会拖
+   * 动——页面层据本 getter 把菜单请求**暂存到 pointerup 结算**（拖拽平移丢弃、原地
+   * 松开补弹）；macOS/Windows 的 contextmenu 在 pointerup 后到达，本 getter 已是
+   * false，走页面层直接弹路径。
+   */
+  get rightPendingActive(): boolean {
+    return this.rightPending !== null && !this.panningFlag;
   }
 
   /** 把当前状态写到 sceneRoot：`translate(tx, ty) scale(scale)`（4 位小数）。 */
@@ -315,7 +336,7 @@ export class Viewport {
   };
 
   private onPointerMove = (e: PointerEvent): void => {
-    if (this.rightPending && !this.panning) {
+    if (this.rightPending && !this.panningFlag) {
       const dx = e.clientX - this.rightPending.x;
       const dy = e.clientY - this.rightPending.y;
       if (Math.hypot(dx, dy) <= Viewport.RIGHT_PAN_THRESHOLD) return;
@@ -327,13 +348,13 @@ export class Viewport {
       this.startPan();
       return;
     }
-    if (!this.panning) return;
+    if (!this.panningFlag) return;
     this.panBy(e.clientX - this.lastPan.x, e.clientY - this.lastPan.y);
     this.lastPan = { x: e.clientX, y: e.clientY };
   };
 
   private onPointerUp = (e: PointerEvent): void => {
-    if (this.panning) {
+    if (this.panningFlag) {
       this.endPan();
       this.justPannedFlag = true; // 页面层 contextmenu 防抖依据
       this.releasePointer(e);
@@ -348,13 +369,13 @@ export class Viewport {
 
   /** 进入平移态：置位 + svg 挂 gm-panning 类（页面层抓手光标钩子）。 */
   private startPan(): void {
-    this.panning = true;
+    this.panningFlag = true;
     this.svg.classList.add('gm-panning');
   }
 
   /** 结束平移态：复位 + 摘类（幂等，destroy 兜底复用）。 */
   private endPan(): void {
-    this.panning = false;
+    this.panningFlag = false;
     this.svg.classList.remove('gm-panning');
   }
 

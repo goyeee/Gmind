@@ -415,12 +415,17 @@ describe('Viewport 拖拽平移（M7b-W3 平移改道：中键 / 空格+左键�
     svg.dispatchEvent(pointerEvent('pointerdown', { button: 2, clientX: 10, clientY: 10, pointerId: 1 }));
     svg.dispatchEvent(pointerEvent('pointermove', { clientX: 15, clientY: 10, pointerId: 1 })); // 5px：过阈值，pan = 5
     expect(svg.classList.contains('gm-panning')).toBe(true);
+    // panning getter（2026-10-09 右键菜单修复）：headless/Linux 的 contextmenu 在
+    // pointerup **之前**合成，此时 justPanned 尚未置位——页面层拦截拖拽释放弹菜单
+    // 须依赖「进行中的平移态」（拖拽中 true、松开后 false）。
+    expect(vp.panning).toBe(true);
     svg.dispatchEvent(pointerEvent('pointermove', { clientX: 60, clientY: 25, pointerId: 1 }));
     svg.dispatchEvent(pointerEvent('pointerup', { clientX: 60, clientY: 25, pointerId: 1 }));
     const t = parseTransform();
     expect(t.tx).toBeCloseTo(50, 4); // 60-10：起点起算的完整位移（阈值不吞位移）
     expect(t.ty).toBeCloseTo(15, 4);
     expect(svg.classList.contains('gm-panning')).toBe(false);
+    expect(vp.panning).toBe(false);
     expect(vp.justPanned).toBe(true); // 页面层 contextmenu 防抖依据（up 后读取）
   });
 
