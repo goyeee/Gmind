@@ -291,11 +291,12 @@ export class CommentsService {
     return new Map(users.map((u) => [u.id, u.nickname]));
   }
 
-  /** docState(base64) → Y.Doc（docFromState 入口全量 normalize）；空态 → 空白模板，
+  /** docState(base64) → Y.Doc（docFromState 入口全量 normalize）；空态 → 空白模板
+   *  （root 文本「中心主题」与 files.service 创建路径同口径，2026-10-09 裁定），
    *  解析失败 → 400（与 saveDocState 同口径文案——DB 行只由服务端写入，理论不可达）。 */
   private decodeDocState(docStateBase64: string, title: string): Y.Doc {
     const bytes = Buffer.from(docStateBase64, 'base64');
-    if (bytes.length === 0) return createTemplateDoc({ title, children: [] });
+    if (bytes.length === 0) return createTemplateDoc({ title, children: [], rootText: '中心主题' });
     try {
       return docFromState(new Uint8Array(bytes));
     } catch {

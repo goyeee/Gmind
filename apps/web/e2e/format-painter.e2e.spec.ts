@@ -131,12 +131,12 @@ function markerBadgesCount(page: Page, text: string) {
 // 用例 3（无选中）：清空选择后点刷 → toast 提示，不进入模式。
 test('格式刷：无选中节点点按钮给出 toast 提示', async ({ page }) => {
   await openSeedDoc(page, '本周计划');
-  // 打开格式右列再点空白画布：画布点击按「外点关闭」收面板 + 清空选择（M7b-R6 起右列默认隐藏）
+  // 打开格式右列再点空白画布：清空选择（2026-10-09 裁定：点画布空白不收面板，
+  // 面板转空态——样式区置灰提示态，无需重开）
   await page.getByTestId('format-toggle').click();
   await expect(page.getByTestId('rich-panel')).toBeVisible();
   await page.locator('.editor-canvas svg').click({ position: { x: 6, y: 6 } });
-  await expect(page.getByTestId('rich-panel')).toHaveCount(0);
-  await page.getByTestId('format-toggle').click(); // 重开：空选 → 样式区置灰提示态
+  await expect(page.getByTestId('rich-panel')).toBeVisible();
   await expect(page.getByTestId('rich-panel').getByTestId('style-hint')).toBeVisible();
 
   const painterBtn = page.getByTestId('format-painter');

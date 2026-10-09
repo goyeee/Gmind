@@ -246,14 +246,16 @@ export class CollabService implements OnApplicationShutdown {
     return rows > 0;
   }
 
-  /** 加载：恢复 doc_state（docFromState 入口全量 normalize）或空模板（仅含 root）。 */
+  /** 加载：恢复 doc_state（docFromState 入口全量 normalize）或空模板（仅含 root，
+   *  中心节点文本固定「中心主题」——2026-10-09 裁定，仅新建空白文档；meta.title
+   *  仍为文件标题，文件标题与中心节点文本自此解耦）。 */
   private async loadDocument(data: onLoadDocumentPayload): Promise<void> {
     const file = await this.files.findOne({ where: { id: data.documentName, deletedAt: IsNull() } });
     if (!file) throw new Error('permission-denied'); // 鉴权后文件被删的竞态：拒绝加载
     const source =
       file.docState && file.docState.length > 0
         ? docFromState(new Uint8Array(file.docState))
-        : createTemplateDoc({ title: file.title, children: [] });
+        : createTemplateDoc({ title: file.title, children: [], rootText: '中心主题' });
     Y.applyUpdate(data.document, docToState(source));
   }
 

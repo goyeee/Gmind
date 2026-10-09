@@ -128,6 +128,18 @@ describe('attachRemoteNormalization：远端事务收敛接线（准入清单 §
     const wired = docFromState(docToState(base));
     const manual = docFromState(docToState(base));
     const remote = docFromState(docToState(base));
+    // 副本先三方互同步（生产顺序：连线即全量 sync，之后才交换编辑差量）。docFromState
+    // 对旧文档有 side 回填本地写（2026-10-09 裁定）——未经同步的 sv 差量会引用对端
+    // 缺失的回填项（Yjs origin 悬挂、差量项被丢），同步后差量只含编辑事务本身。
+    const syncAll = (): void => {
+      Y.applyUpdate(wired, Y.encodeStateAsUpdate(manual));
+      Y.applyUpdate(wired, Y.encodeStateAsUpdate(remote));
+      Y.applyUpdate(manual, Y.encodeStateAsUpdate(wired));
+      Y.applyUpdate(manual, Y.encodeStateAsUpdate(remote));
+      Y.applyUpdate(remote, Y.encodeStateAsUpdate(wired));
+      Y.applyUpdate(remote, Y.encodeStateAsUpdate(manual));
+    };
+    syncAll();
     const xId = findIdByText(wired, 'X');
     const p1Id = findIdByText(wired, 'P1');
     const sv = Y.encodeStateVector(wired);

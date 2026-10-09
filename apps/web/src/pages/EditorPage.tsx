@@ -81,6 +81,8 @@ import {
 } from '@gmind/engine';
 import { todayStr } from '@gmind/shared';
 import { attachKeyboardMap, isEditableTarget, resolveDirectEditKey } from '../editor/keyboardMap';
+import { rootKidEffectiveSides, rootSiblingForceSide } from '../editor/rootSiblingSide';
+import { nextChildText } from '../editor/defaultNodeText';
 import { ActivityPanel } from '../editor/ActivityPanel';
 import { ThemePanel } from '../editor/ThemePanel';
 import {
@@ -643,6 +645,9 @@ export function EditorPage() {
   // 交互不受影响）；浮层面板按各自根类名（member-panel/version-panel/theme-panel/
   // activity-panel/help-panel/find-bar）。
   useEffect(() => {
+    // 格式/任务右列（需求方 2026-10-09 裁定）**不参与外点关闭**：点击画布空白仅清
+    // 选区（面板转空态），面板常驻至显式关闭（自身按钮/工具栏互斥 toggle/只读强
+    // 制收）。其余弹层维持外点即关。
     const anyOpen =
       membersOpen ||
       versionsOpen ||
@@ -651,8 +656,6 @@ export function EditorPage() {
       findOpen ||
       themePanelOpen ||
       structurePanelOpen ||
-      formatOpen ||
-      taskPanelOpen ||
       commentsOpen;
     if (!anyOpen) return;
     const onDocPointerDown = (e: PointerEvent): void => {
@@ -681,8 +684,6 @@ export function EditorPage() {
       setFindOpen(false);
       setThemePanelOpen(false);
       setStructurePanelOpen(false);
-      setFormatOpen(false);
-      setTaskPanelOpen(false);
       setCommentsOpen(false);
     };
     document.addEventListener('pointerdown', onDocPointerDown);
@@ -695,8 +696,6 @@ export function EditorPage() {
     findOpen,
     themePanelOpen,
     structurePanelOpen,
-    formatOpen,
-    taskPanelOpen,
     commentsOpen,
   ]);
 
@@ -1107,6 +1106,23 @@ export function EditorPage() {
     syncZoom();
   };
 
+  /** 定位到中心（需求方 2026-10-09）：保持当前缩放，把中心主题平移到画布中心。
+   *  居中同式 fitCanvas(maxScale) 分支——按 root 盒单点化：tx' = vw/2 − cx×s
+   *  （panBy 补差值）；root 盒缺失（空布局竞态）静默 no-op。 */
+  const centerRoot = (): void => {
+    const vp = viewportRef.current;
+    const svgEl = svgRef.current;
+    if (!vp || !svgEl) return;
+    const box = boxesRef.current.find((b) => b.id === ROOT_NODE_ID);
+    if (!box) return;
+    const s = vp.scale;
+    vp.panBy(
+      svgEl.clientWidth / 2 - (box.x + box.w / 2) * s - vp.tx,
+      svgEl.clientHeight / 2 - (box.y + box.h / 2) * s - vp.ty,
+    );
+    syncZoom();
+  };
+
   const zoomBy = (factor: number): void => {
     const vp = viewportRef.current;
     const svgEl = svgRef.current;
@@ -1311,12 +1327,14 @@ export function EditorPage() {
   /**
    * 新建节点（Tab/Enter/Shift+Tab/右键插入）：**惰性编辑**（2026-09-28 需求方
    * 走查，企微语义对齐）——按键立刻创建节点并选中，**不开编辑框**；默认文本
-   * 「新主题」同事务写入，节点落位即可见有语义。等用户敲下第一个可打印字符时
-   * 才由 keydown effect 补开编辑框（openPendingEditor），该字符/IME 组字直接落
-   * 进编辑框。取消语义：Esc 直接回收（pendingCancelRef → removeIfAlive）；「新
-   * 建后敲字又全删」的空提交同走回收（openPendingEditor onCommit）。撤销语义：
-   * 建节点（含默认文本）一笔事务、敲字提交再一笔——一次 Ctrl+Z 撤回「新主题」、
-   * 两次删节点（编辑器惯例；用例 4 断言「新节点文本消失」仍成立）。
+   * （root 下「分支主题 N」、其余「子主题 N」，2026-10-09 裁定，规则单源
+   * defaultNodeText.nextChildText）同事务写入，节点落位即可见有语义。等用户
+   * 敲下第一个可打印字符时才由 keydown effect 补开编辑框（openPendingEditor），
+   * 该字符/IME 组字直接落进编辑框。取消语义：Esc 直接回收（pendingCancelRef →
+   * removeIfAlive）；「新建后敲字又全删」的空提交同走回收（openPendingEditor
+   * onCommit）。撤销语义：建节点（含默认文本）一笔事务、敲字提交再一笔——一次
+   * Ctrl+Z 撤回默认文本、两次删节点（编辑器惯例；用例 4 断言「新节点文本消失」
+   * 仍成立）。
    * via（M5 Task 4）：node_add 埋点的操作方式——创建即上报（节点确实加进了
    * 文档；取消路径回收节点但不回滚事件，注释口径）。
    */
@@ -1339,11 +1357,14 @@ export function EditorPage() {
     // 节点相反，故建后同事务内显式 setNodeSide 覆写（同值守卫幂等、嵌套事务复用
     // 外层，一次 Ctrl+Z 与建节点同撤）。仅 mindmap 消费侧别（logic/org 布局不读，
     // 不落 side 键）；参照节点无持久侧（旧文档）时 forceSide 缺省，自动定侧接管。
+    // 默认名序号计算在事务外（校验先于事务纪律：nextChildText 纯读同级存活兄弟
+    // 的最大序号，事务内只执行已验证的写）。
+    const defaultText = nextChildText(doc, parentId);
     let createdId = '';
     try {
       withTransaction(doc, ORIGIN_USER, () => {
         createdId = addChild(doc, parentId, index === undefined ? {} : { index });
-        setText(doc, createdId, '新主题', ORIGIN_USER);
+        setText(doc, createdId, defaultText, ORIGIN_USER);
         if (forceSide && parentId === ROOT_NODE_ID && getMeta(doc).structureType === 'mindmap') {
           setNodeSide(doc, createdId, forceSide);
         }
@@ -1397,7 +1418,7 @@ export function EditorPage() {
       selectionRef.current?.selectOnly(relation === 'parent' && nodeToOutdent ? nodeToOutdent : parentId);
     };
     // 惰性：不开编辑框，登记待编辑节点即返回。连续 Enter/Tab 基于 primaryId()
-    // （=本节点）继续新建，pending 被新节点覆盖、旧节点保留「新主题」文本（企
+    // （=本节点）继续新建，pending 被新节点覆盖、旧节点保留默认文本（企
     // 微同款）；Backspace/Delete 走 onDelete→handleDelete 删掉本节点（handle
     // Delete 成功后顺手清 pending，防悬空）。
     pendingEditRef.current = createdId;
@@ -1411,7 +1432,7 @@ export function EditorPage() {
    * 旧「空提交=取消」语义一致；已键入的描述随节点一并废弃）；非空 → setText +
    * setDescription 同一笔事务（描述框留空= setDescription('') 同值守卫零写入）。
    * onCancel 不回收：取消时文本未变（有改动走 blur=commit 到不了 onCancel），保留
-   * 「新主题」现状；回收闭包在关闭路径一律作废（提交后节点已是常驻节点，不可再
+   * 默认文本现状；回收闭包在关闭路径一律作废（提交后节点已是常驻节点，不可再
    * 被回收）。双框形态（非简洁模式）：描述框随编辑浮层一并打开，空时占位
    * 「填写描述…」（2026-10-01 需求方「描述单独输入框」）。
    *
@@ -1476,7 +1497,7 @@ export function EditorPage() {
         }
       },
       onCancel: () => {
-        // 取消不回收：文本没变（保留「新主题」），仅作废回收闭包
+        // 取消不回收：文本没变（保留默认文本），仅作废回收闭包
         pendingCancelRef.current = null;
         setEditingClass(null);
       },
@@ -1529,7 +1550,7 @@ export function EditorPage() {
       const pending = pendingEditRef.current;
       if (pending && pending === nodeId) {
         // pending 优先：待编辑新建节点的空格等同其首个可打印字符——同步补开待
-        // 编辑框且**不 preventDefault**（空格替换全选的「新主题」，原语义不变）。
+        // 编辑框且**不 preventDefault**（空格替换全选的默认文本，原语义不变）。
         // 捕获层已断传播，冒泡层收不到空格，故须在此处理；盒子未就绪（创建同帧
         // 极速按键）保留待编辑下一键重试，空格此时被吞（与旧冒泡路径同）。
         if (openPendingEditor(pending)) {
@@ -1617,7 +1638,7 @@ export function EditorPage() {
 
   /**
    * Enter/Shift+Enter 新建同级。顺时针落位（需求方 2026-10-09，替代 2026-09-30 方向
-   * 矩阵的左列分支）：
+   * 矩阵的左列分支）＋ 同日二次裁定（右满强制左的触发收窄——左下角 bug 修复）：
    * - root 上 Enter/Tab 降级新建子级（现状不变）：addChild 按右列配额自动定侧——右列
    *   未满 3 append 落右列底部，满后 append 落左列顶部（布局左列视觉反序：文档序末位
    *   = 视觉最高位，往左上角生长，围绕中心顺时针）。
@@ -1626,8 +1647,9 @@ export function EditorPage() {
    *   Enter 完全反向）。logic/org（单侧/无侧结构）维持降级现状。
    * - 二级主题（parent===root，mindmap）：索引全层级统一——Enter=文档序后插、
    *   Shift+Enter=前插；布局左列视觉反序下天然涌现「右列 Enter 向下/左列 Enter 向上」
-   *   （顺时针），Shift+Enter 全部反向。同侧保持：参照节点持久 side 经 forceSide 下沉
-   *   给 openNewNodeEditor（addChild 按计数自动定侧可能给相反侧）。
+   *   （顺时针），Shift+Enter 全部反向。侧别经 rootSiblingForceSide（规则单源）：
+   *   ① 右满 3 + 左列空 + 文档序末位分支 Enter → 左（顺时针开启左列）；
+   *   ② 其余（含右满时的非末位右分支）→ 所按分支有效侧，紧挨其下方同侧落位。
    * - logic（全右单侧）与 org、更深层级维持现状（Enter 下方）。
    */
   const handleEnter = (reverse = false): void => {
@@ -1638,19 +1660,13 @@ export function EditorPage() {
     if (current === ROOT_NODE_ID) {
       if (reverse && getMeta(doc).structureType === 'mindmap') {
         // 逆时针：左列未满配额落左列、否则右列；插到该列首个同侧子级文档位之前。
-        const rootSnap = getNode(doc, ROOT_NODE_ID);
-        const kids = rootSnap?.childIds ?? [];
-        // 有效侧 = 持久 side ?? 文档序计数兜底（index<3 右 / ≥3 左）——与 engine
-        // assignMindmapSides / core countRightSideRootChildren 的兜底同式（配额常量
-        // 同值 3，此处为其镜像用法，改动需同步）。
-        const sideOfKid = (cid: string, i: number): NodeSide => {
-          const s = getNode(doc, cid)?.side;
-          if (s === 'left' || s === 'right') return s;
-          return i < 3 ? 'right' : 'left';
-        };
-        const leftCount = kids.filter((cid, i) => sideOfKid(cid, i) === 'left').length;
+        const kids = getNode(doc, ROOT_NODE_ID)?.childIds ?? [];
+        // 有效侧单源：rootSiblingSide.rootKidEffectiveSides（持久 ?? 索引兜底，与
+        // engine assignMindmapSides / core countRightSideRootChildren 的兜底同式）。
+        const sides = rootKidEffectiveSides(doc);
+        const leftCount = sides.filter((s) => s === 'left').length;
         const side: NodeSide = leftCount < 3 ? 'left' : 'right';
-        const firstSameSide = kids.findIndex((cid, i) => sideOfKid(cid, i) === side);
+        const firstSameSide = sides.findIndex((s) => s === side);
         openNewNodeEditor(
           ROOT_NODE_ID,
           firstSameSide === -1 ? kids.length : firstSameSide,
@@ -1668,14 +1684,11 @@ export function EditorPage() {
     const parent = getNode(doc, snap.parentId);
     if (!parent || parent.deleted) return;
     const currentIdx = parent.childIds.indexOf(current);
-    // 二级主题（root 级 mindmap）同侧保持：参照节点持久 side（NodeSnapshot 读侧已
-    // 防御非法值）下沉 forceSide；无持久侧不覆写——新节点由 addChild 自动定侧接管。
-    const forceSide: NodeSide | undefined =
-      parent.id === ROOT_NODE_ID &&
-      getMeta(doc).structureType === 'mindmap' &&
-      (snap.side === 'left' || snap.side === 'right')
-        ? snap.side
-        : undefined;
+    // root 级 mindmap 同侧落位（规则单源 rootSiblingForceSide，2026-10-09 二次裁定）：
+    // 顺时针触发（右满 3+左空+末位分支 Enter）→ 左（开启左列）；其余 → 所按分支
+    // 有效侧（持久 side ?? 索引兜底——旧文档不再被 addChild 计数配额强制换侧，
+    // 左下角 bug 修复）。非 root 级/非 mindmap → undefined，addChild 自动定侧接管。
+    const forceSide: NodeSide | undefined = rootSiblingForceSide(doc, current, reverse);
     // 索引公式全层级统一：Enter=文档序后插（视觉下方）、Shift+Enter=前插（视觉上方）；
     // root 级左列因布局视觉反序自然涌现「Enter 向上」（顺时针）——旧按侧分支的
     // upward 矩阵随共享单带退役。
@@ -2187,6 +2200,10 @@ export function EditorPage() {
   const onSvgContextMenu = (e: React.MouseEvent<SVGSVGElement>): void => {
     e.preventDefault();
     if (justDraggedRef.current) return;
+    // 右键平移释放（需求方 2026-10-09）：Viewport 右键拖动超阈值平移后，浏览器随
+    // pointerup 合成的 contextmenu 不弹菜单（拖了就不弹）；justPanned 在任一
+    // pointerdown 复位，下一次原地右键松开照常弹菜单。
+    if (viewportRef.current?.justPanned) return;
     if (readOnly) return; // 移动端只读：不弹右键菜单（长按 contextmenu 同拦）
     const target = e.target as Element;
     // 概要 bracket（M6 Task 6）：右键 → 概要菜单（删除概要），与节点菜单互斥
@@ -2245,7 +2262,16 @@ export function EditorPage() {
         const snap = getNode(doc, nodeId);
         const parent = snap ? getNode(doc, snap.parentId) : null;
         if (!snap || !parent || parent.deleted) break;
-        openNewNodeEditor(parent.id, parent.childIds.indexOf(nodeId) + 1, 'sibling', 'context');
+        // root 级 mindmap 同侧落位与键盘 Enter 同规则（rootSiblingForceSide 单源，
+        // 2026-10-09 二次裁定）：顺时针触发 → 左；其余 → 所按分支有效侧。
+        openNewNodeEditor(
+          parent.id,
+          parent.childIds.indexOf(nodeId) + 1,
+          'sibling',
+          'context',
+          undefined,
+          rootSiblingForceSide(doc, nodeId, false),
+        );
         break;
       }
       case 'delete':
@@ -3430,18 +3456,6 @@ export function EditorPage() {
             <SearchIcon />
           </button>
         </div>
-        <span className="toolbar-sep" />
-        {/* 全屏组（视图动作收尾） */}
-        <div className="toolbar-group">
-          <button
-            data-testid="fullscreen-btn"
-            className="toolbar-btn"
-            title="全屏（Esc 退出）"
-            onClick={toggleFullscreen}
-          >
-            <FullscreenIcon />
-          </button>
-        </div>
         {/* 顶栏协作者头像栏（M6 Task 9，企微对标）：工具栏最右 ≤5 枚 24px 圆头像
             （昵称首字符回退，底色=成员色），在线=全彩+成员色描边、离线=灰；溢出
             「+N」；点击任意头像/溢出位 = 打开既有成员面板（members-btn 同一面板）。
@@ -3758,42 +3772,63 @@ export function EditorPage() {
         />
       )}
 
-      {/* 底栏（画布专属：适应画布/缩放）：表格视图隐藏（M7a-T4） */}
+      {/* 底栏（画布专属，2026-10-09 布局裁定：左计数 / 右定位中心·适应画布·缩放·
+          全屏——全屏自工具栏迁入，!readOnly 闸维持移动端不装配口径）：表格视图
+          隐藏（M7a-T4） */}
       {view === 'mind' && (
         <footer className="editor-bottombar">
-        {/* 显式无参调用：onClick 直传会把 click 事件当 maxScale（number 形参） */}
-        <button data-testid="fit-btn" onClick={() => fitCanvas()}>
-          适应画布
-        </button>
-        <select
-          data-testid="zoom-select"
-          aria-label="缩放档位"
-          value={ZOOM_PRESETS.includes(zoomPct) ? String(zoomPct) : ''}
-          onChange={(e) => {
-            const pct = Number(e.target.value);
-            if (pct > 0) zoomToPreset(pct);
-          }}
-        >
-          <option value="">档位</option>
-          {ZOOM_PRESETS.map((p) => (
-            <option key={p} value={String(p)}>
-              {p}%
-            </option>
-          ))}
-        </select>
-        <button data-testid="zoom-out" onClick={() => zoomBy(1 / 1.2)}>
-          -
-        </button>
-        <span className="zoom-pct" data-testid="zoom-pct">
-          {zoomPct}%
-        </span>
-        <button data-testid="zoom-in" onClick={() => zoomBy(1.2)}>
-          +
-        </button>
-        <span className="node-count" data-testid="node-count">
-          {nodeCount} 节点
-        </span>
-      </footer>
+          <span className="node-count" data-testid="node-count">
+            {nodeCount} 节点
+          </span>
+          <div className="bottombar-right">
+            <button
+              data-testid="center-btn"
+              title="定位中心（保持当前缩放）"
+              onClick={centerRoot}
+            >
+              定位中心
+            </button>
+            {/* 显式无参调用：onClick 直传会把 click 事件当 maxScale（number 形参） */}
+            <button data-testid="fit-btn" onClick={() => fitCanvas()}>
+              适应画布
+            </button>
+            <select
+              data-testid="zoom-select"
+              aria-label="缩放档位"
+              value={ZOOM_PRESETS.includes(zoomPct) ? String(zoomPct) : ''}
+              onChange={(e) => {
+                const pct = Number(e.target.value);
+                if (pct > 0) zoomToPreset(pct);
+              }}
+            >
+              <option value="">档位</option>
+              {ZOOM_PRESETS.map((p) => (
+                <option key={p} value={String(p)}>
+                  {p}%
+                </option>
+              ))}
+            </select>
+            <button data-testid="zoom-out" onClick={() => zoomBy(1 / 1.2)}>
+              -
+            </button>
+            <span className="zoom-pct" data-testid="zoom-pct">
+              {zoomPct}%
+            </span>
+            <button data-testid="zoom-in" onClick={() => zoomBy(1.2)}>
+              +
+            </button>
+            {!readOnly && (
+              <button
+                data-testid="fullscreen-btn"
+                className="bottombar-icon-btn"
+                title="全屏（Esc 退出）"
+                onClick={toggleFullscreen}
+              >
+                <FullscreenIcon />
+              </button>
+            )}
+          </div>
+        </footer>
       )}
 
       {toast && (

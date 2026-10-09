@@ -51,8 +51,9 @@ async function apiCreateSharedFile(
 const randomPhone = () => '138' + String(Math.floor(10000000 + Math.random() * 89999999));
 
 test('全链路：A 复制分享链接 → B 登录回跳自动加入 → 编辑器；关闭后失效页', async ({ browser, request }) => {
-  // —— A：注册登录；文件经 API 创建（标题与画布 root 文本一致；工作台行内重命名只改
-  //    title 列不回写 doc，画布标题口径以创建时为准），随后刷新列表走 UI 分享入口 ——
+  // —— A：注册登录；文件经 API 创建（中心节点文本自 2026-10-09 裁定起固定「中心主题」，
+  //    与文件标题解耦——画布断言按中心主题；工作台行内重命名只改 title 列不回写 doc），
+  //    随后刷新列表走 UI 分享入口 ——
   const contextA = await browser.newContext({ permissions: ['clipboard-read', 'clipboard-write'] });
   const pageA = await contextA.newPage();
   const aPhone = await registerAndLogin(pageA);
@@ -79,7 +80,7 @@ test('全链路：A 复制分享链接 → B 登录回跳自动加入 → 编辑
   await pageB.getByPlaceholder('验证码（开发环境固定 123456）').fill('123456');
   await pageB.getByRole('button', { name: '登录', exact: true }).click();
   await expect(pageB).toHaveURL(new RegExp(`/edit/${fileId}`));
-  await expect(pageB.locator('.editor-canvas svg .gm-text', { hasText: '分享目标文档' })).toBeVisible();
+  await expect(pageB.locator('.editor-canvas svg .gm-text', { hasText: '中心主题' })).toBeVisible();
 
   // —— A 关闭链接（产品暂无关闭入口 UI，经 API 编排）——
   const closed = await request.delete(`/api/files/${fileId}/share`, { headers: authHeader(aToken) });
@@ -106,7 +107,7 @@ test('已登录用户打开 active 链接：自动加入并进入编辑器（画
   await registerAndLogin(page);
   await page.goto(`/s/${shareToken}`);
   await expect(page).toHaveURL(new RegExp(`/edit/${fileId}`));
-  await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '登录态直达文档' })).toBeVisible();
+  await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '中心主题' })).toBeVisible();
   await context.close();
 });
 

@@ -29,10 +29,12 @@
 | M7a | mindgrid 合并轨第一弹（任务常驻/冲突以 mindgrid 为准）：任务字段、派生规则、标记三组制、表格视图（19fad2c）；kimi 流程验收+修复+回归闭环（eb19547/67c717b）。**表格形态需求方 2026-09-29 走查后提出 M7b 反馈包（11 条），面板/工具栏类项转入 M7b** | ✅ 交付（e2e 挂账随 M7b 收口） | docs/superpowers/specs/2026-09-28-mindgrid-merge-m7.md |
 | M7b | 标记企微对标二批+交互补课（需求方 2026-09-29 反馈 11 条）：企微全量图标/表情目录+组语义（替换/多选）+多值模型、标记面板企微式竖层重做（顶部按钮开合）、节点标记点击换组内、空白左拖框选+批量标记、工具栏去重/文件名宽度/保存中初始态/插入左移/格式刷剔除标记、回退待开始进度清零 | 🚧 进行中 | docs/superpowers/specs/2026-09-29-m7b-marker-wecom-parity.md |
 | — | 分支主题顺时针落位（需求方 2026-10-09 裁定，四问确认：双带居中/左列镜像/中心 Shift+Enter 逆时针/接受旧文档左列重排）：root 一级子树左右两带独立垂直居中于中心主题，右列=文档序自上而下、**左列=文档序自下而上（视觉反序，往左上角生长）**；中心主题 Enter/Tab 顺时针（右列配额 3 满后 append 落左列顶部）、Shift+Enter 逆时针镜像（左列优先、插该列文档序最前）；二级主题 Enter=文档序后插/Shift+Enter=前插（左列视觉反序下涌现向上）；拖拽槽位几何与落点映射同口径视觉序（drag sideInsertDocIndex/resolveDropSlot）；纯右文档布局零变化（金样未动） | ✅ 完成 | engine layout/drag 单测 + web e2e 方向矩阵/顺时针/逆时针用例 |
+| — | 新增节点默认命名与中心主题定名（需求方 2026-10-09 五问裁定：格式=「分支主题 N」/「子主题 N」（同级局部序号，第三级及更深也叫子主题）；删除跳号不重排（max+1，墓碑不计数，保留前缀的改名仍占号）；中心节点=「中心主题」**仅新建空白文档**（存量/XMind 导入/种子不动），文件标题与中心节点文本解耦；表格「+ 添加子任务」与画布统一）：规则单源 `apps/web/src/editor/defaultNodeText.ts`（画布 openNewNodeEditor 与表格 addChildTo 共用，序号计算在事务外）；core `TemplateSpec.rootText` 可选覆盖；服务端三处空态模板同口径（files.service 创建即落 docState=主路径、collab.service 装载兜底、comments.service 空态兜底）；core `operations.ts` 默认空串语义不动（粘贴/恢复/导入零波及）；e2e 断言 8 文件同步（editor 数组精确断言按序号重写；share/member-invite/avatars 画布 root 断言随解耦改「中心主题」） | ✅ 完成 | web 单测 defaultNodeText 10 用例 + core doc.test 2 用例 + server e2e files:80 + web e2e 全量；m1-acceptance FR-EDT-001 行已更新（占位提示缺口随裁定关闭） |
+| — | 格式/任务右列不因画布点击关闭 + 中/右键拖拽平移（需求方 2026-10-09 三问裁定：光标仅拖动中抓手；右键「拖了就不弹菜单」（4px 阈值，原地松开照常弹）；格式/任务面板点空白转空态不关闭，其余弹层维持外点即关）：① EditorPage 统一外点 effect 摘出 formatOpen/taskPanelOpen（点画布仅清选区，面板自身按钮/toggle/只读强制收不变）；② engine Viewport 新增右键阈值平移（增量自起点起算）+ `gm-panning` 类挂摘（editor.css 抓手光标）+ `justPanned` 标记，页面 onSvgContextMenu 据此防抖；中键/空格+左键路径零变化（engine 只增不改）；e2e 更新 format-panel/format-painter 断言 + 新增右键/中键平移用例 | ✅ 完成 | engine viewport.test 5 新用例（37/37）+ web e2e editor:772/801 平移用例 + format-panel:53/102 新语义；附带环境修复：本机 Node 20.19.4→22.22.2（jsdom 30 需 ≥22.22，engine 单测在 20 上无法收集） |
 
 > **M7 合并轨与并行企微对标轨的关系**：`docs/superpowers/specs/2026-09-28-wecom-interaction-parity-design.md`（待评审）与本轨在标记分组/暗色上已被 2026-09-28 裁定更新，其余项（框选/拖动排序/⊕/格式抽屉/外框）不冲突、待并轨排期，见合并轨 spec §二。
 
-**当前门禁基线**（2026-10-09 顺时针落位收口时）：lint/typecheck 0；全仓单测 802；server e2e 189/189；web e2e 158 passed + 1 skipped（PERF 门）。
+**当前门禁基线**（2026-10-09 平移/面板裁定交付后，**本机 Node 已切 22.22.2**——jsdom 30 需 ≥22.22，Node 20 下 engine 单测无法收集，xmind-io undici unhandled error 随切换消失）：lint/typecheck 0；engine 396/396、web/shared/server/xmind-io 单测全过；server e2e 190/190；web e2e 161 passed + 1 skipped（PERF 门）。唯一存量：core bench「1 万次混合操作」3s 阈值超时（机器负载敏感，stash 基线验证非代码回归）。
 
 ## 三、PRD 分期 ≠ 实际交付（对齐差异清单）
 

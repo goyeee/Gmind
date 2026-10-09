@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import request from 'supertest';
 import type { INestApplication } from '@nestjs/common';
 import { DataSource } from 'typeorm';
-import { createTemplateDoc, docToState } from '@gmind/core';
+import { createTemplateDoc, docFromState, docToState, ROOT_NODE_ID } from '@gmind/core';
 import { createTestApp } from './support/app-test';
 import { EventEntity } from '../src/events/event.entity';
 
@@ -75,6 +75,25 @@ describe('files 域', () => {
     expect(created.body.title).toBe('未命名脑图');
   });
 
+  // 空白新建的中心节点文本裁定（需求方 2026-10-09）：root=「中心主题」而非文件标题，
+  // meta.title 仍为文件标题——文件标题与中心节点文本解耦。
+  it('空白新建的文档中心节点文本为「中心主题」，meta.title 仍为文件标题', async () => {
+    const users = app.get((await import('../src/users/users.service')).UsersService);
+    const user = await users.create({ method: 'phone', phone: '13800006666' });
+    const token = await tokenFor(user.id);
+    const created = await request(app.getHttpServer())
+      .post('/api/files')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ title: '我的新图' });
+    expect(created.status).toBe(201);
+    const detail = await request(app.getHttpServer())
+      .get(`/api/files/${created.body.id as string}`)
+      .set('Authorization', `Bearer ${token}`);
+    expect(detail.status).toBe(200);
+    const doc = docFromState(new Uint8Array(Buffer.from(String(detail.body.docState), 'base64')));
+    expect(String(doc.getMap('nodes').get(ROOT_NODE_ID)?.get('text'))).toBe('中心主题');
+    expect(doc.getMap('meta').get('title')).toBe('我的新图');
+  });
   it('title 为空字符串时返回 400（Zod 校验）', async () => {
     const users = app.get((await import('../src/users/users.service')).UsersService);
     const user = await users.create({ method: 'phone', phone: '13800004444' });

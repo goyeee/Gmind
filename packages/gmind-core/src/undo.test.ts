@@ -184,6 +184,11 @@ describe('远端事务不进本地撤销栈（M2 准入清单 §1 多端撤销�
     const state = docToState(base);
     const doc = docFromState(state);
     const remote = docFromState(state);
+    // 副本先双向同步（生产顺序：连线即全量 sync，之后才交换编辑差量）。docFromState
+    // 对旧文档有 side 回填本地写（2026-10-09 裁定）——未经同步的 sv 差量会引用对端
+    // 缺失的回填项（Yjs origin 悬挂），同步后差量只含编辑事务本身。
+    Y.applyUpdate(doc, Y.encodeStateAsUpdate(remote));
+    Y.applyUpdate(remote, Y.encodeStateAsUpdate(doc));
     const xId = findIdByText(doc, 'X');
     const p1Id = findIdByText(doc, 'P1');
     const aliveBefore = fullSnapshot(doc);

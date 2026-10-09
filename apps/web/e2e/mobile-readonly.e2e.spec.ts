@@ -167,11 +167,11 @@ test('桌面回归：默认视口编辑控件齐全，右列默认不渲染，�
   // 右列默认不渲染（M7b-R6 需求方裁定：格式按钮/插入菜单评论项开右列）
   await expect(page.getByTestId('rich-panel')).toHaveCount(0);
   await expect(page.getByTestId('comment-pane')).toHaveCount(0);
-  // 键盘写路径在桌面仍装配：Tab 惰性创建「新主题」节点并选中（敲字才进编辑框；
+  // 键盘写路径在桌面仍装配：Tab 惰性创建默认命名节点「分支主题 1」并选中（敲字才进编辑框；
   // 补开首键纪律见 editor.e2e pressFirstCharToOpen：ASCII 首键带重试）
   await page.keyboard.press('Tab');
   await expect(page.locator('.gm-text-editor')).toHaveCount(0);
-  await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '新主题' })).toBeVisible();
+  await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '分支主题 1' })).toBeVisible();
   const editor = page.locator('.gm-text-editor');
   for (let i = 0; i < 20 && (await editor.count()) === 0; i += 1) {
     await page.keyboard.press('x');

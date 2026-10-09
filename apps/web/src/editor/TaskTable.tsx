@@ -41,6 +41,7 @@ import {
   type TaskStatus,
 } from '@gmind/shared';
 import { MARKER_ROW_ORDER, colorForUser, markerDefOf } from '@gmind/engine';
+import { nextChildText } from './defaultNodeText';
 import { api } from '../api/client';
 import { track } from '../api/events';
 import type { PresenceMember } from './collab';
@@ -738,15 +739,19 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
     }
   };
 
-  /** + 添加子任务：建空节点 → 立即进入标题行内编辑（空提交/Esc 回收，画布同款）。 */
+  /** + 添加子任务：建节点并预填默认名（分支主题 N/子主题 N，与画布统一——
+   *  2026-10-09 裁定）→ 立即进入标题行内编辑（输入 onFocus 全选，敲字即覆盖；
+   *  清空提交/Esc 回收，画布同款）。 */
   const addChildTo = (parentId: string): void => {
     if (readOnly) return;
     if (checkQuota()) return;
     try {
       if (getNode(doc, parentId)?.collapsed) setCollapsed(doc, parentId, false); // 折叠中新建先展开
+      // 序号计算在事务外（校验先于事务纪律）。
+      const defaultText = nextChildText(doc, parentId);
       let createdId = '';
       withTransaction(doc, ORIGIN_USER, () => {
-        createdId = addChild(doc, parentId);
+        createdId = addChild(doc, parentId, { text: defaultText });
       });
       afterUserWrite();
       // node_add 埋点：表格无独立 via 枚举值，并入 context（创建即上报，取消不回滚）

@@ -174,7 +174,7 @@ test('样式：作用域切「仅当前节点」设字号 24 → 子节点字号
   await panel.getByTestId('font-size-select').selectOption('24');
   await expect(nodeGroup(page, '周三').locator('.gm-text')).toHaveAttribute('font-size', '24');
   await expect(childText).toHaveAttribute('font-size', childBefore ?? '');
-  // 焦点移出下拉（keyboardMap 对 select 让路；画布点击同时按外点语义收面板）后撤销恢复
+  // 焦点移出下拉（keyboardMap 对 select 让路；画布点击清选——面板不收，2026-10-09 裁定）后撤销恢复
   await page.locator('.editor-canvas svg').click({ position: { x: 30, y: 30 } });
   await page.keyboard.press('Control+Z');
   await expect

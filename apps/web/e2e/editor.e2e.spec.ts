@@ -46,16 +46,17 @@ async function pressFirstCharToOpen(page: Page): Promise<void> {
 
 /**
  * 用例 2 的创建流程（2026-09-28 惰性编辑语义 + 2026-10-01 双框改版）：Tab **立即
- * 创建**文本为「新主题」的节点并选中，但**不**立刻打开行内编辑框；敲下首个可打印
+ * 创建**默认命名节点（root 下「分支主题 N」，2026-10-09 裁定；本用例种子文档 root
+ * 下首个 → 分支主题 1）并选中，但**不**立刻打开行内编辑框；敲下首个可打印
  * 字符时编辑框才出现（打开即全选默认文本，首字符替换之、其余追加）。双框形态：
  * 标题框 Enter 切描述框（非简洁模式恒渲染），描述框留空再 Enter 一并提交
  * （setDescription('') 同值守卫零写入）。
  */
 async function createNewNodeViaKeyboard(page: Page): Promise<void> {
-  await page.keyboard.press('Tab'); // root 为默认选中：立即落位「新主题」节点（惰性，不开框）
+  await page.keyboard.press('Tab'); // root 为默认选中：立即落位默认命名节点（惰性，不开框）
   const editor = page.locator('.gm-text-editor');
-  // 落位渲染先行：「新主题」文本可见 + 惰性锁定（编辑框不随创建出现）
-  await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '新主题' })).toBeVisible();
+  // 落位渲染先行：默认文本可见 + 惰性锁定（编辑框不随创建出现）
+  await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '分支主题 1' })).toBeVisible();
   await expect(editor).toHaveCount(0);
   await pressFirstCharToOpen(page);
   await expect(editor).toBeFocused();
@@ -91,16 +92,16 @@ test('编辑器：Tab 新建节点提交后画布出现且自动保存', async (
   await expect(status).toHaveText(/已保存/);
 });
 
-// 用例 2b（2026-09-28 惰性创建语义）：Tab 立即落位「新主题」节点、敲字才进编辑、
+// 用例 2b（2026-09-28 惰性创建语义）：Tab 立即落位默认命名（分支主题 1）节点、敲字才进编辑、
 // Esc 取消回收（待编辑态下按 Esc 直接删掉新建节点，不留空壳）
-test('编辑器：惰性创建——Tab 立即落位新主题节点、敲字才进编辑、Esc 取消回收', async ({ page }) => {
+test('编辑器：惰性创建——Tab 立即落位默认命名节点、敲字才进编辑、Esc 取消回收', async ({ page }) => {
   await openSeedDoc(page, '本周计划');
   const groups = page.locator('.editor-canvas svg g[data-node-id]');
   const before = await groups.count();
   await page.keyboard.press('Tab');
-  // 节点立即出现在树中（默认文本「新主题」同事务写入，不落空壳）
+  // 节点立即出现在树中（默认文本同事务写入，不落空壳）
   await expect(groups).toHaveCount(before + 1);
-  await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '新主题' })).toBeVisible();
+  await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '分支主题 1' })).toBeVisible();
   // 惰性锁定：编辑框此刻不出现
   await expect(page.locator('.gm-text-editor')).toHaveCount(0);
   // 待编辑态 Esc 取消创建：节点回收不留壳，编辑框始终未出现
@@ -110,7 +111,7 @@ test('编辑器：惰性创建——Tab 立即落位新主题节点、敲字才�
   // 再次新建：敲字补开编辑框 → 双框 Enter 提交路径仍工作
   await page.keyboard.press('Tab');
   await expect(groups).toHaveCount(before + 1);
-  await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '新主题' })).toBeVisible();
+  await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '分支主题 1' })).toBeVisible();
   await pressFirstCharToOpen(page);
   await page.keyboard.press('Backspace');
   await page.keyboard.insertText('落位节点');
@@ -132,7 +133,7 @@ test('编辑器：双框编辑——标题 Tab 切描述框，长描述自适应
   await expect(page.locator('.editor-canvas svg .gm-text')).toHaveCount(7); // 种子 root+3子+3孙
   // 新建（惰性）→ 敲字补开编辑框 → 键入标题
   await page.keyboard.press('Tab');
-  await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '新主题' })).toBeVisible();
+  await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '分支主题 1' })).toBeVisible();
   await pressFirstCharToOpen(page);
   await page.keyboard.press('Backspace');
   await page.keyboard.insertText('需求评审');
@@ -342,14 +343,14 @@ test('编辑器：编辑后立即返回工作台，卸载冲刷保存持久化',
 });
 
 // 修复 3：Shift+Tab 在节点与父之间插入新父（P→N→C，PRD FR-EDT-001）——按保存后的
-// docState 结构断言：原父在原 index 处持有新节点（惰性创建默认文本「新主题」），
+// docState 结构断言：原父在原 index 处持有新节点（惰性创建默认文本「分支主题 1」），
 // 新节点 children = [原节点]。
 test('编辑器：Shift+Tab 在节点与父之间插入新父', async ({ page }) => {
   await openSeedDoc(page, '本周计划');
   await expect(page.locator('.editor-canvas svg .gm-text')).toHaveCount(7);
   await page.locator('.editor-canvas svg .gm-text', { hasText: '周三' }).click(); // 周三有子「方案评审」
   await page.keyboard.press('Shift+Tab');
-  await expect(page.locator('.editor-canvas svg .gm-text')).toHaveCount(8); // +1 新节点（默认文本「新主题」）
+  await expect(page.locator('.editor-canvas svg .gm-text')).toHaveCount(8); // +1 新节点（默认文本「分支主题 1」）
   await expect(page.getByTestId('save-status')).toHaveText(/已保存/);
 
   // 从服务端读回 docState 反解结构（避免依赖渲染几何）
@@ -371,7 +372,7 @@ test('编辑器：Shift+Tab 在节点与父之间插入新父', async ({ page })
   const textOf = (id: string): string => String(nodes.get(id)?.get('text') ?? '');
 
   const rootKids = childIds('root');
-  expect(rootKids.map(textOf)).toEqual(['周一', '新主题', '周五']); // 新节点（默认文本）占据周三原 index
+  expect(rootKids.map(textOf)).toEqual(['周一', '分支主题 1', '周五']); // 新节点（默认文本）占据周三原 index
   const newId = rootKids[1] as string;
   expect(childIds(newId).map(textOf)).toEqual(['周三']); // 原节点成为新节点之子
   expect(String(nodes.get(newId)?.get('parentId'))).toBe('root');
@@ -451,6 +452,49 @@ async function commitLazyNodeText(page: Page, text: string): Promise<void> {
   await expect(editor).toHaveCount(0);
 }
 
+/**
+ * 服务端读回 docState 反解 Y.Doc（顺时针落位系列用例共用，不依赖渲染几何）：
+ * readDocState 拉取当前文件状态；rootKidsOf / textNodeOf / sideNodeOf 为
+ * root 直接子级的文档序 + 文本 + 持久 side 读取器。
+ */
+async function readDocState(page: Page): Promise<Y.Doc> {
+  const token = await page.evaluate(() => localStorage.getItem('gmind.token'));
+  const fileId = page.url().split('/').pop() ?? '';
+  const res = await page.request.get(`/api/files/${fileId}`, {
+    headers: { Authorization: `Bearer ${token ?? ''}` },
+  });
+  expect(res.ok()).toBeTruthy();
+  const detail = (await res.json()) as { docState: string };
+  const doc = new Y.Doc();
+  const binary = atob(detail.docState); // web tsconfig 无 node types，不用 Buffer
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  Y.applyUpdate(doc, bytes);
+  return doc;
+}
+
+function rootKidsOf(doc: Y.Doc): string[] {
+  const nodes = doc.getMap('nodes') as Y.Map<Y.Map<unknown>>;
+  return ((nodes.get('root')?.get('children') as Y.Array<string> | undefined)?.toArray() ?? []);
+}
+
+function textNodeOf(doc: Y.Doc): (id: string) => string {
+  const nodes = doc.getMap('nodes') as Y.Map<Y.Map<unknown>>;
+  return (id) => String(nodes.get(id)?.get('text') ?? '');
+}
+
+function sideNodeOf(doc: Y.Doc): (id: string) => string {
+  const nodes = doc.getMap('nodes') as Y.Map<Y.Map<unknown>>;
+  return (id) => String(nodes.get(id)?.get('side') ?? '');
+}
+
+/** 文本盒 y（渲染几何断言用；文本不存在时失败）。 */
+async function yOfText(page: Page, text: string): Promise<number> {
+  const box = await page.locator('.editor-canvas svg .gm-text', { hasText: text }).boundingBox();
+  expect(box).not.toBeNull();
+  return box!.y;
+}
+
 // Enter/Shift+Enter 方向矩阵（顺时针落位，需求方 2026-10-09）：二级主题文档序后插
 // （Enter）/前插（Shift+Enter）——布局左列视觉反序下涌现「右列 Enter 向下、左列
 // Enter 向上」（围绕中心顺时针）；root 级落点同侧保持（addChild 按右列计数自动定侧
@@ -463,9 +507,9 @@ test('编辑器：Enter 方向矩阵——左列二级主题 Enter 向上建同�
   await page.getByRole('button', { name: '新建脑图' }).click();
   await page.locator('.file-list li', { hasText: '未命名脑图' }).click();
   await expect(page).toHaveURL(/\/edit\//);
-  await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '未命名脑图' })).toBeVisible();
+  await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '中心主题' })).toBeVisible();
   for (const text of ['右一', '右二', '右三', '左一']) {
-    await page.locator('.editor-canvas svg .gm-text', { hasText: '未命名脑图' }).click(); // root 上 Tab 追加
+    await page.locator('.editor-canvas svg .gm-text', { hasText: '中心主题' }).click(); // root 上 Tab 追加
     await page.keyboard.press('Tab');
     await commitLazyNodeText(page, text);
   }
@@ -474,7 +518,7 @@ test('编辑器：Enter 方向矩阵——左列二级主题 Enter 向上建同�
   // 左列节点敲 Enter：文档序后插（顺时针=左列视觉上方），且同侧落左
   await page.locator('.editor-canvas svg .gm-text', { hasText: '左一' }).click();
   await page.keyboard.press('Enter');
-  await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '新主题' })).toBeVisible();
+  await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '分支主题 1' })).toBeVisible();
   // 右列节点敲 Shift+Enter：文档序前插（其上方），同侧保持右
   await page.locator('.editor-canvas svg .gm-text', { hasText: '右二' }).click();
   await page.keyboard.press('Shift+Enter');
@@ -499,18 +543,85 @@ test('编辑器：Enter 方向矩阵——左列二级主题 Enter 向上建同�
   const textOf = (id: string): string => String(nodes.get(id)?.get('text') ?? '');
   const sideOf = (id: string): string => String(nodes.get(id)?.get('side') ?? '');
 
-  // 终序 = [右一, 新主题(Shift+Enter 前插), 右二, 右三, 左一, 新主题(Enter 后插)]
+  // 终序 = [右一, 分支主题 2(Shift+Enter 前插), 右二, 右三, 左一, 分支主题 1(Enter 后插)]
   const rootKids = childIds('root');
-  expect(rootKids.map(textOf)).toEqual(['右一', '新主题', '右二', '右三', '左一', '新主题']);
-  // 右列 Shift+Enter：新主题占右二原 index 1（其上方），右二后移到 2，同侧=right
+  expect(rootKids.map(textOf)).toEqual(['右一', '分支主题 2', '右二', '右三', '左一', '分支主题 1']);
+  // 右列 Shift+Enter：分支主题 2 占右二原 index 1（其上方），右二后移到 2，同侧=right
   expect(sideOf(rootKids[1] as string)).toBe('right');
   expect(sideOf(rootKids[2] as string)).toBe('right'); // 右二（参照节点侧别不变）
-  // 左列 Enter：新主题文档序后插（视觉反序带下=左一上方），同侧=left
+  // 左列 Enter：分支主题 1 文档序后插（视觉反序带下=左一上方），同侧=left
   expect(sideOf(rootKids[4] as string)).toBe('left'); // 左一（参照节点侧别不变）
   expect(sideOf(rootKids[5] as string)).toBe('left');
   // 造数自证：Tab×4 的 3 右 1 左均带持久 side（右一/右三 right，非计数兜底）
   expect(sideOf(rootKids[0] as string)).toBe('right');
   expect(sideOf(rootKids[3] as string)).toBe('right');
+});
+
+// 右满 3 强制左的触发收窄（需求方 2026-10-09 二次裁定，左下角 bug 修复）：右列满 3
+// 且左列空时——非末位右分支（如最右上）Enter → 紧挨其下方、同侧右（不再被 addChild
+// 计数配额强制换侧）；末位分支（文档序末位=顺时针视觉末位）Enter → 左（开启左列，
+// 顺时针延续）。docState 反解断言 index + side；渲染几何断言右列纵序/左列落侧。
+test('编辑器：右满 3 左空时右分支 Enter——非末位紧挨下方同侧右，末位开启左列', async ({ page }) => {
+  await registerAndLogin(page);
+  // 场景 1：3 右 0 左，最右上（非末位）Enter → 紧挨右一下方、右侧
+  await page.getByRole('button', { name: '新建脑图' }).click();
+  await page.locator('.file-list li', { hasText: '未命名脑图' }).click();
+  await expect(page).toHaveURL(/\/edit\//);
+  const rootText = page.locator('.editor-canvas svg .gm-text', { hasText: '中心主题' });
+  await expect(rootText).toBeVisible();
+  for (const text of ['右一', '右二', '右三']) {
+    await rootText.click(); // root 上 Tab 追加（顺时针）
+    await page.keyboard.press('Tab');
+    await commitLazyNodeText(page, text);
+  }
+  await page.locator('.editor-canvas svg .gm-text', { hasText: '右一' }).click();
+  await page.keyboard.press('Enter');
+  await commitLazyNodeText(page, '插队');
+  await expect(page.getByTestId('save-status')).toHaveText(/已保存/);
+
+  // 场景 1 断言：紧挨右一下方（文档序后插）、同侧右——旧计数配额会强制左（bug）
+  const state1 = await readDocState(page);
+  const kids1 = rootKidsOf(state1);
+  expect(kids1.map(textNodeOf(state1))).toEqual(['右一', '插队', '右二', '右三']);
+  expect(sideNodeOf(state1)(kids1[1] as string)).toBe('right');
+  const yOf1 = await yOfText(page, '右一');
+  const yOfNew = await yOfText(page, '插队');
+  const yOf2 = await yOfText(page, '右二');
+  expect(yOf1).toBeLessThan(yOfNew); // 右一上方
+  expect(yOfNew).toBeLessThan(yOf2); // 新节点在右一与右二之间（紧挨其下方）
+
+  // 场景 2：另起一文，3 右 0 左，末位（右三）Enter → 开启左列
+  await page.getByRole('textbox', { name: '文档标题' }).fill('场景一收尾'); // 避免与场景二「未命名脑图」重名
+  await expect(page.getByTestId('save-status')).toHaveText(/已保存/); // 等改名持久化（文件列表定名）
+  await page.getByRole('button', { name: '返回工作台' }).click();
+  await expect(page).toHaveURL(/\/workspace/);
+  await page.getByRole('button', { name: '新建脑图' }).click();
+  await page.locator('.file-list li', { hasText: '未命名脑图' }).click();
+  await expect(page).toHaveURL(/\/edit\//);
+  const root2 = page.locator('.editor-canvas svg .gm-text', { hasText: '中心主题' }).first();
+  await expect(root2).toBeVisible();
+  for (const text of ['支一', '支二', '支三']) {
+    await root2.click();
+    await page.keyboard.press('Tab');
+    await commitLazyNodeText(page, text);
+  }
+  await page.locator('.editor-canvas svg .gm-text', { hasText: '支三' }).click();
+  await page.keyboard.press('Enter');
+  await commitLazyNodeText(page, '开左列');
+  await expect(page.getByTestId('save-status')).toHaveText(/已保存/);
+
+  // 场景 2 断言：文档序末位 + side=left；渲染在 root 左侧
+  const state2 = await readDocState(page);
+  const kids2 = rootKidsOf(state2);
+  expect(kids2.map(textNodeOf(state2))).toEqual(['支一', '支二', '支三', '开左列']);
+  expect(sideNodeOf(state2)(kids2[3] as string)).toBe('left');
+  const rootBox = await root2.boundingBox();
+  const leftBox = await page
+    .locator('.editor-canvas svg .gm-text', { hasText: '开左列' })
+    .boundingBox();
+  expect(rootBox).not.toBeNull();
+  expect(leftBox).not.toBeNull();
+  expect((leftBox!.x + leftBox!.width) as number).toBeLessThan(rootBox!.x); // root 左侧
 });
 
 // 中心主题顺时针落位（需求方 2026-10-09）：连敲 Tab/Enter——第 1~3 个分支主题落右列
@@ -521,7 +632,7 @@ test('编辑器：中心主题连敲 Tab 顺时针落位——前 3 右列往下
   await page.getByRole('button', { name: '新建脑图' }).click();
   await page.locator('.file-list li', { hasText: '未命名脑图' }).click();
   await expect(page).toHaveURL(/\/edit\//);
-  const rootText = page.locator('.editor-canvas svg .gm-text', { hasText: '未命名脑图' });
+  const rootText = page.locator('.editor-canvas svg .gm-text', { hasText: '中心主题' });
   await expect(rootText).toBeVisible();
   for (const text of ['支一', '支二', '支三', '支四', '支五']) {
     await rootText.click(); // root 上 Tab 追加（顺时针）
@@ -565,7 +676,7 @@ test('编辑器：中心主题 Shift+Enter 逆时针镜像——前 3 落左列�
   await page.getByRole('button', { name: '新建脑图' }).click();
   await page.locator('.file-list li', { hasText: '未命名脑图' }).click();
   await expect(page).toHaveURL(/\/edit\//);
-  const rootText = page.locator('.editor-canvas svg .gm-text', { hasText: '未命名脑图' });
+  const rootText = page.locator('.editor-canvas svg .gm-text', { hasText: '中心主题' });
   await expect(rootText).toBeVisible();
   for (const text of ['逆一', '逆二', '逆三', '逆四']) {
     await rootText.click(); // root 上 Shift+Enter（逆时针）
@@ -650,4 +761,94 @@ test('编辑器：工具栏加星切换与工作台星标视图同步', async ({
   await page.getByTestId('back-btn').click();
   await page.getByTestId('view-tabs').getByRole('button', { name: '星标' }).click();
   await expect(page.locator('.file-list li', { hasText: '本周计划' })).toHaveCount(0);
+});
+
+// ─────────────── 中/右键拖拽平移（需求方 2026-10-09 裁定） ───────────────
+
+// 右键拖动超 4px 阈值进入平移（增量自按下起点起算、阈值不吞位移）；平移期间 svg
+// 挂 gm-panning（抓手光标钩子，editor.css「仅拖动中抓手」裁定）；「拖了就不弹」：
+// 释放合成的 contextmenu 不弹节点菜单（Viewport.justPanned 防抖）；阈值内原地右键
+// 松开照常弹菜单。节点 boundingBox 位移验证视口 translate 生效。
+test('编辑器：右键拖拽平移画布——超阈值平移且不弹菜单，原地右键照常弹菜单', async ({ page }) => {
+  await openSeedDoc(page, '本周计划');
+  const node = page.locator('.editor-canvas svg .gm-text', { hasText: '周一' });
+  const before = await node.boundingBox();
+  expect(before).not.toBeNull();
+  const sx = before!.x + before!.width / 2;
+  const sy = before!.y + before!.height / 2;
+  await page.mouse.move(sx, sy);
+  await page.mouse.down({ button: 'right' });
+  await page.mouse.move(sx + 100, sy + 40, { steps: 5 }); // 超 4px 阈值进入平移
+  await expect(page.locator('.editor-canvas svg')).toHaveClass(/gm-panning/);
+  await page.mouse.up({ button: 'right' });
+  await expect(page.locator('.editor-canvas svg')).not.toHaveClass(/gm-panning/);
+  const after = await node.boundingBox();
+  expect(after).not.toBeNull();
+  expect(Math.abs(after!.x - before!.x - 100)).toBeLessThan(2); // 节点随视口平移 +100
+  expect(Math.abs(after!.y - before!.y - 40)).toBeLessThan(2); // +40
+  await expect(page.getByTestId('context-menu')).toHaveCount(0); // 拖拽释放不弹菜单
+  // 原地右键（无键位按下期间位移）：节点上照常弹菜单
+  const cx = after!.x + after!.width / 2;
+  const cy = after!.y + after!.height / 2;
+  await page.mouse.move(cx, cy);
+  await page.mouse.down({ button: 'right' });
+  await page.mouse.up({ button: 'right' });
+  await expect(page.getByTestId('context-menu')).toBeVisible();
+});
+
+// 定位到中心（需求方 2026-10-09 裁定）：底栏「定位中心」——视口平移使中心主题回到
+// 画布中心、缩放倍率保持不变。先缩放 150% + 右键拖拽偏离，再点按钮断言 root 渲染
+// 盒中心 ≈ 画布中心（±3px）且 zoom-pct 不变。
+test('编辑器：定位中心——平移缩放偏离后点击，中心主题居中且缩放不变', async ({ page }) => {
+  await openSeedDoc(page, '本周计划');
+  const root = page.locator('.editor-canvas svg .gm-text', { hasText: '本周计划' });
+  // 偏离：缩放 150% → 右键拖走（超 4px 阈值进入平移）
+  await page.getByTestId('zoom-select').selectOption('150');
+  await expect(page.getByTestId('zoom-pct')).toHaveText('150%');
+  const b = await root.boundingBox();
+  expect(b).not.toBeNull();
+  await page.mouse.move(b!.x + 10, b!.y + 10);
+  await page.mouse.down({ button: 'right' });
+  await page.mouse.move(b!.x - 190, b!.y - 140, { steps: 4 });
+  await page.mouse.up({ button: 'right' });
+  const canvas = await page.locator('.editor-canvas').boundingBox();
+  expect(canvas).not.toBeNull();
+  const off = await root.boundingBox();
+  expect(off).not.toBeNull();
+  // 已偏离中心（拖动 >50px）
+  expect(
+    Math.abs(off!.x + off!.width / 2 - (canvas!.x + canvas!.width / 2)),
+  ).toBeGreaterThan(50);
+  // 点「定位中心」：root 居中 + 缩放保持 150%
+  await page.getByTestId('center-btn').click();
+  await expect(page.getByTestId('zoom-pct')).toHaveText('150%');
+  const after = await root.boundingBox();
+  expect(after).not.toBeNull();
+  expect(
+    Math.abs(after!.x + after!.width / 2 - (canvas!.x + canvas!.width / 2)),
+  ).toBeLessThan(3);
+  expect(
+    Math.abs(after!.y + after!.height / 2 - (canvas!.y + canvas!.height / 2)),
+  ).toBeLessThan(3);
+});
+
+// 中键平移（既有手势回归钉住）：拖动中同样挂 gm-panning（抓手光标），释放摘除；
+// 节点 boundingBox 位移验证平移量。
+test('编辑器：中键拖拽平移画布，拖动中挂抓手光标类', async ({ page }) => {
+  await openSeedDoc(page, '本周计划');
+  const node = page.locator('.editor-canvas svg .gm-text', { hasText: '周一' });
+  const before = await node.boundingBox();
+  expect(before).not.toBeNull();
+  const sx = before!.x + before!.width / 2;
+  const sy = before!.y + before!.height / 2;
+  await page.mouse.move(sx, sy);
+  await page.mouse.down({ button: 'middle' });
+  await page.mouse.move(sx + 60, sy - 20, { steps: 3 });
+  await expect(page.locator('.editor-canvas svg')).toHaveClass(/gm-panning/);
+  await page.mouse.up({ button: 'middle' });
+  await expect(page.locator('.editor-canvas svg')).not.toHaveClass(/gm-panning/);
+  const after = await node.boundingBox();
+  expect(after).not.toBeNull();
+  expect(Math.abs(after!.x - before!.x - 60)).toBeLessThan(2);
+  expect(Math.abs(after!.y - before!.y + 20)).toBeLessThan(2);
 });

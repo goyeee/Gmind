@@ -86,12 +86,16 @@ async function pressFirstCharToOpen(page: Page): Promise<void> {
   await expect(editor).toBeVisible();
 }
 
-/** 选中节点按 Tab 惰性新建子节点（立即落位「新主题」、敲字才开编辑框）并提交。 */
+/** 选中节点按 Tab 惰性新建子节点（立即落位默认名——root 下「分支主题 N」/其余
+ *  「子主题 N」，2026-10-09 裁定；连续调用时选中已移到新建节点，父级随之变化，
+ *  断言用正则兼容两种默认名）并提交。 */
 async function addChildNode(page: Page, text: string): Promise<void> {
-  await page.keyboard.press('Tab'); // 立即创建「新主题」节点并选中（惰性，不开框）
+  await page.keyboard.press('Tab'); // 立即创建默认命名节点并选中（惰性，不开框）
   const editor = page.locator('.gm-text-editor');
-  // 落位渲染先行：「新主题」文本可见 + 惰性锁定（编辑框不随创建出现）
-  await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '新主题' })).toBeVisible();
+  // 落位渲染先行：默认文本可见 + 惰性锁定（编辑框不随创建出现）
+  await expect(
+    page.locator('.editor-canvas svg .gm-text', { hasText: /^(分支主题|子主题) \d+$/ }),
+  ).toBeVisible();
   await expect(editor).toHaveCount(0);
   await pressFirstCharToOpen(page);
   await page.keyboard.press('Backspace'); // 清占位首键

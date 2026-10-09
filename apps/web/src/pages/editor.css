@@ -348,6 +348,12 @@ body.painter-active .editor-canvas svg {
   touch-action: none;
 }
 
+/* 平移拖动中抓手光标（需求方 2026-10-09：中/右键拖动平移，仅拖动期间变抓手，
+ * 平时画布箭头不变——类由 engine Viewport 在平移置位/复位时挂/摘） */
+.editor-canvas svg.gm-panning {
+  cursor: grabbing;
+}
+
 /* 选中态（页面层视觉）：CSS 声明优先于渲染器写入的 SVG 属性 */
 .editor-canvas svg .gm-selected > rect {
   stroke: #3370ff;
@@ -444,13 +450,27 @@ body.painter-active .editor-canvas svg {
   border-radius: 6px;
   background: #fff;
 }
+/* 底栏右侧控件组（2026-10-09 布局裁定）：定位中心/适应画布/缩放/全屏靠右；
+ * 左侧只剩节点计数。全屏为图标钮（自工具栏迁入），压缩内距适配底栏行高。 */
+.bottombar-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.bottombar-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 6px !important;
+  line-height: 0;
+}
 .zoom-pct {
   min-width: 48px;
   text-align: center;
   font-size: 13px;
 }
 .node-count {
-  margin-left: auto;
   color: #86909c;
   font-size: 12px;
 }

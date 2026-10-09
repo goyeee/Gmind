@@ -20,6 +20,19 @@ describe('createTemplateDoc', () => {
     expect(doc.getMap('meta').get('structureType')).toBe('mindmap');
   });
 
+  it('rootText 覆盖 root 文本而 meta.title 保持（中心主题裁定 2026-10-09：仅新建空白文档传）', () => {
+    const doc = createTemplateDoc({ title: '未命名脑图', children: [], rootText: '中心主题' });
+    const root = doc.getMap('nodes').get(ROOT_NODE_ID) as Y.Map<unknown>;
+    expect(root.get('text')).toBe('中心主题');
+    expect(doc.getMap('meta').get('title')).toBe('未命名脑图');
+  });
+
+  it('rootText 缺省回退 title（既有调用方行为不变）', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: 'X' }] });
+    const root = doc.getMap('nodes').get(ROOT_NODE_ID) as Y.Map<unknown>;
+    expect(root.get('text')).toBe('T');
+  });
+
   it('二进制状态可无损往返', () => {
     const doc = createTemplateDoc({ title: 'R', children: [{ text: 'X' }] });
     const restored = docFromState(docToState(doc));

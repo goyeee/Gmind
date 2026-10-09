@@ -140,7 +140,10 @@ export class FilesService {
       if (typeof structure === 'string' && structure) file.structure = structure;
       if (typeof themeId === 'string' && themeId) file.themeId = themeId;
     } else {
-      const doc = createTemplateDoc({ title: input.title, children: [] });
+      // 中心节点文本固定「中心主题」（需求方 2026-10-09 裁定）：空白文件在创建即落
+      // docState（root 文本在此钉定）；meta.title 仍为文件标题——文件标题与中心节点
+      // 文本解耦。装载通道 collab.service 的空态分支同款 rootText 兜底。
+      const doc = createTemplateDoc({ title: input.title, children: [], rootText: '中心主题' });
       file.docState = Buffer.from(docToState(doc));
       file.nodeCount = countAliveReachable(doc);
     }

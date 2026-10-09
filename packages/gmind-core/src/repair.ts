@@ -791,6 +791,61 @@ export function applySideRepair(doc: Y.Doc, plan: string[]): void {
   for (const nodeId of plan) nodes.get(nodeId)?.delete('side');
 }
 
+/**
+ * 右侧常驻配额（旧文档 side 回填）：与 operations.ROOT_SIDE_RIGHT_QUOTA /
+ * engine assignMindmapSides 兜底同值（引擎不依赖 core，改动需三处同步）。
+ */
+const ROOT_SIDE_RIGHT_QUOTA = 3;
+
+/** side 回填计划条目：root 存活子级 id + 兜底侧别。 */
+export interface SideBackfillEntry {
+  id: string;
+  side: 'left' | 'right';
+}
+
+/**
+ * 旧文档 side 回填计划（文档状态纯函数，replica 一致，幂等；顺时针落位修正，
+ * 需求方 2026-10-09 二次裁定）：root 存活子级缺有效 side（键缺失，或值非法——
+ * 归一删键后同轮收敛，不落「先删后补」中间态）→ 按文档序索引兜底回填
+ * （index 0-2 右、≥3 左，与引擎 assignMindmapSides 兜底同式）。
+ *
+ * 动机：side 特性（2026-09-30）之前的旧文档 root 子级无 side 键，引擎按索引
+ * 兜底定侧——索引随插入/重排漂移会让「有效侧」翻转（Enter 左下角 bug 根因）。
+ * 回填把兜底结果固化为持久值：视觉零变化（回填值 = 当前兜底渲染值），此后
+ * 侧别不再随索引漂移。挂点在 docFromState（所有加载/导入链路的唯一入口，
+ * 归一先行）——产品流新写经 addChild 恒带 side，normalizeTree 的「干净文档
+ * 零修复」契约不受影响；回填写入随下次落库持久化。
+ *
+ * 覆盖范围：仅 root 直接子级（side 仅此层有语义——更深子级 engine 恒随一级
+ * 祖先侧，不回填）；墓碑跳过（children 冻结不变量不受影响，复活后下轮收敛）。
+ */
+export function planSideBackfill(doc: Y.Doc): SideBackfillEntry[] {
+  const nodes = nodesMap(doc);
+  const root = nodes.get(ROOT_NODE_ID);
+  if (!root) return [];
+  const rootChildren = childrenOf(root);
+  if (!rootChildren) return [];
+  const entries = rootChildren.toArray();
+  const plan: SideBackfillEntry[] = [];
+  for (let i = 0; i < entries.length; i += 1) {
+    const id = entries[i];
+    if (typeof id !== 'string') continue; // 非字符串垃圾项由阶段一清理，不参与
+    const node = nodes.get(id);
+    if (node === undefined || isTombstoned(node)) continue;
+    const raw = node.get('side');
+    if (raw === 'left' || raw === 'right') continue; // 有效持久值不覆写
+    plan.push({ id, side: i < ROOT_SIDE_RIGHT_QUOTA ? 'right' : 'left' });
+  }
+  return plan;
+}
+
+/** 应用 side 回填计划（必须在调用方已开启的事务内执行；幂等——同值守卫由
+ *  规划侧「有效值不覆写」保证，apply 只写缺失/非法条目）。 */
+export function applySideBackfill(doc: Y.Doc, plan: SideBackfillEntry[]): void {
+  const nodes = nodesMap(doc);
+  for (const entry of plan) nodes.get(entry.id)?.set('side', entry.side);
+}
+
 // ══ 自定义列收敛（表格自定义列，随全量 normalizeTree 执行）════════════════════
 
 /** 自定义列修复计划（planCustomRepair 产物；applyCustomRepair 在调用方已开启的

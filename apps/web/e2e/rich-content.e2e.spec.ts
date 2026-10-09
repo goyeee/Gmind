@@ -117,7 +117,7 @@ test('富内容：点击链接角标新标签页打开且不改变选中', async
   await panel.getByRole('button', { name: '保存链接' }).click();
   const badge = nodeGroup(page, '周三').locator('.gm-link-badge');
   await expect(badge).toBeVisible();
-  // 选中他人（画布点击按外点语义收面板，链接角标点击不再需要面板）
+  // 选中他人（画布点击不收面板——2026-10-09 裁定；链接角标点击不再依赖面板状态）
   await page.locator('.editor-canvas svg .gm-text', { hasText: '周五' }).click();
   await expect(nodeGroup(page, '周五')).toHaveClass(/gm-selected/);
   const [popup] = await Promise.all([page.waitForEvent('popup'), badge.click()]);
@@ -178,7 +178,7 @@ test('富内容：图标组并存与组内替换', async ({ page }) => {
   await expect(panel.getByTestId('marker-flag-flag')).toHaveAttribute('aria-pressed', 'false');
 });
 
-// 用例 5：右键菜单插入子级可用（惰性：插入即落位「新主题」，敲字才进编辑框）
+// 用例 5：右键菜单插入子级可用（惰性：插入即落位默认名「子主题 1」（周五下），敲字才进编辑框）
 test('富内容：右键菜单插入子级可用', async ({ page }) => {
   await openSeedDoc(page, '本周计划');
   await selectNodeByText(page, '周五');
@@ -188,7 +188,7 @@ test('富内容：右键菜单插入子级可用', async ({ page }) => {
   await menu.getByRole('button', { name: '插入子级' }).click();
   const editor = page.locator('.gm-text-editor');
   // 落位渲染先行 + 惰性锁定；补开首键纪律见 editor.e2e pressFirstCharToOpen
-  await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '新主题' })).toBeVisible();
+  await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '子主题 1' })).toBeVisible();
   await expect(editor).toHaveCount(0);
   for (let i = 0; i < 20 && (await editor.count()) === 0; i += 1) {
     await page.keyboard.press('x');

@@ -77,12 +77,15 @@ async function pressFirstCharToOpen(page: Page): Promise<void> {
 }
 
 /** 选中节点按 Tab 惰性新建子节点并键入文本提交（collab.e2e.spec.ts 同款）。
- *  埋点时机不变：node_add 在 Tab 创建瞬间即上报，编辑框只是延迟到首字符。 */
+ *  埋点时机不变：node_add 在 Tab 创建瞬间即上报，编辑框只是延迟到首字符。
+ *  默认名 root 下「分支主题 N」/其余「子主题 N」（2026-10-09 裁定），正则兼容。 */
 async function addChildNode(page: Page, text: string): Promise<void> {
-  await page.keyboard.press('Tab'); // 立即创建「新主题」节点并选中（惰性，不开框）
+  await page.keyboard.press('Tab'); // 立即创建默认命名节点并选中（惰性，不开框）
   const editor = page.locator('.gm-text-editor');
-  // 落位渲染先行：「新主题」文本可见 + 惰性锁定（编辑框不随创建出现）
-  await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '新主题' })).toBeVisible();
+  // 落位渲染先行：默认文本可见 + 惰性锁定（编辑框不随创建出现）
+  await expect(
+    page.locator('.editor-canvas svg .gm-text', { hasText: /^(分支主题|子主题) \d+$/ }),
+  ).toBeVisible();
   await expect(editor).toHaveCount(0);
   await pressFirstCharToOpen(page);
   await page.keyboard.press('Backspace'); // 清占位首键
@@ -143,13 +146,13 @@ test('右键菜单增删节点：node_add/node_delete 的 via=context', async ({
   await registerAndLogin(page);
   await openSeedDoc(page, '本周计划');
 
-  // root 节点上右键 → 插入子级 → 输入提交（惰性：插入即落位「新主题」，敲字才开框）
+  // root 节点上右键 → 插入子级 → 输入提交（惰性：插入即落位「分支主题 1」，敲字才开框）
   const rootText = page.locator('.editor-canvas svg .gm-text', { hasText: '本周计划' });
   await rootText.click({ button: 'right' });
   await page.getByRole('menu').getByRole('button', { name: '插入子级' }).click();
   const editor = page.locator('.gm-text-editor');
-  // 落位渲染先行：「新主题」文本可见 + 惰性锁定（右键插入也不立即开框）
-  await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '新主题' })).toBeVisible();
+  // 落位渲染先行：「分支主题 1」文本可见 + 惰性锁定（右键插入也不立即开框）
+  await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '分支主题 1' })).toBeVisible();
   await expect(editor).toHaveCount(0);
   await pressFirstCharToOpen(page);
   await page.keyboard.press('Backspace');

@@ -47,10 +47,10 @@ function nodeGroup(page: Page, text: string) {
 }
 
 // 用例 1：选 A（周三）设填充红 → 色钮回显 pressed 且画布 rect 变红；字号回显；
-// 切换到 B（周五，未设样式）→ 无任何色钮 pressed、面板可用；点空白画布 →
-// 面板按「外点关闭」收起（2026-09-28 走查语义）+ 清空选择；重开面板 → 样式区
-// 置灰（disabled）+ 提示「选中节点后设置样式」。
-test('格式面板：填充色钮随选中回显 pressed，画布点击收面板，空选重开置灰', async ({ page }) => {
+// 切换到 B（周五，未设样式）→ 面板不收（2026-10-09 裁定：格式/任务右列点击画布
+// 空白不关闭）、回显随新节点刷新；点空白画布 → 清空选择 + 面板转空态（样式区
+// 置灰 disabled + 提示「选中节点后设置样式」）；重新选节点 → 回显恢复。
+test('格式面板：填充色钮随选中回显 pressed，画布点击不收面板，空选转空态', async ({ page }) => {
   await openSeedDoc(page, '本周计划');
 
   // —— A：周三（有子节点 方案评审）——
@@ -70,10 +70,9 @@ test('格式面板：填充色钮随选中回显 pressed，画布点击收面板
   await expect(panel.getByTestId('font-size-select')).toHaveValue('24');
   await expect(nodeGroup(page, '周三').locator('.gm-text')).toHaveAttribute('font-size', '24');
 
-  // —— B：周五（画布点击命中「弹层外点」语义：面板收起，选中照常切换）——
+  // —— B：周五（画布点击切选中：面板不收，回显即时切到新节点）——
   await selectNodeByText(page, '周五');
-  await expect(panel).toHaveCount(0);
-  await openFormatPanel(page);
+  await expect(panel).toBeVisible();
   await expect(panel.getByTestId('font-size-select')).toBeEnabled();
   await expect(panel.getByTitle('填充-红')).toHaveAttribute('aria-pressed', 'false');
   await expect(panel.getByTitle('文字-红')).toHaveAttribute('aria-pressed', 'false');
@@ -81,27 +80,25 @@ test('格式面板：填充色钮随选中回显 pressed，画布点击收面板
   await expect(panel.locator('.swatch[aria-pressed="true"]')).toHaveCount(0);
   await expect(panel.getByTestId('font-size-select')).toHaveValue('');
 
-  // —— 清空选择：点空白画布（角落，远离自适应居中的内容）→ 面板收起 + 清选；
-  //     重开面板 → 样式区置灰 + 提示 ——
+  // —— 清空选择：点空白画布（角落，远离自适应居中的内容）→ 清选 + 面板转空态
+  //     （不关闭）——样式区置灰 + 提示 ——
   await page.locator('.editor-canvas svg').click({ position: { x: 6, y: 6 } });
-  await expect(panel).toHaveCount(0);
-  await openFormatPanel(page);
+  await expect(panel).toBeVisible();
   // fieldset 自身断言 disabled 属性；禁用级联以内部控件 toBeDisabled 双重钉死
   await expect(section).toHaveAttribute('disabled', '');
   await expect(panel.getByTestId('font-size-select')).toBeDisabled();
   await expect(panel.getByTitle('填充-红')).toBeDisabled();
   await expect(panel.getByTestId('style-hint')).toBeVisible();
   await expect(panel.getByTestId('style-hint')).toHaveText('选中节点后设置样式');
-  // 重新选 A：画布点击会再收面板 → 重开面板后回显恢复（红钮 pressed 复现）
-  await page.getByTestId('format-toggle').click(); // 收起（toggle）
+  // 重新选 A：面板不收，回显直接恢复（红钮 pressed 复现）
   await selectNodeByText(page, '周三');
-  await openFormatPanel(page);
   await expect(panel.getByTestId('font-size-select')).toBeEnabled();
   await expect(panel.getByTitle('填充-红')).toHaveAttribute('aria-pressed', 'true');
 });
 
 // 用例 2：文字色回显——设文字-蓝后色钮 pressed；默认（无值）时全不 pressed；
-// 切节点（画布点击收面板）重开后回显即时刷新（不残留上一节点的 pressed）。
+// 切节点（画布点击不收面板，2026-10-09 裁定）回显即时刷新（不残留上一节点的
+// pressed）；显式 toggle 关闭/重开照常工作。
 test('格式面板：文字色钮随选中回显 pressed', async ({ page }) => {
   await openSeedDoc(page, '本周计划');
   await selectNodeByText(page, '周一');
@@ -110,10 +107,9 @@ test('格式面板：文字色钮随选中回显 pressed', async ({ page }) => {
   await panel.getByTitle('文字-蓝').click();
   await expect(panel.getByTitle('文字-蓝')).toHaveAttribute('aria-pressed', 'true');
   await expect(panel.getByTitle('文字-红')).toHaveAttribute('aria-pressed', 'false');
-  // 同面板切到未设样式的节点：画布点击收面板 → 重开后回显随新节点
+  // 同面板切到未设样式的节点：面板不收，回显随新节点刷新
   await selectNodeByText(page, '周五');
-  await expect(panel).toHaveCount(0);
-  await openFormatPanel(page);
+  await expect(panel).toBeVisible();
   await expect(panel.getByTitle('文字-蓝')).toHaveAttribute('aria-pressed', 'false');
   // 切回 周一：回显恢复 pressed（选中态画布切换）
   await page.getByTestId('format-toggle').click();

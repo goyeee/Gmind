@@ -24,7 +24,12 @@ services:
       timeout: 3s
       retries: 20
 
+  # 可选容器（profiles: extras）——对象存储/邮件捕获现阶段代码未消费（一期存储走
+  # 本地磁盘 local-disk.provider、SMTP 未配置时 MailService 仅 log），且国内网络对
+  # Docker Hub 部分仓库（如 minio/minio）拉取受限，默认不启避免 compose:up 卡死；
+  # 需要时显式开启：docker compose ... --profile extras up -d。
   minio:
+    profiles: ['extras']
     image: ${MINIO_IMAGE:-minio/minio}
     command: server /data --console-address ':9001'
     environment:
@@ -37,6 +42,7 @@ services:
       - minio-data:/data
 
   mailhog:
+    profiles: ['extras']
     image: ${MAILHOG_IMAGE:-mailhog/mailhog}
     ports:
       - '8025:8025'

@@ -60,9 +60,9 @@ test('简洁模式：切换隐藏描述/状态条/任务行并内联进度、盒
   page,
 }) => {
   await openSeedDoc(page, '本周计划');
-  // root 为默认选中：Tab 立即落位「新主题」节点（惰性，不开框），改名「写周报」
+  // root 为默认选中：Tab 立即落位默认命名节点「分支主题 1」（惰性，不开框），改名「写周报」
   await page.keyboard.press('Tab');
-  await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '新主题' })).toBeVisible();
+  await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '分支主题 1' })).toBeVisible();
   await pressFirstCharToOpen(page);
   await page.keyboard.press('Backspace'); // 清占位首键
   await page.keyboard.insertText('写周报');

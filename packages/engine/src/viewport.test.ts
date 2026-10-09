@@ -398,14 +398,65 @@ describe('Viewport 拖拽平移（M7b-W3 平移改道：中键 / 空格+左键�
     expect(t.ty).toBe(0);
   });
 
-  it('非主键（button=2）不启动拖拽平移', () => {
+  it('右键按下原地（≤4px 阈值内）不启动平移（松开归右键菜单，justPanned 保持 false）', () => {
     vp.attach();
     svg.dispatchEvent(pointerEvent('pointerdown', { button: 2, clientX: 10, clientY: 10, pointerId: 1 }));
-    svg.dispatchEvent(pointerEvent('pointermove', { clientX: 80, clientY: 80, pointerId: 1 }));
-    svg.dispatchEvent(pointerEvent('pointerup', { clientX: 80, clientY: 80, pointerId: 1 }));
+    svg.dispatchEvent(pointerEvent('pointermove', { clientX: 12, clientY: 13, pointerId: 1 }));
+    svg.dispatchEvent(pointerEvent('pointerup', { clientX: 12, clientY: 13, pointerId: 1 }));
     const t = parseTransform();
     expect(t.tx).toBe(0);
     expect(t.ty).toBe(0);
+    expect(vp.justPanned).toBe(false);
+    expect(svg.classList.contains('gm-panning')).toBe(false);
+  });
+
+  it('右键拖动超 4px 阈值 → 平移（增量含起点到阈值处的完整位移）；gm-panning 类挂/摘；justPanned 置位', () => {
+    vp.attach();
+    svg.dispatchEvent(pointerEvent('pointerdown', { button: 2, clientX: 10, clientY: 10, pointerId: 1 }));
+    svg.dispatchEvent(pointerEvent('pointermove', { clientX: 15, clientY: 10, pointerId: 1 })); // 5px：过阈值，pan = 5
+    expect(svg.classList.contains('gm-panning')).toBe(true);
+    svg.dispatchEvent(pointerEvent('pointermove', { clientX: 60, clientY: 25, pointerId: 1 }));
+    svg.dispatchEvent(pointerEvent('pointerup', { clientX: 60, clientY: 25, pointerId: 1 }));
+    const t = parseTransform();
+    expect(t.tx).toBeCloseTo(50, 4); // 60-10：起点起算的完整位移（阈值不吞位移）
+    expect(t.ty).toBeCloseTo(15, 4);
+    expect(svg.classList.contains('gm-panning')).toBe(false);
+    expect(vp.justPanned).toBe(true); // 页面层 contextmenu 防抖依据（up 后读取）
+  });
+
+  it('justPanned 生命周期：任一新 pointerdown 复位（下一次右键原地松开可正常弹菜单）', () => {
+    vp.attach();
+    svg.dispatchEvent(pointerEvent('pointerdown', { button: 2, clientX: 10, clientY: 10, pointerId: 1 }));
+    svg.dispatchEvent(pointerEvent('pointermove', { clientX: 60, clientY: 60, pointerId: 1 }));
+    svg.dispatchEvent(pointerEvent('pointerup', { clientX: 60, clientY: 60, pointerId: 1 }));
+    expect(vp.justPanned).toBe(true);
+    svg.dispatchEvent(pointerEvent('pointerdown', { button: 2, clientX: 10, clientY: 10, pointerId: 2 }));
+    expect(vp.justPanned).toBe(false);
+  });
+
+  it('中键平移同样挂 gm-panning 类（拖动中抓手光标）且置 justPanned', () => {
+    vp.attach();
+    svg.dispatchEvent(pointerEvent('pointerdown', { button: 1, clientX: 10, clientY: 10, pointerId: 1 }));
+    svg.dispatchEvent(pointerEvent('pointermove', { clientX: 30, clientY: 10, pointerId: 1 }));
+    expect(svg.classList.contains('gm-panning')).toBe(true);
+    svg.dispatchEvent(pointerEvent('pointerup', { clientX: 30, clientY: 10, pointerId: 1 }));
+    expect(svg.classList.contains('gm-panning')).toBe(false);
+    expect(vp.justPanned).toBe(true);
+  });
+
+  it('右键在节点目标上同样平移（与节点拖拽不冲突——DragController 只认主键）', () => {
+    const g = document.createElementNS(SVG_NS, 'g');
+    g.setAttribute('data-node-id', 'n1');
+    const rect = document.createElementNS(SVG_NS, 'rect');
+    g.appendChild(rect);
+    sceneRoot.appendChild(g);
+    vp.attach();
+    rect.dispatchEvent(pointerEvent('pointerdown', { button: 2, clientX: 10, clientY: 10, pointerId: 1 }));
+    svg.dispatchEvent(pointerEvent('pointermove', { clientX: 70, clientY: 70, pointerId: 1 }));
+    svg.dispatchEvent(pointerEvent('pointerup', { clientX: 70, clientY: 70, pointerId: 1 }));
+    const t = parseTransform();
+    expect(t.tx).toBeCloseTo(60, 4);
+    expect(t.ty).toBeCloseTo(60, 4);
   });
 
   it('Shift+主键空白按下不平移（框选/加选语义归页面层）', () => {

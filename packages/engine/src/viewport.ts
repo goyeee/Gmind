@@ -9,13 +9,19 @@
  * - 滚轮（viewport 自有手势）：无修饰键 = 平移 panBy(-deltaX, -deltaY)；ctrl/meta =
  *   以光标为锚缩放（deltaY<0 → ×1.1，否则 ×1/1.1），preventDefault 阻止浏览器缩放，
  *   监听 { passive: false }。cx/cy 与 toScene 输入均为 svg 相对坐标。
- * - 拖拽平移（M7b-W3 平移改道，需求方裁定「空白左拖=框选」后平移让位）：
- *   触发条件 = **鼠标中键拖动**（任意目标，preventDefault 抑制中键自动滚动）或
+ * - 拖拽平移（M7b-W3 平移改道，需求方裁定「空白左拖=框选」后平移让位；
+ *   2026-10-09 需求方追加右键拖动平移）：
+ *   触发条件 = **鼠标中键拖动**（任意目标，preventDefault 抑制中键自动滚动）、
+ *   **鼠标右键拖动超 4px 阈值**（任意目标；阈值内原地松开不平移，归页面层右键
+ *   菜单——防止手抖位移吃掉菜单。平移增量自按下起点起算，阈值不吞位移）或
  *   **空格按住 + 左键拖动**（仅空白处；节点/折叠徽标/概要上的左键仍归节点拖拽/
  *   页面层手势）。空格状态由 Viewport 自持（attach 期 window keydown/keyup/blur
  *   跟踪，公开只读 spacePressed 供页面层框选起点让位判定），destroy 即解绑。
  *   pointermove 按位移增量 panBy，pointerup/pointercancel 结束；setPointerCapture
  *   特性探测（jsdom 无该 API 时降级为 svg 自身监听）。
+ *   平移进行中给 svg 挂 gm-panning 类（页面层抓手光标钩子），结束即摘；
+ *   justPanned 标记「上一次手势是否发生了平移」（pointerup 后为 true、任一
+ *   pointerdown 复位）——页面层 contextmenu 防抖依据（右键拖拽释放不弹菜单）。
  *   历史（Task 15，FR-EDT-008）：空白无修饰左键（原 Shift+左键）留给页面层框选
  *   起点（SelectionModel.beginMarquee），Viewport 不启动平移。
  * - 生命周期：构造不绑任何事件；attach() 显式绑定、destroy() 全部解绑
@@ -128,8 +134,15 @@ export class Viewport {
   private attached = false;
   private panning = false;
   private lastPan: Point = { x: 0, y: 0 };
+  /** 右键平移待决起点（按下未超 4px 阈值；超阈值转 panning，原地松开丢弃）。 */
+  private rightPending: Point | null = null;
+  /** 上一次手势是否发生了平移（pointerup 置位、任一 pointerdown 复位）。 */
+  private justPannedFlag = false;
   /** 空格按住状态（attach 期 window 键盘跟踪；平移手势闸，M7b-W3 平移改道）。 */
   private spaceDown = false;
+
+  /** 右键平移进入阈值（px）：阈值内原地松开不平移（归右键菜单），起点位移不吞。 */
+  static readonly RIGHT_PAN_THRESHOLD = 4;
 
   constructor(svg: SVGSVGElement, sceneRoot: SVGGElement) {
     this.svg = svg;
@@ -140,6 +153,11 @@ export class Viewport {
   /** 空格是否按住（页面层框选起点据此让位给平移手势；未 attach 恒 false）。 */
   get spacePressed(): boolean {
     return this.attached && this.spaceDown;
+  }
+
+  /** 上一次手势是否发生了平移（页面层 contextmenu 防抖：右键拖拽释放不弹菜单）。 */
+  get justPanned(): boolean {
+    return this.justPannedFlag;
   }
 
   /** 把当前状态写到 sceneRoot：`translate(tx, ty) scale(scale)`（4 位小数）。 */
@@ -214,7 +232,9 @@ export class Viewport {
   destroy(): void {
     if (!this.attached) return;
     this.attached = false;
-    this.panning = false;
+    this.endPan();
+    this.rightPending = null;
+    this.justPannedFlag = false;
     this.spaceDown = false;
     this.svg.removeEventListener('wheel', this.onWheel);
     this.svg.removeEventListener('pointerdown', this.onPointerDown);
@@ -257,29 +277,89 @@ export class Viewport {
   };
 
   private onPointerDown = (e: PointerEvent): void => {
-    // M7b-W3 平移改道：中键拖动（任意目标）或空格+左键（仅空白）才平移；
+    // M7b-W3 平移改道：中键/右键拖动（任意目标）或空格+左键（仅空白）才平移；
     // 无修饰左键空白留给页面层框选（SelectionModel.beginMarquee），不平移。
+    // 新手势开始：上一轮 justPanned 复位（contextmenu 只看最近一次手势）。
+    this.justPannedFlag = false;
     const isMiddle = e.button === 1;
+    const isRight = e.button === 2;
     const isSpaceLeft = e.button === 0 && this.spaceDown;
-    if (!isMiddle && !isSpaceLeft) return;
+    if (!isMiddle && !isRight && !isSpaceLeft) return;
     if (isSpaceLeft && e.shiftKey) return;
     const target = e.target as Element | null;
     // 概要 bracket（M6 T6）非空白：其命中既不平移也不捕获指针——捕获会把随后的
     // click 重定向到 svg，页面层「点标签编辑概要」将收不到命中元素。
-    // 空白判定仅约束空格+左键（中键拖动在节点上也平移，不与节点拖拽冲突——
+    // 空白判定仅约束空格+左键（中/右键拖动在节点上也平移，不与节点拖拽冲突——
     // DragController 只认主键）。
     if (
       !isMiddle &&
+      !isRight &&
       (target?.closest('[data-node-id]') ||
         target?.closest('[data-for-id]') ||
         target?.closest('[data-summary-id]'))
     ) {
       return;
     }
-    e.preventDefault(); // 中键抑制浏览器自动滚动；空格+左键抑制选中文本等默认行为
-    this.panning = true;
+    e.preventDefault(); // 中/右键抑制默认行为；空格+左键抑制选中文本等默认行为
+    if (isRight) {
+      // 右键阈值待决：move 超 4px 才转平移（原地松开归右键菜单）；先捕获指针，
+      // 保证阈值判定期间的 move/up 事件不丢失。
+      this.rightPending = { x: e.clientX, y: e.clientY };
+      this.capturePointer(e);
+      return;
+    }
+    this.rightPending = null;
     this.lastPan = { x: e.clientX, y: e.clientY };
-    // 指针捕获保证移出 svg 仍收到 move/up；jsdom 无该 API，特性探测降级。
+    this.startPan();
+    this.capturePointer(e);
+  };
+
+  private onPointerMove = (e: PointerEvent): void => {
+    if (this.rightPending && !this.panning) {
+      const dx = e.clientX - this.rightPending.x;
+      const dy = e.clientY - this.rightPending.y;
+      if (Math.hypot(dx, dy) <= Viewport.RIGHT_PAN_THRESHOLD) return;
+      // 超阈值转正式平移：增量自按下起点起算（阈值期间的位移不吞）。
+      this.lastPan = this.rightPending;
+      this.rightPending = null;
+      this.panBy(e.clientX - this.lastPan.x, e.clientY - this.lastPan.y);
+      this.lastPan = { x: e.clientX, y: e.clientY };
+      this.startPan();
+      return;
+    }
+    if (!this.panning) return;
+    this.panBy(e.clientX - this.lastPan.x, e.clientY - this.lastPan.y);
+    this.lastPan = { x: e.clientX, y: e.clientY };
+  };
+
+  private onPointerUp = (e: PointerEvent): void => {
+    if (this.panning) {
+      this.endPan();
+      this.justPannedFlag = true; // 页面层 contextmenu 防抖依据
+      this.releasePointer(e);
+      return;
+    }
+    if (this.rightPending) {
+      // 右键阈值内原地松开：不平移（justPanned 保持 false，右键菜单照常弹）。
+      this.rightPending = null;
+      this.releasePointer(e);
+    }
+  };
+
+  /** 进入平移态：置位 + svg 挂 gm-panning 类（页面层抓手光标钩子）。 */
+  private startPan(): void {
+    this.panning = true;
+    this.svg.classList.add('gm-panning');
+  }
+
+  /** 结束平移态：复位 + 摘类（幂等，destroy 兜底复用）。 */
+  private endPan(): void {
+    this.panning = false;
+    this.svg.classList.remove('gm-panning');
+  }
+
+  // 指针捕获保证移出 svg 仍收到 move/up；jsdom 无该 API，特性探测降级。
+  private capturePointer(e: PointerEvent): void {
     if (typeof this.svg.setPointerCapture === 'function') {
       try {
         this.svg.setPointerCapture(e.pointerId);
@@ -287,17 +367,9 @@ export class Viewport {
         /* 捕获失败可忽略：监听就在 svg 上 */
       }
     }
-  };
+  }
 
-  private onPointerMove = (e: PointerEvent): void => {
-    if (!this.panning) return;
-    this.panBy(e.clientX - this.lastPan.x, e.clientY - this.lastPan.y);
-    this.lastPan = { x: e.clientX, y: e.clientY };
-  };
-
-  private onPointerUp = (e: PointerEvent): void => {
-    if (!this.panning) return;
-    this.panning = false;
+  private releasePointer(e: PointerEvent): void {
     if (typeof this.svg.releasePointerCapture === 'function') {
       try {
         this.svg.releasePointerCapture(e.pointerId);
@@ -305,5 +377,5 @@ export class Viewport {
         /* 同上 */
       }
     }
-  };
+  }
 }

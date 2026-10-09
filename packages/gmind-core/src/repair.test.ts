@@ -308,6 +308,10 @@ describe('normalizeTreeFor 事务脏区增量（与全量等价，Task 9 修复�
     const state = docToState(base);
     const docA = docFromState(state); // 增量路径（withTransaction 按脏区 normalize）
     const docB = docFromState(state); // 全量路径（同一残渣 update + normalizeTree）
+    // 副本先双向同步（生产顺序：连线即全量 sync，之后才交换编辑差量）。docFromState
+    // 对旧文档有 side 回填本地写（2026-10-09 裁定）——未经同步的 sv 差量会引用对端
+    // 缺失的回填项（Yjs origin 悬挂、差量项被丢），同步后差量只含残渣事务本身。
+    exchange(docA, docB);
     const xId = findIdByText(docA, 'X');
     const p1Id = findIdByText(docA, 'P1');
     const bId = findIdByText(docA, 'B');
@@ -344,7 +348,11 @@ describe('normalizeTreeFor 事务脏区增量（与全量等价，Task 9 修复�
     // 每个操作（增量 normalize 后）克隆当前状态跑全量 normalizeTree：修复数必须为 0
     // 且快照不变——若增量漏掉该事务制造的任何规则违例，克隆上的全量复扫必然 > 0。
     // （新建节点 id 含 ulid 随机量，无法跨文档复现同序操作，故采用「逐操作克隆复扫」。）
-    const doc = createTemplateDoc({ title: 'T', children: [{ text: 'P1' }, { text: 'P2' }] });
+    // 造数经 docFromState 一次（root 子级 side 已回填，与产品流 addChild 造数同形）——
+    // 否则每轮克隆会被 2026-10-09 的旧文档回填改写，快照对比失真。
+    const doc = docFromState(
+      docToState(createTemplateDoc({ title: 'T', children: [{ text: 'P1' }, { text: 'P2' }] })),
+    );
     const p1 = findIdByText(doc, 'P1');
     const p2 = findIdByText(doc, 'P2');
     const pool: string[] = [p1, p2]; // 非 root 存活节点（root 不可 move/delete）
@@ -680,7 +688,7 @@ describe('侧别 side 归一（逆时针定侧）', () => {
     (doc.getMap('nodes').get(id) as Y.Map<unknown>).set('side', value);
   }
 
-  it('非 left/right（含非字符串）→ 删键，修复数各计 1', () => {
+  it('非 left/right（含非字符串）→ 删键，修复数各计 1（回填不在此层——挂 docFromState）', () => {
     const doc = createTemplateDoc({ title: 'T', children: [] });
     const a = addChild(doc, ROOT_NODE_ID, { text: 'A' });
     const b = addChild(doc, ROOT_NODE_ID, { text: 'B' });
@@ -712,12 +720,95 @@ describe('侧别 side 归一（逆时针定侧）', () => {
     expect(getNode(doc, a)!.deleted).toBe(true);
   });
 
-  it('docFromState（导入即收敛）同样归一非法 side', () => {
+  it('docFromState（导入即收敛）同样归一非法 side（root 子级回填兜底侧）', () => {
     const base = createTemplateDoc({ title: 'T', children: [] });
     const a = addChild(base, ROOT_NODE_ID, { text: 'A' });
     rawSetSide(base, a, 'top');
     const doc = docFromState(docToState(base));
-    expect(getNode(doc, a)!.side).toBeUndefined();
+    expect(getNode(doc, a)!.side).toBe('right');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 旧文档 side 回填（顺时针落位修正，需求方 2026-10-09 二次裁定）：side 特性
+//（2026-09-30）之前创建的文档 root 子级无 side 键——兜底按文档序索引定侧
+//（index 0-2 右、≥3 左，与 engine assignMindmapSides / countRightSideRootChildren
+// 同式），但索引随插入/重排漂移会翻转有效侧（Enter 左下角 bug 根因）。挂
+// docFromState（所有加载/导入链路唯一入口，归一先行）一次性回填持久 side：
+// 视觉零变化（回填值=兜底值），此后侧别稳定不随索引漂移；normalizeTree 的
+// 「干净文档零修复」契约不受影响。
+// ---------------------------------------------------------------------------
+
+describe('旧文档 side 回填（docFromState：root 子级缺键 → 索引兜底回填）', () => {
+  /** 裸写 side 键（本 describe 局部辅助，与上方归一 describe 同款）。 */
+  function rawSide(doc: Y.Doc, id: string, value: unknown): void {
+    (doc.getMap('nodes').get(id) as Y.Map<unknown>).set('side', value);
+  }
+
+  it('无 side 的 root 子级按索引回填：1~3 右、第 4 个起左，幂等且字节稳定', () => {
+    // createTemplateDoc 的 buildSubtree 不写 side——天然「旧文档」形状
+    const base = createTemplateDoc({
+      title: '旧文档',
+      children: [{ text: 'A' }, { text: 'B' }, { text: 'C' }, { text: 'D' }],
+    });
+    const rootChildren = childrenIds(base, ROOT_NODE_ID);
+    expect(rootChildren.length).toBe(4);
+    const doc = docFromState(docToState(base));
+    expect(getNode(doc, rootChildren[0])!.side).toBe('right');
+    expect(getNode(doc, rootChildren[1])!.side).toBe('right');
+    expect(getNode(doc, rootChildren[2])!.side).toBe('right');
+    expect(getNode(doc, rootChildren[3])!.side).toBe('left');
+    // 幂等：回填后的状态再入 docFromState 字节级稳定（normalize 0 + 回填 0）
+    const state = docToState(doc);
+    expect(docToState(docFromState(state))).toEqual(docToState(doc));
+  });
+
+  it('已有合法 side 的节点不覆写（回填只补缺键）', () => {
+    const base = createTemplateDoc({
+      title: '混合文档',
+      children: [{ text: 'A' }, { text: 'B' }],
+    });
+    const rootChildren = childrenIds(base, ROOT_NODE_ID);
+    rawSide(base, rootChildren[0], 'left'); // 手动换过侧的存量值保留
+    const doc = docFromState(docToState(base));
+    expect(getNode(doc, rootChildren[0])!.side).toBe('left');
+    expect(getNode(doc, rootChildren[1])!.side).toBe('right');
+  });
+
+  it('非法值（归一删键后）同轮回填兜底侧——一次 docFromState 收敛', () => {
+    const base = createTemplateDoc({
+      title: '坏值文档',
+      children: [{ text: 'A' }, { text: 'B' }],
+    });
+    const rootChildren = childrenIds(base, ROOT_NODE_ID);
+    rawSide(base, rootChildren[0], 'up'); // 非法
+    const doc = docFromState(docToState(base));
+    expect(getNode(doc, rootChildren[0])!.side).toBe('right');
+  });
+
+  it('墓碑 root 子级跳过回填（children 冻结不变量不受影响）', () => {
+    const base = createTemplateDoc({
+      title: '墓碑文档',
+      children: [{ text: 'A' }, { text: 'B' }],
+    });
+    const rootChildren = childrenIds(base, ROOT_NODE_ID);
+    deleteNodes(base, [rootChildren[0]]);
+    const doc = docFromState(docToState(base));
+    expect(getNode(doc, rootChildren[0])!.deleted).toBe(true);
+    expect(getNode(doc, rootChildren[0])!.side).toBeUndefined(); // 墓碑不回填
+    expect(getNode(doc, rootChildren[1])!.side).toBe('right');
+  });
+
+  it('非 root 子级不回填（side 仅 root 直接子级有语义）', () => {
+    const base = createTemplateDoc({
+      title: '深层文档',
+      children: [{ text: 'A', children: [{ text: 'A1' }] }],
+    });
+    const a = findIdByText(base, 'A');
+    const a1 = findIdByText(base, 'A1');
+    const doc = docFromState(docToState(base));
+    expect(getNode(doc, a)!.side).toBe('right');
+    expect(getNode(doc, a1)!.side).toBeUndefined(); // 深层不回填
   });
 });
 

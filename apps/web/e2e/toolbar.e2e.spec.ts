@@ -56,6 +56,7 @@ const EXISTING_TESTIDS = [
   'versions-toggle',
   'activity-toggle',
   'help-toggle',
+  // fullscreen-btn 2026-10-09 迁至底栏右侧（.editor-bottombar），testid 保留
   'fullscreen-btn',
   'format-toggle',
   'task-toggle',
@@ -67,15 +68,16 @@ const EXISTING_TESTIDS = [
   'view-tab-table',
 ] as const;
 
-test('工具栏：单行分组 + 竖线分隔符（11 组 / 9 分隔线）', async ({ page }) => {
+test('工具栏：单行分组 + 竖线分隔符（10 组 / 8 分隔线）', async ({ page }) => {
   await openSeedDoc(page);
   const toolbar = page.locator('.editor-toolbar');
   await expect(toolbar).toBeVisible();
   // 分组容器：返回 / 标题 / 视图切换 / 撤销重做格式刷 / 插入 / 上级子级同级 /
-  // 格式任务 / 结构主题 / 导出 / 协作 / 全屏（导出组与协作组间省略 1 条分隔线）
-  await expect(toolbar.locator('> .toolbar-group')).toHaveCount(11);
+  // 格式任务 / 结构主题 / 导出 / 协作（导出组与协作组间省略 1 条分隔线；全屏组
+  // 已随 2026-10-09 底栏改版迁至 .editor-bottombar 右侧）
+  await expect(toolbar.locator('> .toolbar-group')).toHaveCount(10);
   // 组间 1px 竖线分隔符
-  await expect(toolbar.locator('.toolbar-sep')).toHaveCount(9);
+  await expect(toolbar.locator('.toolbar-sep')).toHaveCount(8);
   // 每个分隔符都是 1px 宽的竖线元素（可见）
   const seps = toolbar.locator('.toolbar-sep');
   for (let i = 0; i < (await seps.count()); i++) {
@@ -102,8 +104,8 @@ test('工具栏：图标按钮均带内联 svg 与 title 提示；上级/子级/
   await openSeedDoc(page);
   const iconButtons = page.locator('.editor-toolbar button.toolbar-btn', { has: page.locator('> svg') });
   // 返回/撤销/重做/格式刷/插入/格式/任务/简洁/结构/主题面板/导出/成员/版本历史/
-  // 动态/快捷键/查找/全屏 = 17 个图标按钮（M7b 补课：简洁模式切换入列，图标+文字标签）
-  await expect(iconButtons).toHaveCount(17);
+  // 动态/快捷键/查找 = 16 个图标按钮（全屏 2026-10-09 迁至底栏右侧，testid 保留）
+  await expect(iconButtons).toHaveCount(16);
   const count = await iconButtons.count();
   for (let i = 0; i < count; i++) {
     const btn = iconButtons.nth(i);
@@ -156,7 +158,7 @@ test('工具栏：members-btn 与结构面板钮/主题面板钮可访问名语�
   await expect(page.getByTestId('theme-panel-toggle')).toHaveAccessibleName('主题');
 });
 
-test('工具栏：组序符合企微对标布局（返回|标题|视图|撤销重做刷|插入|三钮|格式任务|结构主题|导出|协作|全屏）', async ({ page }) => {
+test('工具栏：组序符合企微对标布局（返回|标题|视图|撤销重做刷|插入|三钮|格式任务|结构主题|导出|协作）', async ({ page }) => {
   await openSeedDoc(page);
   const anchors = [
     'back-btn',
@@ -170,7 +172,6 @@ test('工具栏：组序符合企微对标布局（返回|标题|视图|撤销�
     'theme-panel-toggle',
     'export-menu',
     'members-btn',
-    'fullscreen-btn',
   ] as const;
   const placed: { id: string; x: number; y: number }[] = [];
   for (const id of anchors) {

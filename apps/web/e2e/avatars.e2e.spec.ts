@@ -154,7 +154,7 @@ test('溢出：6 人在线 → ≤5 枚头像 +「+1」溢出位，点击溢出�
     await ctx.addInitScript((t: string) => localStorage.setItem('gmind.token', t), token);
     const p = await ctx.newPage();
     await p.goto(`/edit/${fileId}`);
-    await expect(p.locator('.editor-canvas svg .gm-text', { hasText: '头像栏溢出' })).toBeVisible({
+    await expect(p.locator('.editor-canvas svg .gm-text', { hasText: '中心主题' })).toBeVisible({
       timeout: 15_000,
     });
     return p;

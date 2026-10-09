@@ -80,7 +80,7 @@ test('成员面板邀请区仅 owner 可见：协作者不显示', async ({ brow
   await registerAndLogin(page);
   await page.goto(`/s/${shareToken}`);
   await expect(page).toHaveURL(new RegExp(`/edit/${fileId}`));
-  await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '协作者视图文档' })).toBeVisible();
+  await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '中心主题' })).toBeVisible();
 
   // B 打开成员面板：面板可见但无邀请区（非 owner）
   await page.getByTestId('members-btn').click();

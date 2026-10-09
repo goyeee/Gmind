@@ -54,7 +54,8 @@ test('查找替换：Ctrl+F 打开 → 计数/循环定位 → 替换当前 → 
   test.setTimeout(60_000);
   await openSeedDoc(page, '本周计划');
 
-  // 建 3 个含「节点」的子节点（每次先选 root 再 Tab——惰性创建落位「新主题」节点，
+  // 建 3 个含「节点」的子节点（每次先选 root 再 Tab——惰性创建落位默认命名节点
+  // （root 下每次改名后无前缀残留 → 恒「分支主题 1」），
   // 敲字才开编辑框；选中态由双框 Enter×2 提交后消费，避免上一次新建的选中串位）。
   // 补开首键纪律见 editor.e2e pressFirstCharToOpen：ASCII 首键带重试，退格清占位、
   // insertText 写入中文。
@@ -62,7 +63,7 @@ test('查找替换：Ctrl+F 打开 → 计数/循环定位 → 替换当前 → 
     await page.locator('.editor-canvas svg .gm-text', { hasText: '本周计划' }).click();
     await page.keyboard.press('Tab');
     const editor = page.locator('.gm-text-editor');
-    await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '新主题' })).toBeVisible();
+    await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '分支主题 1' })).toBeVisible();
     await expect(editor).toHaveCount(0); // 惰性锁定：编辑框不随创建出现
     for (let i = 0; i < 20 && (await editor.count()) === 0; i += 1) {
       await page.keyboard.press('x');
