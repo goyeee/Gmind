@@ -2,7 +2,7 @@
 
 浏览器端、协作为先的在线脑图工具。**进度：一期全部收官（M0~M6，2026-09-28）**——单机编辑内核、50 人实时协同、文件管理与分享、评论与通知、XMind 导入导出、PNG/JPG 导出、版本快照与恢复、设置页/快捷键面板/新手引导/埋点/移动端只读，以及企微对标包（图标化工具栏、查找替换、12 套主题、emoji、概要、格式刷、文档动态、协作者头像栏）。
 
-> **查"什么已完成、什么待办"请看 [`AGENTS.md`](./AGENTS.md)**（状态表 + PRD 与代码的差异对齐清单）与 `docs/m0~m6-acceptance.md`（逐条验收真值）。PRD 的分期规划不等于交付状态。
+> **查"什么已完成、什么待办"请看 [`docs/project-status.md`](./docs/project-status.md)**（里程碑状态表 + PRD 与代码的差异对齐清单）与 `docs/m0~m6-acceptance.md`（逐条验收真值）。PRD 的分期规划不等于交付状态。
 
 ## 快速开始（开发环境）
 
@@ -50,7 +50,8 @@ WEB_PORT=5174 API_ORIGIN=http://localhost:3001 pnpm --filter @gmind/web e2e   # 
 
 ## 文档
 
-- **仓库导览与状态对齐（先读这个）**：[`AGENTS.md`](./AGENTS.md)——真相源分级、里程碑状态表、PRD≠交付的差异清单、工程纪律
+- **项目逻辑与进度（先读这个）**：[`docs/project-status.md`](./docs/project-status.md)——真相源分级、里程碑状态表、PRD≠交付的差异清单
+- **代理规则**：[`AGENTS.md`](./AGENTS.md)——工程纪律、文档更新义务、需求不明确时先提问
 - 产品需求：`Gmind_在线协作脑图软件_产品需求文档.md`
 - 技术设计：`docs/superpowers/specs/2026-09-18-gmind-phase1-design.md`
 - 实施计划（历史）：`docs/superpowers/plans/`
