@@ -23,8 +23,9 @@ function msgOf(e: unknown): string {
   return e instanceof Error ? e.message : '操作失败';
 }
 
-function fmtTime(iso: string): string {
-  return new Date(iso).toLocaleString();
+function fmtTime(iso: string | null): string {
+  // createdAt 历史脏数据防御回退 null（服务端 toItem）：显示占位而非抛错。
+  return iso === null ? '—' : new Date(iso).toLocaleString();
 }
 
 /** GET /users/me 在本页的最小消费面：自己那行的禁用判定 + 昵称缺省。 */

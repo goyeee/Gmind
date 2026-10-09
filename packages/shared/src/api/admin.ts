@@ -11,7 +11,7 @@ export type SystemRole = (typeof SYSTEM_ROLES)[number];
 export const ACCOUNT_STATUSES = ['active', 'disabled'] as const;
 export type AccountStatus = (typeof ACCOUNT_STATUSES)[number];
 
-/** GET /api/admin/users 列表项：createdAt 为 ISO 字符串；fileCount 为名下存活文件数（回收站不计）。 */
+/** GET /api/admin/users 列表项：createdAt 为 ISO 字符串（历史脏数据防御回退 null）；fileCount 为名下存活文件数（回收站不计）。 */
 export interface AdminUserListItem {
   id: string;
   nickname: string;
@@ -19,6 +19,6 @@ export interface AdminUserListItem {
   email: string | null;
   systemRole: SystemRole;
   status: AccountStatus;
-  createdAt: string;
+  createdAt: string | null;
   fileCount: number;
 }
