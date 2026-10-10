@@ -124,6 +124,11 @@ function buildHarness(
   descendants: Record<string, string[]>,
   /** 组拾起桩（2026-09-30 组拖动）：缺省恒单节点 [按下 id]——与旧口径一致。 */
   getDragGroup?: (grabbedId: string) => string[],
+  /**
+   * 左列结构门控桩（2026-10-09 需求方修复）：缺省不传 = 回退几何口径（盒集已有
+   * 左列主题才开放，旧行为）；传 () => true 模拟 mindmap 页面接线（恒开放）。
+   */
+  rootLeftAllowed?: () => boolean,
 ): Harness {
   document.body.innerHTML = '';
   const svg = document.createElementNS(SVG_NS, 'svg');
@@ -161,6 +166,7 @@ function buildHarness(
     isDescendant: (id, candidateId) => (descendants[id] ?? []).includes(candidateId),
     childrenIdsOf: (id) => children[id] ?? [],
     overlayLayer: overlay,
+    ...(rootLeftAllowed !== undefined ? { rootLeftAllowed } : {}),
   });
   return { svg, overlay, vp, onDrop, controller };
 }
@@ -783,6 +789,8 @@ describe('resolveDropSlot 根级落点（逆时针定侧：持久侧别不再翻
   it('门控：全右文档（无左列二级主题）拖到根左半 → 恒结算右列（logic/新文档不受影响）', () => {
     // COL 桩（全右，左列门控关闭）：根左半的子级吸附区命中——slot/target 恒 right，
     // 与旧「单侧根级恒右」行为一致，绝不向左解析。
+    // （缺省未传 rootLeftAllowed = 几何兜底口径；2026-10-09 起页面按结构供给，
+    // mindmap 恒开放的修复行为见下两条用例。）
     ({ svg, overlay, vp, onDrop, controller } = buildHarness(COL_BOXES, COL_CHILDREN, {}));
     dragStart(-150, -110, COL_CENTER_A); // 根区左半（-150 < r 中线 0，根区 y 带内）
     expect(slotEl()).not.toBeNull();
@@ -797,6 +805,82 @@ describe('resolveDropSlot 根级落点（逆时针定侧：持久侧别不再翻
       position: 'before',
       side: 'right',
     });
+  });
+
+  it('rootLeftAllowed=true（mindmap 修复）：全右文档拖到根左半 → 结算左列（首个左列主题），target.side=left', () => {
+    // 2026-10-09 需求方修复「左侧没有分支主题时，右侧分支无法拖到左侧」：结构门控
+    // 开放后，COL 桩（全右）同一指针点不再恒右——槽画左列兜底列位、index=左列空堆
+    // 尾插（sideInsertDocIndex 左空 → 文档序末尾）。
+    ({ svg, overlay, vp, onDrop, controller } = buildHarness(
+      COL_BOXES,
+      COL_CHILDREN,
+      {},
+      undefined,
+      () => true,
+    ));
+    dragStart(-150, -110, COL_CENTER_A); // 与上门控用例同一指针点（根区左半）
+    expect(slotEl()).not.toBeNull();
+    expect(slotEl()!.getAttribute('x')).toBe('-200'); // 左列兜底列位（r 左缘 -40 − 列距 60 − a.w 100）
+    expect(slotEl()!.getAttribute('y')).toBe('-20'); // 左列无兄弟 → 父盒垂直居中（槽中心 0 − a.h/2）
+    svg.dispatchEvent(pe('pointerup', { clientX: -150, clientY: -110, pointerId: 1 }));
+    expect(onDrop).toHaveBeenLastCalledWith(['a'], {
+      kind: 'sibling',
+      parentId: 'r',
+      index: 3, // 左列空堆 → 文档序末尾（与空白解析「右顶/左尾」语义一致）
+      anchorId: 'c3',
+      position: 'after',
+      side: 'left', // 页面据此 setNodeSide 建首个左列主题
+    });
+    // 落位仿真：post-removal [c1,c2,c3] 插 index 3 → [c1,c2,c3,a]（文档序末尾追加）
+    const children: Record<string, string[]> = { r: ['c1', 'c2', 'c3', 'a'] };
+    applyTarget(onDrop.mock.calls[0]![1] as DropTarget, children);
+    expect(children.r).toEqual(['c1', 'c2', 'c3', 'a']);
+  });
+
+  it('rootLeftAllowed=true（mindmap 修复）：全右文档空白左半 → 解析左列末尾，target.side=left', () => {
+    // 空白路径同一门控（resolveBlankTarget）：root 左区横向外扩缘（-200）之外的
+    // 左半空白 → 目标侧 left、左列尾插（文档序末尾）。
+    ({ svg, overlay, vp, onDrop, controller } = buildHarness(
+      COL_BOXES,
+      COL_CHILDREN,
+      {},
+      undefined,
+      () => true,
+    ));
+    dragStart(-500, 0, COL_CENTER_A); // 空白（-500 < 根左区缘 -200）
+    expect(slotEl()).not.toBeNull(); // 空白悬停有预览
+    expect(slotEl()!.getAttribute('x')).toBe('-200'); // 左列兜底列位，不在右列
+    expect(slotEl()!.getAttribute('y')).toBe('-20'); // 左列无兄弟 → 父盒垂直居中
+    svg.dispatchEvent(pe('pointerup', { clientX: -500, clientY: 0, pointerId: 1 }));
+    expect(onDrop).toHaveBeenLastCalledWith(['a'], {
+      kind: 'sibling',
+      parentId: 'r',
+      index: 3,
+      anchorId: 'c3',
+      position: 'after',
+      side: 'left',
+    });
+  });
+
+  it('纯函数：rootLeftAllowed=true → 全右文档芯片左半槽画左列兜底列位（index 直通）', () => {
+    // resolveDropSlot 与 classifyDropAt 同一显式门控值（同点必同侧）：芯片左半 +
+    // sideHint left + rootLeftAllowed true → 左列槽（缺省几何口径下此场景恒右，
+    // 由上门控用例锁定）。
+    const res = resolveDropSlot({
+      boxes: COL_BOXES,
+      childrenIds: COL_CHILDREN.r!,
+      draggedId: 'a',
+      parentId: 'r',
+      index: 3,
+      chipBox: { x: -136, y: -96, w: 100, h: 40 },
+      sideHint: 'left',
+      rootLeftAllowed: true,
+    });
+    expect(res).not.toBeNull();
+    expect(res!.index).toBe(3); // 直通（持久侧别下不做仿真修正）
+    expect(res!.slot.side).toBe('left');
+    expect(res!.slot.x).toBe(-200); // 左列兜底列位（r 左缘 -40 − H_GAP_FALLBACK 60 − a.w 100）
+    expect(res!.slot.y).toBe(-20); // 左列无兄弟 → 父盒垂直居中
   });
 });
 
@@ -813,6 +897,24 @@ describe('classifyDropAt 纯函数（M7c-G 区域优先级）', () => {
       draggedId: 'a',
       point,
     });
+
+  it('rootLeftAllowed=true：全右文档根左半 → child of root、sideHint=left、index=左空尾插文档序尾', () => {
+    // 2026-10-09 需求方修复「左侧没有分支主题时，右侧分支无法拖到左侧」：显式结构
+    // 门控开放后目标侧按指针侧直取（缺省几何口径下此点恒 right，由 DOM 门控用例锁定）。
+    expect(
+      classifyDropAt({
+        boxes: COL_BOXES,
+        childrenIdsOf: (id) => COL_CHILDREN[id] ?? [],
+        isDescendant: () => false,
+        draggedId: 'a',
+        rootLeftAllowed: true,
+        point: { x: -150, y: -110 },
+      }),
+    ).toEqual({
+      placement: { kind: 'child', nodeId: 'r', index: 3, sideHint: 'left' },
+      forbiddenId: null,
+    });
+  });
 
   it('根右列 → child of root（index=最近间隙位，sideHint=right）', () => {
     expect(classify({ x: 70, y: -110 })).toEqual({

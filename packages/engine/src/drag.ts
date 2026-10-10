@@ -29,10 +29,13 @@
  *   修正 index」仿真退役）**：持久 side（core addChild 自动定侧 / setNodeSide 写入）
  *   下布局不再翻面，落点解析改为「目标侧 = 芯片所在侧（classify 的 sideHint，指针
  *   相对根盒中线）」，index = 该侧现有二级主题（按 NodeBox 当前 side 过滤）按 y 的
- *   最近插入位映射回文档序（sideInsertDocIndex）。门控：根级尚无左列二级主题（logic
- *   全右 / 新文档右列起步）时恒结算右列——logic 结构不受影响；classifyDropAt 与
- *   resolveDropSlot 用同一门控公式（同点必同侧）。目标 side 随 DropTarget.side 输出，
- *   页面据此调 core setNodeSide（页面接线注意：仅 mindmap 结构消费该字段）。
+ *   最近插入位映射回文档序（sideInsertDocIndex）。门控：根级左列是否开放改由页面
+ *   结构门控决定（deps.rootLeftAllowed，2026-10-09 需求方修复「左侧没有分支主题时
+ *   右侧分支无法拖到左侧」——mindmap 恒开放：拖左即建首个左列主题；logic 向右结构
+ *   恒右，布局不读 side）；缺省回退几何口径（盒集已有左列主题才开放——logic 全右/
+ *   新文档恒右的旧行为）。classifyDropAt/resolveDropSlot/空白解析三处共用同一取值
+ *   （同点必同侧）。目标 side 随 DropTarget.side 输出，页面据此调 core setNodeSide
+ *   （页面接线注意：仅 mindmap 结构消费该字段）。
  * - **去掉 100ms 点亮门槛**（DROP_HOVER_MS 移除）：预览随指针即时更新（每次 move 直接
  *   结算并画，落点切换即摘旧反馈），释放仍取最后一帧缓存——所见即所提不变。
  * - logic/org 门控（org 镜像区/列见上）、ghost 芯片右下偏移、禁止红描边+芯片变红、
@@ -165,7 +168,8 @@ const GHOST_BADGE_RADIUS = 9;
  * 悬停中的几何落点（M7c-G 列吸附连续模型）。index 恒为「移除被拖节点后」的文档序
  * 插入位（最近间隙位，classify 纯几何结算，moveNode 先移除后插入——引擎不再二次修正）；
  * sideHint = root 级命中时的**目标侧别**（逆时针定侧：芯片所在侧，经左列门控——
- * 见 rootLeftEnabled；仅根级携带，非 root 级/同侧列命中无此字段）。kind:'blank' =
+ * 显式 rootLeftAllowed 结构门控 ?? 几何兜底 rootLeftEnabled；仅根级携带，非 root
+ * 级/同侧列命中无此字段）。kind:'blank' =
  * 空白（M7c-F 复验问题4：悬停即解析为 root 对应侧末尾并画预览）；注意与「禁止目标」
  * 的 placement null 区分——后者不参与反馈点亮。
  */
@@ -228,8 +232,10 @@ export interface DropSlotResolution {
  *
  * 根级侧别（逆时针定侧，需求方 2026-09-30；旧「半分逻辑仿真修正 index」退役）：
  * - 目标侧 = sideHint（classify 按芯片所在侧结算的最终侧）?? 芯片盒中心相对根盒中线；
- * - 门控（rootLeftEnabled）：根级尚无左列二级主题（logic 全右 / 新文档右列起步）时
- *   恒结算右列——logic 结构不受影响；与 classifyDropAt 同一公式，同点必同侧；
+ * - 门控：显式 args.rootLeftAllowed（结构门控，页面供——mindmap 恒开放：拖左即建
+ *   首个左列主题，2026-10-09 需求方修复；logic 向右结构恒右）优先；缺省回退几何
+ *   口径 rootLeftEnabled（根级尚无左列二级主题时恒结算右列——logic 全右/新文档
+ *   右列起步的旧行为）。与 classifyDropAt 同一取值，同点必同侧；
  * - 持久 side 下布局不再翻面：index 不做任何修正（classify 的侧别感知映射
  *   sideInsertDocIndex 已产出最终文档序位），槽侧 = 目标侧。非 root 父级：
  *   side=父级侧、index 按几何（placeHorizontal 后代继承父侧，无重排）。
@@ -260,6 +266,13 @@ export function resolveDropSlot(args: {
    * 影响：兄弟堆过滤扩为「移除全组」。槽几何（w/h/列位）仍取主拖节点盒——组落同一槽。
    */
   draggedGroupIds?: string[];
+  /**
+   * 可选：根级左列是否开放（结构门控，2026-10-09 需求方修复「左侧无分支主题时
+   * 无法拖到左侧」）：true = 芯片在左半即落左列（首个左列主题由此建立）；false =
+   * 恒右（logic 向右结构）。缺省回退几何口径 rootLeftEnabled（盒集已有左列主题
+   * 才开放）——与 classifyDropAt 传同一取值，同点必同侧。
+   */
+  rootLeftAllowed?: boolean;
 }): DropSlotResolution | null {
   const { boxes, childrenIds, draggedId, parentId, index, chipBox, sideHint } = args;
   const byId = new Map(boxes.map((b) => [b.id, b]));
@@ -353,10 +366,13 @@ export function resolveDropSlot(args: {
   const parentCx = parentBox.x + parentBox.w / 2;
   const isRootLevel = parentBox.parentId === undefined;
   const chipSide: 'left' | 'right' = sideHint ?? (chipCx >= parentCx ? 'right' : 'left');
-  // 持久侧别（逆时针定侧）：根级目标侧 = 芯片所在侧，左列未启用时恒右（门控公式与
-  // classifyDropAt 一致，同点必同侧）；非 root 继承父侧（placeHorizontal 后代同侧）。
+  // 持久侧别（逆时针定侧）：根级目标侧 = 芯片所在侧。左列门控 = 显式 rootLeftAllowed
+  // （结构门控，页面供——mindmap 恒开放、logic 恒右）?? 几何口径 rootLeftEnabled
+  // （与 classifyDropAt 同一取值，同点必同侧）；非 root 继承父侧（placeHorizontal
+  // 后代同侧）。
+  const leftEnabled = args.rootLeftAllowed ?? rootLeftEnabled(boxes, parentBox);
   const side: 'left' | 'right' = isRootLevel
-    ? chipSide === 'left' && !rootLeftEnabled(boxes, parentBox)
+    ? chipSide === 'left' && !leftEnabled
       ? 'right'
       : chipSide
     : parentBox.side === 'left'
@@ -412,11 +428,14 @@ export function resolveDropSlot(args: {
 }
 
 /**
- * 根级左列门控（逆时针定侧）：根级尚无任何左列二级主题（按当前布局盒判定，含被拖
- * 组成员——拖动中盒集仍是落点前状态）恒结算右列。logic 全右文档永不开启；mindmap
- * 新文档（前 3 个右）也先居右，首个左侧节点出现（含第 4 个自动落左）后开放按芯片
- * 所在侧换侧。classifyDropAt 与 resolveDropSlot 共用同一公式（输入同一盒集 ⇒ 同点
- * 必同侧），保证预览、释放与 target.side 三者一致。
+ * 根级左列门控的**几何兜底口径**（逆时针定侧）：根级尚无任何左列二级主题（按当前
+ * 布局盒判定，含被拖组成员——拖动中盒集仍是落点前状态）恒结算右列。logic 全右文档
+ * 永不开启；mindmap 新文档（前 3 个右）也先居右，首个左侧节点出现（含第 4 个自动
+ * 落左）后开放按芯片所在侧换侧。2026-10-09 起正式门控改由页面结构供给
+ * （deps/args rootLeftAllowed：mindmap 恒开放、logic 恒右——修复「左侧无分支主题时
+ * 无法拖到左侧」），本函数仅在调用方未显式供给时回退使用。classifyDropAt 与
+ * resolveDropSlot 共用同一取值（输入同一盒集/同一显式值 ⇒ 同点必同侧），保证预览、
+ * 释放与 target.side 三者一致。
  */
 function rootLeftEnabled(boxes: NodeBox[], rootBox: NodeBox): boolean {
   return boxes.some((b) => b.parentId === rootBox.id && b.side === 'left');
@@ -746,9 +765,9 @@ function nearestOrgInsertIndex(
  * 3. 都未命中 → {kind:'blank'}（computeResolved 再解析为 root 对应侧末尾）。
  * index = 「移除全组后」子级堆上按指针 y（org 按 x）的最近间隙位——与
  * resolveDropSlot 的槽几何同公式，预览与释放天然一致；root 级命中携带 sideHint =
- * **目标侧别**（逆时针定侧：指针所在侧，经 rootLeftEnabled 左列门控——logic 全右/
- * 新文档恒 right；sideInsertDocIndex 映射回文档序位次，resolveDropSlot 直接消费、
- * 不再仿真修正）。
+ * **目标侧别**（逆时针定侧：指针所在侧，经左列门控——显式 args.rootLeftAllowed
+ * 结构门控 ?? 几何口径 rootLeftEnabled；sideInsertDocIndex 映射回文档序位次，
+ * resolveDropSlot 直接消费、不再仿真修正）。
  */
 export function classifyDropAt(args: {
   boxes: NodeBox[];
@@ -762,6 +781,14 @@ export function classifyDropAt(args: {
    * 不变（dragW/H 仍取主拖节点盒——组作为整体插入一个 parent+index）。
    */
   draggedIds?: string[];
+  /**
+   * 可选：根级左列是否开放（结构门控，2026-10-09 需求方修复「左侧没有分支主题时
+   * 右侧分支无法拖到左侧」）：true = 目标侧按指针侧直取（拖左即建首个左列主题）；
+   * false = 恒右（logic 向右结构）。缺省回退几何口径 rootLeftEnabled（盒集已有
+   * 左列主题才开放，旧行为）。控制器在 classify/resolve/空白解析三处传同一 deps
+   * 取值——同点必同侧不变式保持。
+   */
+  rootLeftAllowed?: boolean;
   point: Point;
 }): { placement: DropPlacement | null; forbiddenId: string | null } {
   const { boxes, childrenIdsOf, isDescendant, draggedId, point } = args;
@@ -814,12 +841,13 @@ export function classifyDropAt(args: {
     }
     if (parent.parentId === undefined) {
       // 根级（逆时针定侧）：目标侧 = 指针侧（zoneSideAt/stripSideAt 的侧别），经左列
-      // 门控（rootLeftEnabled，与 resolveDropSlot 同公式——logic 全右/新文档恒右）；
-      // index = 该侧二级主题（按 NodeBox 当前 side 过滤）按 y 的最近插入位映射回文档序。
+      // 门控（显式 rootLeftAllowed 结构门控 ?? 几何口径 rootLeftEnabled，与
+      // resolveDropSlot 同一取值——logic 恒右/mindmap 恒开放）；index = 该侧二级
+      // 主题（按 NodeBox 当前 side 过滤）按 y 的最近插入位映射回文档序。
       // 顺时针落位（2026-10-09）：左列视觉序 = 文档序倒排——槽位几何按视觉序结算，
       // sideInsertDocIndex 同口径映射回文档序（同点必同果不变式保持）。
-      const targetSide: 'left' | 'right' =
-        side === 'left' && !rootLeftEnabled(boxes, parent) ? 'right' : side;
+      const leftEnabled = args.rootLeftAllowed ?? rootLeftEnabled(boxes, parent);
+      const targetSide: 'left' | 'right' = side === 'left' && !leftEnabled ? 'right' : side;
       const docSibs = stack.filter((b) => b.side === targetSide);
       const visualSibs = targetSide === 'left' ? [...docSibs].reverse() : docSibs;
       const p = nearestInsertIndex(
@@ -887,6 +915,14 @@ export interface DragControllerDeps {
   overlayLayer: SVGGElement;
   /** 可选：id 是否允许被换父（页面级门控，如只读态）；缺省允许。 */
   canReparent?(id: string): boolean;
+  /**
+   * 可选：根级左列是否开放（结构门控，2026-10-09 需求方修复「左侧没有分支主题时
+   * 右侧分支无法拖到左侧」）：mindmap → true（拖左即建首个左列主题，页面 onDrop
+   * 内 setNodeSide 持久化）；logic 向右结构 → false（恒右，布局不读 side）；org
+   * （root side 'down'）不经此门控。缺省回退几何口径（盒集已有左列主题才开放，
+   * 旧行为）。classify/resolve/空白解析三处共用本回调同一取值——同点必同侧。
+   */
+  rootLeftAllowed?(): boolean;
 }
 
 /**
@@ -1226,6 +1262,7 @@ export class DragController {
       isDescendant: (id, candidateId) => deps.isDescendant(id, candidateId),
       draggedId: drag.id,
       draggedIds: drag.ids,
+      rootLeftAllowed: deps.rootLeftAllowed?.(),
       point: { x: sceneX, y: sceneY },
     });
   }
@@ -1271,8 +1308,9 @@ export class DragController {
 
   /**
    * 空白落点解析（M7c-F 复验问题4）：企微语义「空白=挂 root」但要可预期——目标侧取
-   * 指针相对 root 盒中线（右半→right、左半→left），经左列门控（rootLeftEnabled，与
-   * classifyDropAt/resolveDropSlot 同公式：logic 全右/新文档恒右）；index 取该侧现有
+   * 指针相对 root 盒中线（右半→right、左半→left），经左列门控（显式结构门控
+   * rootLeftAllowed ?? 几何口径 rootLeftEnabled，与 classifyDropAt/resolveDropSlot
+   * 同一取值：mindmap 恒开放、logic 恒右）；index 取该侧现有
    * 二级主题（扣除被拖组、按 NodeBox 当前 side 过滤）的**视觉末尾**（sideInsertDocIndex
    * 尾插映射——右列=文档序末兄弟之后、左列=视觉列底即文档序首位左主题之前，顺时针
    * 落位 2026-10-09）。org（root 盒 side 'down'）维持旧口径：恒文档序末尾、侧别仅作
@@ -1292,10 +1330,12 @@ export class DragController {
     if (!rootBox) return null;
     const pointerSide: 'left' | 'right' = scene.x >= rootBox.x + rootBox.w / 2 ? 'right' : 'left';
     const isDown = rootBox.side === 'down';
-    // 目标侧：横向按指针侧 + 左列门控；org 恒透传指针侧（org 分支不消费侧别）。
+    // 目标侧：横向按指针侧 + 左列门控（显式结构门控 ?? 几何口径，与 classifyDropAt/
+    // resolveDropSlot 同一取值）；org 恒透传指针侧（org 分支不消费侧别）。
+    const leftEnabled = deps.rootLeftAllowed?.() ?? rootLeftEnabled(boxes, rootBox);
     const side: 'left' | 'right' = isDown
       ? pointerSide
-      : pointerSide === 'left' && !rootLeftEnabled(boxes, rootBox)
+      : pointerSide === 'left' && !leftEnabled
         ? 'right'
         : pointerSide;
     // 组拖动（2026-09-30）：index 按「移除全组后」的 root 子级结算——组成员现为
@@ -1367,6 +1407,8 @@ export class DragController {
           chipBox: ghostChipBox(scene, draggedBox, deps.viewport.scale),
           // 目标侧覆写（空白=指针侧+门控；根级区域命中=classify 结算的最终侧）。
           sideHint,
+          // 左列门控与 classify/空白解析同一取值（同点必同侧）。
+          rootLeftAllowed: deps.rootLeftAllowed?.(),
         });
         if (resolution === null) {
           slot = null; // 父盒/被拖盒缺失：无预览，释放仍按原 target 结算
