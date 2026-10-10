@@ -44,10 +44,12 @@ async function selectNodeByText(page: Page, text: string): Promise<void> {
   await page.locator('.editor-canvas svg .gm-text', { hasText: text }).click();
 }
 
-/** 打开插入菜单 →「图标」→ 标记面板（与 marker-panel.e2e.spec.ts 同流程）。 */
+/** 打开 TaskPanel →「在标记面板中编辑」→ 标记面板（2026-10-10 插入菜单删除后入口，
+ *  与 marker-panel.e2e.spec.ts 同流程）。TaskPanel 已开时跳过 task-toggle（toggle 语义）。 */
 async function openMarkerPanel(page: Page) {
-  await page.getByTestId('insert-menu').click();
-  await page.getByTestId('insert-icons').click();
+  const editBtn = page.getByTestId('task-panel-markers-edit');
+  if ((await editBtn.count()) === 0) await page.getByTestId('task-toggle').click();
+  await editBtn.click();
   const panel = page.getByTestId('marker-panel');
   await expect(panel).toBeVisible();
   return panel;

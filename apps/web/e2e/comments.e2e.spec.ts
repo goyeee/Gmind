@@ -64,10 +64,10 @@ async function grantCollaborator(
   if (!res.ok()) throw new Error(`授予协作者失败：${res.status()}`);
 }
 
-/** 打开评论右列（M7b-R6：右列默认不渲染，插入菜单「评论」项开启）。 */
+/** 打开评论右列（M7b-R6：右列默认不渲染；2026-10-10 插入菜单删除后走工具栏
+ *  comment-toggle 按钮——插入菜单「评论」项本就是冗余入口）。 */
 async function openComments(page: Page): Promise<void> {
-  await page.getByTestId('insert-menu').click();
-  await page.getByTestId('insert-comment').click();
+  await page.getByTestId('comment-toggle').click();
   await expect(page.getByTestId('comment-pane')).toBeVisible();
 }
 

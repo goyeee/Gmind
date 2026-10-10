@@ -1,14 +1,12 @@
 /*
- * 节点标记面板（M7b-W3 企微式竖层重做）：**锚定弹出层**——挂在工具栏 .insert-wrap
- * 下（absolute，顶贴按钮下沿、左缘与按钮对齐，向下展开），不再有任何
- * position:fixed 视口抽屉几何。内部：标题行 + 分段页签 + 分组竖排滚动体。
- * 迷你选盘（节点徽章点击换组弹层）样式同文件维护（.marker-picker*）。
+ * 节点标记面板（M7b-W3 企微式竖层重做）：**锚定弹出层**。2026-10-10 插入菜单删除后
+ * 改 position:fixed 视口定位（left/top 由调用方锚点供给、页面侧右缘钳制——
+ * 锚点=TaskPanel「在标记面板中编辑」按钮下沿）。内部：标题行 + 分段页签 +
+ * 分组竖排滚动体。迷你选盘（节点徽章点击换组弹层）样式同文件维护（.marker-picker*）。
  */
 
 .marker-panel {
-  position: absolute;
-  top: calc(100% + 4px);
-  left: 0;
+  position: fixed;
   width: 340px;
   max-width: calc(100vw - 16px);
   max-height: 70vh;

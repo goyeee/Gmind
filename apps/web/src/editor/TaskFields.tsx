@@ -117,7 +117,7 @@ export function useTaskMembers(
 
 /**
  * 成员多选 chips（C3/C4 同一份交互语义：点击切换选中，选中高亮成员色）。
- * testid 前缀由调用方给（`quickcard-owner` / `task-panel-owner`，拼 `-{userId}`）。
+ * testid 前缀由调用方给（`task-panel-owner` 等，拼 `-{userId}`）。
  */
 export function MemberMultiSelect({
   memberIndex,
@@ -239,7 +239,7 @@ export function ProgressField({
 /**
  * 智能日期输入（自 TaskTable 迁出，行为/类名不变）：聚焦空值预填当月 1 日
  * （本地临时态），真正选日/改值才提交；未选日离开自动清除预填、零写入。
- * 新增可选 testId（C3/C4 的 quickcard-date-* / task-panel-date-* 挂点）。
+ * 新增可选 testId（task-panel-date-* 等挂点；C3 快速卡已随 2026-10-10 删除）。
  */
 export function SmartDateInput({
   value,
@@ -317,7 +317,8 @@ export function SmartDateInput({
 // ───────────────────── 自定义属性字段（表格自定义列消费侧，任务 2）─────────────────────
 
 /**
- * 自定义属性单字段输入（TaskQuickCard / TaskPanel「自定义属性」小节共用）：按列
+ * 自定义属性单字段输入（TaskPanel「自定义属性」小节；原与已删除的 TaskQuickCard
+ * 共用，2026-10-10 起 TaskPanel 独用）：按列
  * 类型渲染同族编辑器——text=单行输入（placeholder「填写…」，空提交=清空删键）/
  * person=MemberMultiSelect（空值占位「选择成员」，清空到 0 人提交 null）/
  * progress=0-100 数字输入（Enter/失焦提交，钳 0-100 取整，空=清空）/

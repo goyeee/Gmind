@@ -40,17 +40,19 @@ async function openSeedDoc(page: Page): Promise<void> {
 
 /** 既有工具栏 testid 清单（历轮改版后必须全部仍在，mobile-readonly 清单的桌面全集）。
  *  structure-select 已随 2026-09-30 结构面板改版移除（structure-select →
- *  structure-toggle + structure-panel，见 editor.e2e 用例 5 适配）。 */
+ *  structure-toggle + structure-panel，见 editor.e2e 用例 5 适配）。
+ *  insert-menu 已随 2026-10-10 需求方裁定整体删除（菜单连条目全删）。 */
 const EXISTING_TESTIDS = [
   'back-btn',
   'title-input',
   'star-toggle',
   'save-status',
+  // 评论开关 2026-10-10 桌面补装（插入「评论」项随菜单删除后的桌面入口，与移动端同 testid）
+  'comment-toggle',
   'undo-btn',
   'redo-btn',
   'structure-toggle',
   'theme-panel-toggle',
-  'insert-menu',
   'export-menu',
   'members-btn',
   'versions-toggle',
@@ -68,25 +70,26 @@ const EXISTING_TESTIDS = [
   'view-tab-table',
 ] as const;
 
-test('工具栏：单行分组 + 竖线分隔符（10 组 / 8 分隔线）', async ({ page }) => {
+test('工具栏：单行分组 + 竖线分隔符（9 组 / 7 分隔线）', async ({ page }) => {
   await openSeedDoc(page);
   const toolbar = page.locator('.editor-toolbar');
   await expect(toolbar).toBeVisible();
-  // 分组容器：返回 / 标题 / 视图切换 / 撤销重做格式刷 / 插入 / 上级子级同级 /
-  // 格式任务 / 结构主题 / 导出 / 协作（导出组与协作组间省略 1 条分隔线；全屏组
-  // 已随 2026-10-09 底栏改版迁至 .editor-bottombar 右侧）
-  await expect(toolbar.locator('> .toolbar-group')).toHaveCount(10);
+  // 分组容器：返回 / 标题 / 视图切换 / 撤销重做格式刷 / 上级子级同级 / 格式任务 /
+  // 结构主题 / 导出 / 协作（插入组已随 2026-10-10 删除；导出组与协作组间省略 1 条
+  // 分隔线；全屏组已随 2026-10-09 底栏改版迁至 .editor-bottombar 右侧）
+  await expect(toolbar.locator('> .toolbar-group')).toHaveCount(9);
   // 组间 1px 竖线分隔符
-  await expect(toolbar.locator('.toolbar-sep')).toHaveCount(8);
+  await expect(toolbar.locator('.toolbar-sep')).toHaveCount(7);
   // 每个分隔符都是 1px 宽的竖线元素（可见）
   const seps = toolbar.locator('.toolbar-sep');
   for (let i = 0; i < (await seps.count()); i++) {
     await expect(seps.nth(i)).toBeVisible();
   }
   // 2026-09-30 需求方反馈任务 2：文字标签所有宽度常显 + e2e 默认视口（1280）恒
-  // 单行——全部直接子元素 offsetTop 相等（不换行）、无横向溢出；10 个文字标签
-  // （格式刷/插入/三按钮/格式/任务/简洁/结构/主题）全部可见（不再随 ≤1536 降级隐藏；
-  // M7b 补课「简洁」入列由 ≤1536 宽度预算回收抵消，见 editor.css 断点注释）。
+  // 单行——全部直接子元素 offsetTop 相等（不换行）、无横向溢出；9 个文字标签
+  // （格式刷/三按钮/格式/任务/简洁/结构/主题；「插入」标签随 2026-10-10 菜单删除出列）
+  // 全部可见（不再随 ≤1536 降级隐藏；M7b 补课「简洁」入列由 ≤1536 宽度预算回收抵消，
+  // 见 editor.css 断点注释）。
   const lineTops = await toolbar
     .locator('> *')
     .evaluateAll((els) => [...new Set(els.map((e) => (e as HTMLElement).offsetTop))]);
@@ -94,7 +97,7 @@ test('工具栏：单行分组 + 竖线分隔符（10 组 / 8 分隔线）', asy
   const overflow = await toolbar.evaluate((el) => el.scrollWidth > el.clientWidth);
   expect(overflow, '工具栏不得横向溢出').toBe(false);
   const labels = toolbar.locator('.toolbar-btn-label');
-  await expect(labels).toHaveCount(10);
+  await expect(labels).toHaveCount(9);
   for (let i = 0; i < (await labels.count()); i++) {
     await expect(labels.nth(i)).toBeVisible();
   }
@@ -103,9 +106,10 @@ test('工具栏：单行分组 + 竖线分隔符（10 组 / 8 分隔线）', asy
 test('工具栏：图标按钮均带内联 svg 与 title 提示；上级/子级/同级为文字钮', async ({ page }) => {
   await openSeedDoc(page);
   const iconButtons = page.locator('.editor-toolbar button.toolbar-btn', { has: page.locator('> svg') });
-  // 返回/撤销/重做/格式刷/插入/格式/任务/简洁/结构/主题面板/导出/成员/版本历史/
-  // 动态/快捷键/查找 = 16 个图标按钮（全屏 2026-10-09 迁至底栏右侧，testid 保留）
-  await expect(iconButtons).toHaveCount(16);
+  // 返回/撤销/重做/格式刷/格式/任务/简洁/结构/主题面板/导出/成员/版本历史/动态/
+  // 快捷键/查找 = 15 个图标按钮（插入钮 2026-10-10 随菜单删除出列；全屏 2026-10-09
+  // 迁至底栏右侧，testid 保留）
+  await expect(iconButtons).toHaveCount(15);
   const count = await iconButtons.count();
   for (let i = 0; i < count; i++) {
     const btn = iconButtons.nth(i);
@@ -158,14 +162,13 @@ test('工具栏：members-btn 与结构面板钮/主题面板钮可访问名语�
   await expect(page.getByTestId('theme-panel-toggle')).toHaveAccessibleName('主题');
 });
 
-test('工具栏：组序符合企微对标布局（返回|标题|视图|撤销重做刷|插入|三钮|格式任务|结构主题|导出|协作）', async ({ page }) => {
+test('工具栏：组序符合企微对标布局（返回|标题|视图|撤销重做刷|三钮|格式任务|结构主题|导出|协作）', async ({ page }) => {
   await openSeedDoc(page);
   const anchors = [
     'back-btn',
     'title-input',
     'view-tab-mind',
     'undo-btn',
-    'insert-menu',
     'toolbar-add-parent',
     'format-toggle',
     'structure-toggle',
@@ -190,12 +193,13 @@ test('工具栏：组序符合企微对标布局（返回|标题|视图|撤销�
       expect(cur.y, `${cur.id} 换行后必须位于 ${prev.id} 下方（跨排向下）`).toBeGreaterThan(prev.y);
     }
   }
-  // 企微三按钮组落位钉死：插入 < 上级子级同级 < 格式任务 < 结构主题
-  const insertX = (await page.getByTestId('insert-menu').boundingBox())!.x;
+  // 企微三按钮组落位钉死：撤销重做刷 < 上级子级同级 < 格式任务 < 结构主题
+  // （插入组 2026-10-10 删除后，三钮组左邻为撤销重做格式刷组）
+  const redoX0 = (await page.getByTestId('redo-btn').boundingBox())!.x;
   const addX = (await page.getByTestId('toolbar-add-parent').boundingBox())!.x;
   const formatX = (await page.getByTestId('format-toggle').boundingBox())!.x;
   const structX = (await page.getByTestId('structure-toggle').boundingBox())!.x;
-  expect(addX).toBeGreaterThan(insertX);
+  expect(addX).toBeGreaterThan(redoX0);
   expect(formatX).toBeGreaterThan(addX);
   expect(structX).toBeGreaterThan(formatX);
   // 同组相邻：撤销 < 重做；成员 < 版本历史 < 动态 < 快捷键 < 查找

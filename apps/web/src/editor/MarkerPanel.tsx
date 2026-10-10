@@ -7,9 +7,9 @@ import './marker-panel.css';
  * 节点标记面板（M7b-W3 企微式竖层重做，需求方原话「竖着的贴近右侧的层、内部分组、
  * 顶部按钮点开、不要固定在右侧」）。
  *
- * 形态：**锚定弹出层**——挂在工具栏 .insert-wrap 下（position:absolute），顶部贴
- * 「插入」按钮下沿、左缘与按钮对齐（右缘越界时按 anchor 左移钳制），向下展开；
- * 宽 340px、max-height 70vh 内部滚动。替换 M7a 版 position:fixed 视口抽屉。
+ * 形态：**锚定弹出层**——2026-10-10 插入菜单删除后改 position:fixed 视口定位
+ * （left/top=调用方锚点，页面侧右缘越界钳制；锚点=TaskPanel「在标记面板中编辑」
+ * 按钮下沿），向下展开；宽 340px、max-height 70vh 内部滚动。
  * 顶部「图标」/「表情」标题 + 分段页签（图标|表情）+ 右上角 ×（企微截图同构）。
  *
  * 内容（M7b-W1 目录单源，不手抄）：图标页 = 心情/优先级/数字/箭头/旗帜/进度/其他
@@ -87,15 +87,18 @@ export interface MarkerPanelProps {
   tab: MarkerTab;
   onTabChange: (tab: MarkerTab) => void;
   onClose: () => void;
-  /** 相对 .insert-wrap 左缘的水平偏移（px）：右缘越界钳制时为负，把面板收回视口。 */
-  offsetLeft?: number;
+  /**
+   * 面板 fixed 定位（2026-10-10 插入菜单删除后改视口锚定）：最终屏幕坐标
+   * （left 已经页面侧右缘钳制）。锚点=调用方按钮下沿/点击点。
+   */
+  position: { left: number; top: number };
 }
 
 /** 图标页组序（表情组独占第二页）。 */
 const ICON_PAGE_GROUPS = ['mood', 'priority', 'number', 'arrow', 'flag', 'progress', 'other'] as const;
 
 export function MarkerPanel(props: MarkerPanelProps): ReactElement {
-  const { icons, selectedCount, onSetIcon, tab, onTabChange, onClose, offsetLeft = 0 } = props;
+  const { icons, selectedCount, onSetIcon, tab, onTabChange, onClose, position } = props;
   const disabled = selectedCount === 0;
 
   const markerButton = (group: IconGroup, def: MarkerGlyphDef): ReactElement => {
@@ -123,7 +126,13 @@ export function MarkerPanel(props: MarkerPanelProps): ReactElement {
       data-testid="marker-panel"
       role="dialog"
       aria-label="节点标记"
-      style={offsetLeft !== 0 ? { left: offsetLeft } : undefined}
+      style={{
+        left: position.left,
+        top: position.top,
+        // 下缘视口钳制（2026-10-10 fixed 锚定配套）：锚点在右列中部时 70vh 会探出
+        // 视口底缘（内部滚动也难到达末组），按锚点收敛可用高。
+        maxHeight: `calc(100vh - ${Math.max(0, position.top) + 8}px)`,
+      }}
     >
       <div className="marker-panel-head">
         <h3 className="marker-panel-title">{tab === 'icon' ? '图标' : '表情'}</h3>

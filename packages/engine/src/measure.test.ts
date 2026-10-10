@@ -80,19 +80,22 @@ describe('measureNodeBox', () => {
 
   // M7c-C2 任务信息行槽位（只增不改）：无 taskRow 选项时几何与旧版逐字节一致；
   // 有 taskRow 时盒高加一行（TASK_ROW_H）、盒宽下限容纳任务行内容。
+  // 2026-10-10 mindgrid 对齐：左=负责人文字（adapter 实测宽）、右=百分比槽；
+  // 日期为盒外悬浮标签不占行宽。
   it('任务行槽位：无 taskRow 几何不变；有 taskRow 高度加一行、宽度保底任务行内容', () => {
-    const slots = { owners: 2, showProgress: true, hasDue: true };
+    const slots = { ownerLabel: '张三 +1', ownerUnassigned: false, showProgress: true };
+    const slotsW = taskRowContentWidth(slots, slots.ownerLabel.length * 10); // 桩 10px/字符
     // 缺省（无任务信息）：完全不参与
     const plain = measureNodeBox('ab', style, theme, { adapter: stubAdapter });
     expect(plain.h).toBe(14 * 1.5);
     expect(plain.w).toBe(2 * 10 + 2 * 8);
-    // 有任务信息：h = 文本高 + TASK_ROW_H；w 下限 = 任务行内容宽（126 > 文本宽 36）
+    // 有任务信息：h = 文本高 + TASK_ROW_H；w 下限 = 任务行内容宽（98 > 文本宽 36）
     const withRow = measureNodeBox('ab', style, theme, { adapter: stubAdapter, taskRow: slots });
     expect(withRow.h).toBe(14 * 1.5 + TASK_ROW_H);
-    expect(withRow.w).toBe(taskRowContentWidth(slots));
+    expect(withRow.w).toBe(slotsW);
     // 任务行内容更窄时文本主导宽度，任务行仍计高（本套主题 maxTextWidth=50 会断行，
-    // 文本主导上限 5×10+16=66，故取窄槽位 owners=1）
-    const narrow = { owners: 1, showProgress: false, hasDue: false };
+    // 文本主导上限 5×10+16=66，故取窄槽位——负责人文字 2 字 20px + 内边距 12 = 32 < 66）
+    const narrow = { ownerLabel: '张三', ownerUnassigned: false, showProgress: false };
     const wide = measureNodeBox('ab', style, theme, { adapter: stubAdapter, taskRow: narrow });
     expect(wide.w).toBe(2 * 10 + 2 * 8);
     expect(wide.h).toBe(14 * 1.5 + TASK_ROW_H);
@@ -128,7 +131,7 @@ describe('measureNodeBox', () => {
   // M7b 补课（mindgrid 账号级显示偏好「脑图简洁模式」）：compact=true 时节点盒
   // 收敛为「标题 + 标记 + 内联进度」紧凑盒——描述行不产出、任务行槽位不计高宽。
   describe('compact 简洁模式', () => {
-    const slots = { owners: 2, showProgress: true, hasDue: true };
+    const slots = { ownerLabel: '张三 +1', ownerUnassigned: false, showProgress: true };
 
     it('描述行不产出、任务行槽位不计高宽：盒高只含标题行，盒宽=文本宽+内联进度槽', () => {
       const box = measureNodeBox('ab', style, theme, {
@@ -155,14 +158,14 @@ describe('measureNodeBox', () => {
     });
 
     it('紧凑盒窄于任务行内容宽：描述/任务详情的占位让位给内联进度', () => {
-      // 详细模式盒宽下限 = 任务行内容宽 126；紧凑盒 66 显著缩小（「缩小节点占位」）
+      // 详细模式盒宽下限 = 任务行内容宽 98；紧凑盒 66 显著缩小（「缩小节点占位」）
       const detail = measureNodeBox('ab', style, theme, { adapter: stubAdapter, taskRow: slots });
       const compactBox = measureNodeBox('ab', style, theme, {
         adapter: stubAdapter,
         taskRow: slots,
         compact: true,
       });
-      expect(detail.w).toBe(taskRowContentWidth(slots));
+      expect(detail.w).toBe(taskRowContentWidth(slots, slots.ownerLabel.length * 10));
       expect(compactBox.w).toBe(2 * 10 + 2 * 8 + TASK_PROGRESS_W);
       expect(compactBox.h).toBe(detail.h - TASK_ROW_H);
     });

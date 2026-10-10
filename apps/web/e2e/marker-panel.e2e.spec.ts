@@ -1,11 +1,14 @@
 import { expect, test, type Page } from '@playwright/test';
 
 /**
- * 节点标记面板 E2E —— 插入菜单锚定弹出层（企微「标记」面板对标，M7b-W3 竖层重做）。
+ * 节点标记面板 E2E —— 锚定弹出层（企微「标记」面板对标，M7b-W3 竖层重做；
+ * 2026-10-10 入口迁移）。
  *
- * 形态：工具栏「插入」下拉（insert-menu）→「图标」项（insert-icons）打开锚定弹出层
- * marker-panel（absolute 于 .insert-wrap，顶贴按钮下沿、向下展开；开面板收菜单，
- * 二者同挂 insert-wrap 互斥）；「表情」项（insert-emoji）同层直开表情页签。
+ * 入口（2026-10-10 工具栏「插入」菜单整体删除后）：工具栏「任务」（task-toggle）
+ * 开右侧 TaskPanel →「在标记面板中编辑」（task-panel-markers-edit）→ 锚定弹出层
+ * marker-panel（fixed 视口定位，顶贴按钮下沿、向下展开；无选中节点时 TaskPanel
+ * 空态无此入口，原「无选中打开面板禁用提示」路径随之退役——禁用态契约保留为
+ * 组件内防御，e2e 不再覆盖）。
  * 面板内分段页签 marker-tab-icon / marker-tab-emoji 切换；图标页七组竖排（心情/
  * 优先级/数字/箭头/旗帜/进度/其他，M7b-W1 目录单源 MARKER_CATALOG），表情页 28 枚
  * emoji 网格（emoji-picker 容器，逐值 testid marker-emoji-{char}）。
@@ -14,7 +17,7 @@ import { expect, test, type Page } from '@playwright/test';
  * 点击 = 批量 setIcon（「全含则移除否则设置」，单事务）；single 组（心情/优先级/数字/
  * 箭头/旗帜/进度）组内单选替换，multi 组（其他/表情）组内多选叠加；回显按当前选中
  * 集**交集口径** aria-pressed；无选中节点 → 面板禁用 + 提示「选中节点后添加标记」。
- * Esc / 外点关闭整个插入层（菜单 + 面板）。
+ * Esc / 外点关闭面板。
  *
  * 画布渲染侧（M7b-W1 起）：.gm-markers 容器 + 逐值 g.gm-marker-badge
  * [data-marker-group][data-marker-value]（旧 .gm-icons 文本槽已移除）。
@@ -56,23 +59,23 @@ function markerBadgeByValue(page: Page, text: string, value: string) {
   return nodeGroup(page, text).locator(`.gm-markers .gm-marker-badge[data-marker-value="${value}"]`);
 }
 
-/** 打开插入菜单 → 点「图标」→ 锚定弹出层标记面板可见（菜单收起，面板互斥展开）。 */
+/** 打开 TaskPanel → 点「在标记面板中编辑」→ 锚定弹出层标记面板可见（2026-10-10 入口迁移）。
+ *  TaskPanel 已开时跳过 task-toggle（toggle 语义，再点会收面板）。 */
 async function openMarkerPanel(page: Page) {
-  await page.getByTestId('insert-menu').click();
-  await page.getByTestId('insert-icons').click();
+  const editBtn = page.getByTestId('task-panel-markers-edit');
+  if ((await editBtn.count()) === 0) await page.getByTestId('task-toggle').click();
+  await editBtn.click();
   const panel = page.getByTestId('marker-panel');
   await expect(panel).toBeVisible();
   return panel;
 }
 
 // 用例 1：面板结构——页签 + 图标页七组齐全（组名 + 值域网格）+ 表情页 28 枚；
-// 面板锚定弹出（顶贴插入按钮下沿，向下展开）。
-test('标记面板：插入菜单锚定弹出层展开，页签 + 七组值域 + 表情页齐全', async ({ page }) => {
+// 面板锚定弹出（顶贴「在标记面板中编辑」按钮下沿，向下展开）。
+test('标记面板：TaskPanel 入口锚定弹出层展开，页签 + 七组值域 + 表情页齐全', async ({ page }) => {
   await openSeedDoc(page, '本周计划');
   await selectNodeByText(page, '周一');
   const panel = await openMarkerPanel(page);
-  // 开面板收菜单（同挂 insert-wrap 互斥）
-  await expect(page.getByTestId('insert-icons')).toHaveCount(0);
   // 分段页签：图标（默认）/ 表情
   await expect(panel.getByTestId('marker-tab-icon')).toHaveAttribute('aria-selected', 'true');
   await expect(panel.getByTestId('marker-tab-emoji')).toHaveAttribute('aria-selected', 'false');
@@ -105,10 +108,10 @@ test('标记面板：插入菜单锚定弹出层展开，页签 + 七组值域 +
   const picker = panel.getByTestId('emoji-picker');
   await expect(picker).toBeVisible();
   await expect(picker.locator('[data-testid^="marker-emoji-"]')).toHaveCount(28);
-  // 面板锚定弹出：顶贴「插入」按钮下沿（panel.y > menu.y，向下展开）
-  const menuBox = (await page.getByTestId('insert-menu').boundingBox())!;
+  // 面板锚定弹出：顶贴「在标记面板中编辑」按钮下沿（panel.y > 按钮.y，向下展开）
+  const btnBox = (await page.getByTestId('task-panel-markers-edit').boundingBox())!;
   const panelBox = (await panel.boundingBox())!;
-  expect(panelBox.y).toBeGreaterThan(menuBox.y);
+  expect(panelBox.y).toBeGreaterThan(btnBox.y);
 });
 
 // 用例 2：点旗帜 → 节点 .gm-markers 旗帜徽标 + 按钮 pressed；再点同值取消（批量
@@ -126,7 +129,7 @@ test('标记面板：旗帜写入渲染与 pressed 回显，再点同值取消',
   await flag.click();
   await expect(markerBadges(page, '周一')).toHaveCount(0);
   await expect(flag).toHaveAttribute('aria-pressed', 'false');
-  // Esc 关闭整个插入层（菜单 + 右侧面板）
+  // Esc 关闭标记面板
   await page.keyboard.press('Escape');
   await expect(page.getByTestId('marker-panel')).toHaveCount(0);
 });
@@ -159,7 +162,7 @@ test('标记面板：切换节点回显独立，优先级与旗帜异组并存',
   let panel = await openMarkerPanel(page);
   await panel.getByTestId('marker-flag-flag').click();
   await expect(markerBadgeByValue(page, '周一', 'flag')).toHaveCount(1);
-  // 换选 周三：锚定面板悬在画布上方会挡住节点点击，先 Esc 收起插入层（Esc/外点关
+  // 换选 周三：锚定面板悬在画布上方会挡住节点点击，先 Esc 收起面板（Esc/外点关
   // 闭语义），换选后重开面板：旗帜不 pressed（回显随节点）
   await page.keyboard.press('Escape');
   await selectNodeByText(page, '周三');
@@ -174,27 +177,25 @@ test('标记面板：切换节点回显独立，优先级与旗帜异组并存',
   await expect(markerBadgeByValue(page, '周一', 'flag')).toHaveCount(1);
 });
 
-// 用例 4：无选中节点 → 面板禁用 + 提示「选中节点后添加标记」。
-test('标记面板：无选中节点时禁用并提示', async ({ page }) => {
+// 用例 4（2026-10-10 入口迁移改写）：无选中节点 → TaskPanel 空态、无「在标记面板中
+// 编辑」入口（MarkerPanel 无从打开——原「无选中打开面板禁用提示」路径随插入菜单
+// 删除退役，组件内禁用态保留为防御）。
+test('标记面板：无选中节点时 TaskPanel 空态、无标记编辑入口', async ({ page }) => {
   await openSeedDoc(page, '本周计划');
   // 点空白画布清空选择（远离自适应居中的内容）
   await page.locator('.editor-canvas svg').click({ position: { x: 6, y: 6 } });
-  const panel = await openMarkerPanel(page);
-  await expect(panel.getByTestId('marker-hint')).toHaveText('选中节点后添加标记');
-  await expect(panel.getByTestId('marker-flag-flag')).toBeDisabled();
-  await expect(panel.getByTestId('marker-priority-p1')).toBeDisabled();
-  // 表情页同样禁用
-  await panel.getByTestId('marker-tab-emoji').click();
-  await expect(panel.getByTestId('marker-emoji-😊')).toBeDisabled();
+  await page.getByTestId('task-toggle').click();
+  await expect(page.getByTestId('task-panel')).toBeVisible();
+  await expect(page.locator('.task-panel-empty')).toHaveText('选中节点后查看与编辑任务');
+  await expect(page.getByTestId('task-panel-markers-edit')).toHaveCount(0);
 });
 
-// 用例 5：插入菜单「链接」项——先开格式右列（E3 回归修复：openRichAndFocus 先
-// setFormatOpen 再下一帧聚焦），链接输入框聚焦可达；仅无选中节点时才落提示 toast。
-test('插入菜单：链接项打开格式右列并聚焦链接输入框', async ({ page }) => {
+// 用例 5（2026-10-10 改写）：插入菜单「链接」项随菜单删除——链接编辑走格式面板
+// 既有入口：选中节点开格式右列，链接输入框可达。
+test('格式面板：链接输入框入口（插入菜单删除后路径）', async ({ page }) => {
   await openSeedDoc(page, '本周计划');
   await selectNodeByText(page, '周一');
-  await page.getByTestId('insert-menu').click();
-  await page.getByTestId('insert-link').click();
+  await page.getByTestId('format-toggle').click();
   await expect(page.getByTestId('rich-panel')).toBeVisible();
-  await expect(page.locator('input[aria-label="节点链接"]')).toBeFocused();
+  await expect(page.locator('input[aria-label="节点链接"]')).toBeVisible();
 });

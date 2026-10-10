@@ -48,17 +48,15 @@ async function useMobileViewport(page: Page): Promise<void> {
 }
 
 /** 移动端只读分支应不装配的工具栏编辑控件（桌面回归用例反向断言可见）。
- *  insert-menu（标记面板任务的插入菜单）随桌面工具栏分支装配——T5 口径：
- *  标记写入是编辑动作，移动端只读不提供入口。theme-select 下拉已移除
- *  （M7b-W2 #6：主题只留面板按钮），不再列入清单。structure-select 已随
- *  2026-09-30 结构面板改版替换为 structure-toggle（口径不变：编辑控件不装配）。 */
+ *  insert-menu 已随 2026-10-10 需求方裁定整体删除，不再列入清单。theme-select
+ *  下拉已移除（M7b-W2 #6：主题只留面板按钮），不再列入清单。structure-select
+ *  已随 2026-09-30 结构面板改版替换为 structure-toggle（口径不变：编辑控件不装配）。 */
 const EDITING_TESTIDS = [
   'structure-toggle',
   'theme-panel-toggle',
   'undo-btn',
   'redo-btn',
   'fullscreen-btn',
-  'insert-menu',
   'export-menu',
   'title-input',
   'star-toggle',
@@ -163,8 +161,10 @@ test('桌面回归：默认视口编辑控件齐全，右列默认不渲染，�
     await expect(page.getByTestId(tid)).toBeVisible();
   }
   await expect(page.getByTestId('title-display')).toHaveCount(0); // 移动端标题展示不装配
-  await expect(page.getByTestId('comment-toggle')).toHaveCount(0); // 移动端评论开关不装配
-  // 右列默认不渲染（M7b-R6 需求方裁定：格式按钮/插入菜单评论项开右列）
+  // 评论开关桌面已装配（2026-10-10 需求方裁定：插入「评论」项随菜单删除后桌面补装，
+  // 与移动端同 testid——移动端只读本就保留评论入口，桌面对齐）
+  await expect(page.getByTestId('comment-toggle')).toBeVisible();
+  // 右列默认不渲染（M7b-R6 需求方裁定：格式按钮/评论开关开右列）
   await expect(page.getByTestId('rich-panel')).toHaveCount(0);
   await expect(page.getByTestId('comment-pane')).toHaveCount(0);
   // 键盘写路径在桌面仍装配：Tab 惰性创建默认命名节点「分支主题 1」并选中（敲字才进编辑框；

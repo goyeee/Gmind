@@ -41,12 +41,16 @@ function markerBadgeByValue(page: Page, text: string, value: string) {
   return nodeGroup(page, text).locator(`.gm-markers .gm-marker-badge[data-marker-value="${value}"]`);
 }
 
-/** 打开插入 → 表情：返回表情页签下的 emoji 网格定位器（emoji-picker testid 不变）。 */
+/** 打开 TaskPanel →「在标记面板中编辑」→ 表情页签（2026-10-10 插入菜单删除后入口），
+ *  返回表情页签下的 emoji 网格定位器（emoji-picker testid 不变）。
+ *  TaskPanel 已开时跳过 task-toggle（toggle 语义，再点会收面板）。 */
 async function openEmojiArea(page: Page) {
-  await page.getByTestId('insert-menu').click();
-  await page.getByTestId('insert-emoji').click();
+  const editBtn = page.getByTestId('task-panel-markers-edit');
+  if ((await editBtn.count()) === 0) await page.getByTestId('task-toggle').click();
+  await editBtn.click();
   const panel = page.getByTestId('marker-panel');
   await expect(panel).toBeVisible();
+  await panel.getByTestId('marker-tab-emoji').click();
   const picker = panel.getByTestId('emoji-picker');
   await expect(picker).toBeVisible();
   return picker;
@@ -101,10 +105,11 @@ test('表情区：emoji 与旗帜并存互不影响；Esc 与外点关闭', asyn
   // Esc 关闭整个插入层（菜单 + 面板）
   await page.keyboard.press('Escape');
   await expect(page.getByTestId('marker-panel')).toHaveCount(0);
-  // 外点关闭（点底栏「适应画布」：插入层之外，不改变选中）
+  // 外点关闭（点底栏左侧计数区：标记面板之外，不改变选中；2026-10-10 面板改右列
+  // 锚定后会盖住右下「适应画布」钮，故改点左下计数区）
   const picker2 = await openEmojiArea(page);
   await expect(picker2).toBeVisible();
-  await page.getByTestId('fit-btn').click();
+  await page.getByTestId('node-count').click();
   await expect(page.getByTestId('marker-panel')).toHaveCount(0);
   // 关闭后选中未丢：旗帜徽标仍在
   await expect(markerBadgeByValue(page, '周一', 'flag')).toHaveCount(1);

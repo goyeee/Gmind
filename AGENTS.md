@@ -9,7 +9,13 @@
 - 尤其要确认清楚：验收口径（以哪个文档为准）、是否触碰"裁定不做"清单、是否影响既有 testid 契约与布局金样。
 - 宁可多问一句，也不要猜错方向返工；同理，发现文档与代码不一致时先提出来对齐，而不是默默按某一方改。
 
-## 二、工程纪律（改代码前必读，违者评审打回）
+## 二、Git 提交与推送须凭明确指令
+
+- **未经明确指令不得 `git commit`，不得 `git push`**。完成代码后停在"已改完、验证绿"的状态，汇报改动与验证结果，等指令再提交/推送。
+- 指令**仅对当次任务有效**：上一个任务说过"提交/推送"，不代表后续任务沿用；每个任务都要单独收到指令。
+- 收到提交/推送指令时，只提交**本次任务**的改动；工作区若混有需求方进行中的未提交工作，按 hunk 拆分排除，不得一并带入，除非需求方明确说明。
+
+## 三、工程纪律（改代码前必读，违者评审打回）
 
 1. **唯一写入口**：对 Yjs 文档的一切写必须经 `@gmind/core` 操作 API（addChild/setText/moveNode/setSummary…），禁止直操 Y.Map（装载通道 docFromState/Y.applyUpdate 除外）。
 2. **校验先于事务**：Yjs 事务内抛错**不回滚**——全部校验/diff 计算放 `withTransaction` 之外，事务内只执行已验证的写。
@@ -21,7 +27,7 @@
 8. **门禁五件套**（提交前全绿）：`pnpm lint && pnpm typecheck && pnpm test && pnpm --filter @gmind/server test:e2e && WEB_PORT=5174 API_ORIGIN=http://localhost:3001 pnpm --filter @gmind/web e2e`。
 9. **SDD 流程**：里程碑级工作走 docs/superpowers/plans 计划→任务简报→实现→独立评审→修复环→全分支终审→验收文档；台账在 `.superpowers/sdd/<plan>/progress.md`（收口后删，git 为准）。
 
-## 三、文档更新义务（防状态错位，必要时必须更新）
+## 四、文档更新义务（防状态错位，必要时必须更新）
 
 - **交付任何里程碑/任务**：当日更新对应 `docs/mX-acceptance.md`（真实用例名+行号当日 grep，禁止转抄报告；无自动化背书不写"通过"）；若影响整体进度，同步 [`docs/project-status.md`](./docs/project-status.md)（状态表/差异清单）与 `README.md`（进度行）。
 - **里程碑收口**：更新 `docs/project-status.md` §二 状态表与 §三 差异清单；`README.md` 的进度行同步。

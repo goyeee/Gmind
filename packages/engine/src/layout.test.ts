@@ -853,10 +853,13 @@ describe('layout 确定性与金样', () => {
     );
     // 叶（有任务信息）：h = 20 + TASK_ROW_H
     expect(boxOf(result, 't').h).toBe(20 + TASK_ROW_H);
-    // 父（有任务信息）：恒预留 Σ 进度槽 → 宽保底 owners 2 + 进度（无日期）
-    const pRow = { owners: 2, showProgress: true, hasDue: false };
+    // 父（有任务信息）：恒预留 Σ 进度槽 → 宽保底 负责人文字（'u1 +1' 5 字符 ×10px）
+    // + 百分比槽（2026-10-10 mindgrid 对齐：日期悬浮标签不占行宽）
+    const pRow = { ownerLabel: 'u1 +1', ownerUnassigned: false, showProgress: true };
     expect(boxOf(result, 'p').h).toBe(20 + TASK_ROW_H);
-    expect(boxOf(result, 'p').w).toBeGreaterThanOrEqual(taskRowContentWidth(pRow));
+    expect(boxOf(result, 'p').w).toBeGreaterThanOrEqual(
+      taskRowContentWidth(pRow, pRow.ownerLabel.length * 10),
+    );
     // todo 全缺省：零槽位，几何不变（'纯' 10px + 2×12 = 34，被 minNodeWidth 40 抬底）
     expect(boxOf(result, 'q').h).toBe(20);
     expect(boxOf(result, 'q').w).toBe(Math.max(10 + theme.nodePaddingX * 2, theme.minNodeWidth));

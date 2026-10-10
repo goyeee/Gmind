@@ -45,11 +45,12 @@ async function openFormatPanel(page: Page) {
   return panel;
 }
 
-/** 打开工具栏「插入」→「图标」标记面板（2026-09-28 图标区迁出 RichPanel 后的
- *  标记写入路径；「标记」项更名「图标」，表情独立为 insert-emoji），返回标记面板。 */
+/** 打开 TaskPanel →「在标记面板中编辑」标记面板（2026-10-10 插入菜单删除后的
+ *  标记写入路径），返回标记面板。TaskPanel 已开时跳过 task-toggle（toggle 语义）。 */
 async function openMarkerPanel(page: Page) {
-  await page.getByTestId('insert-menu').click();
-  await page.getByTestId('insert-icons').click();
+  const editBtn = page.getByTestId('task-panel-markers-edit');
+  if ((await editBtn.count()) === 0) await page.getByTestId('task-toggle').click();
+  await editBtn.click();
   const panel = page.getByTestId('marker-panel');
   await expect(panel).toBeVisible();
   return panel;
@@ -76,9 +77,8 @@ function nodeGroup(page: Page, text: string) {
 test('富内容：简介（备注）区块已回退隐藏，描述区块与 × 收起仍工作', async ({ page }) => {
   await openSeedDoc(page, '本周计划');
   await selectNodeByText(page, '周一');
-  await page.getByTestId('insert-menu').click();
-  await expect(page.getByTestId('insert-note')).toHaveCount(0); // 插入菜单无「简介」项
-  await page.keyboard.press('Escape'); // 收起插入层（Esc/外点关闭语义）
+  // 插入菜单已整体删除（2026-10-10 裁定）：「简介」项断言随之失效，保留格式面板侧钉死
+  await expect(page.getByTestId('insert-menu')).toHaveCount(0);
   const panel = await openFormatPanel(page);
   await expect(panel.getByLabel('节点备注')).toHaveCount(0); // 备注编辑区不渲染
   await expect(panel.getByRole('button', { name: '保存备注' })).toHaveCount(0);

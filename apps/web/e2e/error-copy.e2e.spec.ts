@@ -162,9 +162,8 @@ test('⑦ 导出过大：拒绝文案含「文件过大」+「拆分后导出」
 // ⑧a 评论 501 字：服务端 400 message 透出——含上限数值（原因）+ 精简动作（下一步）
 test('⑧a 评论超 500 字：toast 含「500 字」上限数值与下一步动作', async ({ page }) => {
   await openSeedDoc(page, '本周计划');
-  // 评论右列默认不渲染（M7b-R6）：插入菜单「评论」项开启
-  await page.getByTestId('insert-menu').click();
-  await page.getByTestId('insert-comment').click();
+  // 评论右列默认不渲染（M7b-R6）：工具栏 comment-toggle 开启（2026-10-10 插入菜单删除后路径）
+  await page.getByTestId('comment-toggle').click();
   // 装配完成默认单选 root → 评论输入可用
   const input = page.getByTestId('comment-input');
   await expect(input).toBeEnabled();

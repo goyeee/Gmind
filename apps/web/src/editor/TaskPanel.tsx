@@ -35,9 +35,11 @@ import './task-panel.css';
  * 右侧任务属性面板（M7c-C3/C4，spec 2026-09-29 §R3；对标 mindgrid NodeEditor）：
  * 工具栏「任务」按钮（task-toggle）点开的右列面板，与「格式」互斥（开任务收格式，
  * 开格式收任务——页面侧接线）；评论面板可共存（同列纵排）。
+ * 2026-10-10 需求方裁定新增第二入口：**再点已选中节点**也开本面板（mindgrid
+ * 「单击选中 · 再击开属性」同款；右键「任务设置」快速卡随之删除）。
  *
  * 内容（纵向分节，与 RichPanel 同族样式）：标题（只读展示）/ 描述（textarea，
- * 200 上限计数，失焦提交）/ 负责人（成员多选，同快速卡）/ 状态四选 / 优先级·标记
+ * 200 上限计数，失焦提交）/ 负责人（成员多选）/ 状态四选 / 优先级·标记
  * （当前标记回显 +「在标记面板中编辑」跳转）/ 三日期（SmartDateInput）/ 进度
  * （叶子可编、父级 Σ 只读）/ 自定义属性（表格自定义列逐列渲染 CustomFieldInput，
  * 即改即存）/ 删除节点（危险红，confirm 二次确认复用现有机制）。
@@ -58,8 +60,9 @@ export interface TaskPanelProps {
   presence: PresenceMember[];
   afterUserWrite: () => void;
   showToast: (message: string) => void;
-  /** 「在标记面板中编辑」：关闭本面板入口动作由页面侧 openMarkerPanel('icon')。 */
-  onOpenMarkers: () => void;
+  /** 「在标记面板中编辑」：页面侧 openMarkerPanel；anchor=本按钮下沿（2026-10-10
+   *  插入菜单删除后 MarkerPanel 改 fixed 视口锚定，锚点由调用方供给）。 */
+  onOpenMarkers: (anchor: { left: number; top: number }) => void;
   /** 删除当前选中节点（页面侧 handleDelete；确认弹窗在本组件内）。 */
   onDelete: () => void;
   onClose: () => void;
@@ -228,7 +231,10 @@ export function TaskPanel(props: TaskPanelProps): ReactElement {
           type="button"
           className="task-panel-jump"
           data-testid="task-panel-markers-edit"
-          onClick={onOpenMarkers}
+          onClick={(e) => {
+            const rect = e.currentTarget.getBoundingClientRect();
+            onOpenMarkers({ left: rect.left, top: rect.bottom + 4 });
+          }}
         >
           在标记面板中编辑
         </button>

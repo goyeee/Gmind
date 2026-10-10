@@ -47,10 +47,11 @@ function nodeGroup(page: Page, text: string) {
 }
 
 // 用例 1：选 A（周三）设填充红 → 色钮回显 pressed 且画布 rect 变红；字号回显；
-// 切换到 B（周五，未设样式）→ 面板不收（2026-10-09 裁定：格式/任务右列点击画布
-// 空白不关闭）、回显随新节点刷新；点空白画布 → 清空选择 + 面板转空态（样式区
-// 置灰 disabled + 提示「选中节点后设置样式」）；重新选节点 → 回显恢复。
-test('格式面板：填充色钮随选中回显 pressed，画布点击不收面板，空选转空态', async ({ page }) => {
+// 切换到 B（周五，未设样式）→ 面板不收（点节点不关面板——跟随选中切换内容，
+// 同 mindgrid）、回显随新节点刷新；点**空白**画布 → 清空选择 + 面板关闭
+// （2026-10-10 需求方改判 10-09「点空白转空态不关闭」：格式/任务面板恢复外点
+// 即关）；重开面板再选节点 → 回显恢复。
+test('格式面板：填充色钮随选中回显 pressed，点节点不收面板，点空白关闭', async ({ page }) => {
   await openSeedDoc(page, '本周计划');
 
   // —— A：周三（有子节点 方案评审）——
@@ -80,18 +81,14 @@ test('格式面板：填充色钮随选中回显 pressed，画布点击不收面
   await expect(panel.locator('.swatch[aria-pressed="true"]')).toHaveCount(0);
   await expect(panel.getByTestId('font-size-select')).toHaveValue('');
 
-  // —— 清空选择：点空白画布（角落，远离自适应居中的内容）→ 清选 + 面板转空态
-  //     （不关闭）——样式区置灰 + 提示 ——
+  // —— 清空选择：点空白画布（角落，远离自适应居中的内容）→ 清选 + 面板**关闭**
+  //     （2026-10-10 改判：外点即关，不再转空态保留）——
   await page.locator('.editor-canvas svg').click({ position: { x: 6, y: 6 } });
-  await expect(panel).toBeVisible();
-  // fieldset 自身断言 disabled 属性；禁用级联以内部控件 toBeDisabled 双重钉死
-  await expect(section).toHaveAttribute('disabled', '');
-  await expect(panel.getByTestId('font-size-select')).toBeDisabled();
-  await expect(panel.getByTitle('填充-红')).toBeDisabled();
-  await expect(panel.getByTestId('style-hint')).toBeVisible();
-  await expect(panel.getByTestId('style-hint')).toHaveText('选中节点后设置样式');
-  // 重新选 A：面板不收，回显直接恢复（红钮 pressed 复现）
+  await expect(panel).toHaveCount(0);
+  // 重开面板再选 A：回显直接恢复（红钮 pressed 复现）
   await selectNodeByText(page, '周三');
+  await page.getByTestId('format-toggle').click();
+  await expect(panel).toBeVisible();
   await expect(panel.getByTestId('font-size-select')).toBeEnabled();
   await expect(panel.getByTitle('填充-红')).toHaveAttribute('aria-pressed', 'true');
 });

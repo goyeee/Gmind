@@ -166,9 +166,10 @@ test('右键菜单增删节点：node_add/node_delete 的 via=context', async ({
   expect(added[0].payload.via).toBe('context');
   await expectCommonParams(page, added[0]);
 
-  // 新节点上右键 → 删除。右键菜单（含「任务设置」等 9 项）锚定点击点向下展开、
-  // 无视口钳制：新节点落位偏下时「删除」项会越出视口底缘（产品挂账：菜单越界），
-  // 沿用 versions spec 的 DOM click 直发模式触发同一 React onClick 路径。
+  // 新节点上右键 → 删除。右键菜单（8 项——「任务设置」已随 2026-10-10 裁定删除）
+  // 锚定点击点向下展开、无视口钳制：新节点落位偏下时「删除」项会越出视口底缘
+  // （产品挂账：菜单越界），沿用 versions spec 的 DOM click 直发模式触发同一
+  // React onClick 路径。
   await page.locator('.editor-canvas svg .gm-text', { hasText: '右键新节点' }).click({ button: 'right' });
   await page
     .getByRole('menu')

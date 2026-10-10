@@ -1,4 +1,10 @@
-import { TASK_PROGRESS_W, TASK_ROW_H, taskRowContentWidth, type TaskRowSlots } from './taskvisual';
+import {
+  TASK_META_FONT_SIZE,
+  TASK_PROGRESS_W,
+  TASK_ROW_H,
+  taskRowContentWidth,
+  type TaskRowSlots,
+} from './taskvisual';
 import type { MeasureAdapter, TextStyle, ThemeTokens } from './types';
 
 export interface MeasureNodeBoxOptions {
@@ -102,7 +108,22 @@ export function measureNodeBox(
     if (w > maxLineW) maxLineW = w;
   }
   const imageW = options.imageW !== undefined ? options.imageW + theme.nodePaddingX * 2 : 0;
-  const taskRowW = !compact && options.taskRow ? taskRowContentWidth(options.taskRow) : 0;
+  // 任务行宽（2026-10-10 mindgrid 对齐）：左=负责人文字（adapter 实测，不可常量
+  // 估算）、右=百分比槽；日期为盒外悬浮标签不占行宽。
+  const taskMetaStyle: TextStyle = {
+    fontSize: TASK_META_FONT_SIZE,
+    fontWeight: 400,
+    fontFamily: style.fontFamily,
+  };
+  const taskRowW =
+    !compact && options.taskRow
+      ? taskRowContentWidth(
+          options.taskRow,
+          options.taskRow.ownerLabel !== ''
+            ? adapter.measureTextLine(options.taskRow.ownerLabel, taskMetaStyle)
+            : 0,
+        )
+      : 0;
   // 简洁模式内联进度槽宽（mindgrid COMPACT.PROGRESS_W=30 同值）：有任务信息
   // （taskRow 槽位存在 = hasTaskInfo 口径）时盒宽下限追加槽宽——内联百分数画在
   // 标题行右缘（渲染侧右对齐同值），长标题不与其重叠；无任务信息零参与。

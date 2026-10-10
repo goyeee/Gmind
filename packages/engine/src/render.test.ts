@@ -3,7 +3,6 @@ import { createScene, renderScene } from './render';
 import { MARKER_CATALOG } from './markers';
 import type { NodeVisual, SceneInput } from './render';
 import { resolveNodeStyle, THEMES } from './themes';
-import { colorForUser } from './cursors';
 import type { EdgeRoute, LayoutResult, NodeBox, ResolvedNodeStyle, SummaryBox, ThemeTokens } from './types';
 
 // ---------------------------------------------------------------------------
@@ -732,9 +731,10 @@ describe('renderScene：概要（企微竖向花括号 / 旧横括线）', () =>
 });
 
 // ---------------------------------------------------------------------------
-// 任务视觉（M7c-C2，spec 2026-09-29-m7c §R4）：状态色左边条 / 负责人头像 /
-// 有效进度 / 预期日期徽标 / 无任务信息零变化。语义源：mindgrid 节点卡 +
-// @gmind/shared derive（effectiveProgress/isOverdue 口径）；色值企微底色四态。
+// 任务视觉（M7c-C2，spec 2026-09-29-m7c §R4；2026-10-10 mindgrid 全量对齐）：
+// 状态色左边条 / footer 左负责人文字·右百分比 / 预期日期盒外悬浮 chip /
+// 无任务信息零变化。语义源：mindgrid 节点卡 + @gmind/shared derive
+// （effectiveProgress/isOverdue 口径）；色值企微底色四态。
 // ---------------------------------------------------------------------------
 
 describe('renderScene：任务视觉（M7c-C2）', () => {
@@ -769,19 +769,37 @@ describe('renderScene：任务视觉（M7c-C2）', () => {
     expect(barOf('b')?.getAttribute('fill')).toBe('#ff8800');
   });
 
-  it('负责人头像：首人 colorForUser 色点；多人尾随「+n」小字', () => {
+  it('负责人文字（2026-10-10 mindgrid 对齐）：footer 左栏首人显示名（ownerNames 优先、缺省回退 ID）；多人「+N」', () => {
     const data = baseData();
-    data.set('b', { text: 'x', task: { owners: ['u1'] } });
-    data.set('c', { text: 'y', task: { owners: ['u1', 'u2', 'u3'] } });
+    data.set('b', { text: 'x', task: { owners: ['u1'], ownerNames: ['张三'] } });
+    data.set('c', { text: 'y', task: { owners: ['u1', 'u2', 'u3'], ownerNames: ['张三', '李四', '王五'] } });
     renderScene(createScene(svg), taskInput(data));
-    const dotB = nodeG('b')?.querySelector('circle.gm-task-owner');
-    expect(dotB).not.toBeNull();
-    expect(dotB?.getAttribute('fill')).toBe(colorForUser('u1')); // Gmind 成员色单源
-    expect(dotB?.getAttribute('r')).toBe('5');
-    expect(nodeG('b')?.querySelector('.gm-task-owner-plus')).toBeNull();
-    const dotC = nodeG('c')?.querySelector('circle.gm-task-owner');
-    expect(dotC?.getAttribute('fill')).toBe(colorForUser('u1')); // 首人色
-    expect(nodeG('c')?.querySelector('.gm-task-owner-plus')?.textContent).toBe('+2');
+    const ownerOf = (id: string): SVGTextElement | null =>
+      nodeG(id)?.querySelector('text.gm-task-owner-text') ?? null;
+    expect(ownerOf('b')?.textContent).toBe('张三'); // ownerNames[0] 显示名优先
+    expect(ownerOf('b')?.getAttribute('fill')).toBe('#86909c'); // 常态灰字
+    expect(ownerOf('b')?.getAttribute('x')).toBe('6'); // 行左内边距 TASK_ROW_PAD
+    expect(ownerOf('b')?.getAttribute('text-anchor')).toBe('start');
+    expect(ownerOf('c')?.textContent).toBe('张三 +2'); // 多人「+N」（含首人共 3 人）
+    // ownerNames 缺省 → 回退 owners[0] ID 直显
+    data.set('b', { text: 'x', task: { owners: ['u9'] } });
+    renderScene(createScene(svg), taskInput(data));
+    expect(nodeG('b')?.querySelector('text.gm-task-owner-text')?.textContent).toBe('u9');
+  });
+
+  it('未分配：depth≥2 且无负责人（有任务信息）→ 橙字「未分配」；depth<2 左栏不画', () => {
+    const data = baseData();
+    data.set('b', { text: 'x', task: { status: 'doing' } }); // b depth=2、无负责人
+    renderScene(createScene(svg), taskInput(data));
+    const un = nodeG('b')?.querySelector('text.gm-task-owner-unassigned');
+    expect(un?.textContent).toBe('未分配');
+    expect(un?.getAttribute('fill')).toBe('#ff8800'); // 橙（mindgrid --c-orange）
+    expect(un?.getAttribute('x')).toBe('6'); // 同左栏位
+    // depth=1（root 直接子级）无负责人 → 左栏不画（mindgrid 口径 depth≥2 才显示）
+    const nodes = [box('a', -60, -10, 120, 20, 'right', 0), box('b', 60, -20, 100, 40, 'right', 1)];
+    renderScene(createScene(svg), taskInput(data, nodes));
+    expect(nodeG('b')?.querySelector('.gm-task-owner-unassigned')).toBeNull();
+    expect(nodeG('b')?.querySelector('.gm-task-owner-text')).toBeNull();
   });
 
   it('有效进度：叶=自身百分比（progress>0 才显示）；父=Σ 直属子级均值；灰字', () => {
@@ -809,30 +827,34 @@ describe('renderScene：任务视觉（M7c-C2）', () => {
     expect(progOf('d')?.textContent).toBe('40%'); // 父 Σ 汇总（直属子级均值）
   });
 
-  it('日期徽标：MM-DD 灰底；逾期红底白字（dueDate<今天且进度<100 且非 done）', () => {
+  it('日期悬浮 chip（2026-10-10 mindgrid 对齐）：盒右上角外侧 MM-DD；逾期红字红框，常态灰字浅框（逾期=dueDate<今天且进度<100 且非 done）', () => {
     const data = baseData();
     data.set('b', { text: 'x', task: { dueDate: '2026-09-01' } }); // 逾期（进度 0 < 100）
     data.set('c', { text: 'y', task: { dueDate: '2026-10-01' } }); // 未到期
     renderScene(createScene(svg), taskInput(data));
-    const bgOf = (id: string): SVGRectElement | null =>
-      nodeG(id)?.querySelector('rect.gm-task-due-bg') ?? null;
-    const dueOf = (id: string): SVGTextElement | null =>
-      nodeG(id)?.querySelector('text.gm-task-due') ?? null;
-    expect(dueOf('b')?.textContent).toBe('09-01'); // YYYY-MM-DD → MM-DD（同 mindgrid）
-    expect(bgOf('b')?.getAttribute('fill')).toBe('#f53f3f'); // 逾期红底
-    expect(dueOf('b')?.getAttribute('fill')).toBe('#ffffff'); // 白字
-    expect(bgOf('c')?.getAttribute('fill')).toBe('#f2f3f5'); // 常态灰底
-    expect(dueOf('c')?.getAttribute('fill')).toBe('#86909c');
+    const chipRectOf = (id: string): SVGRectElement | null =>
+      nodeG(id)?.querySelector('g.gm-task-due-float rect') ?? null;
+    const chipTextOf = (id: string): SVGTextElement | null =>
+      nodeG(id)?.querySelector('g.gm-task-due-float text') ?? null;
+    expect(chipTextOf('b')?.textContent).toBe('09-01'); // YYYY-MM-DD → MM-DD（同 mindgrid）
+    expect(chipRectOf('b')?.getAttribute('stroke')).toBe('#f53f3f'); // 逾期红框
+    expect(chipTextOf('b')?.getAttribute('fill')).toBe('#f53f3f'); // 逾期红字
+    expect(chipRectOf('b')?.getAttribute('fill')).toBe(theme.canvasBackground); // 浮于画布底色
+    // 盒右上角外侧（b.w=100）：chip x = 100 − 38 − 6 = 56、y = −9（跨坐上缘，不占盒高）
+    expect(chipRectOf('b')?.getAttribute('x')).toBe('56');
+    expect(chipRectOf('b')?.getAttribute('y')).toBe('-9');
+    expect(chipRectOf('c')?.getAttribute('stroke')).toBe('#e5e6eb'); // 常态浅框
+    expect(chipTextOf('c')?.getAttribute('fill')).toBe('#86909c'); // 常态灰字
 
     const scene = createScene(svg);
     // done 状态：过期日期也不判逾期（isOverdue 口径）
     data.set('b', { text: 'x', task: { status: 'done', dueDate: '2026-09-01' } });
     renderScene(scene, taskInput(data));
-    expect(bgOf('b')?.getAttribute('fill')).toBe('#f2f3f5');
+    expect(chipRectOf('b')?.getAttribute('stroke')).toBe('#e5e6eb');
     // 叶有效进度 100：过期日期不判逾期
     data.set('b', { text: 'x', task: { progress: 100, dueDate: '2026-09-01' } });
     renderScene(scene, taskInput(data));
-    expect(bgOf('b')?.getAttribute('fill')).toBe('#f2f3f5');
+    expect(chipRectOf('b')?.getAttribute('stroke')).toBe('#e5e6eb');
     // 父 Σ ≥ 100：过期日期不判逾期（子甲 100 / 子乙 100）
     const nodes = [
       box('a', -60, -10, 120, 20, 'right', 0),
@@ -844,7 +866,11 @@ describe('renderScene：任务视觉（M7c-C2）', () => {
     data.set('e', { text: 'E', task: { progress: 100 } });
     data.set('f', { text: 'F', task: { progress: 100 } });
     renderScene(scene, taskInput(data, nodes));
-    expect(bgOf('b')?.getAttribute('fill')).toBe('#f2f3f5');
+    expect(chipRectOf('b')?.getAttribute('stroke')).toBe('#e5e6eb');
+    // 逾期时 footer 百分比同红（mindgrid footer 同款）
+    data.set('b', { text: 'x', task: { progress: 40, dueDate: '2026-09-01' } });
+    renderScene(scene, taskInput(data));
+    expect(nodeG('b')?.querySelector('text.gm-task-progress')?.getAttribute('fill')).toBe('#f53f3f');
   });
 
   it('无任务信息零变化：todo 全缺省与无 task 的节点 DOM 与纯脑图节点逐字节一致', () => {
@@ -983,19 +1009,24 @@ describe('renderScene：任务行签名缓存（remove→re-add 完整重建，�
   const taskOf = (status: string, due: string) => ({
     status, progress: 40, owners: ['01M352X50QV7T99S3WBH6PDTR5'], startDate: null, dueDate: due, doneDate: null,
   });
-  it('任务信息移除后重加相同数据 → 任务行完整重建（日期徽标在位，不得残留空壳）', () => {
+  it('任务信息移除后重加相同数据 → 任务行/日期悬浮 chip 完整重建（不得残留空壳）', () => {
     const scene = createScene(svg);
     const withTask = baseData();
     (withTask.set as (k: string, v: unknown) => void)('b', { text: 'x', task: taskOf('doing', '2026-10-15') });
     const without = baseData();
     renderScene(scene, makeInput(baseLayout(), withTask));
     expect(nodeG('b')?.querySelector('.gm-task-row')).not.toBeNull();
+    expect(nodeG('b')?.querySelector('.gm-task-due-float')).not.toBeNull();
     renderScene(scene, makeInput(baseLayout(), without));
     expect(nodeG('b')?.querySelector('.gm-task-row')).toBeNull();
+    expect(nodeG('b')?.querySelector('.gm-task-due-float')).toBeNull();
     renderScene(scene, makeInput(baseLayout(), withTask));
     const row = nodeG('b')?.querySelector('.gm-task-row');
     expect(row).not.toBeNull();
-    expect(row?.querySelector('.gm-task-due')?.textContent).toContain('10-15');
+    expect(row?.querySelector('.gm-task-owner-text')).not.toBeNull(); // 行内元素重建（非空壳）
+    const chip = nodeG('b')?.querySelector('.gm-task-due-float');
+    expect(chip).not.toBeNull();
+    expect(chip?.querySelector('text')?.textContent).toContain('10-15');
   });
 });
 
@@ -1043,19 +1074,22 @@ describe('renderScene：简洁模式（compact）', () => {
     expect(nodeG('c')?.querySelector('tspan')?.getAttribute('y')).toBe('24.9');
   });
 
-  it('compact 往返切换：切回详细模式条带/任务行恢复（签名缓存随容器重建归零），再切回再隐藏', () => {
+  it('compact 往返切换：切回详细模式条带/任务行/日期悬浮 chip 恢复（签名缓存随容器重建归零），再切回再隐藏', () => {
     const scene = createScene(svg);
     const data = baseData();
     data.set('b', { text: 'x', task: { progress: 40, dueDate: '2026-10-15' } });
     renderScene(scene, compactInput(data, { compact: true }));
     expect(nodeG('b')?.querySelector('.gm-task-bar, .gm-task-row')).toBeNull();
+    expect(nodeG('b')?.querySelector('.gm-task-due-float')).toBeNull(); // 简洁模式不显示日期（mindgrid 同款）
     expect(nodeG('b')?.querySelector('text.gm-task-progress-inline')?.textContent).toBe('40%');
     renderScene(scene, compactInput(data, { compact: false })); // 切回详细
     expect(nodeG('b')?.querySelector('rect.gm-task-bar')).not.toBeNull();
     expect(nodeG('b')?.querySelector('text.gm-task-progress')?.textContent).toBe('40%');
+    expect(nodeG('b')?.querySelector('.gm-task-due-float text')?.textContent).toBe('10-15');
     expect(nodeG('b')?.querySelector('text.gm-task-progress-inline')).toBeNull();
     renderScene(scene, compactInput(data, { compact: true })); // 再切回简洁
     expect(nodeG('b')?.querySelector('.gm-task-bar, .gm-task-row')).toBeNull();
+    expect(nodeG('b')?.querySelector('.gm-task-due-float')).toBeNull();
     expect(nodeG('b')?.querySelector('text.gm-task-progress-inline')?.textContent).toBe('40%');
   });
 

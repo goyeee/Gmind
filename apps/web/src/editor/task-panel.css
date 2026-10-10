@@ -1,72 +1,11 @@
 /*
- * 任务快速设置弹层（M7c-C3）+ 右侧任务面板（M7c-C4）样式。
- * C3 弹层 = fixed 视口浮层锚定点击点/节点右缘（同 .marker-picker 模式，视口内钳制
- * 由页面侧坐标计算承担）；C4 面板 = 右列卡片分节（与 RichPanel 同族：白底、
- * 280px 列宽自适应、分节标题）。共用 TaskFields 的 tt-chip/tt-date/tt-avatar
- * 基线（task-table.css，全局已装载）。
+ * 右侧任务面板（M7c-C4）样式。C3 快速设置弹层（.task-quickcard*）已随 2026-10-10
+ * 需求方裁定整体删除（右键「任务设置」去除，由再点已选中节点开 TaskPanel 取代），
+ * 死样式一并清除。C4 面板 = 右列卡片分节（与 RichPanel 同族：白底、280px 列宽
+ * 自适应、分节标题）。共用 TaskFields 的 tt-chip/tt-date/tt-avatar 基线
+ * （task-table.css，全局已装载）。
  */
 
-/* ── C3：快速设置弹层（对标 mindgrid NodeQuickCard，紧凑卡 ~300px） ─────── */
-.task-quickcard {
-  position: fixed;
-  z-index: 1210;
-  width: 300px;
-  max-width: calc(100vw - 16px);
-  max-height: 72vh;
-  display: flex;
-  flex-direction: column;
-  background: #fff;
-  border: 1px solid #e5e6eb;
-  border-radius: 10px;
-  box-shadow: 0 8px 24px rgba(31, 35, 41, 0.16);
-  font-size: 12px;
-  color: #1f2329;
-}
-.task-quickcard-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 8px 12px;
-  border-bottom: 1px solid #f0f1f3;
-  flex: none;
-}
-.task-quickcard-title {
-  font-weight: 600;
-  font-size: 13px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.task-quickcard-sub {
-  color: #86909c;
-  font-size: 11px;
-  margin-left: 6px;
-  flex: none;
-}
-.task-quickcard-close {
-  border: none;
-  background: transparent;
-  color: #86909c;
-  font-size: 16px;
-  line-height: 1;
-  width: 22px;
-  height: 22px;
-  border-radius: 4px;
-  cursor: pointer;
-  padding: 0;
-  flex: none;
-}
-.task-quickcard-close:hover {
-  background: #f2f3f5;
-  color: #1f2329;
-}
-.task-quickcard-body {
-  padding: 10px 12px 12px;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
 .task-field-label {
   display: block;
   color: #86909c;

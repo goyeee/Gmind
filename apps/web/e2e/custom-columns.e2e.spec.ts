@@ -2,15 +2,15 @@ import { expect, test, type Page } from '@playwright/test';
 import * as Y from 'yjs';
 
 /**
- * 表格自定义列 E2E（M7c 消费侧：TaskTable 动态列 + 表头管理 + 任务快速卡自定义属性）。
+ * 表格自定义列 E2E（M7c 消费侧：TaskTable 动态列 + 表头管理 + 任务面板自定义属性）。
  *
  * 覆盖链路：
  * 1. 加列（文本类型）→ 表头出现新列 → 单元格点击填写 → 服务端 docState 断言
  *    （meta.customColumns schema + 节点 custom 值）；
  * 2. 加人员列 + 日期列 → 人员弹层选成员（复用 MemberMultiSelect）、日期格填值 →
  *    docState 断言 person 数组与 'YYYY-MM-DD'；
- * 3. 任务设置快速卡（`,` 快捷键）：自定义属性小节按列可见 → 修改文本列值 →
- *    切回表格回显（双视图同源 doc）；
+ * 3. TaskPanel（2026-10-10 起替代已删除的右键「任务设置」快速卡/`,` 快捷键）：
+ *    自定义属性小节按列可见 → 修改文本列值 → 切回表格回显（双视图同源 doc）；
  * 4. 删列：列头右键菜单 confirm → 列消失 + 节点值被清除（core 同事务孤儿清理）。
  *
  * docState 断言模式沿用 editor.e2e.spec.ts：GET /api/files/:id 反解 docState，
@@ -180,7 +180,7 @@ test('加人员列+日期列 → 弹层选成员、日期格填值，docState �
   expect(vals).toContain('2026-10-15');
 });
 
-test('任务设置快速卡：自定义属性三列可见，修改文本列值后表格回显', async ({ page }) => {
+test('任务面板：自定义属性三列可见，修改文本列值后表格回显（2026-10-10 快速卡退役后路径）', async ({ page }) => {
   test.setTimeout(90_000);
   await openSeedDocTable(page, '本周计划');
 
@@ -188,32 +188,33 @@ test('任务设置快速卡：自定义属性三列可见，修改文本列值�
   await addColumn(page, '复核人', 'person');
   await addColumn(page, '截止', 'date');
 
-  // 切脑图 → 选周一 → `,` 弹任务快速卡
+  // 切脑图 → 选周一 → 工具栏「任务」开 TaskPanel（右键「任务设置」/`,` 快速卡已随
+  // 2026-10-10 裁定删除，自定义属性小节由 TaskPanel 承接）
   await page.getByTestId('view-tab-mind').click();
   await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '周一' })).toBeVisible();
   await page.locator('.editor-canvas svg .gm-text', { hasText: '周一' }).click();
-  await page.keyboard.press(',');
-  const card = page.getByTestId('task-quickcard');
-  await expect(card).toBeVisible();
+  await page.getByTestId('task-toggle').click();
+  const panel = page.getByTestId('task-panel');
+  await expect(panel).toBeVisible();
 
   // 自定义属性小节：三列逐行渲染（text 输入 / person 占位「选择成员」/ date 日期框）
-  const section = card.getByTestId('quickcard-custom-section');
+  const section = panel.getByTestId('task-panel-custom-section');
   await expect(section).toBeVisible();
-  const textRow = card.locator('[data-testid="quickcard-custom-row"]', { hasText: '备注' });
+  const textRow = panel.locator('[data-testid="task-panel-custom-row"]', { hasText: '备注' });
   await expect(textRow).toBeVisible();
-  await expect(card.locator('[data-testid="quickcard-custom-row"]', { hasText: '复核人' })).toContainText(
+  await expect(panel.locator('[data-testid="task-panel-custom-row"]', { hasText: '复核人' })).toContainText(
     '选择成员',
   );
   await expect(
-    card.locator('[data-testid="quickcard-custom-row"]', { hasText: '截止' }).locator('input[data-smart-date]'),
+    panel.locator('[data-testid="task-panel-custom-row"]', { hasText: '截止' }).locator('input[data-smart-date]'),
   ).toBeVisible();
 
   // 修改文本列值（失焦即改即存）→ 切回表格回显（双视图同源 doc）
-  await textRow.locator('input').fill('快速卡填写');
-  await card.locator('.task-quickcard-head').click();
+  await textRow.locator('input').fill('面板填写');
+  await panel.locator('.task-panel-head').click();
   await page.getByTestId('view-tab-table').click();
   const row = page.locator('.tt-table tbody tr', { hasText: '周一' });
-  await expect(row.getByTestId('table-custom-text')).toHaveText('快速卡填写');
+  await expect(row.getByTestId('table-custom-text')).toHaveText('面板填写');
 });
 
 test('删列：confirm 后列消失，节点值被清除（docState 断言孤儿清理）', async ({ page }) => {

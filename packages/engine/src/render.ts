@@ -23,11 +23,14 @@
  *   任务视觉（M7c-C2，只增不改；无任务信息=hasTaskInfo false 时全部不渲染，
  *   DOM 与现状一致）：<rect class="gm-task-bar">（左缘 3px 竖条，fill 按
  *   task.status 走 TASK_STATUS_COLORS 企微四色）、<g class="gm-task-row">
- *   （卡片第二行任务信息行：负责人色点头像 <circle class="gm-task-owner">
- *   （首人 colorForUser 色，多人加 <text class="gm-task-owner-plus">「+n」）、
- *   有效进度 <text class="gm-task-progress">（叶=自身、父=Σ 直属子级均值，
- *   口径=@gmind/shared effectiveProgress）、预期日期徽标 <rect class="gm-task-due-bg">
- *   + <text class="gm-task-due">（MM-DD；逾期（isOverdue 口径）红底白字否则灰底）。
+ *   （footer 任务信息行，2026-10-10 mindgrid 全量对齐：左=负责人文字
+ *   <text class="gm-task-owner-text">（首人显示名——ownerNames 渲染期派生，
+ *   缺省回退 ID——多人「+N」；无负责人且 depth≥2 改
+ *   <text class="gm-task-owner-unassigned"> 橙字「未分配」）、右=有效进度
+ *   <text class="gm-task-progress">（叶=自身、父=Σ 直属子级均值，口径=
+ *   @gmind/shared effectiveProgress；逾期红字））、预期日期悬浮 chip
+ *   <g class="gm-task-due-float">（盒右上角外侧 MM-DD 胶囊：逾期红字红框、
+ *   常态灰字浅框，底色=theme.canvasBackground；不占盒宽/高）。
  *   任务行占盒底 TASK_ROW_H 条带，主文本/标记行在其余区域垂直居中——无任务行时
  *   contentCenter 恒等于 b.h/2，既有几何逐字节不变）、
  *   简洁模式（SceneInput.compact，M7b 补课）：状态条/任务行条带与描述行均隐藏，
@@ -51,24 +54,20 @@ import type {
   SummaryBox,
   ThemeTokens,
 } from './types';
-import { colorForUser } from './cursors';
 import { DESC_FONT_SIZE } from './measure';
 import {
-  TASK_AVATAR_D,
-  TASK_AVATAR_PLUS_W,
   TASK_BAR_W,
-  TASK_DUE_BG,
+  TASK_DUE_FLOAT_BORDER,
   TASK_DUE_FG,
   TASK_DUE_FONT_SIZE,
   TASK_DUE_H,
   TASK_DUE_OVERDUE_BG,
   TASK_DUE_W,
-  TASK_GAP,
   TASK_META_FG,
   TASK_META_FONT_SIZE,
-  TASK_PROGRESS_W,
   TASK_ROW_H,
   TASK_ROW_PAD,
+  TASK_UNASSIGNED_FG,
   hasTaskInfo,
   taskOverdueIds,
   taskParentIds,
@@ -185,10 +184,14 @@ export interface NodeEntry {
   image: SVGImageElement | null;
   /** 状态色左边条（M7c-C2；无任务信息时 null）。 */
   taskBar: SVGRectElement | null;
-  /** 任务信息行容器（头像/进度/日期徽标；M7c-C2；无任务信息时 null）。 */
+  /** 任务信息行容器（footer：左负责人文字/右百分比；2026-10-10 mindgrid 对齐；无任务信息时 null）。 */
   taskRow: SVGGElement | null;
   /** 上次渲染的任务签名（签名+几何；变化才重建行内元素，引用保持策略同标记行）。 */
   lastTaskSig: string;
+  /** 预期日期悬浮 chip（2026-10-10 mindgrid 对齐：盒右上角外侧；无 dueDate 或简洁模式时 null）。 */
+  taskDueFloat: SVGGElement | null;
+  /** 上次渲染的日期悬浮 chip 签名（不变则元素引用保持，策略同任务行）。 */
+  lastDueFloatSig: string;
   /** 简洁模式内联进度（M7b 补课；非 compact 或无任务信息时 null）。 */
   taskInline: SVGTextElement | null;
   /** 描述行（M7c-C1；盒无 descLine 时 null）。 */
@@ -397,6 +400,8 @@ function applyNode(
       taskBar: null,
       taskRow: null,
       lastTaskSig: '',
+      taskDueFloat: null,
+      lastDueFloatSig: '',
       taskInline: null,
       descText: null,
       badge: null,
@@ -426,7 +431,7 @@ function applyNode(
   // 无任务行且无描述时 contentCenter === b.h/2，基线/标记位与旧版逐字节一致（只增不改）。
   // 简洁模式（M7b 补课）：紧凑盒测量侧已不计任务行/描述行（b.h 即紧凑高），条带
   // 扣除同步关闭——contentCenter 回归 b.h/2，标题/标记在紧凑盒内垂直居中。
-  const taskSlots = taskRowSlotsOf(visual.task, taskCtx.parent);
+  const taskSlots = taskRowSlotsOf(visual.task, taskCtx.parent, b.depth);
   const descLine = compact ? '' : (b.descLine ?? '');
   const contentCenter =
     (b.h - (!compact && taskSlots ? TASK_ROW_H : 0) - (descLine !== '' ? TASK_ROW_H : 0)) / 2;
@@ -628,12 +633,15 @@ function applyNode(
     entry.taskBar.setAttribute('fill', taskStatusColor(task?.status));
   }
 
-  // 任务信息行：盒底 TASK_ROW_H 条带，行内容自右缘向左排（日期徽标→进度→负责人，
-  // mindgrid 卡片行序的右对齐镜像）。签名（任务数据+盒几何）不变则整行元素引用
-  // 保持（重建为无状态绘制，代价极小——同标记行策略）。简洁模式恒隐藏（进度改
-  // 内联，见下方 gm-task-progress-inline；syncOptional 同步移除整行）。
+  // 任务信息行（2026-10-10 mindgrid 全量对齐）：盒底 TASK_ROW_H footer 条带，
+  // 左=负责人文字（首人显示名、多人「+N」；无负责人且 depth≥2 橙字「未分配」）、
+  // 右=有效进度（叶=自身、父=Σ 直属子级均值；逾期红字）。签名（任务数据+盒几何）
+  // 不变则整行元素引用保持（重建为无状态绘制，代价极小——同标记行策略）。
+  // 简洁模式恒隐藏（进度改内联，见下方 gm-task-progress-inline；syncOptional
+  // 同步移除整行）。
+  const ownerLabel = taskSlots?.ownerLabel ?? '';
   const taskRowSig = showTaskStrips
-    ? `${task?.status ?? 'todo'}|${(task?.owners ?? []).join(',')}|${taskCtx.progress}|${task?.dueDate ?? ''}|${taskCtx.overdue ? 1 : 0}|${fmt(b.w)}x${fmt(b.h)}`
+    ? `${ownerLabel}|${taskSlots?.ownerUnassigned ? 1 : 0}|${taskSlots?.showProgress ? 1 : 0}|${taskCtx.progress}|${taskCtx.overdue ? 1 : 0}|${fmt(b.w)}x${fmt(b.h)}`
     : '';
   const prevTaskRow = entry.taskRow;
   entry.taskRow = syncOptional(entry.taskRow, showTaskStrips, g, () => el('g', { class: 'gm-task-row' }));
@@ -646,76 +654,78 @@ function applyNode(
   if (entry.taskRow && entry.lastTaskSig !== taskRowSig) {
     entry.lastTaskSig = taskRowSig;
     const rowY = b.h - TASK_ROW_H / 2;
-    const owners = (task?.owners ?? []).filter((o) => o !== '');
     const parts: SVGElement[] = [];
-    let cursor = b.w - TASK_ROW_PAD;
-    // 预期日期徽标（最右）：MM-DD；逾期红底白字，否则灰底灰字。
-    if ((task?.dueDate ?? '') !== '') {
-      cursor -= TASK_DUE_W;
-      parts.push(
-        el('rect', {
-          class: 'gm-task-due-bg',
-          x: fmt(cursor),
-          y: fmt(rowY - TASK_DUE_H / 2),
-          width: fmt(TASK_DUE_W),
-          height: fmt(TASK_DUE_H),
-          rx: fmt(TASK_DUE_H / 2),
-          fill: taskCtx.overdue ? TASK_DUE_OVERDUE_BG : TASK_DUE_BG,
-        }),
-      );
-      const dueText = el('text', {
-        class: 'gm-task-due',
-        x: fmt(cursor + TASK_DUE_W / 2),
-        y: fmt(rowY + TASK_DUE_FONT_SIZE * 0.35),
-        'text-anchor': 'middle',
-        'font-size': fmt(TASK_DUE_FONT_SIZE),
-        fill: taskCtx.overdue ? '#ffffff' : TASK_DUE_FG,
+    // 负责人左栏（行左缘起，文字名取代色点——2026-10-10 mindgrid 对齐）：
+    // 常态灰字；「未分配」橙字（depth≥2 无负责人，ownerUnassigned 态）。
+    if (ownerLabel !== '') {
+      const ownerText = el('text', {
+        class: taskSlots?.ownerUnassigned ? 'gm-task-owner-unassigned' : 'gm-task-owner-text',
+        x: fmt(TASK_ROW_PAD),
+        y: fmt(rowY + TASK_META_FONT_SIZE * 0.35),
+        'text-anchor': 'start',
+        'font-size': fmt(TASK_META_FONT_SIZE),
+        fill: taskSlots?.ownerUnassigned ? TASK_UNASSIGNED_FG : TASK_META_FG,
       });
-      dueText.textContent = (task?.dueDate ?? '').slice(5); // YYYY-MM-DD → MM-DD（同 mindgrid）
-      parts.push(dueText);
-      cursor -= TASK_GAP;
+      ownerText.textContent = ownerLabel;
+      parts.push(ownerText);
     }
-    // 有效进度：叶=自身、父=Σ 直属子级均值（taskCtx.progress 已按 shared 口径聚合）。
+    // 有效进度右栏（行右缘右对齐）：叶=自身、父=Σ 直属子级均值（taskCtx.progress
+    // 已按 shared 口径聚合）；逾期红字（mindgrid footer 同款）。
     if (taskSlots?.showProgress) {
-      cursor -= TASK_PROGRESS_W;
       const progressText = el('text', {
         class: 'gm-task-progress',
-        x: fmt(cursor + TASK_PROGRESS_W),
+        x: fmt(b.w - TASK_ROW_PAD),
         y: fmt(rowY + TASK_META_FONT_SIZE * 0.35),
         'text-anchor': 'end',
         'font-size': fmt(TASK_META_FONT_SIZE),
-        fill: TASK_META_FG,
+        fill: taskCtx.overdue ? TASK_DUE_OVERDUE_BG : TASK_META_FG,
       });
       progressText.textContent = `${taskCtx.progress}%`;
       parts.push(progressText);
-      cursor -= TASK_GAP;
-    }
-    // 负责人头像（最左）：首人 colorForUser 色点；多人加「+n」小字（右对齐行尾）。
-    if (owners.length > 0) {
-      const ownersW = TASK_AVATAR_D + (owners.length > 1 ? TASK_GAP + TASK_AVATAR_PLUS_W : 0);
-      parts.push(
-        el('circle', {
-          class: 'gm-task-owner',
-          cx: fmt(cursor - ownersW + TASK_AVATAR_D / 2),
-          cy: fmt(rowY),
-          r: fmt(TASK_AVATAR_D / 2),
-          fill: colorForUser(owners[0] as string),
-        }),
-      );
-      if (owners.length > 1) {
-        const plus = el('text', {
-          class: 'gm-task-owner-plus',
-          x: fmt(cursor),
-          y: fmt(rowY + TASK_META_FONT_SIZE * 0.35),
-          'text-anchor': 'end',
-          'font-size': fmt(TASK_META_FONT_SIZE),
-          fill: TASK_META_FG,
-        });
-        plus.textContent = `+${owners.length - 1}`;
-        parts.push(plus);
-      }
     }
     entry.taskRow.replaceChildren(...parts);
+  }
+
+  // 预期日期悬浮 chip（2026-10-10 mindgrid 对齐）：节点盒右上角外侧（chip 水平
+  // 跨坐上缘，右缘内收 6px——mindgrid `-top-2 right-1.5` 同位），MM-DD 胶囊；
+  // 逾期红字红框、常态灰字浅框，底色取 theme.canvasBackground（浮于画布）。不占
+  // 盒宽/高（盒外绘制，布局零参与）；简洁模式恒隐藏（mindgrid compact 不显示日期）。
+  const showDueFloat = hasTask && !compact && (task?.dueDate ?? '') !== '';
+  const dueFloatSig = showDueFloat
+    ? `${task?.dueDate ?? ''}|${taskCtx.overdue ? 1 : 0}|${fmt(b.w)}`
+    : '';
+  const prevDueFloat = entry.taskDueFloat;
+  entry.taskDueFloat = syncOptional(entry.taskDueFloat, showDueFloat, g, () =>
+    el('g', { class: 'gm-task-due-float' }),
+  );
+  if (entry.taskDueFloat !== prevDueFloat) {
+    // 同任务行不变式：容器实例变化 ⇒ 签名缓存归零（防 remove→re-add 残留命中）。
+    entry.lastDueFloatSig = '';
+  }
+  if (entry.taskDueFloat && entry.lastDueFloatSig !== dueFloatSig) {
+    entry.lastDueFloatSig = dueFloatSig;
+    const chipX = b.w - TASK_DUE_W - 6;
+    const chipY = -TASK_DUE_H / 2 - 2;
+    const fg = taskCtx.overdue ? TASK_DUE_OVERDUE_BG : TASK_DUE_FG;
+    const chipRect = el('rect', {
+      x: fmt(chipX),
+      y: fmt(chipY),
+      width: fmt(TASK_DUE_W),
+      height: fmt(TASK_DUE_H),
+      rx: fmt(TASK_DUE_H / 2),
+      fill: theme.canvasBackground,
+      stroke: taskCtx.overdue ? TASK_DUE_OVERDUE_BG : TASK_DUE_FLOAT_BORDER,
+      'stroke-width': '1',
+    });
+    const chipText = el('text', {
+      x: fmt(chipX + TASK_DUE_W / 2),
+      y: fmt(chipY + TASK_DUE_H / 2 + TASK_DUE_FONT_SIZE * 0.35),
+      'text-anchor': 'middle',
+      'font-size': fmt(TASK_DUE_FONT_SIZE),
+      fill: fg,
+    });
+    chipText.textContent = (task?.dueDate ?? '').slice(5); // YYYY-MM-DD → MM-DD（同 mindgrid）
+    entry.taskDueFloat.replaceChildren(chipRect, chipText);
   }
 
   // 简洁模式内联进度（M7b 补课，mindgrid compact 同语义）：任务条带隐藏后，有效

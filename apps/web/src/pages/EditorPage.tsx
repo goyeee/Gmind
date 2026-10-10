@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import type * as Y from 'yjs';
 import {
@@ -91,7 +91,6 @@ import {
   ExportIcon,
   FullscreenIcon,
   HistoryIcon,
-  InsertIcon,
   KeyboardIcon,
   MembersIcon,
   PainterIcon,
@@ -114,8 +113,8 @@ import { MemberPanel } from '../editor/MemberPanel';
 import { RichPanel } from '../editor/RichPanel';
 import { StructurePanel, type StructureTypeValue } from '../editor/StructurePanel';
 import { TaskTable } from '../editor/TaskTable';
-import { TaskQuickCard } from '../editor/TaskQuickCard';
 import { TaskPanel } from '../editor/TaskPanel';
+import { useTaskMembers, deriveNodesOfDoc } from '../editor/TaskFields';
 import { CommentPanel, type CommentThreadView } from '../editor/CommentPanel';
 import { FindReplace } from '../editor/FindReplace';
 import { VersionPanel } from '../editor/VersionPanel';
@@ -152,10 +151,18 @@ import './editor.css';
  * 子级（FR-EDT-009，推翻旧「同级」实现）、链接角标新标签页打开（FR-EDT-019）、
  * 画布粘贴截图直插（FR-EDT-020，imageUpload 共享助手）、剪贴板错误码映射。
  *
- * M7b-W3（2026-09-29，企微对标二批交互）：标记面板重做为企微式锚定竖层（挂
- * insert-wrap 下，弃 fixed 视口抽屉）+ 批量标记（多选全含则移除否则设置，单事务）；
+ * M7b-W3（2026-09-29，企微对标二批交互）：标记面板重做为企微式锚定竖层
+ * + 批量标记（多选全含则移除否则设置，单事务）；
  * 节点标记徽章点击换组（同组迷你选盘浮层）；空白无修饰左拖=框选（原 Shift+左拖，
  * 平移改道空格+左拖/中键，Viewport 自理）。
+ *
+ * 2026-10-10 需求方裁定包（spec 2026-10-10-node-props-and-task-visual-design）：
+ * ① 工具栏「插入」菜单整体删除（5 条目全删；链接/图片走格式面板既有入口、评论走
+ * comment-toggle；MarkerPanel 改 fixed 视口锚定，入口=TaskPanel「在标记面板中
+ * 编辑」）；② 再点已选中节点开 TaskPanel（mindgrid 同款），右键「任务设置」/
+ * TaskQuickCard/`,` 快捷键全删；③ 格式/任务面板改判外点即关（点节点不关、跟随
+ * 选中，点空白关闭）；④ 节点任务视觉对齐 mindgrid（footer 左负责人文字/右百分比，
+ * 预期日期盒右上角外侧悬浮 chip——engine 侧，见 taskvisual.ts 头注）。
  *
  * 2026-09-30 编辑入口改进（需求方走查：「鼠标选中某主题后应该可以直接编辑，或
  * 敲击空格全选主题内容」）：① 选中即可编辑——恰单选存活节点时敲可打印字符直入
@@ -359,7 +366,7 @@ export function EditorPage() {
   const [structurePanelOpen, setStructurePanelOpen] = useState(false);
   // 结构/主题面板锚定 wrap（2026-09-30 需求方四条反馈任务 1）：两面板从 fixed 右上
   // 改为企微式「按钮正下方贴靠下拉」——按钮包一层 relative wrap，面板 absolute 挂
-  // wrap 下（同 insert-wrap/export-wrap 贴按钮下拉先例）。ref 供渲染期实测 wrap
+  // wrap 下（同 export-wrap 贴按钮下拉先例）。ref 供渲染期实测 wrap
   // 屏幕坐标做右缘越界钳制（见 anchoredOffsetLeft）。
   const structureWrapRef = useRef<HTMLDivElement | null>(null);
   const themeWrapRef = useRef<HTMLDivElement | null>(null);
@@ -420,6 +427,24 @@ export function EditorPage() {
 
   const [tick, setTick] = useState(0);
   const [status, setStatus] = useState('尚未编辑');
+  // 负责人显示名目录（2026-10-10 mindgrid 对齐：节点 footer 文字名取代色点）：
+  // 渲染期派生（协作者 ∪ presence ∪ 文档内既有负责人），随 nodeData 透传 engine，
+  // 不入 Yjs 文档。tick = 文档版本号（TaskPanel docVersion 同口径）驱动重建。
+  const docOwnerIds = useMemo(() => {
+    if (!doc) return [] as string[];
+    const ids: string[] = [];
+    for (const n of deriveNodesOfDoc(doc)) {
+      for (const o of n.task?.owners ?? []) if (!ids.includes(o)) ids.push(o);
+    }
+    return ids;
+  }, [doc, tick]);
+  const memberIndex = useTaskMembers(fileId, members, docOwnerIds);
+  const memberIndexRef = useRef(memberIndex);
+  memberIndexRef.current = memberIndex;
+  // 成员目录异步就绪（协作者拉取返回/presence 变化）→ 画布补一轮重绘刷新节点名字
+  useEffect(() => {
+    scheduleRerenderRef.current?.();
+  }, [memberIndex]);
   // 星标态（M3b 清偿包，FR-FIL-004）：GET /:id 的 starred 为初始值，工具栏切换乐观更新
   const [starred, setStarred] = useState(false);
   // 协同通道真值表状态（M2 Task 3）：startCollab 回调推进，saveLoop 经桥接消费。
@@ -439,22 +464,18 @@ export function EditorPage() {
   // 格式面板开合（M7b-R2 需求方裁定）：样式右列默认不显示，收进工具栏「格式」按钮。
   const [formatOpen, setFormatOpen] = useState(false);
   // 右侧任务面板开合（M7c-C4）：与格式面板互斥（开任务收格式、开格式收任务）。
+  // 2026-10-10 需求方裁定：再点已选中节点也开本面板（取代已删除的右键「任务设置」
+  // 快速卡——TaskQuickCard/`,` 快捷键/quickCard 态全链路退役）。
   const [taskPanelOpen, setTaskPanelOpen] = useState(false);
-  // 任务快速设置弹层（M7c-C3）：nodeId + 弹出锚点（viewport 客户端坐标，fixed 定位）。
-  // 右键菜单「任务设置」/ 选中节点按 `,` 双入口；Esc/外点关（markerPicker 同机制）。
-  const [quickCard, setQuickCard] = useState<{ nodeId: string; x: number; y: number } | null>(null);
-  // 插入菜单（2026-09-28 二次改版）+ 标记面板（M7b-W3 企微式竖层重做）：
-  // 面板为**锚定弹出层**——挂在 .insert-wrap 下（absolute），状态 {open, tab, anchor}
-  // 扩展 anchor = 插入按钮 getBoundingClientRect（面板顶贴按钮下沿、左缘对齐；
-  // 右缘越界时按 anchor 换算 offsetLeft 收回视口）。tab 由「图标/表情」菜单项决定，
-  // 面板内可切换；对齐企微「顶部按钮点开竖层」形态，不再是 fixed 视口抽屉。
-  const [insertOpen, setInsertOpen] = useState(false);
+  // 标记面板（M7b-W3 企微式竖层）：锚定弹出层。2026-10-10 工具栏「插入」菜单整体
+  // 删除（需求方裁定：菜单连条目全删——链接/图片走格式面板既有入口、评论走工具栏
+  // comment-toggle）后改 **fixed 视口定位**：anchor=调用方供给的屏幕坐标
+  // （TaskPanel「在标记面板中编辑」按钮下沿），渲染期右缘越界钳制。
   const [markerPanel, setMarkerPanel] = useState<{
     open: boolean;
     tab: MarkerTab;
     anchor: { left: number; top: number };
   }>({ open: false, tab: 'icon', anchor: { left: 0, top: 0 } });
-  const insertWrapRef = useRef<HTMLDivElement | null>(null);
   // 节点标记点击换组（M7b-W3 #4）：徽章命中 → 该组迷你选盘浮层（HTML 层锚定点击点，
   // contextMenu 同款 fixed 定位；nodeId/group 为写入目标，x/y 为弹出锚点）。
   const [markerPicker, setMarkerPicker] = useState<{
@@ -520,33 +541,28 @@ export function EditorPage() {
     return () => document.removeEventListener('pointerdown', onDocPointerDown);
   }, [exportOpen]);
 
-  // —— 插入菜单 + 标记面板弹层（M7b-W3：面板同挂 insert-wrap，Esc/外点关闭沿用
+  // —— 标记面板弹层（2026-10-10 插入菜单删除后独立成层，Esc/外点关闭沿用
+  // M7c-D2 pointerdown 口径）——
   // insert-layer 机制）——菜单与面板互斥（开面板收菜单、开菜单收面板）；打开期间
-  // document pointerdown 命中 insert-wrap 之外即收（M7c-D2：mousedown 会被画布
-  // preventDefault 抑制）、Esc 即收；只读降级即收。
-  const closeInsertLayer = (): void => {
-    setInsertOpen(false);
+  // 标记面板外点/Esc 关闭（2026-10-10 插入菜单删除后独立成层）：document pointerdown
+  // 命中面板之外即收（M7c-D2：mousedown 会被画布 preventDefault 抑制）、Esc 即收；
+  // 只读降级即收。
+  const closeMarkerPanel = (): void => {
     setMarkerPanel((p) => (p.open ? { ...p, open: false } : p));
   };
-  /** 「图标/表情」菜单项入口：记录插入按钮 anchor（getBoundingClientRect）后开面板。 */
-  const openMarkerPanel = (tab: MarkerTab): void => {
-    const rect = insertWrapRef.current?.getBoundingClientRect();
-    setInsertOpen(false);
-    setMarkerPanel({
-      open: true,
-      tab,
-      anchor: rect ? { left: rect.left, top: rect.bottom } : { left: 0, top: 0 },
-    });
+  /** MarkerPanel 打开入口：anchor=调用方屏幕坐标（TaskPanel 按钮下沿）。 */
+  const openMarkerPanel = (tab: MarkerTab, anchor: { left: number; top: number }): void => {
+    setMarkerPanel({ open: true, tab, anchor });
   };
   useEffect(() => {
-    if (!(insertOpen || markerPanel.open)) return;
+    if (!markerPanel.open) return;
     const onDocPointerDown = (e: PointerEvent): void => {
-      if (insertWrapRef.current && !insertWrapRef.current.contains(e.target as Node)) {
-        closeInsertLayer();
+      if (!(e.target as Element | null)?.closest?.('.marker-panel')) {
+        closeMarkerPanel();
       }
     };
     const onKeyDown = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') closeInsertLayer();
+      if (e.key === 'Escape') closeMarkerPanel();
     };
     document.addEventListener('pointerdown', onDocPointerDown);
     document.addEventListener('keydown', onKeyDown);
@@ -554,12 +570,12 @@ export function EditorPage() {
       document.removeEventListener('pointerdown', onDocPointerDown);
       document.removeEventListener('keydown', onKeyDown);
     };
-  }, [insertOpen, markerPanel.open]);
+  }, [markerPanel.open]);
   useEffect(() => {
-    if (readOnly && (insertOpen || markerPanel.open)) {
-      closeInsertLayer();
+    if (readOnly && markerPanel.open) {
+      closeMarkerPanel();
     }
-  }, [readOnly, insertOpen, markerPanel.open]);
+  }, [readOnly, markerPanel.open]);
 
   // —— 迷你选盘（节点标记点击换组）Esc/外点关闭（面板同机制；M7c-D2 改 pointerdown
   // —— mousedown 被画布 onSvgPointerDown 的 preventDefault 抑制，空白点击收不起）——
@@ -584,57 +600,17 @@ export function EditorPage() {
     };
   }, [markerPicker]);
 
-  // —— 任务快速设置弹层（M7c-C3）——
-  /**
-   * 打开快速卡：锚点显式给（右键点击点）或按节点盒右缘换算（`,` 快捷键触发——
-   * viewport 场景坐标 → svg 客户端坐标，fixed 定位）。节点不存在（空文档）按
-   * root 盒兜底定位。
-   */
-  const openQuickCard = (nodeId: string, x?: number, y?: number): void => {
-    let ax = x;
-    let ay = y;
-    const vp = viewportRef.current;
-    const svgEl = svgRef.current;
-    if ((ax === undefined || ay === undefined) && vp && svgEl) {
-      const box = boxesRef.current.find((b) => b.id === nodeId) ?? boxesRef.current[0];
-      if (box) {
-        const rect = svgEl.getBoundingClientRect();
-        const p = vp.toScreen(box.x + box.w, box.y);
-        ax = rect.left + p.x;
-        ay = rect.top + p.y;
-      }
-    }
-    setQuickCard({ nodeId, x: ax ?? 120, y: ay ?? 120 });
-  };
+  // 任务快速设置弹层（M7c-C3）已随 2026-10-10 裁定整体退役（需求方：右键「任务设置」
+  // 去除，由「再点已选中节点 → TaskPanel」取代——见文件头注与 spec
+  // 2026-10-10-node-props-and-task-visual-design）：TaskQuickCard 组件、`,` 快捷键、
+  // openQuickCard 全链路删除。
 
-  // 快速卡 Esc/外点关闭（markerPicker 同款：document pointerdown 命中卡片之外即收；
-  // M7c-D2 改 pointerdown——mousedown 被画布 preventDefault 抑制，空白点击收不起）
+  // 只读降级 / 切表格视图面板强制收（写弹层不跨视图驻留）
   useEffect(() => {
-    if (!quickCard) return;
-    const onDocPointerDown = (e: PointerEvent): void => {
-      if (!(e.target as Element | null)?.closest?.('.task-quickcard')) setQuickCard(null);
-    };
-    const onKeyDown = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') setQuickCard(null);
-    };
-    document.addEventListener('pointerdown', onDocPointerDown);
-    document.addEventListener('keydown', onKeyDown);
-    return () => {
-      document.removeEventListener('pointerdown', onDocPointerDown);
-      document.removeEventListener('keydown', onKeyDown);
-    };
-  }, [quickCard]);
-
-  // 只读降级 / 切表格视图即收快速卡（写弹层不跨视图驻留）
-  useEffect(() => {
-    if (readOnly) setQuickCard(null);
     if (readOnly && taskPanelOpen) setTaskPanelOpen(false);
     // 结构面板随桌面工具栏装配：只读降级即收（按钮已不装配，面板不留存）
     if (readOnly && structurePanelOpen) setStructurePanelOpen(false);
   }, [readOnly, taskPanelOpen, structurePanelOpen]);
-  useEffect(() => {
-    if (view === 'table') setQuickCard(null);
-  }, [view]);
 
   // —— 工具栏弹层统一外点关闭（2026-09-28 需求方走查：插入/主题/成员/版本/动态/
   // 快捷键/查找/格式/任务/评论点其他地方必须自动消失）——导出/插入/标记已有各自
@@ -656,12 +632,14 @@ export function EditorPage() {
       findOpen ||
       themePanelOpen ||
       structurePanelOpen ||
-      commentsOpen;
+      commentsOpen ||
+      formatOpen ||
+      taskPanelOpen;
     if (!anyOpen) return;
     const onDocPointerDown = (e: PointerEvent): void => {
       const el = e.target as Element | null;
       if (!el?.closest) return;
-      // 插入/导出菜单内部（含「链接/图片」等右列联动菜单项）豁免：菜单项点击的
+      // 导出菜单内部（含「链接/图片」等右列联动菜单项）豁免：菜单项点击的
       // pointerdown 若在此收掉 formatOpen，紧随的 click 再开会出现一帧收-开抖动，
       // 且聚焦时序与互斥语义纠缠（E3 回归修复）——菜单自身的开合由各自监听管理。
       // 结构/主题面板 wrap（2026-09-30 任务 1）：面板已挂 .structure-wrap/.theme-wrap
@@ -670,9 +648,8 @@ export function EditorPage() {
       if (
         el.closest('[data-popover-toggle]') ||
         el.closest(
-          '.editor-right, .editor-mobile-comments, .theme-panel, .structure-panel, .theme-wrap, .structure-wrap, .activity-panel, .help-panel, .find-bar, .member-panel, .version-panel',
+          '.editor-right, .editor-mobile-comments, .theme-panel, .structure-panel, .theme-wrap, .structure-wrap, .activity-panel, .help-panel, .find-bar, .member-panel, .version-panel, .marker-panel',
         ) ||
-        insertWrapRef.current?.contains(el) ||
         exportWrapRef.current?.contains(el)
       ) {
         return;
@@ -685,6 +662,13 @@ export function EditorPage() {
       setThemePanelOpen(false);
       setStructurePanelOpen(false);
       setCommentsOpen(false);
+      // 格式/任务面板外点即关（2026-10-10 需求方改判 10-09「点空白转空态不关闭」）：
+      // 点**画布空白**关闭；点节点不关（面板跟随选中切换内容，同 mindgrid 属性面板——
+      // 否则「再点开面板」路径下换选节点会把面板收掉）。
+      if (!el.closest('[data-node-id]')) {
+        setFormatOpen(false);
+        setTaskPanelOpen(false);
+      }
     };
     document.addEventListener('pointerdown', onDocPointerDown);
     return () => document.removeEventListener('pointerdown', onDocPointerDown);
@@ -697,6 +681,8 @@ export function EditorPage() {
     themePanelOpen,
     structurePanelOpen,
     commentsOpen,
+    formatOpen,
+    taskPanelOpen,
   ]);
 
   // —— 结构面板（2026-09-30 任务 3）：Esc 关闭（ThemePanel 无 Esc，本面板按需求
@@ -724,32 +710,6 @@ export function EditorPage() {
     if (!selection || selection.selected.size !== 1) return;
     panNodeIntoView([...selection.selected][0]);
   }, [formatOpen, taskPanelOpen, commentsOpen, view, readOnly]);
-
-  // `,`（逗号）快捷键（M7c-C3）：选中节点弹出任务快速卡；再按 = toggle 关闭
-  // （kimi 复验 P4：原实现无开合态判断，卡片开着再按重复 openQuickCard 重锚，永远
-  // 关不掉——现已改为同节点收盘，换节点才重开重锚）。独立监听（不入 keyboardMap
-  // ——帮助清单契约不动）；让路纪律与 Ctrl+F 同款：覆盖层/输入控件/表格视图不触发；
-  // 恰单选才生效（多选无单一目标、空选无目标）。quickCard 入依赖：闭包读当帧开合态。
-  useEffect(() => {
-    if (readOnly) return;
-    const onKeyDown = (e: KeyboardEvent): void => {
-      if (e.key !== ',') return;
-      if (overlay.isOpen || isEditableTarget(e.target)) return;
-      if (viewRef.current === 'table') return;
-      const selection = selectionRef.current;
-      if (!selection || selection.selected.size !== 1) return;
-      e.preventDefault();
-      const nodeId = [...selection.selected][0];
-      if (quickCard && quickCard.nodeId === nodeId) {
-        setQuickCard(null); // 已开且锚的就是当前单选节点：toggle 收盘
-        return;
-      }
-      openQuickCard(nodeId);
-    };
-    document.addEventListener('keydown', onKeyDown, false);
-    return () => document.removeEventListener('keydown', onKeyDown, false);
-  }, [readOnly, quickCard]);
-
 
   /**
    * 标记写入（M7b-W3 #5 批量语义）：对**选中集全部节点**逐个 setIcon，单事务
@@ -820,43 +780,8 @@ export function EditorPage() {
     }
   };
 
-  /**
-   * 插入菜单的右面板聚焦入口：滚动 RichPanel 对应控件进视口并聚焦（备注
-   * textarea / 链接 input）；控件不在（无选中节点 → RichPanel 空态）时给可行动
-   * toast。图片走 image-input click（触发系统文件选择器）。
-   */
-  const focusRichControl = (selector: string, hint: string): void => {
-    const root = document.querySelector('[data-testid="rich-panel"]');
-    const el = root?.querySelector<HTMLElement>(selector) ?? null;
-    if (!el) {
-      showToast(hint);
-      return;
-    }
-    el.scrollIntoView({ block: 'nearest' });
-    el.focus();
-  };
-
-  /**
-   * M7c-E3 回归修复：右列默认不渲染（M7b-R6）后，链接/图片项的控件只有
-   * formatOpen 时才在 DOM——先开格式面板，下一帧（面板挂载后）再聚焦，控件
-   * 仍缺（无选中节点）才落到可行动 toast。同帧直接查 DOM 会查空（React 尚未
-   * 提交渲染）。
-   */
-  const openRichAndFocus = (selector: string, hint: string): void => {
-    setFormatOpen(true);
-    requestAnimationFrame(() => focusRichControl(selector, hint));
-  };
-
-  const triggerImageInput = (): void => {
-    const input = document.querySelector<HTMLInputElement>(
-      '[data-testid="rich-panel"] [data-testid="image-input"]',
-    );
-    if (!input) {
-      showToast('选中节点后添加图片');
-      return;
-    }
-    input.click();
-  };
+  // 插入菜单的右面板聚焦助手（focusRichControl/openRichAndFocus/triggerImageInput）
+  // 已随 2026-10-10「插入」菜单删除一并退役——链接/图片编辑走格式面板内既有控件。
 
   // —— 查找替换键位（M6 Task 3，企微对标）——
   // Ctrl/Cmd+F 打开：非输入控件时 preventDefault 接管浏览器原生查找；焦点在
@@ -2099,7 +2024,17 @@ export function EditorPage() {
       selection.toggle(id);
       return;
     }
+    // 再点开 TaskPanel（2026-10-10 需求方裁定，mindgrid「单击选中 · 再击开属性」
+    // 同款）：本次点击**之前**该节点已是唯一选中 → 开任务面板（只开不 toggle；
+    // 与格式面板互斥沿用工具栏口径）；多选中的点击先收敛为单选，不当场开。
+    // 双击已选中节点：第一次 click 会开面板、随后 dblclick 进就地编辑——并存
+    // 行为同 mindgrid（spec 2026-10-10 §三 已记）。
+    const alreadySoleSelected = selection.selected.size === 1 && selection.selected.has(id);
     selection.selectOnly(id);
+    if (alreadySoleSelected && !readOnly) {
+      setFormatOpen(false);
+      setTaskPanelOpen(true);
+    }
   };
 
   /**
@@ -2305,10 +2240,6 @@ export function EditorPage() {
     }
     const nodeId = menu.nodeId as string;
     switch (action) {
-      case 'task-quick':
-        // 任务设置（M7c-C3）：快速卡锚定右键点击点（menu.x/y），置顶项
-        openQuickCard(nodeId, menu.x, menu.y);
-        break;
       case 'insert-child':
         openNewNodeEditor(nodeId, undefined, 'child', 'context');
         break;
@@ -2394,12 +2325,12 @@ export function EditorPage() {
       if (acc && acc.length > 0) selectedIcons[group] = acc;
     }
   }
-  // 面板右缘越界钳制（企微弹层贴插入按钮左缘展开；越界时整体左移收回视口）。
+  // 面板右缘越界钳制（fixed 视口定位：左缘贴锚点展开，越界时整体左移收回视口）。
   const MARKER_PANEL_WIDTH = 340;
-  const markerOffsetLeft =
+  const markerPanelLeft =
     markerPanel.anchor.left + MARKER_PANEL_WIDTH > window.innerWidth - 8
-      ? window.innerWidth - 8 - MARKER_PANEL_WIDTH - markerPanel.anchor.left
-      : 0;
+      ? Math.max(8, window.innerWidth - 8 - MARKER_PANEL_WIDTH)
+      : markerPanel.anchor.left;
 
   // —— 结构/主题面板锚定坐标（2026-09-30 需求方四条反馈任务 1）——
   // 两面板改企微式贴按钮下拉（absolute 挂各自 wrap 下、left 对齐按钮左缘）。
@@ -2575,6 +2506,11 @@ export function EditorPage() {
         isDescendant: (id, candidateId) => subtreeIds(d, id).includes(candidateId),
         // 文档子级序（M7c-D1）：sibling 落点 index 结算输入（engine 纯计算在事务外）。
         childrenIdsOf: (id) => childrenIds(d, id),
+        // 根级左列门控（2026-10-09 需求方修复「左侧没有分支主题时，右侧分支无法拖到
+        // 左侧」）：mindmap 恒开放——拖到左半即建首个左列主题（onDrop 内按 target.side
+        // setNodeSide 持久化）；logic 向右结构恒右（布局不读 side）；org（down）不经
+        // 此门控。
+        rootLeftAllowed: () => getMeta(d).structureType === 'mindmap',
         // 组拾起（2026-09-30 需求方批量拖动）：按下节点命中当前多选（size>1 且含该
         // 节点）→ 返回整组 id，按布局序（box.y 再 box.x 升序）排序——释放端按
         // index+i 递增插入即还原组内序；排除 root（root 不可移动，组不含 root）。
@@ -2687,7 +2623,14 @@ export function EditorPage() {
           commentCount: commentCountsRef.current[id],
           // 任务字段（M7c-C2 接线）：状态条/任务行/徽标数据源。description 行不经
           // nodeData——布局经 DocReader.getNode 直读（engine NodeSnapshotLike 通道）。
-          task: snap.task,
+          // ownerNames（2026-10-10 mindgrid 对齐）：footer 文字名数据源——成员目录
+          // 映射显示名，查不到回退 ID 前 8 位（useTaskMembers 同口径）；渲染期派生。
+          task: {
+            ...snap.task,
+            ownerNames: snap.task.owners.map(
+              (o) => memberIndexRef.current.get(o)?.nickname ?? o.slice(0, 8),
+            ),
+          },
         });
       }
       renderScene(scene, {
@@ -2979,10 +2922,11 @@ export function EditorPage() {
     <div className="editor-page">
       <header className="editor-toolbar">
         {/* 工具栏图标化分组改版（M6 Task 1，企微对标）：单行分组 + 1px 竖线分隔。
-            组序：[返回] | [标题·星标·保存状态] | [撤销·重做·格式刷] | [结构·主题] |
-            [插入] | [导出] | [成员·版本历史·动态·快捷键·查找] | [全屏]；全部按钮
-            内联 SVG 图标 + title 提示，既有 data-testid 一概保留（members-btn 实名
-            与既有用例一致）。插入组为标记面板任务新增（标记/备注/链接/图片）。 */}
+            组序：[返回] | [标题·星标·保存状态] | [视图] | [撤销·重做·格式刷] |
+            [上级/子级/同级] | [格式·任务·简洁] | [结构·主题] | [导出] |
+            [成员·版本历史·动态·快捷键·查找]（插入组 2026-10-10 整体删除；全屏组
+            2026-10-09 迁至底栏）；全部按钮内联 SVG 图标 + title 提示，既有
+            data-testid 一概保留（members-btn 实名与既有用例一致）。 */}
         <div className="toolbar-group">
           <button
             data-testid="back-btn"
@@ -3046,6 +2990,19 @@ export function EditorPage() {
           <span className="save-status" data-testid="save-status">
             {status}
           </span>
+          {/* 评论开关（2026-10-10 需求方裁定：插入「评论」项随菜单删除后桌面端补
+              入口——与移动端分支同一 testid 同一动作，标题组尾随 save-status，
+              位置语义与移动端一致）。 */}
+          <button
+            data-testid="comment-toggle"
+            data-popover-toggle="comment-toggle"
+            className="toolbar-btn toolbar-btn-text"
+            title="评论"
+            aria-label="评论"
+            onClick={() => setCommentsOpen((v) => !v)}
+          >
+            评论
+          </button>
         </div>
         <span className="toolbar-sep" />
         {/* 视图切换（M7a-T4）：脑图 | 表格 分段控件。切换互斥、各自状态保留
@@ -3107,108 +3064,6 @@ export function EditorPage() {
             <PainterIcon />
             <span className="toolbar-btn-label">格式刷</span>
           </button>
-        </div>
-        <span className="toolbar-sep" />
-        {/* 插入组（2026-09-28 二次改版；M7b-W3 面板重做）：下拉两并列项「图标」「表情」
-            打开**锚定弹出层** MarkerPanel（企微式竖层：挂 .insert-wrap 下、顶贴按钮
-            下沿向下展开，面板内可切换图标/表情页签）；备注/链接/图片聚焦 RichPanel
-            对应控件。不再使用 fixed 视口抽屉（需求方 #1 裁定）。 */}
-        <div className="toolbar-group">
-          <div className="insert-wrap" ref={insertWrapRef}>
-            <button
-              data-testid="insert-menu"
-              className="toolbar-btn toolbar-btn-text"
-              title="插入"
-              aria-label="插入"
-              aria-haspopup="menu"
-              aria-expanded={insertOpen}
-              onClick={() => {
-                if (insertOpen) {
-                  closeInsertLayer();
-                  return;
-                }
-                // 开菜单收面板（二者同挂 insert-wrap，互斥——注释契约见 closeInsertLayer）
-                setMarkerPanel((p) => (p.open ? { ...p, open: false } : p));
-                setInsertOpen(true);
-              }}
-            >
-              <InsertIcon />
-              <span className="toolbar-btn-label">插入</span>
-            </button>
-            {insertOpen && (
-              <div className="insert-dropdown" role="menu" aria-label="插入">
-                {/* 任务 3（2026-09-30 需求方四条反馈）：插入菜单去 × ——外点/Esc
-                    关闭不变已兜底，头部只留「插入」标题文字；导出菜单/结构/主题
-                    面板的 × 不动（对齐企微下拉浮层无关闭钮形态）。 */}
-                <div className="popover-head">
-                  <span className="popover-head-title">插入</span>
-                </div>
-                <button
-                  data-testid="insert-icons"
-                  role="menuitem"
-                  onClick={() => openMarkerPanel('icon')}
-                >
-                  图标
-                </button>
-                <button
-                  data-testid="insert-emoji"
-                  role="menuitem"
-                  onClick={() => openMarkerPanel('emoji')}
-                >
-                  表情
-                </button>
-                <button
-                  data-testid="insert-link"
-                  role="menuitem"
-                  onClick={() => {
-                    closeInsertLayer();
-                    openRichAndFocus('input[aria-label="节点链接"]', '选中节点后编辑链接');
-                  }}
-                >
-                  链接
-                </button>
-                <button
-                  data-testid="insert-comment"
-                  role="menuitem"
-                  onClick={() => {
-                    closeInsertLayer();
-                    setCommentsOpen(true);
-                  }}
-                >
-                  评论
-                </button>
-                <button
-                  data-testid="insert-image"
-                  role="menuitem"
-                  onClick={() => {
-                    closeInsertLayer();
-                    setFormatOpen(true);
-                    // 面板挂载后一帧再触发系统文件选择器（同 openRichAndFocus 时序）
-                    requestAnimationFrame(() => triggerImageInput());
-                  }}
-                >
-                  图片
-                </button>
-                {/* 「简介」项已回退（2026-10-01 需求方反馈任务 2，恢复 M7b #3 裁定的
-                    note 隐藏态）：M7c-I 的 insert-note 菜单项与 RichPanel 备注区块
-                    一并撤下，note 数据模型与画布 'N' 角标渲染不动（见 RichPanel 头注）。 */}
-              </div>
-            )}
-            {/* 标记面板（M7b-W3 企微式竖层）：锚定弹出层，absolute 于 .insert-wrap
-                （顶贴按钮下沿、左缘对齐，offsetLeft 右缘越界钳制）；批量口径见
-                applyMarker（多选可批量应用），无选中禁用+提示。 */}
-            {markerPanel.open && (
-              <MarkerPanel
-                icons={selectedIcons}
-                selectedCount={selectedIds.length}
-                onSetIcon={applyMarker}
-                tab={markerPanel.tab}
-                onTabChange={(tab) => setMarkerPanel((p) => ({ ...p, tab }))}
-                onClose={() => setMarkerPanel((p) => ({ ...p, open: false }))}
-                offsetLeft={markerOffsetLeft}
-              />
-            )}
-          </div>
         </div>
         <span className="toolbar-sep" />
         {/* 主题三按钮（M7b-R4 需求方裁定，企微工具栏对标）：添加上级主题/添加子主题/
@@ -3665,7 +3520,7 @@ export function EditorPage() {
           {(formatOpen || taskPanelOpen || commentsOpen) && (
           <div className="editor-right">
             {/* M7b-R6：右列默认不渲染（需求方裁定「默认右侧不要有弹出」）——格式按钮开样式面板、
-                插入菜单「评论」项开评论面板；评论面板头部带 × 关闭。M6 Task 2 的常驻裁决就此改道。 */}
+                工具栏 comment-toggle 开评论面板；评论面板头部带 × 关闭。M6 Task 2 的常驻裁决就此改道。 */}
             {formatOpen && doc && um && (
               <RichPanel
                 doc={doc}
@@ -3688,7 +3543,7 @@ export function EditorPage() {
                 presence={members}
                 afterUserWrite={afterUserWrite}
                 showToast={showToast}
-                onOpenMarkers={() => openMarkerPanel('icon')}
+                onOpenMarkers={(anchor) => openMarkerPanel('icon', anchor)}
                 onDelete={() => handleDelete('context')}
                 onClose={() => setTaskPanelOpen(false)}
               />
@@ -3739,8 +3594,8 @@ export function EditorPage() {
             </button>
           ) : (
             ([
-              // 任务设置（M7c-C3）：置顶项（需求方裁定），弹出任务快速卡
-              ['task-quick', '任务设置'],
+              // 右键「任务设置」已随 2026-10-10 裁定删除（由再点已选中节点开
+              // TaskPanel 取代），菜单项数 9 → 8
               ['insert-child', '插入子级'],
               ['insert-sibling', '插入同级'],
               ['add-summary', '添加概要'],
@@ -3760,6 +3615,21 @@ export function EditorPage() {
             ))
           )}
         </div>
+      )}
+
+      {/* 标记面板（M7b-W3 企微式竖层；2026-10-10 插入菜单删除后 fixed 视口锚定，
+          锚点=TaskPanel「在标记面板中编辑」按钮下沿，左缘右缘越界钳制）：批量口径见
+          applyMarker（多选可批量应用），无选中禁用+提示；Esc/外点关。 */}
+      {markerPanel.open && (
+        <MarkerPanel
+          icons={selectedIcons}
+          selectedCount={selectedIds.length}
+          onSetIcon={applyMarker}
+          tab={markerPanel.tab}
+          onTabChange={(tab) => setMarkerPanel((p) => ({ ...p, tab }))}
+          onClose={() => setMarkerPanel((p) => ({ ...p, open: false }))}
+          position={{ left: markerPanelLeft, top: markerPanel.anchor.top }}
+        />
       )}
 
       {/* 节点标记迷你选盘（M7b-W3 #4 点击换组）：徽章点击弹出该组值网格（HTML 层
@@ -3807,27 +3677,6 @@ export function EditorPage() {
             })}
           </div>
         </div>
-      )}
-
-      {/* 任务快速设置弹层（M7c-C3）：右键菜单「任务设置」/`, 快捷键双入口；fixed 锚定
-          点击点/节点右缘、视口钳制（组件内），Esc/外点关（页面侧监听）；目标节点已删
-          不渲染；表格视图不渲染（画布专属浮层）。 */}
-      {!readOnly && quickCard && view === 'mind' && doc && (
-        <TaskQuickCard
-          doc={doc}
-          fileId={fileId}
-          nodeId={quickCard.nodeId}
-          docVersion={tick}
-          anchor={{ x: quickCard.x, y: quickCard.y }}
-          presence={members}
-          afterUserWrite={afterUserWrite}
-          showToast={showToast}
-          onMoreMarkers={() => {
-            setQuickCard(null);
-            openMarkerPanel('icon');
-          }}
-          onClose={() => setQuickCard(null)}
-        />
       )}
 
       {/* 底栏（画布专属，2026-10-09 布局裁定：左计数 / 右定位中心·适应画布·缩放·
