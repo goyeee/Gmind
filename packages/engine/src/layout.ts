@@ -35,7 +35,7 @@ import {
   SUMMARY_CHIP_PAD_X,
   SUMMARY_FONT_SIZE,
 } from './render';
-import { taskRowSlotsOf } from './taskvisual';
+import { assigneeColumnIdsOf, flattenAssigneeEntries, taskRowSlotsOf } from './taskvisual';
 import { themeTextStyleOf } from './themes';
 import type {
   DocReader,
@@ -126,6 +126,8 @@ function collectTree(
   styleOf: (id: string, depth: number) => TextStyle,
   compact: boolean,
 ): LayoutNode | null {
+  // 人员进度列 id 集（2026-10-11 第二步）：collectTree 级一次读取，节点拉平共用。
+  const assigneeColIds = assigneeColumnIdsOf(reader.getMeta().customColumns);
   const visited = new Set<string>();
   const build = (id: string, depth: number): LayoutNode | null => {
     if (visited.has(id)) return null;
@@ -152,7 +154,14 @@ function collectTree(
         if (child) children.push(child);
       }
     }
-    const taskRow = taskRowSlotsOf(snap.task, children.length > 0, depth);
+    const taskRow = taskRowSlotsOf(
+      {
+        ...snap.task,
+        assignees: flattenAssigneeEntries(snap.custom, assigneeColIds),
+      },
+      children.length > 0,
+      depth,
+    );
     // 描述（M7c-C1，只增不改）：快照 description 透传测量（非空时第二行 + 高度自适应，
     // 截断产物 box.descLine 随盒输出）。缺省时选项与旧版逐项一致（金样锁定）。
     // 简洁模式（M7b 补课）：原值照传，紧凑口径由测量侧 compact 分支收口（描述行

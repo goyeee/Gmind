@@ -10,6 +10,8 @@ import {
   getNode,
   ORIGIN_USER,
   ROOT_NODE_ID,
+  setCustomColumns,
+  setCustomField,
   setNodeTask,
   setText,
   withTransaction,
@@ -79,6 +81,27 @@ describe('deriveNodesOfDoc（M7c-C3/C4 抽公共）', () => {
     expect(a?.task?.owners).toEqual([]);
     // 父「任务A」自身进度 0：Σ = 直属子级 (40+80)/2 = 60（effectiveProgress 单一实现）
     expect(effectiveProgress(nodes, a?.id ?? '')).toBe(60);
+  });
+
+  it('人员进度列（assignee）条目拉平进 customAssignees；effectiveProgress 按 2026-10-11 口径合成', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: '任务X' }] });
+    const id = getNode(doc, ROOT_NODE_ID)!.childIds[0]!;
+    setCustomColumns(doc, [{ id: 'w1', name: '前端配合', type: 'assignee' }], ORIGIN_USER);
+    setNodeTask(doc, id, { owners: ['uA'], progress: 60 }, ORIGIN_USER);
+    setCustomField(doc, id, 'w1', { uB: 80, uC: 30 }, ORIGIN_USER);
+    const nodes = deriveNodesOfDoc(doc);
+    const n = nodes.find((x) => x.title === '任务X')!;
+    expect(n.customAssignees).toEqual([
+      { user: 'uB', progress: 80 },
+      { user: 'uC', progress: 30 },
+    ]);
+    // (60 + 80 + 30) / 3 = 56.67 → 57（标准负责人一项 + 每人一项）
+    expect(effectiveProgress(nodes, n.id)).toBe(57);
+  });
+
+  it('无 assignee 条目的节点不出现 customAssignees 键（快照零新增键面）', () => {
+    const nodes = deriveNodesOfDoc(buildDoc());
+    for (const n of nodes) expect('customAssignees' in n).toBe(false);
   });
 });
 

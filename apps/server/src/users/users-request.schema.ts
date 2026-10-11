@@ -46,3 +46,10 @@ export const notifyPrefsSchema = z.object({
     .array(optOutMemberSchema)
     .max(EMAIL_OPT_OUT_TYPES.length, '通知类型仅支持 mention/reply/permission，请重新选择'),
 });
+
+/** 头像设置（2026-10-11）：avatarUrl 为 5 个预置 SVG 路径（/avatars/preset-1..5.svg）
+ *  或本人上传键（users/{userId}/{ulid}.{ext}）——白名单在 service 二次校验
+ *  （预置正则 + 本人键前缀），此处只约束长度。 */
+export const avatarSchema = z.object({
+  avatarUrl: z.string().min(1).max(500),
+});

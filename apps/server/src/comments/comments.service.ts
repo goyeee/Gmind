@@ -26,7 +26,7 @@ export interface CommentView {
   nodeId: string;
   nodeTextSnapshot: string;
   nodeDeleted: boolean;
-  author: { id: string; nickname: string };
+  author: { id: string; nickname: string; avatar: string | null };
   content: string;
   mentions: string[];
   createdAt: string;
@@ -82,8 +82,8 @@ export class CommentsService {
     // 统一 ASC 基准（created_at 同毫秒按 ulid 单调性兜底），楼主 DESC / 回复 ASC 各自派生
     rows.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime() || (a.id < b.id ? -1 : 1));
 
-    const nicknames = await this.nicknamesOf(rows.map((r) => r.authorId));
-    const views = new Map(rows.map((r) => [r.id, this.toView(r, alive, nicknames)]));
+    const authors = await this.authorInfosOf(rows.map((r) => r.authorId));
+    const views = new Map(rows.map((r) => [r.id, this.toView(r, alive, authors)]));
 
     const threads = rows
       .filter((r) => r.parentId === null)
@@ -127,7 +127,7 @@ export class CommentsService {
       rootAuthorId: null,
     });
     await this.recordCommentCreate(fileId, userId, input.nodeId, mentions);
-    return { ...this.toView(row, this.aliveNodeIds(doc), await this.nicknamesOf([row.authorId])), replies: [] };
+    return { ...this.toView(row, this.aliveNodeIds(doc), await this.authorInfosOf([row.authorId])), replies: [] };
   }
 
   /** POST /api/files/:id/comments/:commentId/replies：楼中楼挂到楼主（reply-to-reply 拍平），
@@ -165,7 +165,7 @@ export class CommentsService {
       rootAuthorId: root.authorId,
     });
     await this.recordCommentCreate(fileId, userId, root.nodeId, mentions);
-    return this.toView(row, alive, await this.nicknamesOf([row.authorId]));
+    return this.toView(row, alive, await this.authorInfosOf([row.authorId]));
   }
 
   // ---- 内部 ---------------------------------------------------------------
@@ -211,7 +211,7 @@ export class CommentsService {
         fileId: input.fileId,
         title: input.title,
         commenterId: input.commenterId,
-        commenterName: (await this.nicknamesOf([input.commenterId])).get(input.commenterId) ?? '',
+        commenterName: (await this.authorInfosOf([input.commenterId])).get(input.commenterId)?.nickname ?? '',
         content: Array.from(input.content).slice(0, NOTIFY_CONTENT_MAX_CHARS).join(''),
         nodeId: input.nodeId,
       };
@@ -248,7 +248,7 @@ export class CommentsService {
   }
 
   /** 行 → 视图（唯一出口）。nodeDeleted 按当前存活集判定；mentions 反序列化容错。 */
-  private toView(row: CommentEntity, alive: Set<string>, nicknames: Map<string, string>): CommentView {
+  private toView(row: CommentEntity, alive: Set<string>, authors: Map<string, { nickname: string; avatar: string | null }>): CommentView {
     let mentions: string[] = [];
     if (row.mentions) {
       try {
@@ -264,7 +264,12 @@ export class CommentsService {
       nodeId: row.nodeId,
       nodeTextSnapshot: row.nodeTextSnapshot,
       nodeDeleted: !alive.has(row.nodeId),
-      author: { id: row.authorId, nickname: nicknames.get(row.authorId) ?? '' },
+      // avatar 一并下发（2026-10-11 头像功能）：评论面板作者头像数据源。
+      author: {
+        id: row.authorId,
+        nickname: authors.get(row.authorId)?.nickname ?? '',
+        avatar: authors.get(row.authorId)?.avatar ?? null,
+      },
       content: row.content,
       mentions,
       createdAt: row.createdAt.toISOString(),
@@ -284,11 +289,12 @@ export class CommentsService {
     return out;
   }
 
-  private async nicknamesOf(authorIds: string[]): Promise<Map<string, string>> {
+  /** 作者信息（昵称 + 头像；2026-10-11 头像功能）：评论视图 author 字段数据源。 */
+  private async authorInfosOf(authorIds: string[]): Promise<Map<string, { nickname: string; avatar: string | null }>> {
     const ids = [...new Set(authorIds)];
     if (ids.length === 0) return new Map();
-    const users = await this.userRepo.find({ where: { id: In(ids) }, select: ['id', 'nickname'] });
-    return new Map(users.map((u) => [u.id, u.nickname]));
+    const users = await this.userRepo.find({ where: { id: In(ids) }, select: ['id', 'nickname', 'avatarUrl'] });
+    return new Map(users.map((u) => [u.id, { nickname: u.nickname, avatar: u.avatarUrl ?? null }]));
   }
 
   /** docState(base64) → Y.Doc（docFromState 入口全量 normalize）；空态 → 空白模板

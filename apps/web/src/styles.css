@@ -118,6 +118,16 @@ button { cursor: pointer; }
 .settings-card h3 { margin: 0; font-size: 15px; }
 .settings-card input, .settings-card select { padding: 8px 10px; border: 1px solid #e5e6eb; border-radius: 6px; font-size: 14px; max-width: 320px; }
 .settings-card button.primary { align-self: flex-start; padding: 8px 16px; border: none; background: #3370ff; color: #fff; border-radius: 6px; cursor: pointer; }
+/* 头像区（2026-10-11）：当前头像 + 预置库横排 + 上传钮 */
+.avatar-section-row { display: flex; align-items: center; gap: 16px; }
+.avatar-presets { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.avatar-preset-btn { padding: 2px; border: 2px solid transparent; border-radius: 50%; background: none; cursor: pointer; line-height: 0; }
+.avatar-preset-btn:hover { border-color: #3370ff; }
+.avatar-preset-btn img { border-radius: 50%; display: block; }
+.avatar-upload-btn { padding: 6px 12px; border: 1px dashed #c9cdd4; border-radius: 6px; color: #4e5969; font-size: 13px; cursor: pointer; }
+.avatar-upload-btn:hover { border-color: #3370ff; color: #3370ff; }
+/* Avatar 图片态（圆裁剪；文字态 .tt-avatar 为 span 既有样式） */
+img.tt-avatar-img { border-radius: 50%; object-fit: cover; display: inline-block; flex: none; }
 .settings-hint { margin: 0; color: #86909c; font-size: 12px; }
 .pref-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 8px 0; border-bottom: 1px dashed #f0f1f2; cursor: pointer; }
 .pref-row:last-of-type { border-bottom: none; }

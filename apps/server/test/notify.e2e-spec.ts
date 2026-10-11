@@ -140,8 +140,8 @@ describe('站内通知（FR-CMT-005）', () => {
     expect(res.body).toHaveLength(2);
     expect(res.body).toEqual(
       expect.arrayContaining([
-        { userId: owner.id, nickname: owner.nickname, role: 'owner', isOwner: true },
-        { userId: collaborator.id, nickname: collaborator.nickname, role: 'editor', isOwner: false },
+        { userId: owner.id, nickname: owner.nickname, role: 'owner', isOwner: true, avatar: null },
+        { userId: collaborator.id, nickname: collaborator.nickname, role: 'editor', isOwner: false, avatar: null },
       ]),
     );
     // 协作者同口径可见（canAccess）；路人 404 不泄露存在性

@@ -114,7 +114,7 @@ describe('评论域（FR-CMT-001/003）', () => {
     expect(res.body.nodeId).toBe(nodeIdA);
     expect(res.body.nodeTextSnapshot).toBe('节点A'); // 创建时快照
     expect(res.body.nodeDeleted).toBe(false);
-    expect(res.body.author).toEqual({ id: collaborator.id, nickname: collaborator.nickname });
+    expect(res.body.author).toEqual({ id: collaborator.id, nickname: collaborator.nickname, avatar: null });
     expect(res.body.content).toBe('这个分支再想想');
     expect(res.body.mentions).toEqual([]);
     expect(Number.isNaN(Date.parse(res.body.createdAt))).toBe(false);

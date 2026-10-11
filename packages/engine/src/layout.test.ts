@@ -4,8 +4,9 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { layout } from './layout';
 import { THEMES } from './themes';
-import { TASK_ROW_H, taskRowContentWidth, type NodeTaskVisual } from './taskvisual';
+import { TASK_ROW_H, taskRowContentWidth, taskRowSlotsOf, type NodeTaskVisual } from './taskvisual';
 import type {
+  DocMetaLike,
   DocReader,
   LayoutResult,
   MeasureAdapter,
@@ -31,11 +32,17 @@ interface PlainNode {
   image?: { key: string; w: number; h: number } | null;
   task?: NodeTaskVisual;
   description?: string;
+  /** 自定义列值（2026-10-11 第二步：assignee 列拉平来源）。 */
+  custom?: Record<string, unknown>;
   /** 持久侧别（逆时针定侧）：透传 NodeSnapshotLike.side，仅 root 直接子级有语义。 */
   side?: string;
 }
 
-function makeReader(defs: Record<string, PlainNode>, summaries?: SummaryLike[]): DocReader {
+function makeReader(
+  defs: Record<string, PlainNode>,
+  summaries?: SummaryLike[],
+  meta?: Partial<DocMetaLike>,
+): DocReader {
   const snap = (id: string): NodeSnapshotLike | null => {
     const def = defs[id];
     if (!def) return null;
@@ -50,11 +57,12 @@ function makeReader(defs: Record<string, PlainNode>, summaries?: SummaryLike[]):
       image: def.image,
       task: def.task,
       description: def.description,
+      custom: def.custom,
       side: def.side,
     };
   };
   const reader: DocReader = {
-    getMeta: () => ({ title: '测试文档', structureType: 'mindmap', themeId: 'stub' }),
+    getMeta: () => ({ title: '测试文档', structureType: 'mindmap', themeId: 'stub', ...meta }),
     getNode: snap,
     childrenIds: (id) => snap(id)?.childIds ?? [],
   };
@@ -853,17 +861,40 @@ describe('layout 确定性与金样', () => {
     );
     // 叶（有任务信息）：h = 20 + TASK_ROW_H
     expect(boxOf(result, 't').h).toBe(20 + TASK_ROW_H);
-    // 父（有任务信息）：恒预留 Σ 进度槽 → 宽保底 负责人文字（'u1 +1' 5 字符 ×10px）
-    // + 百分比槽（2026-10-10 mindgrid 对齐：日期悬浮标签不占行宽）
-    const pRow = { ownerLabel: 'u1 +1', ownerUnassigned: false, showProgress: true };
+    // 父（有任务信息）：负责人头像化（2026-10-11）→ 左栏 2 枚头像槽 + 百分比槽
+    // （taskRowContentWidth 头像宽为常量槽；ownerLabel 恒 ''——宽度断言按槽位实算）
+    const pRow = taskRowSlotsOf({ owners: ['u1', 'u2'] }, true, 1)!;
     expect(boxOf(result, 'p').h).toBe(20 + TASK_ROW_H);
-    expect(boxOf(result, 'p').w).toBeGreaterThanOrEqual(
-      taskRowContentWidth(pRow, pRow.ownerLabel.length * 10),
-    );
+    expect(boxOf(result, 'p').w).toBeGreaterThanOrEqual(taskRowContentWidth(pRow, 0));
     // todo 全缺省：零槽位，几何不变（'纯' 10px + 2×12 = 34，被 minNodeWidth 40 抬底）
     expect(boxOf(result, 'q').h).toBe(20);
     expect(boxOf(result, 'q').w).toBe(Math.max(10 + theme.nodePaddingX * 2, theme.minNodeWidth));
     expect(boxOf(result, 'root').h).toBe(20);
+  });
+
+  // 人员进度列头像槽（2026-10-11 第二步，只增不改）：schema 中 assignee 列的
+  // custom 值拉平为头像槽计入任务行宽；无 assignee 数据节点几何逐字节不变。
+  it('人员进度头像槽：assignee 列条目计入任务行宽；无 custom 节点几何不变', () => {
+    const reader = makeReader(
+      {
+        root: { text: '根', children: ['w', 'n'] },
+        w: { text: '任', task: { status: 'doing' }, custom: { w1: { uB: 30, uC: 100 } } },
+        n: { text: '纯', task: { status: 'doing' } },
+      },
+      undefined,
+      { customColumns: [{ id: 'w1', name: '测试', type: 'assignee' }] },
+    );
+    const result = layout(reader, { structure: 'mindmap', theme, measure: stubAdapter, styleOf });
+    // 有人员进度：任务行宽 = 2 枚头像槽（AVATAR_SLOT×2 − 尾隙）+ 间距 + 百分比槽 + 2×pad
+    expect(boxOf(result, 'w').h).toBe(20 + TASK_ROW_H);
+    expect(boxOf(result, 'w').w).toBeGreaterThanOrEqual(
+      taskRowContentWidth(
+        { ownerLabel: '', ownerUnassigned: false, ownerAvatars: [], assigneeAvatars: [{ user: 'uB', name: 'uB', progress: 30, colId: 'w1' }, { user: 'uC', name: 'uC', progress: 100, colId: 'w1' }], showProgress: false },
+        0,
+      ),
+    );
+    // 同文档无 custom 节点：零头像槽，宽回归纯文本口径（几何不变）
+    expect(boxOf(result, 'n').w).toBe(Math.max(10 + theme.nodePaddingX * 2, theme.minNodeWidth));
   });
 
   // M7c-C1 描述行（只增不改）：有描述节点盒高加一行、descLine 随盒输出（单行省略）；

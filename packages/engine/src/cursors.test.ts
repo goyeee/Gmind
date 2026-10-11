@@ -181,6 +181,27 @@ describe('setCursors：初次渲染', () => {
     expect(cursorLayer()?.querySelectorAll('g.gm-remote-cursor')).toHaveLength(2);
   });
 
+  it('光标头像（2026-10-11 头像功能）：有 avatar 标签画圆形 <image>（gm-cursor-clip）并隐色点，无 avatar 回退色点', () => {
+    const api = createCursorLayer(scene);
+    // 无 avatar：色点显、image 隐（默认态，标签构建即二选一回填）
+    api.setCursors([{ userId: 'u1', name: '阿明', color: '#2563eb', nodeIds: ['b'] }], baseLayout().nodes);
+    let label = labelOf('u1');
+    expect(label?.querySelector<SVGCircleElement>('circle')?.style.display).not.toBe('none');
+    expect(label?.querySelector<SVGImageElement>('image.gm-remote-cursor-avatar')?.style.display).toBe('none');
+    expect(svg.querySelector('#gm-cursor-clip')).not.toBeNull();
+    // 有 avatar：image 显（href + 裁剪）并隐色点
+    api.setCursors(
+      [{ userId: 'u1', name: '阿明', color: '#2563eb', avatar: '/avatars/preset-1.svg', nodeIds: ['b'] }],
+      baseLayout().nodes,
+    );
+    label = labelOf('u1');
+    const img = label?.querySelector<SVGImageElement>('image.gm-remote-cursor-avatar');
+    expect(img?.style.display).not.toBe('none');
+    expect(img?.getAttribute('href')).toBe('/avatars/preset-1.svg');
+    expect(img?.getAttribute('clip-path')).toBe('url(#gm-cursor-clip)');
+    expect(label?.querySelector<SVGCircleElement>('circle')?.style.display).toBe('none');
+  });
+
   it('单用户多节点选中：多框但单标签（锚定第一个存在节点）', () => {
     createCursorLayer(scene).setCursors(
       [cursor('u1', '阿明', '#2563eb', ['a', 'c'])],

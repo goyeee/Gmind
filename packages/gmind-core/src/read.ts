@@ -223,6 +223,34 @@ function readCustom(raw: unknown): Record<string, unknown> | undefined {
   return Object.keys(out).length > 0 ? out : undefined;
 }
 
+/** 人员进度列拉平条目（done 门禁与 derive 聚合映射共用）：schema 中 type='assignee'
+ *  的各列值合并为 [{colId, colName, user, progress}]；空对象列/坏形状值跳过；
+ *  无 assignee 列时恒 []（门禁不生效）。纯读函数。 */
+export interface AssigneeEntry {
+  colId: string;
+  colName: string;
+  user: string;
+  progress: number;
+}
+
+export function assigneeEntriesOf(doc: Y.Doc, id: string): AssigneeEntry[] {
+  const schema = canonicalCustomColumns(doc.getMap('meta').get('customColumns')).filter(
+    (c) => c.type === 'assignee',
+  );
+  if (schema.length === 0) return [];
+  const custom = getNode(doc, id)?.custom;
+  if (!custom) return [];
+  const out: AssigneeEntry[] = [];
+  for (const col of schema) {
+    const raw = custom[col.id];
+    if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) continue;
+    for (const [user, progress] of Object.entries(raw as Record<string, unknown>)) {
+      if (typeof progress === 'number') out.push({ colId: col.id, colName: col.name, user, progress });
+    }
+  }
+  return out;
+}
+
 export function getNode(doc: Y.Doc, id: string): NodeSnapshot | null {
   const node = nodesMap(doc).get(id);
   if (!node) return null;

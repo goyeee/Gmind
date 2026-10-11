@@ -3,6 +3,9 @@ export type GmindCoreErrorCode =
   | 'TEXT_TOO_LONG' | 'NOTE_TOO_LONG' | 'DESCRIPTION_TOO_LONG' | 'INVALID_HREF' | 'INVALID_ICON_GROUP'
   | 'INVALID_ICON_VALUE' | 'INVALID_ICON_OVERFLOW'
   | 'TASK_INVALID_STATUS' | 'TASK_INVALID_PROGRESS' | 'TASK_INVALID_OWNERS' | 'TASK_INVALID_DATE'
+  /** done 门禁（人员进度列，需求方 2026-10-11 裁定）：标完成要求所有人员进度列
+   *  条目与标准负责人进度全 100%（文案两段式=原因+下一步）。 */
+  | 'TASK_DONE_GATE_BLOCKED'
   | 'SUMMARY_INVALID'
   | 'INVALID_NODE_SIDE' | 'SIDE_ONLY_ROOT_CHILD'
   /** 表格自定义列（doc 级 schema + 节点 custom 值）：schema 定义非法 / 超列上限 /

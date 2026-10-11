@@ -580,14 +580,16 @@ describe('renderScene：评论角标（FR-CMT-002）', () => {
 });
 
 describe('renderScene：清理与幂等', () => {
-  it('更新为空布局后无孤儿元素：三层清空，svg 只剩三层', () => {
+  it('更新为空布局后无孤儿元素：三层清空，svg 只剩三层 + 常驻头像裁剪 defs', () => {
     const scene = createScene(svg);
     renderScene(scene, makeInput(baseLayout(), baseData()));
     renderScene(scene, makeInput({ nodes: [], edges: [], collapsedCounts: new Map(), summaries: [], width: 0, height: 0 }, baseData()));
     expect(scene.nodesLayer.children).toHaveLength(0);
     expect(scene.edgesLayer.children).toHaveLength(0);
     expect(scene.summariesLayer.children).toHaveLength(0);
-    expect(svg.children).toHaveLength(3);
+    // 2026-10-11 头像图片：共享 clipPath defs 常驻（第 4 个直接子元素，协调层不动它）
+    expect(svg.children).toHaveLength(4);
+    expect(svg.querySelector('defs #gm-avatar-clip')).not.toBeNull();
   });
 
   it('重复渲染同一输入：DOM 结构与元素引用稳定（幂等）', () => {
@@ -769,26 +771,93 @@ describe('renderScene：任务视觉（M7c-C2）', () => {
     expect(barOf('b')?.getAttribute('fill')).toBe('#ff8800');
   });
 
-  it('负责人文字（2026-10-10 mindgrid 对齐）：footer 左栏首人显示名（ownerNames 优先、缺省回退 ID）；多人「+N」', () => {
+  it('负责人头像（2026-10-11 头像化裁定）：圆形文字头像逐人横排（首字符入圆；ownerNames 显示名优先、缺省回退 ID）；不再「+N」合并', () => {
     const data = baseData();
     data.set('b', { text: 'x', task: { owners: ['u1'], ownerNames: ['张三'] } });
     data.set('c', { text: 'y', task: { owners: ['u1', 'u2', 'u3'], ownerNames: ['张三', '李四', '王五'] } });
     renderScene(createScene(svg), taskInput(data));
-    const ownerOf = (id: string): SVGTextElement | null =>
-      nodeG(id)?.querySelector('text.gm-task-owner-text') ?? null;
-    expect(ownerOf('b')?.textContent).toBe('张三'); // ownerNames[0] 显示名优先
-    expect(ownerOf('b')?.getAttribute('fill')).toBe('#86909c'); // 常态灰字
-    expect(ownerOf('b')?.getAttribute('x')).toBe('6'); // 行左内边距 TASK_ROW_PAD
-    expect(ownerOf('b')?.getAttribute('text-anchor')).toBe('start');
-    expect(ownerOf('c')?.textContent).toBe('张三 +2'); // 多人「+N」（含首人共 3 人）
-    // ownerNames 缺省 → 回退 owners[0] ID 直显
+    const avatarsOf = (id: string): string[] =>
+      [...(nodeG(id)?.querySelectorAll('g.gm-task-owner-avatar') ?? [])].map(
+        (g) => g.querySelector('text')?.textContent ?? '',
+      );
+    expect(avatarsOf('b')).toEqual(['张']); // ownerNames[0] 显示名首字符优先
+    expect(avatarsOf('c')).toEqual(['张', '李', '王']); // 多人逐枚横排（头像化后不再 +N）
+    // ownerNames 缺省 → 回退 owners[0] ID 首字符
     data.set('b', { text: 'x', task: { owners: ['u9'] } });
     renderScene(createScene(svg), taskInput(data));
-    expect(nodeG('b')?.querySelector('text.gm-task-owner-text')?.textContent).toBe('u9');
+    expect(avatarsOf('b')).toEqual(['u']);
   });
 
-  it('未分配：depth≥2 且无负责人（有任务信息）→ 橙字「未分配」；depth<2 左栏不画', () => {
+  it('人员进度头像（2026-10-11 第二步）：圆形文字头像外缘弧形进度环，data 锚点可点；0 仅底环、100 满弧', () => {
     const data = baseData();
+    data.set('b', {
+      text: 'x',
+      task: {
+        owners: ['u1'],
+        ownerNames: ['张三'],
+        assignees: [
+          { user: 'uB', name: '李四', progress: 30, colId: 'w1' },
+          { user: 'uC', name: '王五', progress: 100, colId: 'w1' },
+          { user: 'uD', name: '赵六', progress: 0, colId: 'w1' },
+        ],
+      },
+    });
+    renderScene(createScene(svg), taskInput(data));
+    const groups = [...(nodeG('b')?.querySelectorAll('g.gm-task-assignee') ?? [])];
+    expect(groups).toHaveLength(3);
+    // data 锚点（宿主点击委托命中：user + 来源列）
+    expect(groups[0]?.getAttribute('data-assignee-user')).toBe('uB');
+    expect(groups[0]?.getAttribute('data-assignee-col')).toBe('w1');
+    // 首字符入圆
+    const initials = groups.map((g) => g.querySelector('text')?.textContent);
+    expect(initials).toEqual(['李', '王', '赵']);
+    // 进度环：30% 画弧 path；100% 画整圆 circle；0 不画进度（仅底环）
+    expect(groups[0]?.querySelector('path.gm-task-assignee-ring')).not.toBeNull(); // 30% 弧
+    expect(groups[1]?.querySelector('circle.gm-task-assignee-ring')).not.toBeNull(); // 100% 整圆
+    expect(groups[2]?.querySelector('.gm-task-assignee-ring')).toBeNull(); // 0% 无进度弧
+    expect(groups[2]?.querySelector('circle.gm-task-assignee-ring-bg')).not.toBeNull(); // 底环恒在
+    // 协调更新：30 → 80 换弧（签名差分重建）
+    data.set('b', {
+      text: 'x',
+      task: {
+        owners: ['u1'],
+        assignees: [{ user: 'uB', name: '李四', progress: 80, colId: 'w1' }],
+      },
+    });
+    renderScene(createScene(svg), taskInput(data));
+    const g2 = nodeG('b')?.querySelector('g.gm-task-assignee');
+    expect(g2?.getAttribute('data-assignee-user')).toBe('uB');
+    expect(g2?.querySelector('path.gm-task-assignee-ring')).not.toBeNull();
+  });
+
+  it('头像图片（2026-10-11 头像功能）：owner/assignee 有 avatar 画圆形裁剪 <image>（共享 clipPath），无 avatar 回退首字符 text', () => {
+    const data = baseData();
+    data.set('b', {
+      text: 'x',
+      task: {
+        owners: ['u1'],
+        ownerNames: ['张三'],
+        ownerAvatarUrls: ['/avatars/preset-2.svg'],
+        assignees: [
+          { user: 'uB', name: '李四', progress: 50, colId: 'w1', avatar: '/api/images/users/uB/a.png' },
+          { user: 'uC', name: '王五', progress: 0, colId: 'w1' }, // 无 avatar → 文字回退
+        ],
+      },
+    });
+    renderScene(createScene(svg), taskInput(data));
+    const owner = nodeG('b')?.querySelector('g.gm-task-owner-avatar');
+    const ownerImg = owner?.querySelector('image.gm-task-avatar-img');
+    expect(ownerImg?.getAttribute('href')).toBe('/avatars/preset-2.svg');
+    expect(ownerImg?.getAttribute('clip-path')).toBe('url(#gm-avatar-clip)');
+    expect(owner?.querySelector('text')).toBeNull(); // 有图不画首字符
+    const assignees = [...(nodeG('b')?.querySelectorAll('g.gm-task-assignee') ?? [])];
+    const withImg = assignees[0]?.querySelector('image.gm-task-avatar-img');
+    expect(withImg?.getAttribute('href')).toBe('/api/images/users/uB/a.png');
+    expect(assignees[1]?.querySelector('image.gm-task-avatar-img')).toBeNull(); // 无图回退
+    expect(assignees[1]?.querySelector('text')?.textContent).toBe('王');
+  });
+
+  it('未分配：depth≥2 且无负责人（有任务信息）→ 橙字「未分配」；depth<2 左栏不画', () => {    const data = baseData();
     data.set('b', { text: 'x', task: { status: 'doing' } }); // b depth=2、无负责人
     renderScene(createScene(svg), taskInput(data));
     const un = nodeG('b')?.querySelector('text.gm-task-owner-unassigned');
@@ -1023,7 +1092,7 @@ describe('renderScene：任务行签名缓存（remove→re-add 完整重建，�
     renderScene(scene, makeInput(baseLayout(), withTask));
     const row = nodeG('b')?.querySelector('.gm-task-row');
     expect(row).not.toBeNull();
-    expect(row?.querySelector('.gm-task-owner-text')).not.toBeNull(); // 行内元素重建（非空壳）
+    expect(row?.querySelector('.gm-task-progress')).not.toBeNull(); // 行内元素重建（非空壳）
     const chip = nodeG('b')?.querySelector('.gm-task-due-float');
     expect(chip).not.toBeNull();
     expect(chip?.querySelector('text')?.textContent).toContain('10-15');

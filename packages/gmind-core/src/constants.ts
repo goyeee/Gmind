@@ -274,8 +274,10 @@ export function isValidDateStr(s: string): boolean {
 /* ── 表格自定义列约束（doc 级 schema + 节点 custom 值；setCustomColumns /
  *    setCustomField 校验、read 防御读取、repair 收敛的口径单源）────────────── */
 
-/** 列类型目录（需求方原话「可以自定义文本、人员、进度、日期类型的列」）。 */
-export const CUSTOM_COLUMN_TYPES = ['text', 'person', 'progress', 'date'] as const;
+/** 列类型目录（需求方原话「可以自定义文本、人员、进度、日期类型的列」；
+ *  assignee=人员进度列，需求方 2026-10-11 裁定新增——区别于 person 纯名单，
+ *  每人自带进度并参与任务总进度聚合与 done 门禁）。 */
+export const CUSTOM_COLUMN_TYPES = ['text', 'person', 'progress', 'date', 'assignee'] as const;
 export type CustomColumnType = (typeof CUSTOM_COLUMN_TYPES)[number];
 
 /** doc 级 schema 上限：最多 20 列，超出写入口抛 CUSTOM_COLUMN_OVERFLOW。 */
@@ -298,8 +300,9 @@ export interface CustomColumnDef {
 }
 
 /** 节点 custom 值联合：text=string、person=用户ID string[]（复用任务 owners 的
- *  项长/去重/上限规则）、progress=0-100 整数、date='YYYY-MM-DD'；null=删键（无键）。 */
-export type CustomFieldValue = string | string[] | number | null;
+ *  项长/去重/上限规则）、progress=0-100 整数、date='YYYY-MM-DD'、assignee=
+ *  Record<用户ID, 0-100 整数>（人员进度列，空对象=列存在但无人）；null=删键（无键）。 */
+export type CustomFieldValue = string | string[] | number | Record<string, number> | null;
 
 /**
  * meta.customColumns 防御读取/规范化（纯函数）：read.getMeta 透传、operations 两个
@@ -328,9 +331,9 @@ export function canonicalCustomColumns(raw: unknown): CustomColumnDef[] {
 }
 
 /** custom 值与列类型的**形状**判定（repair 删键口径）：text=串、person=串数组、
- *  progress=0-100 整数、date=日历合法串。只判形状不做值域收敛（text 长度/person
- *  去重上限不在此处——写入口已归一，repair 保持「只删不改」的最小修复面，见
- *  planCustomRepair 头注）。 */
+ *  progress=0-100 整数、date=日历合法串、assignee=对象且每项值 0-100 整数。只判
+ *  形状不做值域收敛（text 长度/person 去重上限/assignee 项长不在此处——写入口已
+ *  归一，repair 保持「只删不改」的最小修复面，见 planCustomRepair 头注）。 */
 export function isValidCustomValueOfType(type: CustomColumnType, value: unknown): boolean {
   switch (type) {
     case 'text':
@@ -341,6 +344,15 @@ export function isValidCustomValueOfType(type: CustomColumnType, value: unknown)
       return typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= 100;
     case 'date':
       return typeof value === 'string' && isValidDateStr(value);
+    case 'assignee':
+      return (
+        typeof value === 'object' &&
+        value !== null &&
+        !Array.isArray(value) &&
+        Object.values(value as Record<string, unknown>).every(
+          (v) => typeof v === 'number' && Number.isInteger(v) && v >= 0 && v <= 100,
+        )
+      );
   }
 }
 

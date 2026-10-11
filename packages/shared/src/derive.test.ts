@@ -266,3 +266,64 @@ describe('日期工具（移植自 mindgrid types.ts，本地时区）', () => {
     expect(todayStr()).toBe(dayKey(Date.now()));
   });
 });
+
+describe('人员进度列聚合口径（需求方 2026-10-11 裁定）', () => {
+  // 叶子节点总进度 = 所有「带进度的人」拉平平均：标准负责人（owners 非空时
+  // task.progress 算一项）+ customAssignees 拉平条目（每人一项，多列由调用方拉平）；
+  // 无任何参与项时回落原口径（task.progress ?? 0）。有子级时仍按子级均值
+  // （人员列只在叶子生效）。done 门禁（全 100% 才能标完成）是 core 校验层职责，
+  // 不在本聚合函数内。
+  it('无人员列条目且 owners 非空 → 显示 task.progress（零回归）', () => {
+    const n = node('n', null, { task: task({ progress: 60, owners: ['a'] }) });
+    expect(effectiveProgress([n], 'n')).toBe(60);
+  });
+
+  it('owners 非空 + 条目 → 拉平平均（task.progress 一项 + 每人一项，Math.round）', () => {
+    // (60 + 80 + 30) / 3 = 56.67 → 57
+    const n = node('n', null, {
+      task: task({ progress: 60, owners: ['a'] }),
+      customAssignees: [
+        { user: 'b', progress: 80 },
+        { user: 'c', progress: 30 },
+      ],
+    });
+    expect(effectiveProgress([n], 'n')).toBe(57);
+  });
+
+  it('owners 空 + 条目 → 仅条目平均（task.progress 不参与）', () => {
+    const n = node('n', null, {
+      task: task({ progress: 60 }),
+      customAssignees: [
+        { user: 'b', progress: 80 },
+        { user: 'c', progress: 40 },
+      ],
+    });
+    expect(effectiveProgress([n], 'n')).toBe(60); // (80+40)/2
+  });
+
+  it('owners 空且无条目 → 回落 task.progress（零回归）', () => {
+    const n = node('n', null, { task: task({ progress: 60 }) });
+    expect(effectiveProgress([n], 'n')).toBe(60);
+  });
+
+  it('条目全 100 与低值混合 → 按人数平均（「全 100 才算完成」是门禁不是聚合）', () => {
+    const n = node('n', null, {
+      task: task({ progress: 100, owners: ['a'] }),
+      customAssignees: [
+        { user: 'b', progress: 100 },
+        { user: 'c', progress: 50 },
+      ],
+    });
+    expect(effectiveProgress([n], 'n')).toBe(83); // (100+100+50)/3 = 83.33 → 83
+  });
+
+  it('有子级时仍按子级均值；子的叶子值按新口径计算', () => {
+    const leaf = node('leaf', 'p', {
+      task: task({ progress: 60, owners: ['a'] }),
+      customAssignees: [{ user: 'b', progress: 100 }], // (60+100)/2 = 80
+    });
+    const other = node('other', 'p', { task: task({ progress: 20 }) });
+    const p = node('p', null);
+    expect(effectiveProgress([leaf, other, p], 'p')).toBe(50); // (80+20)/2
+  });
+});

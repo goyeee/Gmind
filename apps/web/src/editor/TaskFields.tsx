@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactElement, type CSSProperties } from 'react';
 import type * as Y from 'yjs';
 import {
+  assigneeEntriesOf,
   CUSTOM_TEXT_MAX_LENGTH,
   getNode,
   ROOT_NODE_ID,
@@ -45,6 +46,26 @@ export const STATUS_KEYS = Object.keys(STATUS_META) as TaskStatus[];
 export interface MemberOption {
   userId: string;
   nickname: string;
+  /** 头像地址（2026-10-11）：预置 `/avatars/preset-N.svg` 或上传键 `users/{id}/...`；
+   *  null/缺省 = 未自定义——Avatar 组件按 userId 稳定哈希自动分配 5 个预置之一。 */
+  avatar?: string | null;
+}
+
+/** 预置 SVG 头像库（5 个；public/avatars/preset-1..5.svg 直出）。 */
+export const PRESET_AVATAR_COUNT = 5;
+
+/** 未自定义头像时的稳定预置分配：userId 字符码和 %5（与成员色 colorForUser 同思路——
+ *  同一用户恒得同一预置，无需落库迁移存量用户）。 */
+export function presetAvatarOf(userId: string): string {
+  let hash = 0;
+  for (let i = 0; i < userId.length; i += 1) hash = (hash + userId.charCodeAt(i)) % 997;
+  return `/avatars/preset-${(hash % PRESET_AVATAR_COUNT) + 1}.svg`;
+}
+
+/** 头像地址 → <img> src：上传键经公开读取端点直出；预置路径原样（vite public）。 */
+export function avatarSrcOf(avatar: string | null | undefined, userId: string): string {
+  if (!avatar) return presetAvatarOf(userId);
+  return avatar.startsWith('users/') ? `/api/images/${avatar}` : avatar;
 }
 
 /** 选中态 chip 样式（企微浅底 + 主题色描边；同 TaskTable）。 */
@@ -52,17 +73,34 @@ export function chipActive(color: string): CSSProperties {
   return { color, borderColor: color, background: `${color}14` };
 }
 
-/** 成员头像：底色 = 成员色 15% 透明，字色 = 成员色（colorForUser 与 awareness 同源）。 */
+/** 成员头像（2026-10-11 头像功能）：有 avatar（或稳定预置分配）渲染圆形 <img>，
+ *  加载失败/无昵称回退首字符文字圆；底色 = 成员色 15% 透明（colorForUser 同源）。 */
 export function Avatar({
   userId,
   nickname,
+  avatar,
   size = 18,
 }: {
   userId: string;
   nickname: string;
+  avatar?: string | null;
   size?: number;
 }) {
   const color = colorForUser(userId);
+  const [imgFailed, setImgFailed] = useState(false);
+  const src = avatarSrcOf(avatar, userId);
+  if (!imgFailed) {
+    return (
+      <img
+        className="tt-avatar tt-avatar-img"
+        style={{ width: size, height: size }}
+        src={src}
+        alt={nickname}
+        title={nickname}
+        onError={() => setImgFailed(true)}
+      />
+    );
+  }
   return (
     <span
       className="tt-avatar"
@@ -92,7 +130,7 @@ export function useTaskMembers(
   const [collaborators, setCollaborators] = useState<MemberOption[]>([]);
   useEffect(() => {
     let alive = true;
-    api<Array<{ userId: string; nickname: string }>>(`/files/${fileId}/collaborators`)
+    api<Array<{ userId: string; nickname: string; avatar?: string | null }>>(`/files/${fileId}/collaborators`)
       .then((list) => {
         if (alive) setCollaborators(list);
       })
@@ -151,7 +189,7 @@ export function MemberMultiSelect({
             style={on ? chipActive(color) : undefined}
             onClick={() => onToggle(m.userId)}
           >
-            <Avatar userId={m.userId} nickname={m.nickname} size={14} />
+            <Avatar userId={m.userId} nickname={m.nickname} avatar={m.avatar} size={14} />
             {m.nickname}
           </button>
         );
@@ -176,6 +214,8 @@ export function deriveNodesOfDoc(doc: Y.Doc): DeriveNode[] {
   for (const [id, snap] of snaps) {
     if (id === ROOT_NODE_ID) continue;
     const parent = snap.parentId === '' ? root : snaps.get(snap.parentId);
+    // 人员进度列条目拉平（assigneeEntriesOf 纯读；无条目不出该键——快照零新增键面）
+    const assignees = assigneeEntriesOf(doc, id);
     out.push({
       id,
       parentId: snap.parentId === '' ? null : snap.parentId,
@@ -183,6 +223,9 @@ export function deriveNodesOfDoc(doc: Y.Doc): DeriveNode[] {
       collapsed: snap.collapsed,
       order: parent ? Math.max(0, parent.childIds.indexOf(id)) : 0,
       task: { ...snap.task, owners: [...snap.task.owners] },
+      ...(assignees.length > 0
+        ? { customAssignees: assignees.map(({ user, progress }) => ({ user, progress })) }
+        : {}),
     });
   }
   return out;
@@ -317,13 +360,135 @@ export function SmartDateInput({
 // ───────────────────── 自定义属性字段（表格自定义列消费侧，任务 2）─────────────────────
 
 /**
+ * 人员进度列编辑器（assignee 类型，需求方 2026-10-11 裁定的第 5 种自定义列）：
+ * 每人一行 [头像+昵称] [0-100 数字输入 %] [×移除]，底部成员多选添加（新人默认
+ * 进度 0——「选了人就必须有进度」，0 即未开始）。整值替换提交（与 core 整值 LWW
+ * 口径一致）：任何行变化构造新 Record 提交；移除到 0 人提交 null（删键）。
+ * 表格单元格弹层与任务面板（CustomFieldInput assignee 分支）共用本组件。
+ */
+export function AssigneeField({
+  value,
+  memberIndex,
+  onCommit,
+  testId,
+}: {
+  value: unknown;
+  memberIndex: Map<string, MemberOption>;
+  onCommit: (v: Record<string, number> | null) => void;
+  testId: string;
+}): ReactElement {
+  const entries: Array<[string, number]> =
+    typeof value === 'object' && value !== null && !Array.isArray(value)
+      ? (Object.entries(value as Record<string, unknown>) as Array<[string, unknown]>)
+          .filter((entry): entry is [string, number] => typeof entry[1] === 'number')
+          .map(([u, p]) => [u, p])
+      : [];
+  const asRecord = (): Record<string, number> => Object.fromEntries(entries);
+  const commit = (next: Record<string, number>): void => {
+    onCommit(Object.keys(next).length > 0 ? next : null);
+  };
+  return (
+    <span className="task-assignee" data-testid={testId}>
+      {entries.length === 0 && <span className="task-custom-placeholder">选择成员并更新进度</span>}
+      {entries.map(([user, progress]) => (
+        <span key={user} className="task-assignee-row" data-testid={`${testId}-row-${user}`}>
+          <Avatar userId={user} nickname={memberIndex.get(user)?.nickname ?? user.slice(0, 8)} avatar={memberIndex.get(user)?.avatar} />
+          <span className="task-assignee-name">
+            {memberIndex.get(user)?.nickname ?? user.slice(0, 8)}
+          </span>
+          <AssigneeProgressInput
+            testId={`${testId}-progress-${user}`}
+            progress={progress}
+            onCommit={(p) => commit({ ...asRecord(), [user]: p })}
+          />
+          <button
+            type="button"
+            className="task-assignee-remove"
+            data-testid={`${testId}-remove-${user}`}
+            title="移除该成员"
+            onClick={() => {
+              const next = asRecord();
+              delete next[user];
+              commit(next);
+            }}
+          >
+            ×
+          </button>
+        </span>
+      ))}
+      <MemberMultiSelect
+        memberIndex={memberIndex}
+        selected={entries.map(([u]) => u)}
+        onToggle={(userId) => {
+          const next = asRecord();
+          if (userId in next) delete next[userId];
+          else next[userId] = 0; // 新人默认进度 0
+          commit(next);
+        }}
+        testIdPrefix={`${testId}-member`}
+        emptyHint="暂无文档成员，邀请协作者后可指派"
+      />
+    </span>
+  );
+}
+
+/** 人员进度行内的 0-100 数字输入（失焦/Enter 提交、Esc 还原、钳制取整；
+ *  外部值同步守卫同 SmartDateInput——自身聚焦中不被远端值打断）。 */
+function AssigneeProgressInput({
+  progress,
+  onCommit,
+  testId,
+}: {
+  progress: number;
+  onCommit: (v: number) => void;
+  testId: string;
+}): ReactElement {
+  const [local, setLocal] = useState(String(progress));
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  useEffect(() => {
+    if (document.activeElement !== inputRef.current) setLocal(String(progress));
+  }, [progress]);
+  const commit = (): void => {
+    const n = Number(local);
+    const clamped = local.trim() !== '' && Number.isFinite(n) ? Math.min(100, Math.max(0, Math.round(n))) : progress;
+    if (clamped !== progress) onCommit(clamped);
+    setLocal(String(clamped));
+  };
+  return (
+    <span className="task-assignee-progress">
+      <input
+        ref={inputRef}
+        data-testid={testId}
+        value={local}
+        inputMode="numeric"
+        aria-label="进度（0-100）"
+        onChange={(e) => setLocal(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            (e.target as HTMLInputElement).blur();
+          } else if (e.key === 'Escape') {
+            e.preventDefault();
+            setLocal(String(progress)); // 还原
+            (e.target as HTMLInputElement).blur();
+          }
+        }}
+      />
+      %
+    </span>
+  );
+}
+
+/**
  * 自定义属性单字段输入（TaskPanel「自定义属性」小节；原与已删除的 TaskQuickCard
  * 共用，2026-10-10 起 TaskPanel 独用）：按列
  * 类型渲染同族编辑器——text=单行输入（placeholder「填写…」，空提交=清空删键）/
  * person=MemberMultiSelect（空值占位「选择成员」，清空到 0 人提交 null）/
  * progress=0-100 数字输入（Enter/失焦提交，钳 0-100 取整，空=清空）/
- * date=SmartDateInput。即改即存：onCommit 由调用方接 core setCustomField +
- * afterUserWrite，GmindCoreError 两段式文案在调用方 toast（TaskPanel write 模式）。
+ * date=SmartDateInput / assignee=AssigneeField（人员进度列）。即改即存：onCommit 由
+ * 调用方接 core setCustomField + afterUserWrite，GmindCoreError 两段式文案在调用方
+ * toast（TaskPanel write 模式）。
  *
  * 值口径：value 读自 getNode(doc,id).custom?.[colId]（防御归一后的 plain 值），
  * 非本列类型形状（crafted 遗留）按空值处理；未变更零提交（onCommit 内不重复写）。
@@ -338,7 +503,7 @@ export function CustomFieldInput({
   def: CustomColumnDef;
   value: unknown;
   memberIndex: Map<string, MemberOption>;
-  onCommit: (v: string | string[] | number | null) => void;
+  onCommit: (v: string | string[] | number | Record<string, number> | null) => void;
   testIdPrefix: string;
 }): ReactElement {
   const testId = `${testIdPrefix}-${def.id}`;
@@ -367,6 +532,10 @@ export function CustomFieldInput({
         </span>
       );
     }
+    case 'assignee':
+      return (
+        <AssigneeField value={value} memberIndex={memberIndex} onCommit={onCommit} testId={testId} />
+      );
     case 'progress':
       return (
         <CustomProgressField def={def} value={value} onCommit={onCommit} testId={testId} />

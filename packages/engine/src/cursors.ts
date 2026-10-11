@@ -70,6 +70,8 @@ export interface RemoteCursor {
   userId: string;
   name: string;
   color: string;
+  /** 头像图片 URL（2026-10-11 头像功能；宿主转换后传入）——标签色点升级为圆形头像。 */
+  avatar?: string;
   /** 该用户当前选中的节点 id 列表（首个存在节点为标签锚点）。 */
   nodeIds: string[];
 }
@@ -125,6 +127,21 @@ function labelTextWidth(name: string): number {
  */
 export function createCursorLayer(scene: SceneRoot): CursorLayer {
   scene.nodesLayer.querySelector('g.gm-cursors')?.remove();
+  // 光标头像圆形裁剪（2026-10-11）：共享 clipPath 注入 scene svg defs（与任务行
+  // gm-avatar-clip 并存；userSpaceOnUse 圆心原点，image 按标签局部坐标给 x/y）。
+  let defs = scene.svg.querySelector('defs');
+  if (!defs) {
+    defs = el('defs');
+    scene.svg.prepend(defs);
+  }
+  if (!defs.querySelector('#gm-cursor-clip')) {
+    // 圆心 = 标签头像位中心（所有光标标签几何同位，共享单一 clip）。
+    const clip = el('clipPath', { id: 'gm-cursor-clip', clipPathUnits: 'userSpaceOnUse' });
+    clip.appendChild(
+      el('circle', { cx: fmt(LABEL_CHIP_PAD_X + LABEL_DOT_R), cy: fmt(-LABEL_CHIP_H / 2), r: fmt(LABEL_DOT_R) }),
+    );
+    defs.appendChild(clip);
+  }
   const layer = el('g', { class: 'gm-cursors' });
   scene.nodesLayer.appendChild(layer);
 
@@ -183,6 +200,19 @@ export function createCursorLayer(scene: SceneRoot): CursorLayer {
         // 用户色胶囊衬底（2026-10-11：密集堆叠下与上方兄弟节点交叠也可读，
         // mindgrid 悬浮 chip 同款）：宽随昵称估算重算（见下方回填）。
         label.appendChild(el('rect', { x: '0', y: fmt(-LABEL_CHIP_H), height: fmt(LABEL_CHIP_H), rx: fmt(LABEL_CHIP_H / 2) }));
+        // 头像位（2026-10-11）：有 avatar 画圆形 <image>（共享 gm-cursor-clip），
+        // 缺省回填用户色圆点（下方回填逻辑二选一）。
+        label.appendChild(
+          el('image', {
+            class: 'gm-remote-cursor-avatar',
+            x: fmt(LABEL_CHIP_PAD_X),
+            y: fmt(-LABEL_CHIP_H / 2 - LABEL_DOT_R),
+            width: fmt(LABEL_DOT_R * 2),
+            height: fmt(LABEL_DOT_R * 2),
+            'clip-path': 'url(#gm-cursor-clip)',
+            preserveAspectRatio: 'xMidYMid slice',
+          }),
+        );
         label.appendChild(
           el('circle', { cx: fmt(LABEL_CHIP_PAD_X + LABEL_DOT_R), cy: fmt(-LABEL_CHIP_H / 2), r: LABEL_DOT_R }),
         );
@@ -200,6 +230,22 @@ export function createCursorLayer(scene: SceneRoot): CursorLayer {
       const anchor = anchored[0];
       if (anchor) {
         label.setAttribute('data-cursor-user', cursor.userId);
+        // 头像/色点二选一回填（image 与 circle 同位互斥显隐）。
+        const avatarImg = label.querySelector<SVGImageElement>('image.gm-remote-cursor-avatar');
+        const dot = label.querySelector<SVGCircleElement>('circle');
+        if (avatarImg) {
+          if (cursor.avatar) {
+            avatarImg.setAttribute('href', cursor.avatar);
+            avatarImg.style.display = '';
+            if (dot) dot.style.display = 'none';
+          } else {
+            avatarImg.style.display = 'none';
+            if (dot) {
+              dot.style.display = '';
+              dot.setAttribute('fill', cursor.color);
+            }
+          }
+        }
         // 胶囊宽 = 左内边距 + 色点直径 + 点文间距 + 文字估算宽 + 右内边距（免测量）
         const chipW = LABEL_CHIP_PAD_X * 2 + LABEL_DOT_R * 2 + LABEL_DOT_TEXT_GAP + labelTextWidth(cursor.name);
         const chip = label.querySelector('rect');
@@ -216,7 +262,6 @@ export function createCursorLayer(scene: SceneRoot): CursorLayer {
             ? anchor.x + LABEL_CORNER_INSET_X
             : anchor.x + anchor.w - chipW - LABEL_CORNER_INSET_X;
         label.setAttribute('transform', `translate(${fmt(tx)}, ${fmt(anchor.y - LABEL_OFFSET_Y)})`);
-        label.querySelector('circle')?.setAttribute('fill', cursor.color);
         const text = label.querySelector('text');
         if (text) {
           text.textContent = cursor.name;

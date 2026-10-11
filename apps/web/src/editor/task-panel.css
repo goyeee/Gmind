@@ -341,3 +341,55 @@
 .task-custom-progress {
   width: 72px;
 }
+/* 人员进度列（assignee，2026-10-11 裁定）：每人一行 [头像+昵称][进度输入][×]，
+ * 底部成员 chips 添加（新人默认进度 0）；行纵排、进度输入窄盒 */
+.task-assignee {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.task-assignee-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.task-assignee-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+.task-assignee-progress {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 12px;
+  color: #4e5969;
+}
+.task-assignee-progress input {
+  width: 44px;
+  padding: 2px 4px;
+  border: 1px solid #e5e6eb;
+  border-radius: 4px;
+  font-size: 12px;
+  text-align: right;
+}
+.task-assignee-progress input:focus {
+  border-color: #3370ff;
+}
+.task-assignee-remove {
+  border: none;
+  background: none;
+  color: #86909c;
+  cursor: pointer;
+  padding: 0 2px;
+  font-size: 13px;
+  line-height: 1;
+}
+.task-assignee-remove:hover {
+  color: #f53f3f;
+}

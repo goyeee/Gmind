@@ -1607,3 +1607,107 @@ describe('setTableView（表格视图持久态整体写入）', () => {
     expect(getMeta(doc).tableView!.hidden).toEqual(['owner']); // 视图态仍在
   });
 });
+
+describe('人员进度列（assignee 类型，需求方 2026-10-11 裁定）', () => {
+  /** 造数：含 assignee 列的 schema + 单节点。 */
+  function docWithAssignee(): { doc: Y.Doc; nodeId: string } {
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
+    setCustomColumns(doc, [
+      { id: 'w1', name: '前端配合', type: 'assignee' },
+      { id: 'w2', name: '测试', type: 'assignee' },
+    ]);
+    return { doc, nodeId: childrenIds(doc, ROOT_NODE_ID)[0]! };
+  }
+
+  it('合法写入读回（Record<userId, 0-100 整数>；空对象=列存在但无人）', () => {
+    const { doc, nodeId } = docWithAssignee();
+    setCustomField(doc, nodeId, 'w1', { uB: 80, uD: 100 });
+    setCustomField(doc, nodeId, 'w2', {});
+    expect(getNode(doc, nodeId)!.custom).toEqual({ w1: { uB: 80, uD: 100 }, w2: {} });
+  });
+
+  it('非法值拒绝：progress 越界/小数/非数、非对象、项数超限（校验先于事务，零变更）', () => {
+    const { doc, nodeId } = docWithAssignee();
+    expect(() => setCustomField(doc, nodeId, 'w1', { uB: 101 })).toThrow(/0-100/);
+    expect(() => setCustomField(doc, nodeId, 'w1', { uB: -1 })).toThrow(/0-100/);
+    expect(() => setCustomField(doc, nodeId, 'w1', { uB: 33.5 })).toThrow(/0-100/);
+    expect(() => setCustomField(doc, nodeId, 'w1', { uB: '80' } as unknown as Record<string, number>)).toThrow(/0-100/);
+    expect(() => setCustomField(doc, nodeId, 'w1', ['uB'] as unknown as Record<string, number>)).toThrow(/对象/);
+    expect(() =>
+      setCustomField(doc, nodeId, 'w1', Object.fromEntries(Array.from({ length: 21 }, (_, i) => [`u${i}`, 0]))),
+    ).toThrow(/最多/);
+    expect(getNode(doc, nodeId)!.custom).toBeUndefined(); // 全部零变更
+  });
+
+  it('null 删键幂等', () => {
+    const { doc, nodeId } = docWithAssignee();
+    setCustomField(doc, nodeId, 'w1', { uB: 80 });
+    setCustomField(doc, nodeId, 'w1', null);
+    expect(getNode(doc, nodeId)!.custom).toBeUndefined();
+    setCustomField(doc, nodeId, 'w1', undefined);
+    expect(getNode(doc, nodeId)!.custom).toBeUndefined();
+  });
+});
+
+describe('setNodeTask done 门禁（人员进度列，需求方 2026-10-11 裁定）', () => {
+  /** 造数：任务节点 + assignee 列；返回节点 id。 */
+  function docWithTask(): { doc: Y.Doc; nodeId: string } {
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
+    setCustomColumns(doc, [
+      { id: 'w1', name: '前端配合', type: 'assignee' },
+      { id: 'w2', name: '测试', type: 'assignee' },
+    ]);
+    return { doc, nodeId: childrenIds(doc, ROOT_NODE_ID)[0]! };
+  }
+
+  it('无 assignee 列：标 done 不受门禁影响（零回归）', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
+    const id = childrenIds(doc, ROOT_NODE_ID)[0]!;
+    setNodeTask(doc, id, { status: 'done' }, ORIGIN_USER);
+    expect(getNode(doc, id)!.task.status).toBe('done');
+  });
+
+  it('有列但列全空（未分配）：不拦截（空列不拖后腿）', () => {
+    const { doc, nodeId } = docWithTask();
+    setNodeTask(doc, nodeId, { status: 'done' }, ORIGIN_USER);
+    expect(getNode(doc, nodeId)!.task.status).toBe('done');
+  });
+
+  it('条目含 <100%：拦截抛错（两段式文案含列名与下一步），零变更', () => {
+    const { doc, nodeId } = docWithTask();
+    setCustomField(doc, nodeId, 'w1', { uB: 100 });
+    setCustomField(doc, nodeId, 'w2', { uC: 30 });
+    expect(() => setNodeTask(doc, nodeId, { status: 'done' }, ORIGIN_USER)).toThrow(/测试/);
+    expect(() => setNodeTask(doc, nodeId, { status: 'done' }, ORIGIN_USER)).toThrow(/100%/);
+    expect(getNode(doc, nodeId)!.task.status).toBe('todo'); // 零变更
+  });
+
+  it('条目全 100% 但标准负责人 progress<100（owners 非空）：拦截', () => {
+    const { doc, nodeId } = docWithTask();
+    setNodeTask(doc, nodeId, { owners: ['uA'], progress: 60 }, ORIGIN_USER);
+    setCustomField(doc, nodeId, 'w1', { uB: 100 });
+    setCustomField(doc, nodeId, 'w2', { uC: 100 });
+    expect(() => setNodeTask(doc, nodeId, { status: 'done' }, ORIGIN_USER)).toThrow(/负责人/);
+    expect(getNode(doc, nodeId)!.task.status).toBe('todo');
+  });
+
+  it('条目全 100% 且负责人 100%（或 owners 空）：放行并联动 doneDate/progress=100', () => {
+    const { doc, nodeId } = docWithTask();
+    setNodeTask(doc, nodeId, { owners: ['uA'], progress: 100 }, ORIGIN_USER);
+    setCustomField(doc, nodeId, 'w1', { uB: 100 });
+    setCustomField(doc, nodeId, 'w2', { uC: 100 });
+    setNodeTask(doc, nodeId, { status: 'done' }, ORIGIN_USER);
+    const task = getNode(doc, nodeId)!.task;
+    expect(task.status).toBe('done');
+    expect(task.progress).toBe(100);
+    expect(task.doneDate).toBeTruthy();
+  });
+
+  it('非 done 状态（doing/blocked）不触发门禁', () => {
+    const { doc, nodeId } = docWithTask();
+    setCustomField(doc, nodeId, 'w1', { uB: 30 });
+    setNodeTask(doc, nodeId, { status: 'doing' }, ORIGIN_USER);
+    expect(getNode(doc, nodeId)!.task.status).toBe('doing');
+  });
+});
+

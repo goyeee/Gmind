@@ -49,6 +49,21 @@ export class StorageService {
 
   /** 校验大小与魔数 → 生成键 files/{fileId}/{ulid}.{ext} → 落盘。尺寸 w/h 由前端读取，服务端不解析像素。 */
   async saveImage(fileId: string, data: Buffer): Promise<{ key: string }> {
+    return this.saveNamespacedImage('files', fileId, data);
+  }
+
+  /** 用户头像上传（2026-10-11）：键 users/{userId}/{ulid}.{ext}——读取端点公开
+   *  且无键前缀校验（local-disk 越界防御兜底），用户头像经此键直出 <img>。 */
+  async saveAvatar(userId: string, data: Buffer): Promise<{ key: string }> {
+    return this.saveNamespacedImage('users', userId, data);
+  }
+
+  /** 键契约 {namespace}/{ownerId}/{ulid}.{ext} 的公共实现（saveImage/saveAvatar 共用）。 */
+  private async saveNamespacedImage(
+    namespace: 'files' | 'users',
+    ownerId: string,
+    data: Buffer,
+  ): Promise<{ key: string }> {
     if (data.length > MAX_IMAGE_BYTES) {
       throw new PayloadTooLargeException(IMAGE_TOO_LARGE_MESSAGE);
     }
@@ -56,11 +71,11 @@ export class StorageService {
     if (!ext) {
       throw new UnsupportedMediaTypeException('不支持的图片格式');
     }
-    // fileId 直接拼进磁盘键，拒绝路径成分（路由参数已被 URL 解码，须防 '..%2F' 穿越）
-    if (!fileId || fileId.includes('/') || fileId.includes('\\') || fileId.includes('..')) {
+    // ownerId 直接拼进磁盘键，拒绝路径成分（路由参数已被 URL 解码，须防 '..%2F' 穿越）
+    if (!ownerId || ownerId.includes('/') || ownerId.includes('\\') || ownerId.includes('..')) {
       throw new BadRequestException('非法的文件标识');
     }
-    const key = `files/${fileId}/${ulid()}.${ext}`;
+    const key = `${namespace}/${ownerId}/${ulid()}.${ext}`;
     await this.provider.put(key, data, IMAGE_EXT_CONTENT_TYPES[ext]);
     return { key };
   }

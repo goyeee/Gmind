@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api, apiPost, ApiError } from '../api/client';
 import type { PresenceMember } from './collab';
+import { Avatar, type MemberOption } from './TaskFields';
 import './member-panel.css';
 
 /**
@@ -280,11 +281,16 @@ function formatJoinedAt(iso: string): string {
   return `${hh}:${mm}`;
 }
 
-function MemberRow({ member, isOwner }: { member: PresenceMember; isOwner: boolean }) {
+function MemberRow({ member, isOwner, memberIndex }: { member: PresenceMember; isOwner: boolean; memberIndex?: Map<string, MemberOption> }) {
   return (
     <li className="member-row" data-testid="member-row" data-member-user={member.userId}>
-      <span className="member-avatar" style={{ background: member.color }} aria-hidden>
-        {member.nickname.charAt(0) || '？'}
+      <span className="member-avatar" aria-hidden>
+        <Avatar
+          userId={member.userId}
+          nickname={member.nickname}
+          avatar={memberIndex?.get(member.userId)?.avatar}
+          size={22}
+        />
       </span>
       <span className="member-name">{member.nickname}</span>
       {isOwner && (
@@ -302,11 +308,13 @@ function MemberGroup({
   title,
   members,
   ownerUserId,
+  memberIndex,
 }: {
   testId: string;
   title: string;
   members: PresenceMember[];
   ownerUserId: string | null;
+  memberIndex?: Map<string, MemberOption>;
 }) {
   return (
     <section className="member-group" data-testid={testId}>
@@ -320,7 +328,7 @@ function MemberGroup({
         <ul className="member-rows">
           {members.map((m) => (
             // 键用 awareness clientID：同账号多标签页 userId 相同，键须按连接唯一
-            <MemberRow key={m.clientID} member={m} isOwner={m.userId === ownerUserId} />
+            <MemberRow key={m.clientID} member={m} isOwner={m.userId === ownerUserId} memberIndex={memberIndex} />
           ))}
         </ul>
       )}
@@ -328,7 +336,7 @@ function MemberGroup({
   );
 }
 
-export function MemberPanel({ members, ownerUserId, open, onClose, fileId, canInvite, showToast, focusUserId }: MemberPanelProps) {
+export function MemberPanel({ members, ownerUserId, open, onClose, fileId, canInvite, showToast, focusUserId, memberIndex }: MemberPanelProps & { memberIndex?: Map<string, MemberOption> }) {
   // 定位目标行（M6 T9 评审修复轮）：面板打开且带目标时，行 scrollIntoView 进视口
   // + 短时高亮（2s 后移除）。行元素按 data-member-user 直查（effect 在渲染后运行，
   // 面板 open 才有行）；目标行不存在（离线成员不在 presence）或目标为空时 no-op。
@@ -363,8 +371,8 @@ export function MemberPanel({ members, ownerUserId, open, onClose, fileId, canIn
           ×
         </button>
       </header>
-      <MemberGroup testId="member-group-editing" title="正在编辑" members={editing} ownerUserId={ownerUserId} />
-      <MemberGroup testId="member-group-viewing" title="正在查看" members={viewing} ownerUserId={ownerUserId} />
+      <MemberGroup testId="member-group-editing" title="正在编辑" members={editing} ownerUserId={ownerUserId} memberIndex={memberIndex} />
+      <MemberGroup testId="member-group-viewing" title="正在查看" members={viewing} ownerUserId={ownerUserId} memberIndex={memberIndex} />
       {canInvite && <InviteSection fileId={fileId} showToast={showToast} />}
     </aside>
   );

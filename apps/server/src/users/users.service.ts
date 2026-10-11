@@ -140,6 +140,21 @@ export class UsersService {
     return { emailOptOut: [...prefs.emailOptOut] };
   }
 
+  /** 头像设置（2026-10-11 需求方裁定）：白名单 = 5 个预置 SVG 路径或本人上传键
+   *  （users/{userId}/ 前缀，防指向他人对象）；其余 400 两段式。落列后返回视图。 */
+  async setAvatar(userId: string, avatarUrl: string): Promise<{ avatarUrl: string }> {
+    const user = await this.findById(userId);
+    if (!user) throw new BadRequestException('用户不存在，请重新登录');
+    const isPreset = /^\/avatars\/preset-[1-5]\.svg$/.test(avatarUrl);
+    const isOwnUpload = avatarUrl.startsWith(`users/${userId}/`) && !avatarUrl.slice(`users/${userId}/`.length).includes('/');
+    if (!isPreset && !isOwnUpload) {
+      throw new BadRequestException('头像地址非法，请从预置头像中选择或重新上传');
+    }
+    user.avatarUrl = avatarUrl;
+    await this.repo.save(user);
+    return { avatarUrl };
+  }
+
   /** 开发环境验证码核身（与登录 DevProvider 同源 env.DEV_SMS_CODE；失败文案按
    *  NFR-USE-005 给原因 + 下一步动作）。 */
   private verifyDevCode(code: string | undefined): void {

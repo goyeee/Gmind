@@ -33,8 +33,34 @@ export interface NodeTaskVisual {
    * 缺省/缺位回退 owners 原值（ID）。
    */
   ownerNames?: string[];
+  /**
+   * 负责人头像地址（2026-10-11 头像功能）：与 owners 同序（缺省/缺位 = 无自定义
+   * 头像，宿主 Avatar 组件按 userId 稳定分配预置 SVG）；上传键经公开 /api/images
+   * 端点直出，预置为 /avatars/preset-N.svg。
+   */
+  ownerAvatarUrls?: Array<string | null>;
   progress?: number;
   dueDate?: string | null;
+  /**
+   * 人员进度列头像（需求方 2026-10-11 裁定，第二步）：任务行内横向圆形头像 +
+   * 弧形进度；与自定义列 assignee 条目一一对应，name 为渲染期派生显示名
+   * （宿主成员目录映射，layout 通道可不填 name——槽位宽度只按数量计）。
+   */
+  assignees?: AssigneeVisual[];
+}
+
+/** 人员进度列头像条目（engine 内拉平自定义列 assignee 值后的渲染形态）。 */
+export interface AssigneeVisual {
+  /** 用户 ID（点击锚点 data-assignee-user）。 */
+  user: string;
+  /** 显示名（首字符入头像；缺省回退 ID 前 8 位）。 */
+  name: string;
+  /** 进度 0-100。 */
+  progress: number;
+  /** 来源列 id（写回 setCustomField 用；点击锚点 data-assignee-col）。 */
+  colId: string;
+  /** 头像地址（2026-10-11；缺省 = 无自定义，宿主稳定分配预置 SVG）。 */
+  avatar?: string | null;
 }
 
 /** 企微底色状态四色（todo 灰 / doing 蓝 / done 绿 / blocked 橙）。 */
@@ -51,8 +77,9 @@ export function taskStatusColor(status: string | undefined): string {
 }
 
 /**
- * 有无任务信息：status=todo 且无负责人/进度/日期 → 纯脑图节点
- * （零任务视觉零槽位，卡片保持现状）。
+ * 有无任务信息：status=todo 且无负责人/进度/日期/人员进度 → 纯脑图节点
+ * （零任务视觉零槽位，卡片保持现状）。人员进度列（2026-10-11 第二步）计入
+ * 门槛：仅有 assignee 数据的节点也产任务行（头像需要行位）。
  */
 export function hasTaskInfo(task: NodeTaskVisual | undefined): boolean {
   if (!task) return false;
@@ -60,7 +87,8 @@ export function hasTaskInfo(task: NodeTaskVisual | undefined): boolean {
     (task.status !== undefined && task.status !== 'todo') ||
     (task.owners?.length ?? 0) > 0 ||
     (task.progress ?? 0) > 0 ||
-    (task.dueDate ?? '') !== ''
+    (task.dueDate ?? '') !== '' ||
+    (task.assignees?.length ?? 0) > 0
   );
 }
 
@@ -94,16 +122,41 @@ export const TASK_META_FONT_SIZE = 11;
 /** 日期悬浮标签字号。 */
 export const TASK_DUE_FONT_SIZE = 10;
 
+/** 任务行头像几何（需求方 2026-10-11 裁定：负责人/人员进度圆形头像横排）：
+ *  头像为「文字圆」（首字符代替——头像图片功能后续迭代），人员进度头像外缘
+ *  叠弧形进度环（render 绘制；measure 只按槽宽计几何）。 */
+export const AVATAR_R = 7;
+/** 相邻头像槽距（直径 2R + 间隙 4）。 */
+export const AVATAR_SLOT = AVATAR_R * 2 + 4;
+/** 头像首字符字号。 */
+export const AVATAR_FONT_SIZE = 8;
+/** 头像圆底色（owner 与 assignee 同）。 */
+export const AVATAR_BG = '#eef0f2';
+/** 头像首字符色。 */
+export const AVATAR_FG = '#4e5969';
+/** 人员进度弧形进度环色（任务进度绿；100% 同）。 */
+export const AVATAR_PROGRESS_FG = '#34c724';
+/** 进度环底色（未走部分）。 */
+export const AVATAR_PROGRESS_BG = '#e5e6eb';
+
 /** 任务行槽位（layout→measure 透传；render 绘制判定同源）。 */
 export interface TaskRowSlots {
   /**
    * 负责人左栏最终文本（2026-10-10 mindgrid 对齐）：有负责人 = 首人显示名
    * （ownerNames[0] ?? owners[0]，多人追加「 +N」）；无负责人且 depth≥2 = 「未分配」；
    * 其余 = ''（左栏不画）。
+   * 2026-10-11 负责人头像化后本字段语义收窄：ownerAvatars 非空时恒 ''（头像取代
+   * 文字），仅保留「未分配」橙字用途。
    */
   ownerLabel: string;
   /** 「未分配」橙字态（depth≥2 无负责人）。 */
   ownerUnassigned: boolean;
+  /** 负责人头像显示名组（与 owners 同序；缺省/空 = 不画头像）。 */
+  ownerAvatars?: string[];
+  /** 负责人头像地址组（与 ownerAvatars 同序；2026-10-11 头像图片——缺省回退文字首字符）。 */
+  ownerAvatarUrls?: Array<string | null>;
+  /** 人员进度头像组（横向排于负责人头像之后；缺省/空 = 不画）。 */
+  assigneeAvatars?: AssigneeVisual[];
   /** 是否显示进度（父节点恒显示 Σ 汇总；叶子仅 progress>0）。 */
   showProgress: boolean;
 }
@@ -131,7 +184,8 @@ export function ownerLabelOf(
 /**
  * 由节点任务字段算任务行槽位（无任务信息 → undefined，零槽位）。
  * isParent = 有无存活子节点（父节点恒显示 Σ 汇总，含 0%）；depth 供「未分配」
- * 判定（depth≥2 才显示，mindgrid 口径）。
+ * 判定（depth≥2 才显示，mindgrid 口径）。负责人头像化（2026-10-11）：
+ * ownerAvatars=显示名组（左缘横排），「未分配」橙字仅在无负责人时保留。
  */
 export function taskRowSlotsOf(
   task: NodeTaskVisual | undefined,
@@ -140,21 +194,33 @@ export function taskRowSlotsOf(
 ): TaskRowSlots | undefined {
   if (!task || !hasTaskInfo(task)) return undefined;
   const { label, unassigned } = ownerLabelOf(task, depth);
+  const owners = (task.owners ?? []).filter((o) => o !== '');
+  const ownerAvatars = owners.map((o, i) => task.ownerNames?.[i] ?? o);
+  const assigneeAvatars = task.assignees ?? [];
+  // 头像（负责人/人员进度）存在时「未分配」文字让位——头像已表达有人参与，
+  // 且避免文字宽与头像串联的 render 侧测量耦合（render 无文字测量 adapter）。
+  const showAvatars = ownerAvatars.length > 0 || assigneeAvatars.length > 0;
   return {
-    ownerLabel: label,
-    ownerUnassigned: unassigned,
+    ownerLabel: showAvatars ? '' : label,
+    ownerUnassigned: unassigned && !showAvatars,
+    ownerAvatars,
+    ownerAvatarUrls: task.ownerAvatarUrls ?? [],
+    assigneeAvatars,
     showProgress: isParent || (task.progress ?? 0) > 0,
   };
 }
 
 /**
  * 任务行内容总宽（盒宽下限；render 绘制槽位同源）：
- * 左=负责人文字（ownerLabelW 由测量侧 adapter 实测传入——文字宽度不可常量估算），
+ * 左=「未分配」文字（ownerLabelW 由测量侧 adapter 实测传入——文字宽度不可常量
+ * 估算）+ 负责人/人员进度头像槽（常量槽宽 AVATAR_SLOT，头像直径与间距固定），
  * 右=百分比槽；相邻项间距 TASK_GAP。日期为盒外悬浮标签，不占行宽（2026-10-10 起）。
  */
 export function taskRowContentWidth(s: TaskRowSlots, ownerLabelW: number): number {
   let w = 0;
   if (s.ownerLabel !== '') w += ownerLabelW;
+  const avatars = (s.ownerAvatars?.length ?? 0) + (s.assigneeAvatars?.length ?? 0);
+  if (avatars > 0) w += (w > 0 ? TASK_GAP : 0) + avatars * AVATAR_SLOT - (AVATAR_SLOT - AVATAR_R * 2);
   if (s.showProgress) w += (w > 0 ? TASK_GAP : 0) + TASK_PROGRESS_W;
   return w > 0 ? w + TASK_ROW_PAD * 2 : 0;
 }
@@ -174,6 +240,10 @@ function buildDeriveNodes(
   const deriveNodes: DeriveNode[] = [];
   for (const [id, v] of nodeData) {
     const t = v.task;
+    // 人员进度列条目拉平（2026-10-11 Σ 口径修复）：engine 的 effectiveProgress
+    // 与 TaskTable/任务面板同源（shared 单一实现）——此前缺此字段，节点任务行
+    // 百分比与表格合成进度不一致。
+    const customAssignees = (t?.assignees ?? []).map(({ user, progress }) => ({ user, progress }));
     deriveNodes.push({
       id,
       parentId: parentById.get(id) ?? null,
@@ -188,6 +258,7 @@ function buildDeriveNodes(
             owners: t.owners ?? [],
           }
         : undefined,
+      ...(customAssignees.length > 0 ? { customAssignees } : {}),
     });
   }
   return deriveNodes;
@@ -229,5 +300,39 @@ export function taskOverdueIds(
 export function taskParentIds(layoutNodes: Array<{ id: string; parentId?: string }>): Set<string> {
   const out = new Set<string>();
   for (const b of layoutNodes) if (b.parentId) out.add(b.parentId);
+  return out;
+}
+
+/** meta.customColumns（raw）→ assignee 列 id 集（layout 通道；防御读：非数组/坏
+ *  形状容忍，与 core canonicalCustomColumns 宽松口径对齐——engine 不 import core）。 */
+export function assigneeColumnIdsOf(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  const out: string[] = [];
+  for (const item of raw) {
+    if (item === null || typeof item !== 'object') continue;
+    const { id, type } = item as Record<string, unknown>;
+    if (typeof id === 'string' && id !== '' && type === 'assignee') out.push(id);
+  }
+  return out;
+}
+
+/** 从节点 custom 值拉平人员进度列条目（layout 通道，2026-10-11 第二步）：按
+ *  assignee 列 id 集顺序遍历、列内按对象键序；坏形状值跳过（name 先回退 ID 前 8
+ *  位——layout 槽位宽度只按数量计，显示名由 render 通道的宿主成员目录派生覆盖）。 */
+export function flattenAssigneeEntries(
+  custom: Record<string, unknown> | undefined,
+  assigneeColIds: string[],
+): AssigneeVisual[] {
+  if (!custom || assigneeColIds.length === 0) return [];
+  const out: AssigneeVisual[] = [];
+  for (const colId of assigneeColIds) {
+    const raw = custom[colId];
+    if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) continue;
+    for (const [user, progress] of Object.entries(raw as Record<string, unknown>)) {
+      if (typeof progress === 'number' && Number.isInteger(progress) && progress >= 0 && progress <= 100) {
+        out.push({ user, name: user.slice(0, 8), progress, colId });
+      }
+    }
+  }
   return out;
 }

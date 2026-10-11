@@ -68,6 +68,13 @@ import {
   TASK_ROW_H,
   TASK_ROW_PAD,
   TASK_UNASSIGNED_FG,
+  AVATAR_BG,
+  AVATAR_FG,
+  AVATAR_FONT_SIZE,
+  AVATAR_PROGRESS_BG,
+  AVATAR_PROGRESS_FG,
+  AVATAR_R,
+  AVATAR_SLOT,
   hasTaskInfo,
   taskOverdueIds,
   taskParentIds,
@@ -283,6 +290,13 @@ export interface SceneInput {
  */
 export function createScene(svg: SVGSVGElement): SceneRoot {
   while (svg.firstChild) svg.firstChild.remove();
+  // 头像圆形裁剪（2026-10-11 头像图片）：共享 clipPath（userSpaceOnUse 圆心原点，
+  // 使用者按 translate(cx,cy) 就位）——每场景一次注入，头像 image 统一引用。
+  const defs = el('defs');
+  const clip = el('clipPath', { id: 'gm-avatar-clip', clipPathUnits: 'userSpaceOnUse' });
+  clip.appendChild(el('circle', { r: fmt(AVATAR_R) }));
+  defs.appendChild(clip);
+  svg.appendChild(defs);
   const edgesLayer = el('g', { class: 'gm-edges' });
   const summariesLayer = el('g', { class: 'gm-summaries' });
   const nodesLayer = el('g', { class: 'gm-nodes' });
@@ -341,6 +355,110 @@ function markerDefsOf(icons: Record<string, unknown> | undefined): Array<{ def: 
 }
 
 /** 折叠徽标位移：right→盒右、left→盒左、down→盒下（由 box.side 确定性决定）。 */
+/** 弧形进度环路径（12 点起顺时针 pct%；调用方特判 0=不画、100=整圆——360° 弧
+ *  起点终点重合在部分渲染器上不闭合）。圆心原点，由调用方 translate 就位。 */
+function ringArcPath(r: number, pct: number): string {
+  const angle = (Math.min(100, Math.max(0, pct)) / 100) * Math.PI * 2;
+  const x2 = r * Math.sin(angle);
+  const y2 = -r * Math.cos(angle);
+  const large = angle > Math.PI ? 1 : 0;
+  return `M 0 ${fmt(-r)} A ${fmt(r)} ${fmt(r)} 0 ${large} 1 ${fmt(x2)} ${fmt(y2)}`;
+}
+
+/**
+ * 任务行圆形头像（2026-10-11 负责人/人员进度头像化；头像图片迭代）：圆底 + 显示名
+ * 首字符；avatar 有值时以 <image> 圆形裁剪叠于底色圆上（首字符 text 不画——图片
+ * 即头像；加载失败由宿主 Avatar 组件级兜底，引擎不挂事件）。
+ * progress 非 null 为人员进度头像——外缘叠弧形进度环。
+ * data 属性（data-assignee-user/col）由宿主点击委托命中（快速弹选盘改进度）。
+ */
+function avatarGroup(
+  cx: number,
+  cy: number,
+  name: string,
+  progress: number | null,
+  data: Record<string, string> | null,
+  avatar?: string | null,
+): SVGGElement {
+  const g = el('g', {
+    class: progress !== null ? 'gm-task-assignee' : 'gm-task-owner-avatar',
+    ...(data ?? {}),
+  });
+  if (progress !== null) {
+    const ringR = AVATAR_R + 1.5;
+    g.appendChild(
+      el('circle', {
+        class: 'gm-task-assignee-ring-bg',
+        cx: fmt(cx),
+        cy: fmt(cy),
+        r: fmt(ringR),
+        fill: 'none',
+        stroke: AVATAR_PROGRESS_BG,
+        'stroke-width': '1.5',
+      }),
+    );
+    if (progress >= 100) {
+      g.appendChild(
+        el('circle', {
+          class: 'gm-task-assignee-ring',
+          cx: fmt(cx),
+          cy: fmt(cy),
+          r: fmt(ringR),
+          fill: 'none',
+          stroke: AVATAR_PROGRESS_FG,
+          'stroke-width': '1.5',
+        }),
+      );
+    } else if (progress > 0) {
+      g.appendChild(
+        el('path', {
+          class: 'gm-task-assignee-ring',
+          d: ringArcPath(ringR, progress),
+          transform: `translate(${fmt(cx)} ${fmt(cy)})`,
+          fill: 'none',
+          stroke: AVATAR_PROGRESS_FG,
+          'stroke-width': '1.5',
+        }),
+      );
+    }
+  }
+  g.appendChild(
+    el('circle', {
+      class: 'gm-task-avatar',
+      cx: fmt(cx),
+      cy: fmt(cy),
+      r: fmt(AVATAR_R),
+      fill: AVATAR_BG,
+    }),
+  );
+  if (avatar) {
+    g.appendChild(
+      el('image', {
+        class: 'gm-task-avatar-img',
+        x: fmt(-AVATAR_R),
+        y: fmt(-AVATAR_R),
+        width: fmt(AVATAR_R * 2),
+        height: fmt(AVATAR_R * 2),
+        href: avatar,
+        'clip-path': 'url(#gm-avatar-clip)',
+        preserveAspectRatio: 'xMidYMid slice',
+        transform: `translate(${fmt(cx)} ${fmt(cy)})`, // 圆心就位：clip 圆心(0,0)随 user space 平移
+      }),
+    );
+  } else {
+    const initial = el('text', {
+      x: fmt(cx),
+      y: fmt(cy + AVATAR_FONT_SIZE * 0.35),
+      'text-anchor': 'middle',
+      'font-size': fmt(AVATAR_FONT_SIZE),
+      fill: AVATAR_FG,
+    });
+    initial.textContent = name.trim()[0] ?? '?';
+    g.appendChild(initial);
+  }
+  return g;
+}
+
 function badgeTransform(b: NodeBox): string {
   switch (b.side) {
     case 'left':
@@ -630,14 +748,21 @@ function applyNode(
     entry.taskBar.setAttribute('fill', taskStatusColor(task?.status));
   }
 
-  // 任务信息行（2026-10-10 mindgrid 全量对齐）：盒底 TASK_ROW_H footer 条带，
-  // 左=负责人文字（首人显示名、多人「+N」；无负责人且 depth≥2 橙字「未分配」）、
-  // 右=有效进度（叶=自身、父=Σ 直属子级均值；逾期红字）。签名（任务数据+盒几何）
-  // 不变则整行元素引用保持（重建为无状态绘制，代价极小——同标记行策略）。
-  // 简洁模式恒隐藏（紧凑盒 = 纯标题 + 标记；内联进度 2026-10-11 裁定退役）。
+  // 任务信息行（2026-10-10 mindgrid 全量对齐；2026-10-11 负责人/人员进度头像化）：
+  // 盒底 TASK_ROW_H footer 条带，左→右 = 「未分配」橙字（无头像时）→ 负责人圆形
+  // 文字头像组 → 人员进度圆形文字头像组（外缘弧形进度环，data-assignee-user/col
+  // 锚点供宿主点击弹选盘）→ 右=有效进度（叶=合成口径含人员列、父=Σ；逾期红字）。
+  // 签名（任务数据+盒几何）不变则整行元素引用保持（重建为无状态绘制，代价极小
+  // ——同标记行策略）。简洁模式恒隐藏（紧凑盒 = 纯标题 + 标记）。
   const ownerLabel = taskSlots?.ownerLabel ?? '';
+  const ownerSig = (taskSlots?.ownerAvatars ?? [])
+    .map((n, i) => `${n}·${taskSlots?.ownerAvatarUrls?.[i] ?? ''}`)
+    .join('·');
+  const assigneeSig = (taskSlots?.assigneeAvatars ?? [])
+    .map((a) => `${a.user}:${a.progress}:${a.avatar ?? ''}`)
+    .join(',');
   const taskRowSig = showTaskStrips
-    ? `${ownerLabel}|${taskSlots?.ownerUnassigned ? 1 : 0}|${taskSlots?.showProgress ? 1 : 0}|${taskCtx.progress}|${taskCtx.overdue ? 1 : 0}|${fmt(b.w)}x${fmt(b.h)}`
+    ? `${ownerLabel}|${ownerSig}|${assigneeSig}|${taskSlots?.ownerUnassigned ? 1 : 0}|${taskSlots?.showProgress ? 1 : 0}|${taskCtx.progress}|${taskCtx.overdue ? 1 : 0}|${fmt(b.w)}x${fmt(b.h)}`
     : '';
   const prevTaskRow = entry.taskRow;
   entry.taskRow = syncOptional(entry.taskRow, showTaskStrips, g, () => el('g', { class: 'gm-task-row' }));
@@ -651,12 +776,12 @@ function applyNode(
     entry.lastTaskSig = taskRowSig;
     const rowY = b.h - TASK_ROW_H / 2;
     const parts: SVGElement[] = [];
-    // 负责人左栏（行左缘起，文字名取代色点——2026-10-10 mindgrid 对齐）：
-    // 常态灰字；「未分配」橙字（depth≥2 无负责人，ownerUnassigned 态）。
+    // 左→右游标：「未分配」文字（无头像时）→ 头像组；右侧 % 恒右对齐不占游标。
+    let cursorX = TASK_ROW_PAD;
     if (ownerLabel !== '') {
       const ownerText = el('text', {
         class: taskSlots?.ownerUnassigned ? 'gm-task-owner-unassigned' : 'gm-task-owner-text',
-        x: fmt(TASK_ROW_PAD),
+        x: fmt(cursorX),
         y: fmt(rowY + TASK_META_FONT_SIZE * 0.35),
         'text-anchor': 'start',
         'font-size': fmt(TASK_META_FONT_SIZE),
@@ -664,9 +789,29 @@ function applyNode(
       });
       ownerText.textContent = ownerLabel;
       parts.push(ownerText);
+      cursorX += ownerLabel.length * TASK_META_FONT_SIZE; // 仅用于与后续串联的近似推进（测量侧保证盒宽）
     }
-    // 有效进度右栏（行右缘右对齐）：叶=自身、父=Σ 直属子级均值（taskCtx.progress
-    // 已按 shared 口径聚合）；逾期红字（mindgrid footer 同款）。
+    // 负责人圆形头像组（2026-10-11 头像化；有 avatar 画图片、缺省文字首字符）。
+    {
+      const ownerUrls = taskSlots?.ownerAvatarUrls ?? [];
+      const ownerNames = taskSlots?.ownerAvatars ?? [];
+      for (let i = 0; i < ownerNames.length; i += 1) {
+        parts.push(avatarGroup(cursorX + AVATAR_R, rowY, ownerNames[i]!, null, null, ownerUrls[i] ?? null));
+        cursorX += AVATAR_SLOT;
+      }
+    }
+    // 人员进度圆形头像组（外缘弧形进度环 + 点击锚点；进度 0 仅圆环底、100 满弧）。
+    for (const a of taskSlots?.assigneeAvatars ?? []) {
+      parts.push(
+        avatarGroup(cursorX + AVATAR_R, rowY, a.name, a.progress, {
+          'data-assignee-user': a.user,
+          'data-assignee-col': a.colId,
+        }, a.avatar ?? null),
+      );
+      cursorX += AVATAR_SLOT;
+    }
+    // 有效进度右栏（行右缘右对齐）：叶=合成有效进度（taskCtx.progress 已按 shared
+    // 人员进度列口径聚合）；逾期红字（mindgrid footer 同款）。
     if (taskSlots?.showProgress) {
       const progressText = el('text', {
         class: 'gm-task-progress',

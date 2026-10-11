@@ -251,6 +251,11 @@ export interface DocMetaLike {
   title: string;
   structureType: string;
   themeId: string;
+  /**
+   * 自定义列 schema（2026-10-11 第二步只增不改）：布局经它识别 assignee 列并从
+   * 节点 custom 值拉平人员进度头像槽位；缺省/坏形状按无人员进度列处理。
+   */
+  customColumns?: unknown;
 }
 
 /** 节点快照结构子集（core 的 NodeSnapshot 结构兼容；按需只增不改）。 */
@@ -285,6 +290,11 @@ export interface NodeSnapshotLike {
    * 任务行槽位；缺省（纯脑图节点）零槽位，几何与现状一致。
    */
   task?: NodeTaskVisual;
+  /**
+   * 自定义列值（人员进度列，2026-10-11 第二步只增不改）：布局经它拉平 assignee
+   * 条目计算任务行头像槽位（头像宽为常量槽）；缺省零参与，几何与现状一致。
+   */
+  custom?: Record<string, unknown>;
   /**
    * 持久化侧别（需求方 2026-09-30 逆时针定侧规则，core NodeSnapshot.side 结构兼容）：
    * 'left'|'right'，仅 root 直接子级在 mindmap 结构下被布局消费（优先于文档序计数

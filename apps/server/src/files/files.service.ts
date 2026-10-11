@@ -331,16 +331,18 @@ export class FilesService {
    *  [{userId, nickname, role, isOwner}]——owner 首位（isOwner/role 'owner'）+ 协作者行；
    *  mention 候选即本列表的 userId 集（CommentsService.filterMentions 的 allowed 同源）。
    *  canAccess 口径（owner 或协作者可读），缺失/已删/无权限统一 404。 */
-  async listCollaborators(userId: string, fileId: string): Promise<Array<{ userId: string; nickname: string; role: string; isOwner: boolean }>> {
+  async listCollaborators(userId: string, fileId: string): Promise<Array<{ userId: string; nickname: string; role: string; isOwner: boolean; avatar: string | null }>> {
     const file = await this.findAliveOr404(userId, fileId);
     const rows = await this.collabRepo.find({ where: { fileId: file.id } });
-    const users = await this.userRepo.find({ where: { id: In([file.ownerUserId, ...rows.map((r) => r.userId)]) }, select: ['id', 'nickname'] });
+    // avatar_url 一并下发（2026-10-11 头像功能）：成员目录数据源，编辑器全量头像位消费。
+    const users = await this.userRepo.find({ where: { id: In([file.ownerUserId, ...rows.map((r) => r.userId)]) }, select: ['id', 'nickname', 'avatarUrl'] });
     const nicknames = new Map(users.map((u) => [u.id, u.nickname]));
-    const owner = { userId: file.ownerUserId, nickname: nicknames.get(file.ownerUserId) ?? '', role: 'owner', isOwner: true };
+    const avatars = new Map(users.map((u) => [u.id, u.avatarUrl]));
+    const owner = { userId: file.ownerUserId, nickname: nicknames.get(file.ownerUserId) ?? '', role: 'owner', isOwner: true, avatar: avatars.get(file.ownerUserId) ?? null };
     // owner 拥有 file_collaborators 行的脏数据防御：去重（owner 条目已覆盖其身份）
     const collaborators = rows
       .filter((r) => r.userId !== file.ownerUserId)
-      .map((r) => ({ userId: r.userId, nickname: nicknames.get(r.userId) ?? '', role: r.role, isOwner: false }));
+      .map((r) => ({ userId: r.userId, nickname: nicknames.get(r.userId) ?? '', role: r.role, isOwner: false, avatar: avatars.get(r.userId) ?? null }));
     return [owner, ...collaborators];
   }
 

@@ -1,6 +1,7 @@
 import { HocuspocusProvider } from '@hocuspocus/provider';
 import { attachRemoteNormalization, docFromState, docToState, ROOT_NODE_ID } from '@gmind/core';
 import { colorForUser, type RemoteCursor } from '@gmind/engine';
+import { avatarSrcOf } from './TaskFields';
 import * as Y from 'yjs';
 import { IndexeddbPersistence } from 'y-indexeddb';
 import { api, getToken } from '../api/client';
@@ -49,6 +50,8 @@ export interface PresenceUser {
   userId: string;
   nickname: string;
   color: string;
+  /** 头像地址（2026-10-11；广播原始值，消费侧经 avatarSrcOf 转 URL）。 */
+  avatar?: string | null;
 }
 
 /** 在线成员（awareness states → 成员面板数据面；含自己）。 */
@@ -85,10 +88,11 @@ export interface CollabHandle {
   setSelection(nodeIds: string[]): void;
 }
 
-/** GET /api/users/me 响应（collab 只消费 id/nickname）。 */
+/** GET /api/users/me 响应（collab 消费 id/nickname/avatarUrl——头像广播数据源）。 */
 interface MeResponse {
   id: string;
   nickname: string;
+  avatarUrl?: string | null;
 }
 
 let mePromise: Promise<MeResponse> | null = null;
@@ -122,6 +126,7 @@ function userOf(state: AwarenessState): PresenceUser | null {
     userId: user.userId,
     nickname: typeof user.nickname === 'string' && user.nickname !== '' ? user.nickname : '用户',
     color: typeof user.color === 'string' ? user.color : colorForUser(user.userId),
+    avatar: typeof user.avatar === 'string' && user.avatar !== '' ? user.avatar : null,
   };
 }
 
@@ -161,7 +166,13 @@ export function buildRemoteCursors(
     if (!user || !Array.isArray(state.selection)) continue;
     const nodeIds = state.selection.filter((id): id is string => typeof id === 'string');
     if (nodeIds.length === 0) continue;
-    cursors.push({ userId: String(clientID), name: user.nickname, color: user.color, nodeIds });
+    cursors.push({
+      userId: String(clientID),
+      name: user.nickname,
+      color: user.color,
+      avatar: user.avatar ? avatarSrcOf(user.avatar, user.userId) : undefined,
+      nodeIds,
+    });
   }
   return cursors;
 }
@@ -213,6 +224,7 @@ export function startCollab(fileId: string, doc: Y.Doc, opts: CollabOptions): Co
       userId: me.id,
       nickname: me.nickname,
       color: colorForUser(me.id),
+      avatar: me.avatarUrl ?? null,
     });
     awareness.setLocalStateField('joinedAt', new Date().toISOString());
     awareness.setLocalStateField('editing', localEditing);

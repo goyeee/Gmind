@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api, apiPatch, apiPost, ApiError } from '../api/client';
+import { Avatar, PRESET_AVATAR_COUNT } from '../editor/TaskFields';
 
 /**
  * 账号设置页（M5 Task 1，FR-ACC-002 收口 + FR-CMT-006 通知偏好收口）：三区卡片。
@@ -15,13 +16,15 @@ import { api, apiPatch, apiPost, ApiError } from '../api/client';
  *   不受开关控制（system 类型不在可关闭之列）。
  */
 
-/** 身份形态（GET /api/users/me，UserGuard 装配 phone/email/hasPassword）。 */
+/** 身份形态（GET /api/users/me，UserGuard 装配 phone/email/hasPassword/avatarUrl）。 */
 interface MeIdentity {
   id: string;
   nickname: string;
   phone: string | null;
   email: string | null;
   hasPassword: boolean;
+  /** 头像（2026-10-11）：null=未自定义（前端按 userId 稳定分配预置 SVG）。 */
+  avatarUrl: string | null;
 }
 
 type EmailOptOutType = 'mention' | 'reply' | 'permission';
@@ -38,6 +41,24 @@ const PREF_ITEMS: Array<{ key: EmailOptOutType; label: string; desc: string }> =
 
 function msgOf(e: unknown): string {
   return e instanceof Error ? e.message : '操作未完成：网络异常或服务暂不可用，请稍后重试';
+}
+
+/** 头像上传（2026-10-11）：multipart 原生 fetch（api client 只发 JSON）；成功后服务端
+ *  已直接定为当前头像，返回 avatarUrl 供本地同步。 */
+async function uploadAvatar(file: File): Promise<string> {
+  const form = new FormData();
+  form.append('file', file);
+  const token = localStorage.getItem('gmind.token');
+  const res = await fetch('/api/users/me/avatar', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token ?? ''}` },
+    body: form,
+  });
+  const data = (await res.json().catch(() => ({}))) as { avatarUrl?: string; message?: string };
+  if (!res.ok || !data.avatarUrl) {
+    throw new Error(data.message ?? '头像上传失败，请调整后重试');
+  }
+  return data.avatarUrl;
 }
 
 export function SettingsPage() {
@@ -150,6 +171,66 @@ export function SettingsPage() {
         </div>
       </header>
       {error && <p className="error">{error}</p>}
+
+      {/* 头像（2026-10-11 需求方裁定）：当前头像展示 + 5 预置 SVG 选择 + 本地上传。
+          未自定义（avatarUrl null）时 Avatar 组件按 userId 稳定分配预置。 */}
+      <section className="settings-card" data-testid="avatar-section">
+        <h3>头像</h3>
+        <div className="avatar-section-row">
+          {me && (
+            <span className="avatar-current" data-testid="avatar-current">
+              <Avatar userId={me.id} nickname={me.nickname} avatar={me.avatarUrl} size={56} />
+            </span>
+          )}
+          <div className="avatar-presets">
+            {Array.from({ length: PRESET_AVATAR_COUNT }, (_, i) => `/avatars/preset-${i + 1}.svg`).map((url) => (
+              <button
+                key={url}
+                type="button"
+                className="avatar-preset-btn"
+                data-testid={`avatar-preset-${url.match(/preset-(\d)/)?.[1]}`}
+                aria-label={`选择预置头像 ${url}`}
+                onClick={() => {
+                  void (async () => {
+                    try {
+                      await apiPatch('/users/me/avatar', { avatarUrl: url });
+                      await reload();
+                      showToast('头像已更新');
+                    } catch (e) {
+                      showToast(msgOf(e));
+                    }
+                  })();
+                }}
+              >
+                <img src={url} alt="" width={36} height={36} />
+              </button>
+            ))}
+            <label className="avatar-upload-btn">
+              上传头像
+              <input
+                type="file"
+                accept="image/png,image/jpeg,image/gif,image/webp"
+                data-testid="avatar-upload-input"
+                style={{ display: 'none' }}
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  e.target.value = '';
+                  if (!file) return;
+                  void (async () => {
+                    try {
+                      await uploadAvatar(file);
+                      await reload();
+                      showToast('头像已更新');
+                    } catch (err) {
+                      showToast(msgOf(err));
+                    }
+                  })();
+                }}
+              />
+            </label>
+          </div>
+        </div>
+      </section>
 
       <section className="settings-card" data-testid="password-section">
         <h3>登录密码</h3>

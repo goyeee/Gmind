@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import type * as Y from 'yjs';
 import {
   addChild,
+  assigneeEntriesOf,
   capUndoStack,
   childrenIds,
   countAliveReachable,
@@ -17,6 +18,8 @@ import {
   moveNode,
   ORIGIN_USER,
   pathToRoot,
+  PROGRESS_STAGE_PCT,
+  progressStageOf,
   redo as coreRedo,
   removeSummary,
   ROOT_NODE_ID,
@@ -84,6 +87,7 @@ import { todayStr } from '@gmind/shared';
 import { attachKeyboardMap, isEditableTarget, resolveDirectEditKey } from '../editor/keyboardMap';
 import { rootKidEffectiveSides, rootSiblingForceSide } from '../editor/rootSiblingSide';
 import { nextChildText } from '../editor/defaultNodeText';
+import { avatarSrcOf } from '../editor/TaskFields';
 import { ActivityPanel } from '../editor/ActivityPanel';
 import { ThemePanel } from '../editor/ThemePanel';
 import {
@@ -477,6 +481,17 @@ export function EditorPage() {
     x: number;
     y: number;
   } | null>(null);
+  // 人员进度头像选盘（2026-10-11 第二步）：点击节点任务行成员头像 → 9 档选盘
+  // 快速更新该成员进度（对齐 A 的进度徽章交互标杆；写回 setCustomField 整值替换）。
+  const [assigneePicker, setAssigneePicker] = useState<{
+    nodeId: string;
+    user: string;
+    colId: string;
+    name: string;
+    progress: number;
+    x: number;
+    y: number;
+  } | null>(null);
   // 右键菜单（Task 12）：nodeId 为节点菜单锚点；summaryId 为概要菜单锚点（M6 T6，
   // 二者互斥——右键命中 bracket 时弹概要菜单，命中节点时弹节点菜单）
   const [contextMenu, setContextMenu] = useState<
@@ -609,7 +624,7 @@ export function EditorPage() {
       if (
         el.closest('[data-popover-toggle]') ||
         el.closest(
-          '.editor-right, .editor-mobile-comments, .theme-panel, .structure-panel, .theme-wrap, .structure-wrap, .activity-panel, .help-panel, .find-bar, .member-panel, .version-panel, .marker-panel, .personal-menu',
+          '.editor-right, .editor-mobile-comments, .theme-panel, .structure-panel, .theme-wrap, .structure-wrap, .activity-panel, .help-panel, .find-bar, .member-panel, .version-panel, .marker-panel, .personal-menu, .gm-task-assignee, .assignee-picker',
         ) ||
         exportWrapRef.current?.contains(el)
       ) {
@@ -712,6 +727,28 @@ export function EditorPage() {
       afterUserWrite();
     } catch (e) {
       showToast(e instanceof Error ? e.message : '标记设置失败');
+    }
+  };
+
+  /** 人员进度选盘写回（2026-10-11 第二步）：档位百分比 → setCustomField 整值替换
+   *  该成员进度（读现值合并后写回，校验先于事务在 core 内；完成后关盘）。 */
+  const applyAssigneePickerValue = (pct: number): void => {
+    const p = assigneePicker;
+    const d = doc;
+    if (!p || !d) return;
+    try {
+      const current = getNode(d, p.nodeId)?.custom?.[p.colId];
+      const base: Record<string, number> =
+        typeof current === 'object' && current !== null && !Array.isArray(current)
+          ? { ...(current as Record<string, number>) }
+          : {};
+      base[p.user] = pct;
+      setCustomField(d, p.nodeId, p.colId, base, ORIGIN_USER);
+      afterUserWrite();
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : '进度更新失败，请调整后重试');
+    } finally {
+      setAssigneePicker(null);
     }
   };
 
@@ -1893,6 +1930,44 @@ export function EditorPage() {
       if (nodeId) setCommentFilter(nodeId);
       return;
     }
+    // 人员进度头像（2026-10-11 第二步）：点击节点任务行上的成员头像 → 档位选盘
+    // 快速更新该成员进度（对齐 A 的进度徽章交互标杆）；先于标记徽章/折叠/选择
+    // 处理并直接 return（角标家族同一让位纪律）。只读不弹（写路径）。
+    const assigneeG = target.closest('.gm-task-assignee[data-assignee-user]');
+    if (assigneeG && !readOnly) {
+      const nodeId = target.closest('[data-node-id]')?.getAttribute('data-node-id');
+      const user = assigneeG.getAttribute('data-assignee-user');
+      const colId = assigneeG.getAttribute('data-assignee-col');
+      if (nodeId && user && colId) {
+        setContextMenu(null);
+        const current = getNode(doc, nodeId)?.custom?.[colId];
+        const progress =
+          typeof current === 'object' && current !== null && !Array.isArray(current)
+            ? (current as Record<string, unknown>)[user]
+            : undefined;
+        // 再点同一头像 = toggle 收盘（统一外点已豁免 .gm-task-assignee，同徽章口径）。
+        if (
+          assigneePicker &&
+          assigneePicker.nodeId === nodeId &&
+          assigneePicker.user === user &&
+          assigneePicker.colId === colId
+        ) {
+          setAssigneePicker(null);
+          return;
+        }
+        setAssigneePicker({
+          nodeId,
+          user,
+          colId,
+          name:
+            memberIndexRef.current.get(user)?.nickname ?? user.slice(0, 8),
+          progress: typeof progress === 'number' ? progress : 0,
+          x: e.clientX,
+          y: e.clientY,
+        });
+        return;
+      }
+    }
     // 标记徽章（M7b-W3 #4 点击换组）：点击 → 该组迷你选盘浮层；先于折叠徽标/
     // 节点选择处理并直接 return——不触发选中/反选/折叠（角标家族同一让位纪律；
     // 节点拖拽侧已由 engine drag 排除 data-marker-group 候选）。只读不弹（写路径）。
@@ -2530,6 +2605,19 @@ export function EditorPage() {
             ownerNames: snap.task.owners.map(
               (o) => memberIndexRef.current.get(o)?.nickname ?? o.slice(0, 8),
             ),
+            // 负责人头像（2026-10-11 头像功能）：成员目录 avatar → 直出 URL
+            // （上传键经 /api/images；null 由引擎回退文字首字符——预置分配在宿主 Avatar
+            // 组件层兜，画布任务行经 ownerAvatarUrls 显式给稳定预置）。
+            ownerAvatarUrls: snap.task.owners.map(
+              (o) => avatarSrcOf(memberIndexRef.current.get(o)?.avatar ?? null, o),
+            ),
+            // 人员进度列头像（2026-10-11 第二步）：拉平条目 + 成员目录显示名
+            // （同 ownerNames 口径；engine 任务行绘制圆形文字头像+弧形进度环）。
+            assignees: assigneeEntriesOf(d, id).map((e) => ({
+              ...e,
+              name: memberIndexRef.current.get(e.user)?.nickname ?? e.user.slice(0, 8),
+              avatar: avatarSrcOf(memberIndexRef.current.get(e.user)?.avatar ?? null, e.user),
+            })),
           },
         });
       }
@@ -3576,6 +3664,54 @@ export function EditorPage() {
         </div>
       )}
 
+      {!readOnly && assigneePicker && view === 'mind' && (
+        <div
+          className="marker-picker assignee-picker"
+          data-testid="assignee-picker"
+          style={{
+            left: Math.min(assigneePicker.x + 6, window.innerWidth - 262),
+            top: Math.min(assigneePicker.y + 6, window.innerHeight - 200),
+          }}
+          role="menu"
+          aria-label="人员进度"
+        >
+          <div className="marker-picker-head">
+            <em className="marker-picker-label">{assigneePicker.name} 的进度</em>
+            <button
+              type="button"
+              data-testid="assignee-picker-close"
+              className="marker-picker-close"
+              title="关闭"
+              aria-label="关闭"
+              onClick={() => setAssigneePicker(null)}
+            >
+              ×
+            </button>
+          </div>
+          <div className="marker-grid">
+            {(MARKER_CATALOG.progress as readonly MarkerGlyphDef[]).map((def) => {
+              // 高亮：当前进度落档（progressStageOf 1/8 步进——30% → p25 高亮，
+              // 与 A 的进度徽章选盘同口径）；档值=PROGRESS_STAGE_PCT[slug] 写回。
+              const active = def.value === progressStageOf(assigneePicker.progress);
+              return (
+                <button
+                  key={def.value}
+                  type="button"
+                  data-testid={`assignee-picker-value-${def.value}`}
+                  title={def.label}
+                  aria-label={def.label}
+                  aria-pressed={active}
+                  className={active ? 'marker-btn active' : 'marker-btn'}
+                  onClick={() => applyAssigneePickerValue(PROGRESS_STAGE_PCT[def.value as keyof typeof PROGRESS_STAGE_PCT])}
+                >
+                  <MarkerChip def={def} />
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {/* 底栏（画布专属，2026-10-09 布局裁定：左计数 / 右定位中心·适应画布·缩放·
           全屏——全屏自工具栏迁入，!readOnly 闸维持移动端不装配口径）：表格视图
           隐藏（M7a-T4） */}
@@ -3665,6 +3801,7 @@ export function EditorPage() {
         canInvite={meId !== '' && meId === ownerUserId}
         showToast={showToast}
         focusUserId={membersFocus}
+        memberIndex={memberIndex}
       />
       <HelpPanel open={helpOpen} onClose={() => setHelpOpen(false)} />
       {/* 主题/结构面板已迁入工具栏各自锚定 wrap（2026-09-30 需求方反馈任务 1：

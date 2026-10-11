@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type * as Y from 'yjs';
 import {
   addChild,
+  assigneeEntriesOf,
   countAliveReachable,
   CUSTOM_COLUMN_LIMIT,
   CUSTOM_COLUMN_NAME_MAX,
@@ -47,6 +48,7 @@ import { track } from '../api/events';
 import type { PresenceMember } from './collab';
 import { MarkerChip } from './MarkerChip';
 import {
+  AssigneeField,
   Avatar,
   chipActive,
   MemberMultiSelect,
@@ -130,12 +132,15 @@ interface ColumnSortValue {
   text: string;
 }
 
-/** 自定义列类型 → 展示标记/标签（列头小图标 + 添加浮层四选；目录单源 core）。 */
+/** 自定义列类型 → 展示标记/标签（列头小图标 + 添加浮层五选；目录单源 core）。
+ *  assignee=人员进度列（需求方 2026-10-11 裁定新增）：区别于 person 纯名单，
+ *  每人自带进度并参与总进度聚合与 done 门禁。 */
 const CUSTOM_TYPE_META: Record<CustomColumnType, { mark: string; label: string }> = {
   text: { mark: 'T', label: '文本' },
   person: { mark: '人', label: '人员' },
   progress: { mark: '%', label: '进度' },
   date: { mark: '日', label: '日期' },
+  assignee: { mark: '进', label: '人员进度' },
 };
 
 /** 新自定义列 id：crypto.randomUUID()（core 只约束非空唯一；web 未依赖 ulid 包
@@ -270,7 +275,7 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
   const [collaborators, setCollaborators] = useState<MemberOption[]>([]);
   useEffect(() => {
     let alive = true;
-    api<Array<{ userId: string; nickname: string }>>(`/files/${fileId}/collaborators`)
+    api<Array<{ userId: string; nickname: string; avatar?: string | null }>>(`/files/${fileId}/collaborators`)
       .then((list) => {
         if (alive) setCollaborators(list);
       })
@@ -294,6 +299,8 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
     for (const [id, snap] of snaps) {
       if (id === ROOT_NODE_ID) continue;
       const parent = snap.parentId === '' ? root : snaps.get(snap.parentId);
+      // 人员进度列条目拉平（与 TaskFields.deriveNodesOfDoc 同口径；无条目不出键）
+      const assignees = assigneeEntriesOf(doc, id);
       out.push({
         id,
         parentId: snap.parentId === '' ? null : snap.parentId,
@@ -305,6 +312,9 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
         icons: { ...snap.icons },
         description: snap.description,
         custom: { ...(snap.custom ?? {}) },
+        ...(assignees.length > 0
+          ? { customAssignees: assignees.map(({ user, progress }) => ({ user, progress })) }
+          : {}),
       });
     }
     return out;
@@ -391,6 +401,14 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
       }
       if (customType === 'progress') {
         return { empty: typeof v !== 'number', numeric: true, num: typeof v === 'number' ? v : 0, text: '' };
+      }
+      if (customType === 'assignee') {
+        // 按首人昵称排（与 person/owner 列同口径）
+        const first =
+          typeof v === 'object' && v !== null && !Array.isArray(v)
+            ? (Object.keys(v as Record<string, unknown>)[0] ?? '')
+            : '';
+        return { empty: first === '', numeric: false, num: 0, text: first !== '' ? nicknameOf(first) : '' };
       }
       return { empty: !(typeof v === 'string' && v !== ''), numeric: false, num: 0, text: typeof v === 'string' ? v : '' };
     }
@@ -596,7 +614,7 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
   const commitCustomField = (
     id: string,
     colId: string,
-    value: string | string[] | number | null,
+    value: string | string[] | number | Record<string, number> | null,
   ): void => {
     try {
       setCustomField(doc, id, colId, value);
@@ -940,7 +958,7 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
                     <>
                       <span className="tt-avatars">
                         {owners.slice(0, 3).map((o) => (
-                          <Avatar key={o} userId={o} nickname={nicknameOf(o)} />
+                          <Avatar key={o} userId={o} nickname={nicknameOf(o)} avatar={memberIndex.get(o)?.avatar} />
                         ))}
                       </span>
                       <span className="tt-owner-names">
@@ -976,7 +994,7 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
                               })
                             }
                           >
-                            <Avatar userId={m.userId} nickname={m.nickname} size={14} />
+                            <Avatar userId={m.userId} nickname={m.nickname} avatar={m.avatar} size={14} />
                             {m.nickname}
                           </button>
                         );
@@ -1042,7 +1060,11 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
                 onClose={() => setProgressEditId(null)}
               />
             ) : (
-              <MiniBar value={task?.progress ?? 0} danger={overdue} />
+              // 叶子显示合成有效进度（eff：人员进度列口径，含标准负责人与各人条目
+              // 的拉平平均；双击进入编辑的是标准负责人个人进度 task.progress）。
+              <span title="总进度含人员进度列；双击编辑负责人进度">
+                <MiniBar value={eff} danger={overdue} />
+              </span>
             )}
           </td>
         );
@@ -1209,7 +1231,7 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
                         <>
                           <span className="tt-avatars">
                             {selected.slice(0, 3).map((o) => (
-                              <Avatar key={o} userId={o} nickname={nicknameOf(o)} />
+                              <Avatar key={o} userId={o} nickname={nicknameOf(o)} avatar={memberIndex.get(o)?.avatar} />
                             ))}
                           </span>
                           <span className="tt-owner-names">
@@ -1283,6 +1305,69 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
                   }}
                 />
               ))}
+            {c.type === 'assignee' &&
+              (() => {
+                // 人员进度列（2026-10-11 裁定）：展示「昵称 80%」前 2 人 + 溢出；
+                // 点击弹层用公共 AssigneeField 编辑（整值替换提交）。
+                const entries: Array<[string, number]> =
+                  typeof value === 'object' && value !== null && !Array.isArray(value)
+                    ? (Object.entries(value as Record<string, unknown>) as Array<[string, unknown]>)
+                        .filter((entry): entry is [string, number] => typeof entry[1] === 'number')
+                        .map(([u, p]) => [u, p])
+                    : [];
+                const open = customEdit?.nodeId === node.id && customEdit.colId === c.id;
+                return readOnly ? (
+                  <span className="tt-date-text">
+                    {entries.length > 0
+                      ? entries.map(([u, p]) => `${nicknameOf(u)} ${p}%`).join('、')
+                      : '—'}
+                  </span>
+                ) : (
+                  <span className="tt-pop-anchor">
+                    <button
+                      type="button"
+                      className="tt-owners-btn"
+                      data-testid="table-custom-assignee"
+                      title="点击分配人员并更新进度"
+                      onClick={() => setCustomEdit(open ? null : { nodeId: node.id, colId: c.id })}
+                    >
+                      {entries.length === 0 ? (
+                        <span className="tt-custom-empty">分配人员</span>
+                      ) : (
+                        <span className="tt-owner-names">
+                          {entries
+                            .slice(0, 2)
+                            .map(([u, p]) => `${nicknameOf(u)} ${p}%`)
+                            .join('、')}
+                          {entries.length > 2 && (
+                            <span style={{ color: '#86909c' }}> +{entries.length - 2}</span>
+                          )}
+                        </span>
+                      )}
+                    </button>
+                    {open && (
+                      <>
+                        <div
+                          className="tt-overlay"
+                          onClick={() => setCustomEdit(null)}
+                          onContextMenu={(e) => {
+                            e.preventDefault();
+                            setCustomEdit(null);
+                          }}
+                        />
+                        <div className="tt-popover">
+                          <AssigneeField
+                            value={value}
+                            memberIndex={memberIndex}
+                            testId="table-custom-assignee-editor"
+                            onCommit={(v) => commitCustomField(node.id, c.id, v)}
+                          />
+                        </div>
+                      </>
+                    )}
+                  </span>
+                );
+              })()}
           </td>
         );
       }
@@ -1340,7 +1425,7 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
                       style={on ? chipActive(color) : undefined}
                       onClick={() => setFilters({ ...filters, owners: toggleInSet(filters.owners, m.userId) })}
                     >
-                      <Avatar userId={m.userId} nickname={m.nickname} size={14} />
+                      <Avatar userId={m.userId} nickname={m.nickname} avatar={m.avatar} size={14} />
                       {m.nickname}
                     </button>
                   );

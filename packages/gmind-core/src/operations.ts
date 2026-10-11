@@ -30,7 +30,7 @@ import {
 } from './constants';
 import { GmindCoreError, type GmindCoreErrorCode } from './errors';
 import { ROOT_NODE_ID } from './doc';
-import { getNode, requireAliveNode, subtreeIds, type NodeImage } from './read';
+import { assigneeEntriesOf, getNode, requireAliveNode, subtreeIds, type NodeImage } from './read';
 import { normalizeTree, normalizeTreeFor, deriveNormalizeDirty } from './repair';
 import { ORIGIN_SYSTEM, ORIGIN_USER, type WriteOrigin } from './undo';
 
@@ -690,6 +690,35 @@ export function setNodeTask(
   });
   if (same) return;
 
+  // —— done 门禁（人员进度列，需求方 2026-10-11 裁定）：标 done 要求所有人员进度列
+  // 条目 100% 且标准负责人进度 100%；空列不参与（不拖后腿）。判定一律用写入前
+  // 当前值——applyStatusRules 会把 done 联动 progress 注入 100，不能拿 linked 当
+  // 「负责人已完成」的依据；undo 走 Yjs 层不经过本入口，撤销不受门禁约束。 ——
+  if (linked.status === 'done') {
+    const entries = assigneeEntriesOf(doc, id);
+    const unfinished = entries.filter((e) => e.progress !== 100);
+    if (unfinished.length > 0) {
+      const byCol = new Map<string, { colName: string; count: number }>();
+      for (const e of unfinished) {
+        const rec = byCol.get(e.colId) ?? { colName: e.colName, count: 0 };
+        rec.count += 1;
+        byCol.set(e.colId, rec);
+      }
+      const detail = [...byCol.values()].map((c) => `「${c.colName}」列还有 ${c.count} 人`).join('、');
+      throw new GmindCoreError(
+        'TASK_DONE_GATE_BLOCKED',
+        `${detail}进度未达 100%，请相关人员先更新进度，全部完成后再标记任务完成`,
+      );
+    }
+    const ownersNow = linked.owners ?? current.owners;
+    if (ownersNow.length > 0 && current.progress < 100) {
+      throw new GmindCoreError(
+        'TASK_DONE_GATE_BLOCKED',
+        '负责人进度未达 100%，请负责人先更新进度，全部完成后再标记任务完成',
+      );
+    }
+  }
+
   withTransaction(doc, origin, () => {
     writeTaskPatch(node, linked);
     // 进度徽章全量联动（需求方 2026-10-10）：凡写入 progress（含状态联动注入的
@@ -870,7 +899,7 @@ export function setTableView(
  *  携带错误码与两段式文案（setCustomField 抛出用；clipboard 粘贴过滤按 ok 静默丢弃）。 */
 interface CustomValueCheck {
   ok: boolean;
-  value?: string | string[] | number;
+  value?: string | string[] | number | Record<string, number>;
   code?: GmindCoreErrorCode;
   message?: string;
 }
@@ -937,6 +966,42 @@ function checkCustomValue(type: CustomColumnType, value: unknown): CustomValueCh
         };
       }
       return { ok: true, value };
+    case 'assignee': {
+      if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+        return {
+          ok: false,
+          code: 'CUSTOM_FIELD_INVALID_VALUE',
+          message: '人员进度列的值必须是「成员→进度」对象，请重新编辑后重试',
+        };
+      }
+      const entries = Object.entries(value as Record<string, unknown>);
+      if (entries.length > MAX_TASK_OWNERS) {
+        return {
+          ok: false,
+          code: 'CUSTOM_FIELD_INVALID_VALUE',
+          message: `人员进度列最多 ${MAX_TASK_OWNERS} 人，请精简后重试`,
+        };
+      }
+      const out: Record<string, number> = {};
+      for (const [user, progress] of entries) {
+        if (user.length < TASK_OWNER_MIN_LENGTH || user.length > TASK_OWNER_MAX_LENGTH) {
+          return {
+            ok: false,
+            code: 'CUSTOM_FIELD_INVALID_VALUE',
+            message: `人员进度列的成员标识非法（须为 ${TASK_OWNER_MIN_LENGTH}-${TASK_OWNER_MAX_LENGTH} 字符的用户ID），请重新选择成员`,
+          };
+        }
+        if (typeof progress !== 'number' || !Number.isInteger(progress) || progress < 0 || progress > 100) {
+          return {
+            ok: false,
+            code: 'CUSTOM_FIELD_INVALID_VALUE',
+            message: '人员进度列的进度必须是 0-100 的整数，请调整后重试',
+          };
+        }
+        out[user] = progress;
+      }
+      return { ok: true, value: out };
+    }
     case 'date':
       if (typeof value !== 'string' || !isValidDateStr(value)) {
         return {
@@ -971,9 +1036,11 @@ function ensureCustomMap(node: Y.Map<unknown>): Y.Map<unknown> {
  *
  * 数据口径：node.custom Y.Map<colId, 值>——text=string / person=用户ID string[]
  * （复用任务 owners 校验：每项 1-64 字符、写入前去重保序、≤MAX_TASK_OWNERS）/
- * progress=0-100 整数 / date='YYYY-MM-DD'。**整值替换**（person 无元素级 toggle，
- * 与 task.owners 的 LWW 存储口径一致）；custom 值是普通字段，不参与任务派生
- * （@gmind/shared derive 不消费——进度列不并入 effectiveProgress 聚合，独立字段）。
+ * progress=0-100 整数 / date='YYYY-MM-DD' / assignee=Record<用户ID, 0-100 整数>
+ * （人员进度列，需求方 2026-10-11 裁定）。**整值替换**（person/assignee 无元素级
+ * toggle，与 task.owners 的 LWW 存储口径一致）；custom 值本是普通字段不参与任务
+ * 派生——**例外：assignee 列**——其条目并入 effectiveProgress 聚合（derive 经调用方
+ * 拉平的 customAssignees 传入）并受 setNodeTask done 门禁校验（见该函数内注）。
  *
  * 校验（先于事务，拒绝即零变更）：colId 在当前 schema 中（防御读取坏 meta 按 []
  * 处理），否则 CUSTOM_FIELD_UNKNOWN_COL；值按列类型校验（checkCustomValue 单源），
@@ -1036,11 +1103,11 @@ export function setCustomField(
 export function sanitizeCustomForDoc(
   doc: Y.Doc,
   custom: Record<string, unknown>,
-): Record<string, string | string[] | number> | null {
+): Record<string, string | string[] | number | Record<string, number>> | null {
   const schema = canonicalCustomColumns(doc.getMap('meta').get('customColumns'));
   if (schema.length === 0) return null;
   const typeById = new Map(schema.map((c) => [c.id, c.type] as const));
-  let out: Record<string, string | string[] | number> | null = null;
+  let out: Record<string, string | string[] | number | Record<string, number>> | null = null;
   for (const [colId, value] of Object.entries(custom)) {
     if (value === null || value === undefined) continue; // 删键方向对粘贴无意义
     const type = typeById.get(colId);

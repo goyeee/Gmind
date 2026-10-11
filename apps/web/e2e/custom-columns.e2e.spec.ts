@@ -43,7 +43,7 @@ async function openSeedDocTable(page: Page, title: string): Promise<string> {
 async function addColumn(
   page: Page,
   name: string,
-  type: 'text' | 'person' | 'progress' | 'date',
+  type: 'text' | 'person' | 'progress' | 'date' | 'assignee',
 ): Promise<void> {
   await page.getByTestId('table-col-add').click();
   await page.getByTestId('table-col-add-name').fill(name);
@@ -250,4 +250,98 @@ test('删列：confirm 后列消失，节点值被清除（docState 断言孤儿
   });
   const custom = customOf(doc, nodeId);
   expect(custom === undefined || custom.size === 0).toBeTruthy();
+});
+
+// 用例 5：人员进度列全链路（需求方 2026-10-11 裁定，第 5 种自定义列类型）——
+// 加列 → 单元格弹层分配成员（新人默认 0%）→ 更新进度 → 表格进度列显示合成值 →
+// 标完成被 done 门禁拦截（两段式 toast：原因+下一步）→ 全 100% 后放行。
+test('人员进度列：分配成员/更新进度/合成显示/done 门禁拦截与放行', async ({ page }) => {
+  await openSeedDocTable(page, '本周计划');
+  await addColumn(page, '测试', 'assignee');
+  // 选真叶子行「方案评审」（周一等有子级节点的有效进度=子级均值，人员列只在叶子生效）
+  const mondayRow = page.locator('tr', { hasText: '方案评审' }).first();
+
+  // 弹层分配成员（chip 候选含文档 owner=注册用户自己；选中即默认 0%）
+  await mondayRow.getByTestId('table-custom-assignee').click();
+  await page.locator('[data-testid^="table-custom-assignee-editor-member-"]').first().click();
+  await expect(mondayRow.getByTestId('table-custom-assignee')).toContainText('0%');
+
+  // 更新进度 30%（弹层内该行进度输入，Enter 提交）
+  const progressInput = page.locator('[data-testid^="table-custom-assignee-editor-progress-"]');
+  await progressInput.fill('30');
+  await progressInput.press('Enter');
+  await expect(mondayRow.getByTestId('table-custom-assignee')).toContainText('30%');
+  // 表格进度列叶子显示合成有效进度（owners 空 → 仅条目均值 30%）
+  await expect(mondayRow.locator('td[data-col-key="progress"] .tt-bar-num')).toHaveText('30%');
+
+  // docState 落库：方案评审 custom 含 Record<userId, 30>
+  await waitForDoc(page, (d) => {
+    const id = findNodeByText(d, '方案评审');
+    const custom = customOf(d, id);
+    if (!custom) return false;
+    for (const v of custom.values()) {
+      if (typeof v === 'object' && v !== null && Object.values(v as object).includes(30)) return true;
+    }
+    return false;
+  });
+  await page.locator('.tt-overlay').click(); // 关成员弹层（Esc 未接该弹层，overlay 点击关闭）
+
+  // done 门禁：状态列选「已完成」→ 拦截 toast（两段式），状态保持待开始
+  await mondayRow.locator('select[aria-label="任务状态"]').selectOption('done');
+  await expect(page.getByTestId('toast')).toContainText('测试');
+  await expect(page.getByTestId('toast')).toContainText('100%');
+  await expect(mondayRow.locator('select[aria-label="任务状态"]')).toHaveValue('todo');
+
+  // 进度补到 100% → 门禁放行 → 状态完成
+  await mondayRow.getByTestId('table-custom-assignee').click();
+  const progressFull = page.locator('[data-testid^="table-custom-assignee-editor-progress-"]');
+  await progressFull.fill('100');
+  await progressFull.press('Enter');
+  await mondayRow.locator('select[aria-label="任务状态"]').selectOption('done');
+  await expect(mondayRow.locator('select[aria-label="任务状态"]')).toHaveValue('done');
+});
+
+// 用例 6：节点上人员进度头像 + 点选盘快速更新（2026-10-11 第二步）——表格给叶子
+// 节点分配成员 30% → 切回脑图 → 任务行出现圆形文字头像（data 锚点）+ 弧形进度环
+// → 点击头像弹 9 档选盘 → 选 100% → docState 写回、头像环变整圆。
+test('人员进度头像：节点展示圆形头像+进度环，点击弹选盘快速更新', async ({ page }) => {
+  await openSeedDocTable(page, '本周计划');
+  await addColumn(page, '测试', 'assignee');
+  // 表格侧给「方案评审」（叶子）分配成员并设 30%（复用用例 5 的弹层操作）
+  const row = page.locator('tr', { hasText: '方案评审' }).first();
+  await row.getByTestId('table-custom-assignee').click();
+  await page.locator('[data-testid^="table-custom-assignee-editor-member-"]').first().click();
+  const progressInput = page.locator('[data-testid^="table-custom-assignee-editor-progress-"]');
+  await progressInput.fill('30');
+  await progressInput.press('Enter');
+  await page.locator('.tt-overlay').click(); // 关弹层
+
+  // 切回脑图：节点任务行出现人员进度头像（圆形头像 + data 锚点 + 弧环）——
+  // 未自定义头像的用户由宿主稳定分配预置 SVG（圆形 <image> 渲染）。
+  await page.getByTestId('view-tab-mind').click();
+  const avatar = page.locator('.editor-canvas svg g.gm-task-assignee');
+  await expect(avatar).toBeVisible();
+  await expect(avatar.getAttribute('data-assignee-user')).resolves.toMatch(/.+/);
+  await expect(avatar.locator('path.gm-task-assignee-ring')).toBeVisible(); // 30% 弧
+  await expect(avatar.locator('image.gm-task-avatar-img')).toHaveAttribute('href', /\/avatars\/preset-\d\.svg/);
+
+  // 点击头像 → 9 档选盘（含当前档高亮）→ 选 done（100%）
+  await avatar.click();
+  const picker = page.getByTestId('assignee-picker');
+  await expect(picker).toBeVisible();
+  await expect(picker).toContainText('的进度');
+  // 30% 不落任何档位（选盘高亮仅精确在档时）——直接选 done（100%）
+  await page.getByTestId('assignee-picker-value-done').click();
+  await expect(picker).toHaveCount(0);
+  // 头像环变整圆（100%）；docState 写回 100
+  await expect(avatar.locator('circle.gm-task-assignee-ring')).toBeVisible();
+  await waitForDoc(page, (d) => {
+    const id = findNodeByText(d, '方案评审');
+    const custom = customOf(d, id);
+    if (!custom) return false;
+    for (const v of custom.values()) {
+      if (typeof v === 'object' && v !== null && Object.values(v as object).includes(100)) return true;
+    }
+    return false;
+  });
 });

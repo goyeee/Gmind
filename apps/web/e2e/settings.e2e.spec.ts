@@ -41,6 +41,30 @@ test('工作台「账号设置」入口 → /settings 三区渲染（无密码=�
   await expect(page.getByTestId('notify-pref-permission')).toBeVisible();
 });
 
+// 头像区（2026-10-11 需求方裁定）：当前头像展示 + 5 预置 SVG 可选 + 本地上传。
+test('头像区：当前头像与预置库渲染，选预置后当前头像与 me 同步', async ({ page }) => {
+  await registerAndLogin(page);
+  await page.getByTestId('settings-entry').click();
+  await expect(page).toHaveURL(/\/settings/);
+  const section = page.getByTestId('avatar-section');
+  await expect(section).toBeVisible();
+  // 当前头像（未自定义 → Avatar 组件稳定分配预置 SVG，圆形 <img>）
+  const current = page.getByTestId('avatar-current').locator('img');
+  await expect(current).toHaveAttribute('src', /\/avatars\/preset-\d\.svg/);
+  // 预置库 5 枚齐
+  for (let i = 1; i <= 5; i += 1) {
+    await expect(page.getByTestId(`avatar-preset-${i}`)).toBeVisible();
+  }
+  await expect(page.getByTestId('avatar-upload-input')).toHaveCount(1);
+  // 选 preset-4 → 当前头像同步 + 服务端 me 落库
+  await page.getByTestId('avatar-preset-4').click();
+  await expect(page.getByTestId('avatar-current').locator('img')).toHaveAttribute('src', '/avatars/preset-4.svg');
+  await expect(page.getByTestId('toast')).toContainText('头像已更新');
+  const token = await page.evaluate(() => localStorage.getItem('gmind.token'));
+  const me = await page.request.get('/api/users/me', { headers: { Authorization: `Bearer ${token ?? ''}` } });
+  expect(((await me.json()) as { avatarUrl: string }).avatarUrl).toBe('/avatars/preset-4.svg');
+});
+
 test('有密码（邮箱注册）用户：密码区渲染旧密码形态', async ({ page }) => {
   // 邮箱验证码注册并设置密码（UI 不提供该组合，经 API 造号）→ 注入 token 直达 /settings
   const email = `u${Date.now()}@test.dev`;
