@@ -5,8 +5,9 @@ import { expect, test, type Page } from '@playwright/test';
  *
  * 流程：新建带描述 + 任务状态/进度的节点（任务面板写入）→ 详细模式默认显示
  * gm-desc 第二行 / 状态色条 / 任务行 → 点 compact-toggle → 断言三者消失、节点盒
- * 变矮、进度内联小字出现 → 再点恢复 → 断言回来、盒高还原；刷新后偏好保持
- * （localStorage `gmind.compact`，账号级显示偏好、不入文档数据）。
+ * 变矮、**不展示百分比**（2026-10-11 需求方裁定，内联进度 gm-task-progress-inline
+ * 已退役——紧凑盒 = 纯标题 + 标记）→ 再点恢复 → 断言回来、盒高还原；刷新后偏好
+ * 保持（localStorage `gmind.compact`，账号级显示偏好、不入文档数据）。
  *
  * 复用 M0 登录模式：新手机号注册即赠 3 个种子文件（helper 内联自 editor.e2e.spec.ts），
  * 用例打开种子文件「本周计划」。
@@ -48,7 +49,7 @@ async function fillTaskFields(page: Page): Promise<void> {
   await page.getByTestId('task-toggle').click();
   await expect(page.getByTestId('task-panel')).toBeVisible();
   // 面板绑定当前选中节点（Tab 刚建的「写周报」），防写错目标
-  await expect(page.getByTestId('task-panel-title')).toHaveText('写周报');
+  await expect(page.getByTestId('task-panel-title')).toHaveValue('写周报');
   await page.getByTestId('task-panel-desc').fill('本周五前完成周报初稿');
   await page.getByTestId('task-panel-desc').blur(); // 描述失焦提交
   await page.getByTestId('task-panel-status-doing').click();
@@ -77,40 +78,40 @@ test('简洁模式：切换隐藏描述/状态条/任务行并内联进度、盒
   await expect(node.locator('text.gm-desc')).toHaveText('本周五前完成周报初稿');
   await expect(node.locator('rect.gm-task-bar')).toBeVisible(); // doing 蓝条
   await expect(node.locator('text.gm-task-progress')).toHaveText('50%');
-  await expect(node.locator('text.gm-task-progress-inline')).toHaveCount(0);
   const rectBefore = await node.locator('rect').first().boundingBox();
   expect(rectBefore).not.toBeNull();
 
-  // —— 点「简洁」：描述/状态条/任务行消失，盒高变小，进度内联标题行右缘 ——
+  // —— 点「简洁」：描述/状态条/任务行消失，盒高变小；不展示百分比（2026-10-11
+  //     需求方裁定，内联进度已退役）——紧凑盒 = 纯标题 + 标记 ——
   await page.getByTestId('compact-toggle').click();
   await expect(page.getByTestId('compact-toggle')).toHaveAttribute('aria-pressed', 'true');
   await expect(node.locator('text.gm-desc')).toHaveCount(0);
   await expect(node.locator('rect.gm-task-bar')).toHaveCount(0);
   await expect(node.locator('g.gm-task-row')).toHaveCount(0);
-  await expect(node.locator('text.gm-task-progress-inline')).toHaveText('50%');
+  await expect(node.locator('.gm-task-progress-inline')).toHaveCount(0); // 不展示百分比
   const rectCompact = await node.locator('rect').first().boundingBox();
   expect(rectCompact).not.toBeNull();
   expect(rectCompact!.height!).toBeLessThan(rectBefore!.height!);
 
-  // —— 再点「简洁」恢复：描述/状态条回来、内联进度消失、盒高还原 ——
+  // —— 再点「简洁」恢复：描述/状态条回来、盒高还原 ——
   await page.getByTestId('compact-toggle').click();
   await expect(page.getByTestId('compact-toggle')).toHaveAttribute('aria-pressed', 'false');
   await expect(node.locator('text.gm-desc')).toHaveText('本周五前完成周报初稿');
   await expect(node.locator('rect.gm-task-bar')).toBeVisible();
   await expect(node.locator('text.gm-task-progress')).toHaveText('50%');
-  await expect(node.locator('text.gm-task-progress-inline')).toHaveCount(0);
+  await expect(node.locator('.gm-task-progress-inline')).toHaveCount(0);
   const rectRestored = await node.locator('rect').first().boundingBox();
   expect(Math.abs(rectRestored!.height! - rectBefore!.height!)).toBeLessThan(0.5);
 
   // —— 刷新后偏好保持（localStorage 账号级持久，不入文档数据）——
   await page.getByTestId('compact-toggle').click(); // 再开简洁
-  await expect(node.locator('text.gm-task-progress-inline')).toHaveText('50%');
+  await expect(node.locator('g.gm-task-row')).toHaveCount(0);
   await expect(page.getByTestId('save-status')).toContainText('已保存', { timeout: 15000 });
   await page.reload();
   await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '写周报' })).toBeVisible();
   await expect(page.getByTestId('compact-toggle')).toHaveAttribute('aria-pressed', 'true');
   const nodeAfterReload = page.locator('.editor-canvas svg [data-node-id]', { hasText: '写周报' });
-  await expect(nodeAfterReload.locator('text.gm-task-progress-inline')).toHaveText('50%');
+  await expect(nodeAfterReload.locator('.gm-task-progress-inline')).toHaveCount(0);
   await expect(nodeAfterReload.locator('text.gm-desc')).toHaveCount(0);
   await expect(nodeAfterReload.locator('rect.gm-task-bar')).toHaveCount(0);
 });

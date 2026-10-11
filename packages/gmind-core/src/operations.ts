@@ -13,6 +13,7 @@ import {
   MAX_NOTE_LENGTH,
   MAX_TASK_OWNERS,
   MAX_TEXT_LENGTH,
+  PROGRESS_STAGE_PCT,
   TASK_OWNER_MAX_LENGTH,
   TASK_OWNER_MIN_LENGTH,
   TASK_STATUSES,
@@ -20,6 +21,7 @@ import {
   canonicalTableView,
   iconValuesOf,
   isValidDateStr,
+  progressStageOf,
   type CustomColumnDef,
   type CustomColumnType,
   type CustomFieldValue,
@@ -481,6 +483,34 @@ export function setIcon(
     if (value !== null && !iconValuesOf(group).includes(value)) {
       throw new GmindCoreError('INVALID_ICON_VALUE', '未知的图标取值');
     }
+    // 进度组反向联动（需求方 2026-10-10 全量联动）：进度徽章是任务进度的可视化
+    // 档位，与 task.progress 一体两面——写档位同步 task.progress=档位百分比
+    // （PROGRESS_STAGE_PCT）；value=null=清除进度（徽章+进度键一并移除，读取回
+    // 缺省 0）。同值守卫看两边：徽章与百分比均处目标态才零事务；徽章同值但百分比
+    // 不一致（旧文档/外部写）仍写入对齐。
+    if (group === 'progress') {
+      const current = readIconArray(node, group);
+      const taskRaw = node.get('task');
+      const taskMap = taskRaw instanceof Y.Map ? taskRaw : null;
+      const pctRaw = taskMap?.get('progress');
+      const curPct = typeof pctRaw === 'number' ? pctRaw : undefined;
+      if (value === null) {
+        if (current.length === 0 && curPct === undefined) return; // 已是清除态
+        withTransaction(doc, origin, () => {
+          if (current.length > 0) iconsMapOf(node).delete(group);
+          if (curPct !== undefined) taskMap!.delete('progress');
+        });
+        return;
+      }
+      const targetPct = PROGRESS_STAGE_PCT[value as keyof typeof PROGRESS_STAGE_PCT];
+      const sameBadge = current.length === 1 && current[0] === value;
+      if (sameBadge && curPct === targetPct) return;
+      withTransaction(doc, origin, () => {
+        if (!sameBadge) iconsMapOf(node).set(group, Y.Array.from([value]));
+        if (curPct !== targetPct) taskMapOf(node).set('progress', targetPct);
+      });
+      return;
+    }
     // 同值守卫（M7c-E4）：single 组已是目标态（同值 / 移除已空的组）不开事务——
     // 也避免 iconsMapOf 的建 Y.Map 副作用落在零变更路径上。
     const current = readIconArray(node, group);
@@ -662,6 +692,13 @@ export function setNodeTask(
 
   withTransaction(doc, origin, () => {
     writeTaskPatch(node, linked);
+    // 进度徽章全量联动（需求方 2026-10-10）：凡写入 progress（含状态联动注入的
+    // 100/0）同事务同步进度档位徽章——有任务进度的节点恒有进度徽章
+    // （progressStageOf 对 0-100 整数恒有落位）。
+    if (linked.progress !== undefined) {
+      const stage = progressStageOf(linked.progress);
+      if (stage !== null) iconsMapOf(node).set('progress', Y.Array.from([stage]));
+    }
   });
 }
 

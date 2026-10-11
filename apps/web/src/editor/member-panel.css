@@ -106,14 +106,122 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* 邀请区（M4 Task 2，FR-SHR-004 UI 面）：owner 专属，面板底部整宽。 */
+/* 邀请区（2026-10-11 重做：站内用户 picker + 折叠站外粘贴入口）：owner 专属，
+   面板底部整宽。 */
 .member-invite {
   margin-top: 10px;
   padding-top: 8px;
   border-top: 1px solid #f2f3f5;
 }
+.member-invite-search {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 5px 8px;
+  border: 1px solid #e5e6eb;
+  border-radius: 6px;
+  font-family: inherit;
+  font-size: 12px;
+}
+.member-invite-search:focus {
+  border-color: #94bfff;
+  outline: none;
+}
+.member-invite-list {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  max-height: 180px;
+  overflow-y: auto;
+}
+.member-invite-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 2px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+}
+.member-invite-row:hover {
+  background: #f7f8fa;
+}
+.member-invite-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.member-invite-contact {
+  flex: none;
+  color: #86909c;
+  font-size: 11px;
+}
+.member-invite-empty {
+  color: #c9cdd4;
+  font-size: 12px;
+  padding: 8px 2px;
+}
+.member-invite-pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 6px;
+  font-size: 12px;
+}
+.member-invite-pager button {
+  border: 1px solid #e5e6eb;
+  border-radius: 4px;
+  background: #fff;
+  cursor: pointer;
+  padding: 2px 8px;
+  font-size: 12px;
+}
+.member-invite-pager button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+.member-invite-page-info {
+  color: #86909c;
+  font-variant-numeric: tabular-nums;
+}
+.member-invite-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 6px;
+}
+.member-invite-selected {
+  color: #86909c;
+  font-size: 12px;
+}
+.member-invite-pull {
+  padding: 5px 14px;
+  border: none;
+  border-radius: 6px;
+  background: #3370ff;
+  color: #fff;
+  cursor: pointer;
+  font-size: 12px;
+}
+.member-invite-pull:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+.member-invite-contacts-toggle {
+  margin-top: 8px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: #86909c;
+  font-size: 12px;
+  cursor: pointer;
+}
+.member-invite-contacts-toggle:hover {
+  color: #3370ff;
+}
 .member-invite-hint {
-  margin: 0 0 6px;
+  margin: 6px 0 6px;
   color: #86909c;
   font-size: 12px;
 }

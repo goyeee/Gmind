@@ -63,6 +63,7 @@ const EDITING_TESTIDS = [
   'versions-toggle',
   'help-toggle',
   'members-btn',
+  'avatar-me',
 ] as const;
 
 test('移动端：画布照常渲染，编辑控件不装配，保留返回/标题只读/保存状态', async ({ page }) => {

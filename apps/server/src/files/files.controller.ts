@@ -39,6 +39,19 @@ const patchFileSchema = z
     message: '至少提供 title 或 folderId',
   });
 
+// GET /api/files/:id/invitable-users（2026-10-11 成员面板「一键拉取站内用户」）：
+// q 可选（≤64，模糊匹配昵称/手机号/邮箱）；page/size 缺省 1/20（size 上限 50）。
+const invitableQuerySchema = z.object({
+  q: z.string().max(64).optional(),
+  page: z.coerce.number().int().min(1).optional(),
+  size: z.coerce.number().int().min(1).max(50).optional(),
+});
+
+// POST /api/files/:id/collaborators：一键拉取 userIds（1..50，ULID 26 位）。
+const addCollaboratorsSchema = z.object({
+  userIds: z.array(z.string().min(1).max(26)).min(1).max(50),
+});
+
 @Controller('api/files')
 @UseGuards(UserGuard)
 export class FilesController {
@@ -78,6 +91,29 @@ export class FilesController {
   @Get(':id/collaborators')
   listCollaborators(@Req() req: { user: { id: string } }, @Param('id') id: string) {
     return this.files.listCollaborators(req.user.id, id);
+  }
+
+  /** 可拉取站内用户目录（2026-10-11 需求方裁定，成员面板「一键拉取」picker 数据源）：
+   *  仅 owner（非 owner 404，不泄露存在性）；排除 owner/既有协作者，q 模糊搜索，
+   *  分页浏览（注册时间升序）。 */
+  @Get(':id/invitable-users')
+  listInvitableUsers(
+    @Req() req: { user: { id: string } },
+    @Param('id') id: string,
+    @Query() query: unknown,
+  ) {
+    return this.files.listInvitableUsers(req.user.id, id, invitableQuerySchema.parse(query ?? {}));
+  }
+
+  /** 一键拉取站内用户为协作者（2026-10-11 裁定：直接添加、无需对方接受）：
+   *  仅 owner；幂等（已是协作者/owner 自身/无效 id 计 skipped）。 */
+  @Post(':id/collaborators')
+  addCollaborators(
+    @Req() req: { user: { id: string } },
+    @Param('id') id: string,
+    @Body() body: unknown,
+  ) {
+    return this.files.addCollaborators(req.user.id, id, addCollaboratorsSchema.parse(body ?? {}).userIds);
   }
 
   @Put(':id/doc-state')

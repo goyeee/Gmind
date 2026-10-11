@@ -1,6 +1,6 @@
 import { BadRequestException, ConflictException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Brackets, In, IsNull, Repository } from 'typeorm';
+import { Brackets, In, IsNull, Like, Not, Repository } from 'typeorm';
 import type * as Y from 'yjs';
 import {
   countAliveReachable,
@@ -342,6 +342,92 @@ export class FilesService {
       .filter((r) => r.userId !== file.ownerUserId)
       .map((r) => ({ userId: r.userId, nickname: nicknames.get(r.userId) ?? '', role: r.role, isOwner: false }));
     return [owner, ...collaborators];
+  }
+
+  /**
+   * 可拉取用户目录（2026-10-11 需求方裁定，成员面板「一键拉取站内用户」）：仅 owner
+   * （非 owner/文件缺失/已删一律 404「文件不存在」，不泄露存在性——deleteOwned 同口径）。
+   * 返回本服务器 status=active 的用户分页目录，排除 owner 与既有协作者；q 非空按
+   * 昵称/手机号/邮箱 LIKE 模糊匹配（escapeLike 通配符转义，FR-FIL-008 同款纪律）。
+   * size 钳 1..50（默认 20），注册时间升序（与账号管理列表同口径）。
+   */
+  async listInvitableUsers(
+    userId: string,
+    fileId: string,
+    opts: { q?: string; page?: number; size?: number },
+  ): Promise<{
+    items: Array<{ userId: string; nickname: string; phone: string | null; email: string | null }>;
+    total: number;
+    page: number;
+    size: number;
+  }> {
+    const file = await this.repo.findOne({ where: { id: fileId, deletedAt: IsNull() } });
+    if (!file || file.ownerUserId !== userId) throw new NotFoundException('文件不存在');
+    const collabs = await this.collabRepo.find({ where: { fileId: file.id }, select: ['userId'] });
+    const excluded = [file.ownerUserId, ...collabs.map((c) => c.userId)];
+    const q = (opts.q ?? '').trim();
+    const page = Math.max(1, Math.floor(opts.page ?? 1));
+    const size = Math.min(50, Math.max(1, Math.floor(opts.size ?? 20)));
+    const base = { status: 'active' as const, id: Not(In(excluded)) };
+    const where =
+      q === ''
+        ? base
+        : (['nickname', 'phone', 'email'] as const).map((field) => ({
+            ...base,
+            [field]: Like(`%${escapeLike(q)}%`),
+          }));
+    const [rows, total] = await this.userRepo.findAndCount({
+      where,
+      order: { createdAt: 'ASC' },
+      skip: (page - 1) * size,
+      take: size,
+      select: ['id', 'nickname', 'phone', 'email'],
+    });
+    return {
+      items: rows.map((u) => ({ userId: u.id, nickname: u.nickname, phone: u.phone, email: u.email })),
+      total,
+      page,
+      size,
+    };
+  }
+
+  /**
+   * 一键拉取站内用户为协作者（2026-10-11 需求方裁定：直接添加、无需对方接受）：
+   * 仅 owner（404 同 deleteOwned 口径）；role='editor'（一期协作者即可编辑，
+   * 与 dev-e2e grant/邀请接受同值）。幂等：owner 自身/已是协作者/不存在或停用的
+   * id 计入 skipped 不报错；并发双插命中 uk_fc_file_user 归并 skipped
+   * （star 同款 ER_DUP_ENTRY 纪律）。返回 { added, skipped }（skipped = 请求数 − 新增数）。
+   */
+  async addCollaborators(
+    userId: string,
+    fileId: string,
+    userIds: string[],
+  ): Promise<{ added: number; skipped: number }> {
+    const file = await this.repo.findOne({ where: { id: fileId, deletedAt: IsNull() } });
+    if (!file || file.ownerUserId !== userId) throw new NotFoundException('文件不存在');
+    const uniq = [...new Set(userIds)];
+    const rows = await this.collabRepo.find({ where: { fileId: file.id }, select: ['userId'] });
+    const existing = new Set([file.ownerUserId, ...rows.map((r) => r.userId)]);
+    const targets = await this.userRepo.find({
+      where: { id: In(uniq), status: 'active' as const },
+      select: ['id'],
+    });
+    let added = 0;
+    for (const t of targets) {
+      if (existing.has(t.id)) continue;
+      const row = this.collabRepo.create();
+      row.fileId = file.id;
+      row.userId = t.id;
+      row.role = 'editor';
+      try {
+        await this.collabRepo.save(row);
+        added += 1;
+        existing.add(t.id);
+      } catch (err) {
+        if (!isDuplicateKeyError(err)) throw err; // 并发双插的败者：幂等归并
+      }
+    }
+    return { added, skipped: uniq.length - added };
   }
 
   /** 读取/写入权限（spec §7.2）：owner 或 file_collaborators 存在行（一期协作者即可编辑）。

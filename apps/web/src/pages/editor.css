@@ -234,7 +234,7 @@ body.painter-active .editor-canvas svg {
   .editor-toolbar .toolbar-btn.toolbar-btn-text.toolbar-add-node .toolbar-btn-label {
     margin-left: 0;
   }
-  .avatar-bar {
+  .toolbar-trailing {
     margin-left: 2px;
     gap: 2px;
   }
@@ -277,58 +277,101 @@ body.painter-active .editor-canvas svg {
   text-align: center;
 }
 
-/* 顶栏协作者头像栏（M6 Task 9，企微对标）：工具栏最右 24px 圆头像（昵称首字符，
-   底色=成员色，在线描边=白边+成员色环由内联样式随成员色写入），离线灰底无描边。
-   独立于 .toolbar-group（无竖线分隔、右缘贴合，T1「7 组」布局契约不动）。 */
-.avatar-bar {
+/* 顶栏右缘（2026-10-11 需求方裁定）：[成员钮][本人头像=个人中心]——协作者头像栏
+   （M6 Task 9）退役。独立于 .toolbar-group（无竖线分隔、右缘贴合，T1 布局契约
+   不动）；margin-left:auto 钉最右（保存状态文案宽度变化只改变弹性空隙）。 */
+.toolbar-trailing {
   flex: none;
   display: flex;
   align-items: center;
-  gap: 4px;
-  height: 28px; /* 单行判定：与按钮行等高，头像在其中垂直居中（2026-09-30 任务 1） */
-  /* M7c-J（需求方反馈）：头像钉在工具栏最右——auto 外边距吸收左侧状态文案的宽度
-     变化，保存中/已保存切换只改变弹性空隙、不再推移任何按钮。 */
+  gap: 6px;
+  height: 28px; /* 单行判定：与按钮行等高 */
   margin-left: auto;
 }
-.editor-toolbar .avatar-bar button:hover {
-  box-shadow: 0 0 0 2px #e8f3ff;
-}
-.editor-toolbar .avatar-chip {
+.editor-toolbar .avatar-me {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
+  width: 26px;
+  height: 26px;
   padding: 0;
-  border: none;
+  border: 2px solid #fff;
   border-radius: 50%;
-  background: transparent;
+  background: #3370ff;
   color: #fff;
   font-size: 12px;
   line-height: 1;
   cursor: pointer;
+  box-shadow: 0 0 0 1px #e5e6eb;
 }
-.editor-toolbar .avatar-chip.offline {
-  background: #a9aeb8;
-  box-shadow: none;
-  opacity: 0.75;
+.editor-toolbar .avatar-me:hover {
+  box-shadow: 0 0 0 2px #e8f3ff;
 }
-/* 溢出位「+N」：灰色小丸，点击同样打开成员面板 */
-.editor-toolbar .avatar-overflow {
+/* 个人中心下拉（fixed 锚定本人头像下沿）：身份头部 + 菜单项 */
+.personal-menu {
+  position: fixed;
+  z-index: 1200;
+  top: 40px; /* 工具栏下方（28px 行高 + 间隙）——窄视口右缘钳制见下方 */
+  right: 12px;
+  width: 220px;
+  padding: 12px;
+  background: #fff;
+  border: 1px solid #e5e6eb;
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(31, 35, 41, 0.16);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+}
+.personal-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-bottom: 10px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid #f2f3f5;
+}
+.personal-avatar {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  height: 24px;
-  padding: 0 7px;
-  border: none;
-  border-radius: 12px;
-  background: #e5e6eb;
-  color: #4e5969;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: #3370ff;
+  color: #fff;
+  font-size: 14px;
+  flex: none;
+}
+.personal-id {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.personal-nickname {
+  font-weight: 600;
+  color: #1f2329;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.personal-phone {
+  color: #86909c;
   font-size: 12px;
+}
+.personal-item {
+  padding: 7px 10px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  text-align: left;
+  font-size: 13px;
+  color: #1f2329;
   cursor: pointer;
 }
-.editor-toolbar .avatar-overflow:hover {
-  background: #d5d7de;
+.personal-item:hover {
+  background: #f2f3f5;
 }
 
 .editor-canvas {
@@ -743,8 +786,9 @@ body.painter-active .editor-canvas svg {
 }
 
 /* 插入菜单（2026-09-28 二次改版；M7b-W3 面板重做）：仅下拉（图标/表情/备注/链接/
-   图片）——标记面板已重做为企微式锚定弹出层（挂本 wrap 下，marker-panel.css）。
-   定位对齐 .export-menu（absolute 于 relative 的 .insert-wrap，顶距 4px）。 */
+   图片）——标记编辑已内嵌任务面板（2026-10-10 裁定，marker-picker.css 承共享
+   值按钮样式）。定位对齐 .export-menu（absolute 于 relative 的 .insert-wrap，
+   顶距 4px）。 */
 .insert-wrap {
   position: relative;
 }

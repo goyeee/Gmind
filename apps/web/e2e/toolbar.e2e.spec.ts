@@ -55,6 +55,7 @@ const EXISTING_TESTIDS = [
   'theme-panel-toggle',
   'export-menu',
   'members-btn',
+  'avatar-me', // 本人头像=个人中心入口（2026-10-11 顶栏右缘重组）
   'versions-toggle',
   'activity-toggle',
   'help-toggle',
@@ -202,19 +203,24 @@ test('工具栏：组序符合企微对标布局（返回|标题|视图|撤销�
   expect(addX).toBeGreaterThan(redoX0);
   expect(formatX).toBeGreaterThan(addX);
   expect(structX).toBeGreaterThan(formatX);
-  // 同组相邻：撤销 < 重做；成员 < 版本历史 < 动态 < 快捷键 < 查找
+  // 同组相邻：撤销 < 重做；版本历史 < 动态 < 快捷键 < 查找（成员入口 2026-10-11
+  // 迁至顶栏最右本人头像左侧，不在本组——见下方 members-btn 断言）
   const undoX = (await page.getByTestId('undo-btn').boundingBox())!.x;
   const redoX = (await page.getByTestId('redo-btn').boundingBox())!.x;
   expect(redoX).toBeGreaterThan(undoX);
   const themeX = (await page.getByTestId('theme-panel-toggle').boundingBox())!.x;
   expect(themeX).toBeGreaterThan(structX);
-  const membersX = (await page.getByTestId('members-btn').boundingBox())!.x;
   const versionsX = (await page.getByTestId('versions-toggle').boundingBox())!.x;
   const activityX = (await page.getByTestId('activity-toggle').boundingBox())!.x;
   const helpX = (await page.getByTestId('help-toggle').boundingBox())!.x;
   const findX = (await page.getByTestId('find-toggle').boundingBox())!.x;
-  expect(versionsX).toBeGreaterThan(membersX);
+  expect(versionsX).toBeGreaterThan(themeX);
   expect(activityX).toBeGreaterThan(versionsX); // T8 动态入口在版本历史右侧
   expect(helpX).toBeGreaterThan(activityX);
   expect(findX).toBeGreaterThan(helpX);
+  // 2026-10-11：members-btn 钉顶栏最右（本人头像 avatar-me 左侧），在查找右侧
+  const membersX = (await page.getByTestId('members-btn').boundingBox())!.x;
+  const avatarMeX = (await page.getByTestId('avatar-me').boundingBox())!.x;
+  expect(membersX).toBeGreaterThan(findX);
+  expect(avatarMeX).toBeGreaterThan(membersX);
 });

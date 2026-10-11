@@ -45,14 +45,14 @@ async function openFormatPanel(page: Page) {
   return panel;
 }
 
-/** 打开 TaskPanel →「在标记面板中编辑」标记面板（2026-10-10 插入菜单删除后的
- *  标记写入路径），返回标记面板。TaskPanel 已开时跳过 task-toggle（toggle 语义）。 */
+/** 打开 TaskPanel 标记区块（2026-10-10 内嵌化）并展开「旗帜」折叠组，返回任务面板。
+ *  TaskPanel 已开时跳过 task-toggle（toggle 语义）。 */
 async function openMarkerPanel(page: Page) {
-  const editBtn = page.getByTestId('task-panel-markers-edit');
-  if ((await editBtn.count()) === 0) await page.getByTestId('task-toggle').click();
-  await editBtn.click();
-  const panel = page.getByTestId('marker-panel');
+  if ((await page.getByTestId('task-panel').count()) === 0) await page.getByTestId('task-toggle').click();
+  const panel = page.getByTestId('task-panel');
   await expect(panel).toBeVisible();
+  const toggle = panel.getByTestId('task-panel-marker-toggle-flag');
+  if ((await toggle.getAttribute('aria-expanded')) === 'false') await toggle.click();
   return panel;
 }
 

@@ -66,6 +66,7 @@ import {
   pasteText,
   readFromSystemClipboard,
   renderScene,
+  colorForUser,
   type RemoteCursor,
   resolveNodeStyle,
   resolveThemeId,
@@ -108,7 +109,7 @@ import {
   uploadImage,
 } from '../editor/imageUpload';
 import { HelpPanel } from '../editor/HelpPanel';
-import { MarkerPanel, MarkerChip, type MarkerTab } from '../editor/MarkerPanel';
+import { MarkerChip } from '../editor/MarkerChip';
 import { MemberPanel } from '../editor/MemberPanel';
 import { RichPanel } from '../editor/RichPanel';
 import { StructurePanel, type StructureTypeValue } from '../editor/StructurePanel';
@@ -131,8 +132,9 @@ import { useIsMobileViewport } from '../editor/useIsMobileViewport';
 import { exportXmind } from '../editor/xmind-export';
 import { exportImage } from '../editor/image-export';
 import { track } from '../api/events';
-import { api, apiPost } from '../api/client';
+import { api, apiPost, clearToken } from '../api/client';
 import './editor.css';
+import '../editor/marker-picker.css';
 
 /**
  * 编辑器页面装配（/edit/:fileId）— M1b Task 11。
@@ -211,9 +213,6 @@ type PainterMode = {
 
 /** WS 断开（或全断网）时的保存指示（M2 Task 3，FR-EDT-034）。 */
 const OFFLINE_STATUS = '离线编辑中，恢复联网后自动同步';
-
-/** 顶栏头像栏展示上限（M6 Task 9，企微对标）：超出折叠为「+N」溢出位。 */
-const MAX_AVATARS = 5;
 
 /** CollabStatus → 保存指示文案（四值：已保存 HH:MM / 保存中 / 离线编辑中 / 配额非重试）。 */
 function statusText(status: CollabStatus, detail?: string): string | null {
@@ -340,14 +339,15 @@ export function EditorPage() {
   const [members, setMembers] = useState<PresenceMember[]>([]);
   const [membersOpen, setMembersOpen] = useState(false);
   // 头像点击定位目标（M6 Task 9 评审修复轮）：随面板打开传给 MemberPanel——滚动
-  // 目标成员行进视口并短时高亮。members-btn/溢出位打开置 null（无定位目标）；
-  // 面板关闭时清空（下次普通打开不复用旧目标）。
+  // 目标成员行进视口并短时高亮。members-btn 打开置 null（无定位目标）；面板关闭
+  // 时清空（下次普通打开不复用旧目标）。注：头像栏随 2026-10-11 裁定退役，本
+  // 定位管线暂无 UI 触发入口，保留为面板能力。
   const [membersFocus, setMembersFocus] = useState<string | null>(null);
-  // 顶栏头像栏的会话内已见成员（M6 Task 9，企微对标）：presence 只含在线者，
-  // 「离线=灰」要求记住本会话曾出现过的成员——同一 onPresence 通道的派生缓存
-  // （非第二获取通道），Map 按 userId 去重、插入序=首见序（稳定展示顺序，
-  // 重复加入不换位）。文件切换随装配 effect cleanup 整体重置。
-  const [avatarSeen, setAvatarSeen] = useState<Map<string, PresenceMember>>(() => new Map());
+  // 个人中心（2026-10-11 需求方裁定：顶栏最右 = [成员钮][本人头像]）：本人身份
+  // 经 GET /users/me 拉取（昵称/手机号，presence 自有身份仅用于首字符兜底）；
+  // 下拉含返回工作台/退出登录（复用工作台 logout 范式）。
+  const [me, setMe] = useState<{ id: string; nickname: string; phone: string | null } | null>(null);
+  const [personalOpen, setPersonalOpen] = useState(false);
   // 版本历史面板开合（M4 Task 8，FR-VER-004 UI）：装配模式同成员面板 open/onClose
   const [versionsOpen, setVersionsOpen] = useState(false);
   // 文档动态面板开合（M6 Task 8，企微对标）：版本历史旁入口，open/onClose 同款装配
@@ -467,17 +467,10 @@ export function EditorPage() {
   // 2026-10-10 需求方裁定：再点已选中节点也开本面板（取代已删除的右键「任务设置」
   // 快速卡——TaskQuickCard/`,` 快捷键/quickCard 态全链路退役）。
   const [taskPanelOpen, setTaskPanelOpen] = useState(false);
-  // 标记面板（M7b-W3 企微式竖层）：锚定弹出层。2026-10-10 工具栏「插入」菜单整体
-  // 删除（需求方裁定：菜单连条目全删——链接/图片走格式面板既有入口、评论走工具栏
-  // comment-toggle）后改 **fixed 视口定位**：anchor=调用方供给的屏幕坐标
-  // （TaskPanel「在标记面板中编辑」按钮下沿），渲染期右缘越界钳制。
-  const [markerPanel, setMarkerPanel] = useState<{
-    open: boolean;
-    tab: MarkerTab;
-    anchor: { left: number; top: number };
-  }>({ open: false, tab: 'icon', anchor: { left: 0, top: 0 } });
   // 节点标记点击换组（M7b-W3 #4）：徽章命中 → 该组迷你选盘浮层（HTML 层锚定点击点，
   // contextMenu 同款 fixed 定位；nodeId/group 为写入目标，x/y 为弹出锚点）。
+  // （标记面板 MarkerPanel 弹层已随 2026-10-10「任务面板标记内嵌化」裁定退役，
+  //  目录编辑改在 TaskPanel 区块内完成。）
   const [markerPicker, setMarkerPicker] = useState<{
     nodeId: string;
     group: IconGroup;
@@ -541,41 +534,8 @@ export function EditorPage() {
     return () => document.removeEventListener('pointerdown', onDocPointerDown);
   }, [exportOpen]);
 
-  // —— 标记面板弹层（2026-10-10 插入菜单删除后独立成层，Esc/外点关闭沿用
-  // M7c-D2 pointerdown 口径）——
-  // insert-layer 机制）——菜单与面板互斥（开面板收菜单、开菜单收面板）；打开期间
-  // 标记面板外点/Esc 关闭（2026-10-10 插入菜单删除后独立成层）：document pointerdown
-  // 命中面板之外即收（M7c-D2：mousedown 会被画布 preventDefault 抑制）、Esc 即收；
-  // 只读降级即收。
-  const closeMarkerPanel = (): void => {
-    setMarkerPanel((p) => (p.open ? { ...p, open: false } : p));
-  };
-  /** MarkerPanel 打开入口：anchor=调用方屏幕坐标（TaskPanel 按钮下沿）。 */
-  const openMarkerPanel = (tab: MarkerTab, anchor: { left: number; top: number }): void => {
-    setMarkerPanel({ open: true, tab, anchor });
-  };
-  useEffect(() => {
-    if (!markerPanel.open) return;
-    const onDocPointerDown = (e: PointerEvent): void => {
-      if (!(e.target as Element | null)?.closest?.('.marker-panel')) {
-        closeMarkerPanel();
-      }
-    };
-    const onKeyDown = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') closeMarkerPanel();
-    };
-    document.addEventListener('pointerdown', onDocPointerDown);
-    document.addEventListener('keydown', onKeyDown);
-    return () => {
-      document.removeEventListener('pointerdown', onDocPointerDown);
-      document.removeEventListener('keydown', onKeyDown);
-    };
-  }, [markerPanel.open]);
-  useEffect(() => {
-    if (readOnly && markerPanel.open) {
-      closeMarkerPanel();
-    }
-  }, [readOnly, markerPanel.open]);
+  // （标记面板弹层的 Esc/外点关闭链已随 2026-10-10「任务面板标记内嵌化」裁定退役：
+  //  MarkerPanel 无入口整体删除，标记编辑在 TaskPanel 区块内联完成。）
 
   // —— 迷你选盘（节点标记点击换组）Esc/外点关闭（面板同机制；M7c-D2 改 pointerdown
   // —— mousedown 被画布 onSvgPointerDown 的 preventDefault 抑制，空白点击收不起）——
@@ -633,6 +593,7 @@ export function EditorPage() {
       themePanelOpen ||
       structurePanelOpen ||
       commentsOpen ||
+      personalOpen ||
       formatOpen ||
       taskPanelOpen;
     if (!anyOpen) return;
@@ -648,7 +609,7 @@ export function EditorPage() {
       if (
         el.closest('[data-popover-toggle]') ||
         el.closest(
-          '.editor-right, .editor-mobile-comments, .theme-panel, .structure-panel, .theme-wrap, .structure-wrap, .activity-panel, .help-panel, .find-bar, .member-panel, .version-panel, .marker-panel',
+          '.editor-right, .editor-mobile-comments, .theme-panel, .structure-panel, .theme-wrap, .structure-wrap, .activity-panel, .help-panel, .find-bar, .member-panel, .version-panel, .marker-panel, .personal-menu',
         ) ||
         exportWrapRef.current?.contains(el)
       ) {
@@ -681,9 +642,20 @@ export function EditorPage() {
     themePanelOpen,
     structurePanelOpen,
     commentsOpen,
+    personalOpen,
     formatOpen,
     taskPanelOpen,
   ]);
+
+  // —— 个人中心下拉（2026-10-11）：Esc 关闭（外点关闭走统一 effect 上方）。 ——
+  useEffect(() => {
+    if (!personalOpen) return;
+    const onKeyDown = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') setPersonalOpen(false);
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [personalOpen]);
 
   // —— 结构面板（2026-09-30 任务 3）：Esc 关闭（ThemePanel 无 Esc，本面板按需求
   // 方要求补齐；编辑覆盖层自身的 Esc 先行 stopPropagation 不受影响）。 ——
@@ -712,47 +684,10 @@ export function EditorPage() {
   }, [formatOpen, taskPanelOpen, commentsOpen, view, readOnly]);
 
   /**
-   * 标记写入（M7b-W3 #5 批量语义）：对**选中集全部节点**逐个 setIcon，单事务
-   * 一次性提交（内层 withTransaction 嵌套复用外层事务，一次 Ctrl+Z 整体回滚）；
-   * afterUserWrite 统一收口（origin/capUndoStack 纪律不变），错误 toast 两段式。
-   *
-   * 方向展开（需求方 #5 裁定「single 组全组已含该值→移除，否则设置」，multi 组
-   * toggle 同义）：single 组全部选中已含 → 逐节点置 null 移除该组，否则给缺该值
-   * 的节点设置（已含者零写入，不给撤销栈留空项）；multi 组全部已含 → toggle 移除，
-   * 否则给缺该值节点 toggle 叠加（setIcon 的 toggle 语义天然收敛到目标态）。
+   * （applyMarker 批量标记写入已随 2026-10-10「任务面板标记内嵌化」裁定退役——
+   *  MarkerPanel 弹层删除后无消费方；TaskPanel 内嵌行单节点直写 setIcon、迷你选盘
+   *  applyPickerValue 保留画布徽章点击换组入口。）
    */
-  const applyMarker = (group: IconGroup, value: string): void => {
-    if (!doc) return;
-    const selection = selectionRef.current;
-    if (!selection) return;
-    const ids = [...selection.selected].filter((id) => {
-      const snap = getNode(doc, id);
-      return !!snap && !snap.deleted;
-    });
-    if (ids.length === 0) return;
-    const hasValue = (id: string): boolean =>
-      getNode(doc, id)?.icons?.[group]?.includes(value) ?? false;
-    try {
-      withTransaction(doc, ORIGIN_USER, () => {
-        const allHave = ids.every(hasValue);
-        if (MARKER_GROUP_MODE[group] === 'multi') {
-          const desired = !allHave; // 全含 → 全移除；否则补齐到全含
-          for (const id of ids) {
-            if (hasValue(id) !== desired) setIcon(doc, id, group, value);
-          }
-        } else if (allHave) {
-          for (const id of ids) setIcon(doc, id, group, null);
-        } else {
-          for (const id of ids) {
-            if (!hasValue(id)) setIcon(doc, id, group, value);
-          }
-        }
-      });
-      afterUserWrite();
-    } catch (e) {
-      showToast(e instanceof Error ? e.message : '标记设置失败');
-    }
-  };
 
   /**
    * 迷你选盘写入（M7b-W3 #4，单节点）：同值 = 移除（single 置 null / multi toggle
@@ -2303,34 +2238,8 @@ export function EditorPage() {
   // 区/多选/已删）为 null → 样式区置灰 + 提示。tick 驱动重渲染，切换节点即时刷新。
   const selectedSnapshot = doc && selectedNodeId ? getNode(doc, selectedNodeId) : null;
 
-  // —— 标记面板批量口径（M7b-W3 #5）——
-  // 选中集存活节点（root 亦可携标记，随选区一并计入）；标记回显 = **交集口径**
-  // （组值仅当全部选中节点都含才亮，与批量「全含则移除否则设置」同一语义）。
-  const selectedIds =
-    selectionNow && doc
-      ? [...selectionNow.selected].filter((id) => {
-          const snap = getNode(doc, id);
-          return !!snap && !snap.deleted;
-        })
-      : [];
-  const selectedIcons: Partial<Record<IconGroup, string[]>> = {};
-  if (doc && selectedIds.length > 0) {
-    for (const group of ICON_GROUPS) {
-      let acc: string[] | null = null;
-      for (const id of selectedIds) {
-        const vals = getNode(doc, id)?.icons?.[group] ?? [];
-        acc = acc === null ? [...vals] : acc.filter((v) => vals.includes(v));
-        if (acc.length === 0) break;
-      }
-      if (acc && acc.length > 0) selectedIcons[group] = acc;
-    }
-  }
-  // 面板右缘越界钳制（fixed 视口定位：左缘贴锚点展开，越界时整体左移收回视口）。
-  const MARKER_PANEL_WIDTH = 340;
-  const markerPanelLeft =
-    markerPanel.anchor.left + MARKER_PANEL_WIDTH > window.innerWidth - 8
-      ? Math.max(8, window.innerWidth - 8 - MARKER_PANEL_WIDTH)
-      : markerPanel.anchor.left;
+  // （标记面板批量口径 selectedIds/selectedIcons 已随 2026-10-10「任务面板标记
+  //  内嵌化」裁定退役——MarkerPanel 删除后无消费方；TaskPanel 内嵌行单节点读写。）
 
   // —— 结构/主题面板锚定坐标（2026-09-30 需求方四条反馈任务 1）——
   // 两面板改企微式贴按钮下拉（absolute 挂各自 wrap 下、left 对齐按钮左缘）。
@@ -2352,13 +2261,6 @@ export function EditorPage() {
   const pickerSnapshot = markerPicker && doc ? getNode(doc, markerPicker.nodeId) : null;
   const pickerLeft = markerPicker ? Math.min(markerPicker.x + 6, window.innerWidth - 262) : 0;
   const pickerTop = markerPicker ? Math.min(markerPicker.y + 6, window.innerHeight - 260) : 0;
-
-  // —— 顶栏头像栏派生（M6 Task 9，企微对标）——
-  // 在线判定 = 当前 presence 集；展示集 = 会话内已见成员首见序前 MAX_AVATARS 枚，
-  // 其余折叠为「+N」溢出位。离线成员（已见不在 presence）仍展示、灰态。
-  const avatarOnlineIds = new Set(members.map((m) => m.userId));
-  const avatarShown = [...avatarSeen.values()].slice(0, MAX_AVATARS);
-  const avatarOverflow = avatarSeen.size - avatarShown.length;
 
   // —— 评论动作（M3b Task 7，FR-CMT-002）——
 
@@ -2413,23 +2315,21 @@ export function EditorPage() {
     if (state) setStarred(state.starred);
   }, [state]);
 
-  /** presence → 会话内已见成员合并（M6 Task 9）：新成员或快照变更才产出新 Map，
-   *  无变化返回原引用（React bail out，不为 editing 抖动等高频回调付重渲染）。 */
-  const mergeAvatarSeen = (next: PresenceMember[]): void => {
-    setAvatarSeen((prev) => {
-      let merged: Map<string, PresenceMember> | null = null;
-      for (const m of next) {
-        const old = prev.get(m.userId);
-        if (old === m) continue;
-        if (old !== undefined && old.joinedAt === m.joinedAt && old.nickname === m.nickname) {
-          continue; // 同一会话快照未变（editing 翻转不重排头像栏）
-        }
-        merged ??= new Map(prev);
-        merged.set(m.userId, m);
-      }
-      return merged ?? prev;
-    });
+  /** 个人中心动作（2026-10-11）：返回工作台 / 退出登录——复用工作台范式
+   *  （POST /auth/logout + clearToken + 回登录页；登出失败也照常本地登出）。 */
+  const logout = (): void => {
+    void api('/auth/logout', { method: 'POST' }).catch(() => undefined);
+    clearToken();
+    navigate('/login');
   };
+
+  // 本人身份（个人中心，2026-10-11）：进编辑器拉一次 GET /users/me（昵称/手机号
+  // 展示 + 头像首字符）；失败静默（下拉头部降级「我」，菜单项仍可用）。
+  useEffect(() => {
+    void api<{ id: string; nickname: string; phone: string | null }>('/users/me')
+      .then(setMe)
+      .catch(() => undefined);
+  }, []);
 
   // —— 引擎装配主 effect ——
   useEffect(() => {
@@ -2782,7 +2682,6 @@ export function EditorPage() {
       },
       onPresence: (next) => {
         setMembers(next);
-        mergeAvatarSeen(next); // 头像栏会话缓存（M6 Task 9）：同一通道派生，见 state 声明处注释
       },
       // persisted ack 携带的行 updated_at（M3a 准入 7.1）→ 刷新写序 base；此后断开
       // 走 PUT 兜底时，携带的是最后一次服务端持久化确认的行值
@@ -2875,7 +2774,6 @@ export function EditorPage() {
       cursorLayerRef.current = null;
       remoteCursorsRef.current = [];
       setMembers([]);
-      setAvatarSeen(new Map()); // 头像栏会话缓存随文件切换重置（M6 Task 9）
       detachKeys?.();
       setEditingClass(null); // 编辑重影类兜底摘除（不依赖 close(false)→onCancel 顺带清理）
       overlay.close(false);
@@ -3309,24 +3207,9 @@ export function EditorPage() {
           </div>
         </div>
         <span className="toolbar-sep" />
-        {/* 协作/视图组：成员 / 版本历史 / 快捷键 / 查找（T3 查找替换已接线） */}
+        {/* 协作/视图组：版本历史 / 快捷键 / 查找（T3 查找替换已接线）；成员入口
+            2026-10-11 迁至顶栏最右（头像左侧），本组不再含 members-btn */}
         <div className="toolbar-group">
-          <button
-            data-testid="members-btn"
-            data-popover-toggle="members-btn"
-            className="toolbar-btn"
-            title="在线成员"
-            aria-label="在线成员"
-            onClick={() => {
-              setMembersFocus(null); // 常规开关：无定位目标（M6 T9 评审修复轮）
-              setMembersOpen((v) => !v);
-            }}
-          >
-            <MembersIcon />
-            <span className="members-badge" data-testid="members-count">
-              {members.length}
-            </span>
-          </button>
           {/* 版本历史（M4 Task 8，FR-VER-004 UI）：时间轴/只读预览/一键恢复入口 */}
           <button
             data-testid="versions-toggle"
@@ -3369,54 +3252,81 @@ export function EditorPage() {
             <SearchIcon />
           </button>
         </div>
-        {/* 顶栏协作者头像栏（M6 Task 9，企微对标）：工具栏最右 ≤5 枚 24px 圆头像
-            （昵称首字符回退，底色=成员色），在线=全彩+成员色描边、离线=灰；溢出
-            「+N」；点击任意头像/溢出位 = 打开既有成员面板（members-btn 同一面板）。
-            数据源与 MemberPanel 同一 presence 通道（members/会话缓存 avatarSeen）；
-            移动端只读分支不装配（随桌面工具栏整体隐藏）。样式独立于 .toolbar-group
-            （无竖线分隔、右缘贴合，T1「7 组」布局契约不动——零回归裁决）。 */}
-        <div className="avatar-bar" data-testid="avatar-bar" aria-label="协作者">
-          {avatarShown.map((m) => {
-            const online = avatarOnlineIds.has(m.userId);
-            return (
-              <button
-                key={m.userId}
-                type="button"
-                data-testid={`avatar-${m.userId}`}
-                className={`avatar-chip${online ? ' online' : ' offline'}`}
-                style={
-                  online
-                    ? { background: m.color, boxShadow: `0 0 0 2px #fff, 0 0 0 3px ${m.color}` }
-                    : undefined
-                }
-                title={`${m.nickname}（${online ? '在线' : '离线'}）`}
-                aria-label={`${m.nickname}（${online ? '在线' : '离线'}）`}
-                onClick={() => {
-                  // 点击头像 = 打开成员面板并定位该成员行（M6 T9 评审修复轮：
-                  // 携带目标 userId；离线成员不在 presence 时定位 no-op）
-                  setMembersFocus(m.userId);
-                  setMembersOpen(true);
-                }}
+        {/* 顶栏右缘（2026-10-11 需求方裁定）：[成员钮][本人头像=个人中心]。
+            成员钮=成员面板唯一入口（MembersIcon + 在线数角标，testid 自协作组迁移，
+            既有用例零改动）；本人头像=个人中心下拉（昵称/手机号 + 返回工作台 +
+            退出登录）。协作者头像栏（M6 Task 9）整体退役——在线名单以成员面板为
+            准；移动端只读分支不装配（随桌面工具栏整体隐藏）。 */}
+        <div className="toolbar-trailing">
+          <button
+            data-testid="members-btn"
+            data-popover-toggle="members-btn"
+            className="toolbar-btn"
+            title="在线成员"
+            aria-label="在线成员"
+            onClick={() => {
+              setMembersFocus(null); // 常规开关：无定位目标（M6 T9 评审修复轮）
+              setMembersOpen((v) => !v);
+            }}
+          >
+            <MembersIcon />
+            <span className="members-badge" data-testid="members-count">
+              {members.length}
+            </span>
+          </button>
+          <button
+            type="button"
+            data-testid="avatar-me"
+            className="avatar-me"
+            style={me ? { background: colorForUser(me.id) } : undefined}
+            title="个人中心"
+            aria-label="个人中心"
+            aria-haspopup="menu"
+            aria-expanded={personalOpen}
+            onClick={() => setPersonalOpen((v) => !v)}
+          >
+            {(me?.nickname ?? '我').charAt(0)}
+          </button>
+        </div>
+        {personalOpen && (
+          <div className="personal-menu" data-testid="personal-menu" role="menu" aria-label="个人中心">
+            <div className="personal-head">
+              <span
+                className="personal-avatar"
+                style={me ? { background: colorForUser(me.id) } : undefined}
+                aria-hidden
               >
-                {m.nickname.charAt(0) || '？'}
-              </button>
-            );
-          })}
-          {avatarOverflow > 0 && (
+                {(me?.nickname ?? '我').charAt(0)}
+              </span>
+              <div className="personal-id">
+                <span className="personal-nickname" data-testid="personal-nickname">
+                  {me?.nickname ?? '我'}
+                </span>
+                <span className="personal-phone" data-testid="personal-phone">
+                  {me?.phone ?? ''}
+                </span>
+              </div>
+            </div>
             <button
               type="button"
-              data-testid="avatar-overflow"
-              className="avatar-overflow"
-              title={`还有 ${avatarOverflow} 位协作者`}
-              onClick={() => {
-                setMembersFocus(null); // 溢出位无特定目标：仅打开面板不定位（裁定）
-                setMembersOpen(true);
-              }}
+              className="personal-item"
+              data-testid="personal-workspace"
+              role="menuitem"
+              onClick={() => navigate('/workspace')}
             >
-              +{avatarOverflow}
+              返回工作台
             </button>
-          )}
-        </div>
+            <button
+              type="button"
+              className="personal-item"
+              data-testid="personal-logout"
+              role="menuitem"
+              onClick={logout}
+            >
+              退出登录
+            </button>
+          </div>
+        )}
       </>
         )}
       </header>
@@ -3543,7 +3453,6 @@ export function EditorPage() {
                 presence={members}
                 afterUserWrite={afterUserWrite}
                 showToast={showToast}
-                onOpenMarkers={(anchor) => openMarkerPanel('icon', anchor)}
                 onDelete={() => handleDelete('context')}
                 onClose={() => setTaskPanelOpen(false)}
               />
@@ -3617,20 +3526,8 @@ export function EditorPage() {
         </div>
       )}
 
-      {/* 标记面板（M7b-W3 企微式竖层；2026-10-10 插入菜单删除后 fixed 视口锚定，
-          锚点=TaskPanel「在标记面板中编辑」按钮下沿，左缘右缘越界钳制）：批量口径见
-          applyMarker（多选可批量应用），无选中禁用+提示；Esc/外点关。 */}
-      {markerPanel.open && (
-        <MarkerPanel
-          icons={selectedIcons}
-          selectedCount={selectedIds.length}
-          onSetIcon={applyMarker}
-          tab={markerPanel.tab}
-          onTabChange={(tab) => setMarkerPanel((p) => ({ ...p, tab }))}
-          onClose={() => setMarkerPanel((p) => ({ ...p, open: false }))}
-          position={{ left: markerPanelLeft, top: markerPanel.anchor.top }}
-        />
-      )}
+      {/* （标记面板 MarkerPanel 已随 2026-10-10「任务面板标记内嵌化」裁定退役：
+          优先级/进度常显 + 六组折叠改在 TaskPanel 区块内联，见 TaskPanel.tsx。） */}
 
       {/* 节点标记迷你选盘（M7b-W3 #4 点击换组）：徽章点击弹出该组值网格（HTML 层
           锚定点击点，视口内钳制），当前值高亮；同值=移除、他值=single 替换/multi

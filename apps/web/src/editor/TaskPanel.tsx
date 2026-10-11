@@ -1,14 +1,19 @@
 import { useEffect, useMemo, useState, type ReactElement } from 'react';
 import type * as Y from 'yjs';
 import {
+  MARKER_GROUP_MODE,
   MAX_DESCRIPTION_LENGTH,
   getMeta,
   setDescription,
   setCustomField,
+  setIcon,
   setNodeTask,
+  setText,
+  progressStageOf,
+  type IconGroup,
   type NodeSnapshot,
 } from '@gmind/core';
-import { MARKER_CATALOG, MARKER_ROW_ORDER, type MarkerGlyphDef } from '@gmind/engine';
+import { MARKER_CATALOG, MARKER_GROUP_LABELS, MARKER_ROW_ORDER, type MarkerGlyphDef } from '@gmind/engine';
 import {
   childrenOf,
   effectiveProgress,
@@ -18,7 +23,7 @@ import {
   type TaskStatus,
 } from '@gmind/shared';
 import type { PresenceMember } from './collab';
-import { MarkerChip } from './MarkerPanel';
+import { MarkerChip } from './MarkerChip';
 import {
   CustomFieldInput,
   deriveNodesOfDoc,
@@ -30,6 +35,7 @@ import {
   useTaskMembers,
 } from './TaskFields';
 import './task-panel.css';
+import './marker-picker.css';
 
 /**
  * 右侧任务属性面板（M7c-C3/C4，spec 2026-09-29 §R3；对标 mindgrid NodeEditor）：
@@ -38,15 +44,25 @@ import './task-panel.css';
  * 2026-10-10 需求方裁定新增第二入口：**再点已选中节点**也开本面板（mindgrid
  * 「单击选中 · 再击开属性」同款；右键「任务设置」快速卡随之删除）。
  *
- * 内容（纵向分节，与 RichPanel 同族样式）：标题（只读展示）/ 描述（textarea，
- * 200 上限计数，失焦提交）/ 负责人（成员多选）/ 状态四选 / 优先级·标记
- * （当前标记回显 +「在标记面板中编辑」跳转）/ 三日期（SmartDateInput）/ 进度
- * （叶子可编、父级 Σ 只读）/ 自定义属性（表格自定义列逐列渲染 CustomFieldInput，
- * 即改即存）/ 删除节点（危险红，confirm 二次确认复用现有机制）。
+ * 内容（纵向分节，与 RichPanel 同族样式）：标题（2026-10-10 预览反馈起可编辑
+ * input，键入即写 setText 实时同步画布节点）/ 描述（textarea，200 上限计数，
+ * 同日起键入即写实时同步画布描述行；原失焦提交退役）/ 负责人（成员多选）/
+ * 状态四选 / 优先级·标记（2026-10-10 需求方裁定内嵌化：优先级+进度两组图标平铺
+ * 常显，其余六组折叠行——「在标记面板中编辑」按钮与 MarkerPanel 弹层退役）/
+ * 三日期（SmartDateInput）/ 进度（叶子可编、父级 Σ 只读）/ 自定义属性（表格
+ * 自定义列逐列渲染 CustomFieldInput，即改即存）/ 删除节点（危险红，confirm
+ * 二次确认复用现有机制）。
  *
  * 写纪律：全部走 core op（setDescription / setNodeTask / setIcon）+ afterUserWrite，
  * 即改即存；异常两段式 toast；全部控件 data-testid `task-panel-*`。
  */
+
+/** 内嵌目录常显行（平铺可直接点）：优先级 + 进度（2026-10-10 需求方裁定）。 */
+const INLINE_MARKER_GROUPS: readonly IconGroup[] = ['priority', 'progress'];
+/** 其余六组折叠行（点组名展开；组序沿用 engine 目录行序去掉常显两组）。 */
+const COLLAPSED_MARKER_GROUPS: readonly IconGroup[] = MARKER_ROW_ORDER.filter(
+  (g) => !INLINE_MARKER_GROUPS.includes(g),
+);
 
 export interface TaskPanelProps {
   doc: Y.Doc;
@@ -60,22 +76,27 @@ export interface TaskPanelProps {
   presence: PresenceMember[];
   afterUserWrite: () => void;
   showToast: (message: string) => void;
-  /** 「在标记面板中编辑」：页面侧 openMarkerPanel；anchor=本按钮下沿（2026-10-10
-   *  插入菜单删除后 MarkerPanel 改 fixed 视口锚定，锚点由调用方供给）。 */
-  onOpenMarkers: (anchor: { left: number; top: number }) => void;
   /** 删除当前选中节点（页面侧 handleDelete；确认弹窗在本组件内）。 */
   onDelete: () => void;
   onClose: () => void;
 }
 
 export function TaskPanel(props: TaskPanelProps): ReactElement {
-  const { doc, fileId, nodeId, selected, docVersion, presence, afterUserWrite, showToast, onOpenMarkers, onDelete, onClose } =
+  const { doc, fileId, nodeId, selected, docVersion, presence, afterUserWrite, showToast, onDelete, onClose } =
     props;
   const snap = selected && !selected.deleted ? selected : null;
-  // 描述草稿（受控本地态）：仅切换选中节点时从文档回灌（tick 驱动的快照刷新不得
-  // 覆盖正在编辑的输入——RichPanel 同款裁决）；失焦提交（未变更零写入）。
+  // 标题/描述草稿（受控本地态）：仅切换选中节点时从文档回灌（tick 驱动的快照刷新
+  // 不得覆盖正在编辑的输入——RichPanel 同款裁决）。
+  // 2026-10-10 需求方裁定（预览反馈）：标题改可编辑输入框、描述改**键入即写**——
+  // 两者实时经 core setText/setDescription 落文档，画布节点文字同帧跟随（撤销栈
+  // 按 500ms 合并打字突发）；未变更零写入（同值守卫）。
+  const [title, setTitle] = useState('');
   const [desc, setDesc] = useState('');
+  // 折叠标记组的展开态（2026-10-10 内嵌化）：组名→开合，切换节点不重置（跨节点
+  // 连续编辑同一组的常见流）。
+  const [openMarkerGroups, setOpenMarkerGroups] = useState<Record<string, boolean>>({});
   useEffect(() => {
+    setTitle(snap?.text ?? '');
     setDesc(snap?.description ?? '');
     // 仅 nodeId 变化回灌（RichPanel 同款裁决）：tick 刷新不得覆盖编辑中的输入
   }, [nodeId]);
@@ -99,11 +120,19 @@ export function TaskPanel(props: TaskPanelProps): ReactElement {
     }
   };
 
-  const commitDescription = (): void => {
+  const commitDescription = (next: string): void => {
     if (!snap) return;
-    const next = desc.trim();
     if ((snap.description ?? '') === next) return; // 未变更零写入
     write(() => setDescription(doc, snap.id, next), '描述保存失败，请精简后重试');
+  };
+
+  /** 标题键入即写（2026-10-10 裁定）：空串不提交（脑图节点无空标题语义，清空等
+   *  下次有值再写；本地输入态不受限）。 */
+  const commitTitle = (next: string): void => {
+    if (!snap) return;
+    if (next === snap.text) return; // 未变更零写入
+    if (next.trim() === '') return; // 空标题不写入（待用户输入非空值时自然提交）
+    write(() => setText(doc, snap.id, next), '标题保存失败，请重试');
   };
 
   if (!snap) {
@@ -149,6 +178,48 @@ export function TaskPanel(props: TaskPanelProps): ReactElement {
     }
   }
 
+  // —— 内嵌标记编辑（2026-10-10 需求方裁定：优先级/进度平铺常显 + 其余六组折叠）——
+  // 进度行 radio（全量联动）：高亮 = 当前任务百分比对应档位（progressStageOf）；
+  // 点档位经 setIcon 反向同步——core 同事务写 task.progress=档位百分比并落徽章
+  // （当前档再点幂等：徽章已在=零事务；徽章缺失（新节点点「未开始」显式落徽章，
+  // 进度 0 走 setNodeTask 会被同值守卫吞掉）则补齐）。父级只读（与 ProgressField
+  // 父级 Σ 只读一致——父节点进度按子级自动汇总）。
+  const activeStage = progressStageOf(task.progress);
+  const clickProgressStage = (def: MarkerGlyphDef): void => {
+    if (hasChildren) return;
+    write(() => setIcon(doc, snap.id, 'progress', def.value), '任务进度保存失败，请调整后重试');
+  };
+  // 其余组点击：single 组再点当前值取消（setIcon null）、multi 组 core toggle 直写。
+  const clickMarkerValue = (group: IconGroup, value: string): void => {
+    if (MARKER_GROUP_MODE[group] === 'multi') {
+      write(() => setIcon(doc, snap.id, group, value), '标记设置失败');
+      return;
+    }
+    const has = (snap.icons[group] ?? []).includes(value);
+    write(() => setIcon(doc, snap.id, group, has ? null : value), '标记设置失败');
+  };
+  const markerValueButton = (
+    group: IconGroup,
+    def: MarkerGlyphDef,
+    active: boolean,
+    disabled: boolean,
+    onClick: () => void,
+  ): ReactElement => (
+    <button
+      key={def.value}
+      type="button"
+      data-testid={`marker-${group}-${def.value}`}
+      title={def.label}
+      aria-label={def.label}
+      aria-pressed={active}
+      disabled={disabled}
+      className={active ? 'task-marker-btn active' : 'task-marker-btn'}
+      onClick={onClick}
+    >
+      <MarkerChip def={def} />
+    </button>
+  );
+
   return (
     <aside className="task-panel" data-testid="task-panel">
       <div className="task-panel-head">
@@ -167,9 +238,17 @@ export function TaskPanel(props: TaskPanelProps): ReactElement {
 
       <section className="task-panel-section">
         <span className="task-field-label">标题</span>
-        <span className="task-panel-title" data-testid="task-panel-title">
-          {snap.text || '（未命名）'}
-        </span>
+        <input
+          className="task-panel-title"
+          data-testid="task-panel-title"
+          value={title}
+          placeholder="（未命名）"
+          aria-label="节点标题"
+          onChange={(e) => {
+            setTitle(e.target.value);
+            commitTitle(e.target.value);
+          }}
+        />
       </section>
 
       <section className="task-panel-section">
@@ -181,8 +260,11 @@ export function TaskPanel(props: TaskPanelProps): ReactElement {
           maxLength={MAX_DESCRIPTION_LENGTH}
           placeholder="一句话说明任务内容"
           aria-label="任务描述"
-          onChange={(e) => setDesc(e.target.value)}
-          onBlur={commitDescription}
+          onChange={(e) => {
+            setDesc(e.target.value);
+            commitDescription(e.target.value); // 键入即写（2026-10-10 裁定）
+          }}
+          onBlur={(e) => commitDescription(e.target.value)}
         />
         <span className="task-panel-desc-count" data-testid="task-panel-desc-count">
           {desc.length}/{MAX_DESCRIPTION_LENGTH}
@@ -227,17 +309,62 @@ export function TaskPanel(props: TaskPanelProps): ReactElement {
             <span className="task-panel-markers-empty">未设置标记</span>
           )}
         </div>
-        <button
-          type="button"
-          className="task-panel-jump"
-          data-testid="task-panel-markers-edit"
-          onClick={(e) => {
-            const rect = e.currentTarget.getBoundingClientRect();
-            onOpenMarkers({ left: rect.left, top: rect.bottom + 4 });
-          }}
-        >
-          在标记面板中编辑
-        </button>
+        {/* 常显行：优先级（single 单选替换，再点当前值取消）——2026-10-10 需求方
+            裁定：目录全量平铺常显（弹层与跳转按钮退役）。 */}
+        <div className="task-marker-row" data-testid="task-panel-marker-row-priority">
+          <em className="task-marker-row-label">{MARKER_GROUP_LABELS.priority}</em>
+          <div className="task-marker-grid">
+            {(MARKER_CATALOG.priority as readonly MarkerGlyphDef[]).map((def) =>
+              markerValueButton('priority', def, (snap.icons.priority ?? []).includes(def.value), false, () =>
+                clickMarkerValue('priority', def.value),
+              ),
+            )}
+          </div>
+        </div>
+        {/* 常显行：进度 radio（全量联动）——高亮=当前百分比档位；点档位=写百分比
+            （core 同步徽章）；父级只读（Σ 自动汇总）。 */}
+        <div className="task-marker-row" data-testid="task-panel-marker-row-progress">
+          <em className="task-marker-row-label">{MARKER_GROUP_LABELS.progress}</em>
+          <div className="task-marker-grid">
+            {(MARKER_CATALOG.progress as readonly MarkerGlyphDef[]).map((def) =>
+              markerValueButton('progress', def, activeStage === def.value, hasChildren, () =>
+                clickProgressStage(def),
+              ),
+            )}
+          </div>
+          {hasChildren && <span className="task-marker-hint">父节点进度按子级自动汇总</span>}
+        </div>
+        {/* 折叠组：心情/数字/箭头/旗帜/其他/表情（点组名开合；已选计数回显）。 */}
+        {COLLAPSED_MARKER_GROUPS.map((group) => {
+          const open = openMarkerGroups[group] ?? false;
+          const current = snap.icons[group] ?? [];
+          return (
+            <div className="task-marker-collapse" key={group} data-testid={`task-panel-marker-group-${group}`}>
+              <button
+                type="button"
+                className="task-marker-collapse-head"
+                data-testid={`task-panel-marker-toggle-${group}`}
+                aria-expanded={open}
+                onClick={() => setOpenMarkerGroups((s) => ({ ...s, [group]: !open }))}
+              >
+                <em className="task-marker-row-label">{MARKER_GROUP_LABELS[group]}</em>
+                {current.length > 0 && <span className="task-marker-count">{current.length}</span>}
+                <span className="task-marker-caret" aria-hidden>
+                  {open ? '▾' : '▸'}
+                </span>
+              </button>
+              {open && (
+                <div className="task-marker-grid">
+                  {(MARKER_CATALOG[group] as readonly MarkerGlyphDef[]).map((def) =>
+                    markerValueButton(group, def, current.includes(def.value), false, () =>
+                      clickMarkerValue(group, def.value),
+                    ),
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
       </section>
 
       <section className="task-panel-section">

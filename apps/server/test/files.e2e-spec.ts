@@ -156,4 +156,118 @@ describe('files 域', () => {
     expect(seedRows).toHaveLength(3);
     expect(seedRows.every((r) => JSON.parse(r.payload ?? '{}').entry === 'seed')).toBe(true);
   });
+
+  // ── 一键拉取站内用户（2026-10-11 需求方裁定：成员面板 picker 数据源 + 直接添加）──
+  describe('站内用户拉取（invitable-users + collaborators POST）', () => {
+    it('owner 可查目录（排除 owner/既有协作者、q 模糊搜索、分页）；非 owner 404', async () => {
+      const users = app.get((await import('../src/users/users.service')).UsersService);
+      const filesSvc = app.get((await import('../src/files/files.service')).FilesService);
+      const owner = await users.create({ method: 'phone', phone: '13811110001' });
+      const collab = await users.create({ method: 'phone', phone: '13811110002' });
+      const other = await users.create({ method: 'phone', phone: '13811110003' });
+      const token = await tokenFor(owner.id);
+      const created = await request(app.getHttpServer())
+        .post('/api/files')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ title: '拉取目录测试' });
+      const fileId = created.body.id as string;
+      // collab 先加成协作者（验证目录排除既有协作者）
+      await filesSvc.addCollaborators(owner.id, fileId, [collab.id]);
+
+      const list = await request(app.getHttpServer())
+        .get(`/api/files/${fileId}/invitable-users`)
+        .set('Authorization', `Bearer ${token}`);
+      expect(list.status).toBe(200);
+      const ids = (list.body.items as Array<{ userId: string }>).map((i) => i.userId);
+      expect(ids).not.toContain(owner.id); // 排除 owner
+      expect(ids).not.toContain(collab.id); // 排除既有协作者
+      expect(ids).toContain(other.id); // 其他活跃用户在列
+      expect(list.body.total).toBeGreaterThan(0);
+      expect(list.body.page).toBe(1);
+      expect(list.body.size).toBe(20);
+
+      // q 模糊搜索（手机号片段）
+      const searched = await request(app.getHttpServer())
+        .get(`/api/files/${fileId}/invitable-users?q=13811110003`)
+        .set('Authorization', `Bearer ${token}`);
+      expect(searched.status).toBe(200);
+      expect((searched.body.items as Array<{ userId: string }>).map((i) => i.userId)).toEqual([other.id]);
+
+      // 分页：size=1 多页
+      const p1 = await request(app.getHttpServer())
+        .get(`/api/files/${fileId}/invitable-users?size=1&page=1`)
+        .set('Authorization', `Bearer ${token}`);
+      const p2 = await request(app.getHttpServer())
+        .get(`/api/files/${fileId}/invitable-users?size=1&page=2`)
+        .set('Authorization', `Bearer ${token}`);
+      expect(p1.body.items).toHaveLength(1);
+      expect(p2.body.items).toHaveLength(1);
+      expect(p1.body.items[0].userId).not.toBe(p2.body.items[0].userId);
+
+      // 非 owner（协作者/路人）一律 404（不泄露文件存在性）
+      const collabToken = await tokenFor(collab.id);
+      const denied = await request(app.getHttpServer())
+        .get(`/api/files/${fileId}/invitable-users`)
+        .set('Authorization', `Bearer ${collabToken}`);
+      expect(denied.status).toBe(404);
+    });
+
+    it('一键拉取直接加成 editor 协作者（幂等：重拉/owner 自身/无效 id 计 skipped）；非 owner 404', async () => {
+      const users = app.get((await import('../src/users/users.service')).UsersService);
+      const owner = await users.create({ method: 'phone', phone: '13822220001' });
+      const a = await users.create({ method: 'phone', phone: '13822220002' });
+      const b = await users.create({ method: 'phone', phone: '13822220003' });
+      const token = await tokenFor(owner.id);
+      const created = await request(app.getHttpServer())
+        .post('/api/files')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ title: '一键拉取测试' });
+      const fileId = created.body.id as string;
+
+      // 拉取 a + b + owner 自身 + 不存在的 id
+      const pulled = await request(app.getHttpServer())
+        .post(`/api/files/${fileId}/collaborators`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ userIds: [a.id, b.id, owner.id, '01NOTEXIST01NOTEXIST01NOT'] });
+      expect(pulled.status).toBe(201);
+      expect(pulled.body).toEqual({ added: 2, skipped: 2 });
+
+      // 幂等重拉：全部 skipped
+      const again = await request(app.getHttpServer())
+        .post(`/api/files/${fileId}/collaborators`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ userIds: [a.id, b.id] });
+      expect(again.body).toEqual({ added: 0, skipped: 2 });
+
+      // 协作者列表可见（role=editor）
+      const collabs = await request(app.getHttpServer())
+        .get(`/api/files/${fileId}/collaborators`)
+        .set('Authorization', `Bearer ${token}`);
+      const byId = new Map(
+        (collabs.body as Array<{ userId: string; role: string }>).map((c) => [c.userId, c.role]),
+      );
+      expect(byId.get(a.id)).toBe('editor');
+      expect(byId.get(b.id)).toBe('editor');
+
+      // 拉取后目录排除新协作者
+      const dir = await request(app.getHttpServer())
+        .get(`/api/files/${fileId}/invitable-users`)
+        .set('Authorization', `Bearer ${token}`);
+      const dirIds = (dir.body.items as Array<{ userId: string }>).map((i) => i.userId);
+      expect(dirIds).not.toContain(a.id);
+
+      // 非 owner 拉取 → 404；空数组 → 400
+      const otherToken = await tokenFor(a.id);
+      const denied = await request(app.getHttpServer())
+        .post(`/api/files/${fileId}/collaborators`)
+        .set('Authorization', `Bearer ${otherToken}`)
+        .send({ userIds: [b.id] });
+      expect(denied.status).toBe(404);
+      const bad = await request(app.getHttpServer())
+        .post(`/api/files/${fileId}/collaborators`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ userIds: [] });
+      expect(bad.status).toBe(400);
+    });
+  });
 });

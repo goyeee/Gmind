@@ -161,17 +161,23 @@ describe('setCursors：初次渲染', () => {
     expect(rectD?.getAttribute('width')).toBe('80');
     expect(rectD?.getAttribute('height')).toBe('30');
 
-    // 标签：色点 + 昵称文本，位置在首个节点上方（y−18，钳制 ≥2）
+    // 标签：用户色胶囊衬底 + 色点 + 白字昵称，位置在首个节点上方（y−18，
+    // 钳制 ≥18 = 胶囊高 16 + 上缘 2；2026-10-11 修复「名字被节点盖住」）
     const label1 = labelOf('u1');
     expect(label1?.parentNode).toBe(cursorLayer());
     expect(label1?.querySelector('circle')?.getAttribute('r')).toBe('4');
     expect(label1?.querySelector('circle')?.getAttribute('fill')).toBe('#2563eb');
+    // 胶囊衬底：用户色填充、高 16、宽 = 12 内边距 + 色点 8 + 间距 4 + 「阿明」2 字 ×11
+    const chip1 = label1?.querySelector('rect');
+    expect(chip1?.getAttribute('fill')).toBe('#2563eb');
+    expect(chip1?.getAttribute('height')).toBe('16');
+    expect(chip1?.getAttribute('width')).toBe('46');
     expect(label1?.querySelector('text')?.textContent).toBe('阿明');
     expect(label1?.querySelector('text')?.getAttribute('font-size')).toBe('11');
-    expect(label1?.getAttribute('transform')).toBe('translate(60, 2)'); // -20-18=-38 → 钳到 2
+    expect(label1?.getAttribute('transform')).toBe('translate(108, -26)'); // 右上角内收 6：x=60+100-46-6，y=-20-6
     const label2 = labelOf('u2');
     expect(label2?.querySelector('text')?.textContent).toBe('小李');
-    expect(label2?.getAttribute('transform')).toBe('translate(200, 82)'); // 100-18=82
+    expect(label2?.getAttribute('transform')).toBe('translate(228, 94)'); // 右上角内收 6：x=200+80-46-6，y=100-6
     expect(cursorLayer()?.querySelectorAll('g.gm-remote-cursor')).toHaveLength(2);
   });
 
@@ -182,8 +188,29 @@ describe('setCursors：初次渲染', () => {
     );
     expect(rectsIn(nodeG('a'), 'u1')).toHaveLength(1);
     expect(rectsIn(nodeG('c'), 'u1')).toHaveLength(1);
-    expect(labelOf('u1')?.getAttribute('transform')).toBe('translate(-60, 2)'); // 首节点 a
+    expect(labelOf('u1')?.getAttribute('transform')).toBe('translate(8, -16)'); // 首节点 a 右上角内收 6：x=-60+120-46-6，y=-10-6
     expect(cursorLayer()?.querySelectorAll('g.gm-remote-cursor')).toHaveLength(1);
+  });
+
+  it('z 序钉死（2026-10-11 修复「名字被节点盖住」）：后建节点追加在层之后时，setCursors 把 gm-cursors 归位 nodesLayer 末位', () => {
+    const api = createCursorLayer(scene);
+    // 模拟 renderScene 后建节点：新节点 g 追加在 gm-cursors 之后（会盖住标签）
+    const late = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    late.setAttribute('data-node-id', 'late');
+    scene.nodesLayer.appendChild(late);
+    expect(scene.nodesLayer.lastElementChild).toBe(late);
+    api.setCursors([cursor('u1', '阿明', '#2563eb', ['b'])], baseLayout().nodes);
+    // 层被 re-append 回末位：标签画在一切节点之上
+    expect(scene.nodesLayer.lastElementChild).toBe(cursorLayer());
+  });
+
+  it('左列节点镜像贴左上角（2026-10-11 需求方裁定）：x = 盒左缘 + 内收 6', () => {
+    // b 改到左列（side left、负 x），胶囊锚左上角而非右上角
+    const left = baseLayout();
+    left.nodes = left.nodes.map((n) => (n.id === 'b' ? box('b', -260, -20, 100, 40, 'left') : n));
+    createCursorLayer(scene).setCursors([cursor('u1', '阿明', '#2563eb', ['b'])], left.nodes);
+    // x = -260 + 6（左上角内收），y = -20 - 6（顶缘上方 6px）
+    expect(labelOf('u1')?.getAttribute('transform')).toBe('translate(-254, -26)');
   });
 });
 
@@ -203,10 +230,10 @@ describe('setCursors：协调更新', () => {
     expect(rectsIn(nodeG('e'), 'u1')).toHaveLength(1);
     expect(svg.querySelectorAll('rect.gm-remote-selection[data-cursor-user="u1"]')).toHaveLength(1);
     expect(svg.querySelectorAll('g.gm-remote-cursor[data-cursor-user="u1"]')).toHaveLength(1);
-    expect(labelOf('u1')?.getAttribute('transform')).toBe('translate(200, 182)'); // 200-18
+    expect(labelOf('u1')?.getAttribute('transform')).toBe('translate(228, 194)'); // 右上角内收 6：x=200+80-46-6，y=200-6
     // u2 元素引用与位置原样保留
     expect(rectsIn(nodeG('b'), 'u2')[0]).toBe(rectB);
-    expect(labelOf('u2')?.getAttribute('transform')).toBe('translate(60, 2)');
+    expect(labelOf('u2')?.getAttribute('transform')).toBe('translate(108, -26)'); // b 右上角内收 6
   });
 
   it('用户从集合消失：其框与标签全部移除；保留用户元素不动', () => {
@@ -236,7 +263,7 @@ describe('setCursors：协调更新', () => {
     expect(rect.getAttribute('width')).toBe('140');
     expect(rect.getAttribute('height')).toBe('60');
     expect(labelOf('u1')).toBe(label);
-    expect(label.getAttribute('transform')).toBe('translate(160, 2)');
+    expect(label.getAttribute('transform')).toBe('translate(248, -26)'); // 移动后右上角内收 6：x=160+140-46-6，y=-20-6
     expect(svg.querySelectorAll('g.gm-remote-cursor')).toHaveLength(1);
   });
 });
@@ -269,7 +296,7 @@ describe('clear 与容错', () => {
     api.setCursors([cursor('u8', '混合', '#7c3aed', ['b', 'ghost'])], baseLayout().nodes);
     expect(svg.querySelectorAll('rect.gm-remote-selection')).toHaveLength(1);
     expect(rectsIn(nodeG('b'), 'u8')).toHaveLength(1);
-    expect(labelOf('u8')?.getAttribute('transform')).toBe('translate(60, 2)');
+    expect(labelOf('u8')?.getAttribute('transform')).toBe('translate(108, -26)'); // b 右上角内收 6
   });
 
   it('同一用户重复条目与重复 nodeId 不产生重复元素（键幂等）', () => {

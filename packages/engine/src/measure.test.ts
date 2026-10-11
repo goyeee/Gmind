@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { measureNodeBox } from './measure';
 import { THEMES } from './themes';
-import { TASK_PROGRESS_W, TASK_ROW_H, taskRowContentWidth } from './taskvisual';
+import { TASK_ROW_H, taskRowContentWidth } from './taskvisual';
 import type { MeasureAdapter, TextStyle, ThemeTokens } from './types';
 
 // 桩测量适配器：每个字符固定 10px 宽（行高由引擎按 theme 自算，不经过适配器）。
@@ -133,7 +133,7 @@ describe('measureNodeBox', () => {
   describe('compact 简洁模式', () => {
     const slots = { ownerLabel: '张三 +1', ownerUnassigned: false, showProgress: true };
 
-    it('描述行不产出、任务行槽位不计高宽：盒高只含标题行，盒宽=文本宽+内联进度槽', () => {
+    it('描述行不产出、任务行槽位不计高宽：盒高只含标题行，盒宽=纯文本宽', () => {
       const box = measureNodeBox('ab', style, theme, {
         adapter: stubAdapter,
         description: '描述',
@@ -142,12 +142,11 @@ describe('measureNodeBox', () => {
       });
       expect('descLine' in box).toBe(false); // 描述行恒缺省（渲染侧 gm-desc 隐藏）
       expect(box.h).toBe(14 * 1.5); // 任务行/描述行零参与（对比详细模式 +2×TASK_ROW_H）
-      // 内联进度槽（TASK_PROGRESS_W）随文本计入宽度下限（长标题不与内联百分数重叠）
-      expect(box.w).toBe(2 * 10 + 2 * 8 + TASK_PROGRESS_W);
+      // 紧凑盒 = 纯文本宽（内联进度槽 2026-10-11 裁定退役：简洁模式不展示百分比）
+      expect(box.w).toBe(2 * 10 + 2 * 8);
     });
 
-    it('无任务信息零内联槽：紧凑盒=纯标题盒（与缺省路径宽度一致）', () => {
-      const box = measureNodeBox('ab', style, theme, {
+    it('无任务信息零内联槽：紧凑盒=纯标题盒（与缺省路径宽度一致）', () => {      const box = measureNodeBox('ab', style, theme, {
         adapter: stubAdapter,
         description: '描述',
         compact: true,
@@ -157,8 +156,8 @@ describe('measureNodeBox', () => {
       expect(box.w).toBe(2 * 10 + 2 * 8);
     });
 
-    it('紧凑盒窄于任务行内容宽：描述/任务详情的占位让位给内联进度', () => {
-      // 详细模式盒宽下限 = 任务行内容宽 98；紧凑盒 66 显著缩小（「缩小节点占位」）
+    it('紧凑盒窄于任务行内容宽：描述/任务详情的占位整体让位（含已退役的内联进度槽）', () => {
+      // 详细模式盒宽下限 = 任务行内容宽 98；紧凑盒 36 显著缩小（「缩小节点占位」）
       const detail = measureNodeBox('ab', style, theme, { adapter: stubAdapter, taskRow: slots });
       const compactBox = measureNodeBox('ab', style, theme, {
         adapter: stubAdapter,
@@ -166,7 +165,7 @@ describe('measureNodeBox', () => {
         compact: true,
       });
       expect(detail.w).toBe(taskRowContentWidth(slots, slots.ownerLabel.length * 10));
-      expect(compactBox.w).toBe(2 * 10 + 2 * 8 + TASK_PROGRESS_W);
+      expect(compactBox.w).toBe(2 * 10 + 2 * 8);
       expect(compactBox.h).toBe(detail.h - TASK_ROW_H);
     });
 

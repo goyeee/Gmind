@@ -87,6 +87,26 @@ export const PROGRESS_VALUES = [
   'done',
 ] as const;
 
+export type ProgressValue = (typeof PROGRESS_VALUES)[number];
+
+/**
+ * 进度档位 → 任务进度百分比（全量联动换算单源，需求方 2026-10-10「任务面板标记
+ * 内嵌化」裁定）：1/8 步进取整（round(k×12.5)），与 progressStageOf 互逆——
+ * progressStageOf(PROGRESS_STAGE_PCT[k]) === k。进度组徽章是任务进度的可视化
+ * 档位：setNodeTask 写 progress 同步徽章、setIcon 写进度组同步百分比，两向闭环。
+ */
+export const PROGRESS_STAGE_PCT: Record<ProgressValue, number> = {
+  none: 0,
+  p12: 13,
+  p25: 25,
+  p37: 38,
+  p50: 50,
+  p62: 63,
+  p75: 75,
+  p87: 88,
+  done: 100,
+};
+
 /**
  * other 组（27，企微截图「其他」组逐枚转录）：done ✓绿 / cancel ✕红 / calendar
  * 蓝方块31 / clock 蓝闹钟 / alert 黄三角! / info 蓝i / question 橙? / important

@@ -12,9 +12,16 @@
  *   （镜像 render.ts 的 seen-set 模式）：
  *   - 每个远端用户在其选中的每个（场景中存在的）节点 <g> 内叠加
  *     rect.gm-remote-selection（用户色描边 2.5、fill none、data-cursor-user）；
- *   - 另在第一个选中节点左上（y−18，钳制 ≥2）放一个 g.gm-remote-cursor 标签
- *     （色点 circle r=4 + 昵称 <text>，白字 + 用户色 paint-order:stroke 描边，
- *     免测量的确定性做法）。多节点选中 → 多框但单标签。
+ *   - 另在第一个选中节点的角上放一个 g.gm-remote-cursor 标签（右列/down 贴右上角、
+ *     左列镜像贴左上角，各内收 6px、悬于盒顶上方 6px，无钳制——场景坐标以根为
+ *     中心可为负）；
+ *     （色点 circle r=4 + 昵称 <text>）。**2026-10-11 修复「名字被节点盖住」**
+ *     （需求方预览反馈）：① z 序——renderScene 后建的节点 g 会追加到
+ *     gm-cursors 层之后把标签压在下面，setCursors 每次调用把层 re-append 到
+ *     nodesLayer 末位（appendChild 移动既有子节点，幂等零位移）；② 标签加
+ *     用户色胶囊底（rect 衬底 + 白字，mindgrid 悬浮 chip 同款）——密集堆叠下
+ *     与上方兄弟节点交叠也可读（宽 = 色点+文字估算宽，CJK 1em/其他 0.55em，
+ *     免测量确定性，drag.ts labelWidthOf 同公式）。多节点选中 → 多框但单标签。
  *   - 用户消失 → 其全部元素移除；用户保留 → 原地回填（节点可能已随布局移动），
  *     不重复建元素；用户不再选中的节点上的框随之移除。
  *   - 不存在于场景（nodeEntries）或缺盒子几何的 nodeId 优雅跳过。
@@ -91,12 +98,26 @@ function el<K extends keyof SVGElementTagNameMap>(
 
 /** 选区框描边宽 / 标签几何常量（确定性）。 */
 const SELECTION_STROKE_WIDTH = 2.5;
-const LABEL_OFFSET_Y = 18;
-const LABEL_MIN_Y = 2;
+/** 胶囊底缘距节点顶缘间距（2026-10-11 需求方「再靠近一些」：18→6；不贴顶缘——
+ *  避开盒右上角日期悬浮 chip（gm-task-due-float 跨坐顶缘）的碰撞区）。 */
+const LABEL_OFFSET_Y = 6;
+/** 胶囊水平内收：右列贴右上角、左列贴左上角，各内收 6px（与日期 chip 内收同值）。 */
+const LABEL_CORNER_INSET_X = 6;
 const LABEL_DOT_R = 4;
 const LABEL_FONT_SIZE = 11;
+/** 标签胶囊几何（2026-10-11）：高 16、左右内边距 6、色点与文字间距 4。 */
+const LABEL_CHIP_H = 16;
+const LABEL_CHIP_PAD_X = 6;
+const LABEL_DOT_TEXT_GAP = 4;
 /** 选区框 map 键分隔符（userId 不含 \u0000，拼键无歧义）。 */
 const KEY_SEP = '\u0000';
+
+/** 标签文字宽度估算（无测量适配器）：CJK/全角按 1em、其余按 0.55em 近似（drag.ts 同公式）。 */
+function labelTextWidth(name: string): number {
+  let w = 0;
+  for (const ch of name) w += LABEL_FONT_SIZE * (ch.charCodeAt(0) > 0xff ? 1 : 0.55);
+  return w;
+}
 
 /**
  * 创建远端光标层：<g class="gm-cursors"> 追加到 scene.nodesLayer 末尾
@@ -113,6 +134,10 @@ export function createCursorLayer(scene: SceneRoot): CursorLayer {
   const rects = new Map<string, SVGRectElement>();
 
   const setCursors = (cursors: RemoteCursor[], boxes: NodeBox[]): void => {
+    // z 序钉死（2026-10-11 修复「名字被节点盖住」）：renderScene 后建的节点 g
+    // 会追加到本层之后把标签/选区框压在下面——每次整集更新把层 re-append 到
+    // nodesLayer 末位（appendChild 移动既有子节点，幂等零位移）。
+    scene.nodesLayer.appendChild(layer);
     const boxById = new Map(boxes.map((b) => [b.id, b]));
     const seenRectKeys = new Set<string>();
     const seenUsers = new Set<string>();
@@ -155,16 +180,18 @@ export function createCursorLayer(scene: SceneRoot): CursorLayer {
       let label = labels.get(cursor.userId);
       if (!label) {
         label = el('g', { class: 'gm-remote-cursor', 'pointer-events': 'none' });
-        label.appendChild(el('circle', { cx: '4', cy: '-4', r: LABEL_DOT_R }));
-        // 白字 + 用户色 paint-order:stroke 描边：任何背景可读，免文本测量。
+        // 用户色胶囊衬底（2026-10-11：密集堆叠下与上方兄弟节点交叠也可读，
+        // mindgrid 悬浮 chip 同款）：宽随昵称估算重算（见下方回填）。
+        label.appendChild(el('rect', { x: '0', y: fmt(-LABEL_CHIP_H), height: fmt(LABEL_CHIP_H), rx: fmt(LABEL_CHIP_H / 2) }));
+        label.appendChild(
+          el('circle', { cx: fmt(LABEL_CHIP_PAD_X + LABEL_DOT_R), cy: fmt(-LABEL_CHIP_H / 2), r: LABEL_DOT_R }),
+        );
         label.appendChild(
           el('text', {
-            x: '12',
-            y: '0',
+            x: fmt(LABEL_CHIP_PAD_X + LABEL_DOT_R * 2 + LABEL_DOT_TEXT_GAP),
+            y: fmt(-LABEL_CHIP_H / 2 + LABEL_FONT_SIZE * 0.35), // 胶囊垂直居中
             'font-size': LABEL_FONT_SIZE,
             fill: '#ffffff',
-            'stroke-width': '3',
-            'paint-order': 'stroke',
           }),
         );
         labels.set(cursor.userId, label);
@@ -173,15 +200,26 @@ export function createCursorLayer(scene: SceneRoot): CursorLayer {
       const anchor = anchored[0];
       if (anchor) {
         label.setAttribute('data-cursor-user', cursor.userId);
-        label.setAttribute(
-          'transform',
-          `translate(${fmt(anchor.x)}, ${fmt(Math.max(anchor.y - LABEL_OFFSET_Y, LABEL_MIN_Y))})`,
-        );
+        // 胶囊宽 = 左内边距 + 色点直径 + 点文间距 + 文字估算宽 + 右内边距（免测量）
+        const chipW = LABEL_CHIP_PAD_X * 2 + LABEL_DOT_R * 2 + LABEL_DOT_TEXT_GAP + labelTextWidth(cursor.name);
+        const chip = label.querySelector('rect');
+        if (chip) {
+          chip.setAttribute('fill', cursor.color);
+          chip.setAttribute('width', fmt(chipW));
+        }
+        // 锚定节点角（2026-10-11 需求方裁定）：右列/down 贴**右上角**、左列镜像贴
+        // **左上角**（各内收 6px），悬于盒顶上方 6px。场景坐标以根为中心可为负——
+        // 不得做 y≥0 钳制（旧 LABEL_MIN_Y 钳制把负 y 节点的标签错钳到 18，「偏离
+        // 特别远」的根因，当日修复）。
+        const tx =
+          anchor.side === 'left'
+            ? anchor.x + LABEL_CORNER_INSET_X
+            : anchor.x + anchor.w - chipW - LABEL_CORNER_INSET_X;
+        label.setAttribute('transform', `translate(${fmt(tx)}, ${fmt(anchor.y - LABEL_OFFSET_Y)})`);
         label.querySelector('circle')?.setAttribute('fill', cursor.color);
         const text = label.querySelector('text');
         if (text) {
           text.textContent = cursor.name;
-          text.setAttribute('stroke', cursor.color);
         }
       }
     }

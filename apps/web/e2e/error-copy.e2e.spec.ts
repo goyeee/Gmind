@@ -196,6 +196,7 @@ test('⑨ 邀请批量非法：toast 逐条原因 + 修正提示', async ({ page
   await openSeedDoc(page, '本周计划');
   await page.getByTestId('members-btn').click();
   await expect(page.getByTestId('invite-section')).toBeVisible();
+  await page.getByTestId('invite-contacts-toggle').click(); // 2026-10-11 起粘贴框折叠为次要入口
   await page.getByTestId('invite-input').fill('bad-email');
   await page.getByTestId('invite-submit').click();
   const toast = page.getByTestId('toast');

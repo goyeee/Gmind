@@ -1032,9 +1032,9 @@ describe('renderScene：任务行签名缓存（remove→re-add 完整重建，�
 
 // ---------------------------------------------------------------------------
 // 简洁模式（M7b 补课，mindgrid 账号级显示偏好「脑图简洁模式」）：SceneInput.compact
-// = true 时状态色条/任务行条带/描述行均隐藏，任务进度改内联小字画在标题行右缘
-// （gm-task-progress-inline，槽宽 TASK_PROGRESS_W 与测量侧盒宽下限同源）；缺省
-// false = 原路径，DOM 逐字节不变（金样锁定）。
+// = true 时状态色条/任务行条带/描述行均隐藏——紧凑盒 = 纯标题 + 标记（内联进度
+// gm-task-progress-inline 已随 2026-10-11 需求方裁定「简洁模式不用展示百分比」
+// 退役）；缺省 false = 原路径，DOM 逐字节不变（金样锁定）。
 // ---------------------------------------------------------------------------
 
 describe('renderScene：简洁模式（compact）', () => {
@@ -1049,21 +1049,15 @@ describe('renderScene：简洁模式（compact）', () => {
     return { layout, theme, styleOf, nodeData: data, today: TODAY, compact: opts.compact };
   }
 
-  it('compact：状态条与任务行隐藏，进度内联标题行右缘（有任务信息）；无任务节点零内联', () => {
+  it('compact：状态条/任务行/日期 chip 隐藏，无内联进度（2026-10-11 裁定），紧凑盒 = 纯标题+标记', () => {
     const data = baseData();
     data.set('b', { text: 'x', task: { status: 'doing', progress: 50 } });
     renderScene(createScene(svg), compactInput(data, { compact: true }));
     expect(nodeG('b')?.querySelector('rect.gm-task-bar')).toBeNull();
     expect(nodeG('b')?.querySelector('g.gm-task-row')).toBeNull();
-    const inline = nodeG('b')?.querySelector('text.gm-task-progress-inline');
-    expect(inline?.textContent).toBe('50%');
-    expect(inline?.getAttribute('fill')).toBe('#86909c');
-    // 内联槽右对齐：x = 盒宽 − nodePaddingX（gmind-blue=12；槽宽 TASK_PROGRESS_W 由测量侧预留）
-    expect(inline?.getAttribute('x')).toBe('88'); // b.w=100 − 12
-    // 基线 = contentCenter(=b.h/2=20) + 11×0.35 = 23.85（紧凑盒行中心，不扣任务条带）
-    expect(inline?.getAttribute('y')).toBe('23.85');
-    // 无任务信息节点（root a）：纯标题+标记，无内联进度
-    expect(nodeG('a')?.querySelector('text.gm-task-progress-inline')).toBeNull();
+    // 简洁模式不展示百分比（内联进度已退役，元素不再存在）
+    expect(nodeG('b')?.querySelector('.gm-task-progress-inline')).toBeNull();
+    expect(nodeG('a')?.querySelector('.gm-task-progress-inline')).toBeNull();
   });
 
   it('compact：描述行不渲染（手工构造盒携带 descLine 也隐藏——渲染侧独立裁定）', () => {
@@ -1081,16 +1075,15 @@ describe('renderScene：简洁模式（compact）', () => {
     renderScene(scene, compactInput(data, { compact: true }));
     expect(nodeG('b')?.querySelector('.gm-task-bar, .gm-task-row')).toBeNull();
     expect(nodeG('b')?.querySelector('.gm-task-due-float')).toBeNull(); // 简洁模式不显示日期（mindgrid 同款）
-    expect(nodeG('b')?.querySelector('text.gm-task-progress-inline')?.textContent).toBe('40%');
+    expect(nodeG('b')?.querySelector('.gm-task-progress-inline')).toBeNull(); // 简洁模式不显示百分比（2026-10-11 裁定）
     renderScene(scene, compactInput(data, { compact: false })); // 切回详细
     expect(nodeG('b')?.querySelector('rect.gm-task-bar')).not.toBeNull();
     expect(nodeG('b')?.querySelector('text.gm-task-progress')?.textContent).toBe('40%');
     expect(nodeG('b')?.querySelector('.gm-task-due-float text')?.textContent).toBe('10-15');
-    expect(nodeG('b')?.querySelector('text.gm-task-progress-inline')).toBeNull();
     renderScene(scene, compactInput(data, { compact: true })); // 再切回简洁
     expect(nodeG('b')?.querySelector('.gm-task-bar, .gm-task-row')).toBeNull();
     expect(nodeG('b')?.querySelector('.gm-task-due-float')).toBeNull();
-    expect(nodeG('b')?.querySelector('text.gm-task-progress-inline')?.textContent).toBe('40%');
+    expect(nodeG('b')?.querySelector('.gm-task-progress-inline')).toBeNull();
   });
 
   it('缺省（不传 compact）与 compact:false 输出逐字节一致（金样锁定口径）', () => {

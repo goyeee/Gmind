@@ -1,0 +1,88 @@
+/*
+ * 标记共享样式（2026-10-10「任务面板标记内嵌化」裁定，随 MarkerPanel 弹层退役
+ * 自 marker-panel.css 收敛）：
+ * - .marker-grid / .marker-btn：标记值按钮网格与按钮态——TaskPanel 内嵌标记区块
+ *   （常显行 + 折叠组）与画布迷你选盘（.marker-picker）共用；
+ * - .marker-picker*：节点徽章点击换组的迷你选盘浮层（EditorPage 渲染）。
+ */
+
+/* 标记值网格：6 列居中（34px 按钮的自适应行距） */
+.marker-grid {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 2px 4px;
+  justify-items: center;
+}
+/* 标记按钮：34×34、hover 浅灰底、选中蓝描边环 */
+.marker-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+.marker-btn:hover:not(:disabled) {
+  background: #f2f3f5;
+}
+.marker-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.marker-btn.active {
+  background: #f0f5ff;
+  outline: 2px solid #3370ff;
+  outline-offset: -1px;
+}
+
+/* ── M7b-W3 节点标记点击换组：迷你选盘浮层（HTML 层，锚定点击点）────────────── */
+.marker-picker {
+  position: fixed;
+  z-index: 1210;
+  width: 252px;
+  max-width: calc(100vw - 16px);
+  padding: 10px 12px 12px;
+  background: #fff;
+  border: 1px solid #e5e6eb;
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(31, 35, 41, 0.16);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.marker-picker-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.marker-picker-close {
+  border: none;
+  background: transparent;
+  color: #86909c;
+  font-size: 16px;
+  line-height: 1;
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  cursor: pointer;
+  padding: 0;
+}
+.marker-picker-close:hover {
+  background: #f2f3f5;
+  color: #1f2329;
+}
+.marker-picker-label {
+  font-style: normal;
+  color: #86909c;
+  font-size: 12px;
+  line-height: 16px;
+}
+.marker-picker .marker-grid {
+  grid-template-columns: repeat(6, 1fr);
+}

@@ -49,9 +49,18 @@ function markerBadgeByValue(page: Page, text: string, value: string) {
   return nodeGroup(page, text).locator(`.gm-markers .gm-marker-badge[data-marker-value="${value}"]`);
 }
 
+/** 打开 TaskPanel 并展开旗帜折叠组点「旗帜」（2026-10-10 标记内嵌化写入路径；
+ *  TaskPanel 已开时跳过 task-toggle——toggle 语义）。 */
+async function plantFlagViaTaskPanel(page: Page): Promise<void> {
+  if ((await page.getByTestId('task-panel').count()) === 0) await page.getByTestId('task-toggle').click();
+  const toggle = page.getByTestId('task-panel-marker-toggle-flag');
+  await expect(toggle).toBeVisible();
+  if ((await toggle.getAttribute('aria-expanded')) === 'false') await toggle.click();
+  await page.getByTestId('marker-flag-flag').click();
+}
+
 /** 选中节点并设填充红 + 旗帜红（源格式）。填充红在格式右列样式区（M7b-R6 起点格式
- *  按钮开），旗帜红经 TaskPanel「在标记面板中编辑」标记面板（M7b-W1 目录：flag 波浪旗；
- *  2026-10-10 插入菜单删除后入口）。 */
+ *  按钮开），旗帜红经任务面板标记区块旗帜折叠组（2026-10-10 内嵌化：flag 波浪旗）。 */
 async function styleSourceRedFlag(page: Page, text: string) {
   await selectNodeByText(page, text);
   const panel = page.getByTestId('rich-panel');
@@ -59,12 +68,8 @@ async function styleSourceRedFlag(page: Page, text: string) {
   await expect(panel).toBeVisible();
   await panel.getByTitle('填充-红').click();
   await expect(nodeGroup(page, text).locator('rect')).toHaveAttribute('fill', RED);
-  // 2026-10-10 插入菜单删除：标记面板入口改 TaskPanel「在标记面板中编辑」
-  await page.getByTestId('task-toggle').click();
-  await page.getByTestId('task-panel-markers-edit').click();
-  const markers = page.getByTestId('marker-panel');
-  await expect(markers).toBeVisible();
-  await markers.getByTestId('marker-flag-flag').click();
+  // 2026-10-10 标记内嵌化：旗帜经任务面板折叠组写入（开任务面板同时收格式右列）
+  await plantFlagViaTaskPanel(page);
   await expect(markerBadgeByValue(page, text, 'flag')).toHaveCount(1);
   return panel;
 }
@@ -156,10 +161,8 @@ test('格式刷：自刷（源=目标）零写入', async ({ page }) => {
   await panel.getByTitle('填充-红').click();
   await expect(nodeGroup(page, '周三').locator('rect')).toHaveAttribute('fill', RED);
   await page.waitForTimeout(UNDO_GAP);
-  // 2026-10-10 插入菜单删除：标记面板入口改 TaskPanel「在标记面板中编辑」
-  await page.getByTestId('task-toggle').click();
-  await page.getByTestId('task-panel-markers-edit').click();
-  await page.getByTestId('marker-panel').getByTestId('marker-flag-flag').click();
+  // 2026-10-10 标记内嵌化：旗帜经任务面板折叠组写入
+  await plantFlagViaTaskPanel(page);
   await expect(markerBadgeByValue(page, '周三', 'flag')).toHaveCount(1);
   await page.waitForTimeout(UNDO_GAP);
 
@@ -187,10 +190,8 @@ test('格式刷：单次应用可被一次 Ctrl+Z 整体回滚', async ({ page }
   await expect(panel).toBeVisible();
   await panel.getByTitle('填充-红').click();
   await page.waitForTimeout(UNDO_GAP);
-  // 2026-10-10 插入菜单删除：标记面板入口改 TaskPanel「在标记面板中编辑」
-  await page.getByTestId('task-toggle').click();
-  await page.getByTestId('task-panel-markers-edit').click();
-  await page.getByTestId('marker-panel').getByTestId('marker-flag-flag').click();
+  // 2026-10-10 标记内嵌化：旗帜经任务面板折叠组写入
+  await plantFlagViaTaskPanel(page);
   // 与应用隔开 >500ms：格式刷事务独立成撤销单元
   await page.waitForTimeout(UNDO_GAP);
 

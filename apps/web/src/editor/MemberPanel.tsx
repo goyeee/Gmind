@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { apiPost, ApiError } from '../api/client';
+import { api, apiPost, ApiError } from '../api/client';
 import type { PresenceMember } from './collab';
 import './member-panel.css';
 
@@ -14,11 +14,12 @@ import './member-panel.css';
  *   GET /api/files/:id 扩展字段，EditorPage 透传）。
  * rows 附 data-member-user 供测试/样式钩用；面板关闭时整棵不渲染。
  *
- * 邀请区（M4 Task 2，FR-SHR-004 UI 面，M3b 缺口收口）：canInvite（EditorPage 以
- * 当前用户 id === ownerUserId 判定，WorkspacePage 行菜单同口径）时面板底部附
- * 批量邀请区——粘贴邮箱/手机号整批 POST /files/:id/invites，成功/失败经 showToast
- * 走 EditorPage 既有 toast（testid toast）。受邀联系人在接受前不是用户，成员面板
- * 数据面（在线 presence）无从刷新，故无 onInvited 回调（裁定见任务报告）。
+ * 邀请区（2026-10-11 需求方裁定重做）：canInvite（EditorPage 以当前用户 id ===
+ * ownerUserId 判定，WorkspacePage 行菜单同口径）时面板底部附邀请区——主路径
+ * 站内用户 picker（搜索/分页/勾选/一键拉取为协作者，直接生效无需接受），次要
+ * 折叠入口保留粘贴邮箱/手机号批量邀请（站外联系人唯一通道；受邀联系人在接受前
+ * 不是用户，成员面板数据面无 from 刷新，故无 onInvited 回调——裁定见任务报告）。
+ * 拉取成功后目录自动重取（新协作者已被服务端排除出可拉列表）。
  */
 
 export interface MemberPanelProps {
@@ -42,11 +43,181 @@ const CONTACT_SPLIT_RE = /[,\s;；、]+/;
 
 /** 单次邀请上限（与 server invite-request.schema 的 50 同口径，客户端先拦免往返）。 */
 const INVITE_MAX = 50;
+/** 站内用户目录每页条数（与 server size 上限 50 同族，picker 定值 20）。 */
+const PICKER_PAGE_SIZE = 20;
 
-/** 批量邀请区（M4 Task 2）：仅 canInvite 时渲染。错误 toast 直接透出服务端
- *  message——400 时服务端已把非法条目逐条拼接（「联系人格式非法：a、b」），原样
- *  展示即「逐条列出」，前端不再二次解析（M3b 实际契约无 invalid 数组）。 */
+/** 可拉取用户目录行（GET /files/:id/invitable-users 契约）。 */
+interface InvitableUser {
+  userId: string;
+  nickname: string;
+  phone: string | null;
+  email: string | null;
+}
+
+/**
+ * 邀请区（2026-10-11 需求方裁定重做，取代 M4 Task 2 的纯粘贴框）：owner 专属。
+ * 主路径 = 站内用户 picker——搜索（300ms 防抖）/分页浏览/勾选（跨页跨搜索保留
+ * 选择）/「一键拉取」直接加成协作者（POST /files/:id/collaborators，无需对方接受）；
+ * 次要入口 = 折叠的「邀请站外联系人」粘贴框（原 textarea 批量邀请流，站外联系人
+ * 唯一通道，testid invite-input/invite-submit 契约不变）。
+ * 错误 toast 直接透出服务端 message（NFR-USE-005 两段式沿用）。
+ */
 function InviteSection({ fileId, showToast }: { fileId: string; showToast(message: string): void }) {
+  const [keyword, setKeyword] = useState('');
+  const [q, setQ] = useState(''); // 防抖后的生效关键词
+  const [page, setPage] = useState(1);
+  const [dir, setDir] = useState<{ items: InvitableUser[]; total: number } | null>(null);
+  const [selected, setSelected] = useState<ReadonlyMap<string, string>>(new Map());
+  const [submitting, setSubmitting] = useState(false);
+  const [contactsOpen, setContactsOpen] = useState(false);
+  const [reloadTick, setReloadTick] = useState(0);
+
+  // 搜索防抖（300ms）：生效关键词变化重置回第 1 页
+  useEffect(() => {
+    const t = setTimeout(() => {
+      setQ(keyword.trim());
+      setPage(1);
+    }, 300);
+    return () => clearTimeout(t);
+  }, [keyword]);
+
+  // 目录拉取：q/page/fileId/拉取后 reloadTick 变化即重取；失败按空目录降级
+  useEffect(() => {
+    let alive = true;
+    api<{ items: InvitableUser[]; total: number }>(
+      `/files/${fileId}/invitable-users?q=${encodeURIComponent(q)}&page=${page}&size=${PICKER_PAGE_SIZE}`,
+    )
+      .then((res) => {
+        if (alive) setDir(res);
+      })
+      .catch(() => {
+        if (alive) setDir({ items: [], total: 0 });
+      });
+    return () => {
+      alive = false;
+    };
+  }, [fileId, q, page, reloadTick]);
+
+  const toggle = (u: InvitableUser): void => {
+    setSelected((prev) => {
+      const next = new Map(prev);
+      if (next.has(u.userId)) next.delete(u.userId);
+      else next.set(u.userId, u.nickname);
+      return next;
+    });
+  };
+
+  const totalPages = dir ? Math.max(1, Math.ceil(dir.total / PICKER_PAGE_SIZE)) : 1;
+
+  const pull = (): void => {
+    if (selected.size === 0) {
+      showToast('请先勾选要拉取的站内用户');
+      return;
+    }
+    if (selected.size > INVITE_MAX) {
+      showToast(`单次最多拉取 ${INVITE_MAX} 位协作者`);
+      return;
+    }
+    setSubmitting(true);
+    void apiPost<{ added: number; skipped: number }>(`/files/${fileId}/collaborators`, {
+      userIds: [...selected.keys()],
+    })
+      .then((res) => {
+        showToast(
+          res.skipped > 0
+            ? `已拉取 ${res.added} 位协作者，${res.skipped} 位已是协作者或无效`
+            : `已拉取 ${res.added} 位协作者`,
+        );
+        setSelected(new Map());
+        setPage(1);
+        setReloadTick((t) => t + 1); // 重取目录（新协作者已被排除出可拉列表）
+      })
+      .catch((e: unknown) => {
+        showToast(e instanceof Error ? e.message : '拉取失败，请稍后重试');
+      })
+      .finally(() => setSubmitting(false));
+  };
+
+  return (
+    <section className="member-invite" data-testid="invite-section">
+      <h3 className="member-group-title">邀请协作</h3>
+      <input
+        className="member-invite-search"
+        data-testid="invite-user-search"
+        aria-label="搜索站内用户（昵称/手机号/邮箱）"
+        placeholder="搜索站内用户（昵称/手机号/邮箱）"
+        value={keyword}
+        onChange={(e) => setKeyword(e.target.value)}
+      />
+      <ul className="member-invite-list" data-testid="invite-user-list">
+        {(dir?.items ?? []).map((u) => (
+          <li key={u.userId}>
+            <label className="member-invite-row" data-testid="invite-user-row" data-member-user={u.userId}>
+              <input
+                type="checkbox"
+                checked={selected.has(u.userId)}
+                onChange={() => toggle(u)}
+              />
+              <span className="member-invite-name">{u.nickname}</span>
+              <span className="member-invite-contact">{u.phone ?? u.email ?? ''}</span>
+            </label>
+          </li>
+        ))}
+        {dir && dir.items.length === 0 && (
+          <li className="member-invite-empty">{q === '' ? '暂无可拉取的站内用户' : '无匹配用户'}</li>
+        )}
+      </ul>
+      <div className="member-invite-pager">
+        <button
+          type="button"
+          data-testid="invite-page-prev"
+          disabled={page <= 1}
+          onClick={() => setPage((p) => Math.max(1, p - 1))}
+        >
+          上一页
+        </button>
+        <span className="member-invite-page-info" data-testid="invite-page-info">
+          {page} / {totalPages}
+        </span>
+        <button
+          type="button"
+          data-testid="invite-page-next"
+          disabled={page >= totalPages}
+          onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+        >
+          下一页
+        </button>
+      </div>
+      <div className="member-invite-footer">
+        <span className="member-invite-selected" data-testid="invite-selected-count">
+          已选 {selected.size} 人
+        </span>
+        <button
+          type="button"
+          className="member-invite-pull"
+          data-testid="invite-pull-submit"
+          disabled={submitting || selected.size === 0}
+          onClick={pull}
+        >
+          一键拉取
+        </button>
+      </div>
+      <button
+        type="button"
+        className="member-invite-contacts-toggle"
+        data-testid="invite-contacts-toggle"
+        aria-expanded={contactsOpen}
+        onClick={() => setContactsOpen((v) => !v)}
+      >
+        邀请站外联系人{contactsOpen ? ' ▴' : ' ▾'}
+      </button>
+      {contactsOpen && <ContactsInvite fileId={fileId} showToast={showToast} />}
+    </section>
+  );
+}
+
+/** 站外联系人批量粘贴邀请（原 M4 Task 2 主路径，2026-10-11 起折叠为次要入口）。 */
+function ContactsInvite({ fileId, showToast }: { fileId: string; showToast(message: string): void }) {
   const [draft, setDraft] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
@@ -84,8 +255,7 @@ function InviteSection({ fileId, showToast }: { fileId: string; showToast(messag
   };
 
   return (
-    <section className="member-invite" data-testid="invite-section">
-      <h3 className="member-group-title">邀请协作</h3>
+    <div className="member-invite-contacts">
       <p className="member-invite-hint">粘贴邮箱或手机号，逗号/空格/换行分隔，上限 50</p>
       <textarea
         className="member-invite-input"
@@ -98,7 +268,7 @@ function InviteSection({ fileId, showToast }: { fileId: string; showToast(messag
       <button type="button" className="member-invite-submit" data-testid="invite-submit" disabled={submitting} onClick={submit}>
         发送邀请
       </button>
-    </section>
+    </div>
   );
 }
 

@@ -7,12 +7,14 @@ import {
   MARKER_MULTI_MAX,
   MAX_DESCRIPTION_LENGTH,
   PRIORITY_LEGACY_MAP,
+  PROGRESS_STAGE_PCT,
   canonicalCustomColumns,
   iconValuesOf,
   isValidCustomValueOfType,
   progressStageOf,
   type CustomColumnDef,
   type IconGroup,
+  type ProgressValue,
 } from './constants';
 import { ORIGIN_SYSTEM } from './undo';
 import { applySummaryRepair, planSummaryRepair } from './summary';
@@ -556,10 +558,16 @@ export function normalizeTreeFor(doc: Y.Doc, origin: string, dirtyNodeIds: Set<s
 
 // ══ 图标八组制收敛（M7b-W1，随全量 normalizeTree 执行）══════════════════════
 
-/** 图标收敛计划条目：该节点收敛后的 icons 全量新组键值（组值数组）。 */
+/**
+ * 图标收敛计划条目：该节点收敛后的 icons 全量新组键值（组值数组）；可选
+ * progressPct = 进度联动收敛（2026-10-10 全量联动装载通道）——随徽章落位同步
+ * 创建/对齐的 task.progress（档位百分比单源 PROGRESS_STAGE_PCT；已有任务进度
+ * 时不覆写，由 planIconRepair 裁定）。
+ */
 export interface IconRepairEntry {
   nodeId: string;
   icons: Partial<Record<IconGroup, string[]>>;
+  progressPct?: number;
 }
 
 /** 内部：组值数组的规范化（字符串过滤、去重保序、目录校验、multi 上限；emoji 组
@@ -702,13 +710,34 @@ export function planIconRepair(doc: Y.Doc): IconRepairEntry[] {
           break; // 未知组：清除（needs 已置位）
       }
     }
-    if (needs) plan.push({ nodeId, icons: mapped });
+    // 进度联动收敛（2026-10-10 全量联动，仅随本就触发的图标重写）：徽章与任务进度
+    // 一体两面——已有合法 task.progress → 结构化字段权威，徽章改落 stage(任务值)
+    // （不同则仍需重写）；无任务进度 → 随徽章档位创建 task.progress（progressPct
+    // 随计划写，applyIconRepair 同事务落位）。干净文档（needs=false）零触碰不变。
+    const entry: IconRepairEntry = { nodeId, icons: mapped };
+    if (needs && mapped.progress !== undefined && mapped.progress.length > 0) {
+      const taskRaw = node.get('task');
+      const pct =
+        taskRaw instanceof Y.Map && typeof taskRaw.get('progress') === 'number'
+          ? (taskRaw.get('progress') as number)
+          : undefined;
+      const byTask = pct !== undefined ? progressStageOf(pct) : null;
+      if (byTask !== null) {
+        if (mapped.progress[0] !== byTask) {
+          mapped.progress = [byTask];
+        }
+      } else {
+        entry.progressPct = PROGRESS_STAGE_PCT[mapped.progress[0] as ProgressValue];
+      }
+    }
+    if (needs) plan.push(entry);
   }
   return plan;
 }
 
 /** 应用图标收敛计划（必须在调用方已开启的事务内执行）：整表重写 icons Y.Map 为
- *  收敛键值（组值数组；空组不写键）。 */
+ *  收敛键值（组值数组；空组不写键）；progressPct（进度联动收敛）落位 task.progress
+ *  ——task Y.Map 缺失则创建（仅 progress 单键，其余任务字段读取归缺省）。 */
 export function applyIconRepair(doc: Y.Doc, plan: IconRepairEntry[]): void {
   const nodes = nodesMap(doc);
   for (const entry of plan) {
@@ -719,6 +748,14 @@ export function applyIconRepair(doc: Y.Doc, plan: IconRepairEntry[]): void {
     for (const key of [...iconsRaw.keys()]) iconsRaw.delete(key);
     for (const [group, values] of Object.entries(entry.icons)) {
       if (values.length > 0) iconsRaw.set(group, Y.Array.from(values));
+    }
+    if (entry.progressPct !== undefined) {
+      const existing = node.get('task');
+      const taskMap = (existing instanceof Y.Map ? existing : new Y.Map<unknown>()) as Y.Map<unknown>;
+      if (!(existing instanceof Y.Map)) node.set('task', taskMap);
+      if (taskMap.get('progress') !== entry.progressPct) {
+        taskMap.set('progress', entry.progressPct);
+      }
     }
   }
 }

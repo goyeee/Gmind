@@ -37,7 +37,10 @@ import {
   MAX_NOTE_LENGTH,
   MAX_TASK_OWNERS,
   OTHER_VALUES,
+  PROGRESS_STAGE_PCT,
+  PROGRESS_VALUES,
   TABLE_BUILTIN_COLUMN_KEYS,
+  progressStageOf,
   type CustomColumnDef,
   type IconGroup,
   type TableViewSort,
@@ -837,6 +840,86 @@ describe('setNodeTask（M7a-T1）', () => {
     } catch (e) {
       expect((e as GmindCoreError).code).toBe('NODE_NOT_FOUND');
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 进度徽章↔百分比全量联动（需求方 2026-10-10「任务面板标记内嵌化」裁定）：进度组
+// 徽章是任务进度的可视化档位——setNodeTask 写 progress（含状态联动注入的
+// 100/0）同事务同步 icons.progress；setIcon 对 progress 组反向同步 task.progress；
+// null=清除进度（徽章与百分比一并移除，读取回缺省 0）。换算 1/8 档
+// （PROGRESS_STAGE_PCT）与既有 progressStageOf 互逆。
+// ---------------------------------------------------------------------------
+
+describe('进度徽章↔百分比全量联动', () => {
+  it('PROGRESS_STAGE_PCT 与 progressStageOf 互逆：每档百分比起算档位回到自身', () => {
+    for (const slug of PROGRESS_VALUES) {
+      expect(progressStageOf(PROGRESS_STAGE_PCT[slug]), slug).toBe(slug);
+    }
+  });
+
+  it('setNodeTask 写 progress → 同事务同步进度档位徽章（38→p37、0→none、100→done）', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
+    const id = childrenIds(doc, ROOT_NODE_ID)[0]!;
+    setNodeTask(doc, id, { progress: 38 });
+    expect(getNode(doc, id)!.task.progress).toBe(38);
+    expect(getNode(doc, id)!.icons.progress).toEqual(['p37']);
+    setNodeTask(doc, id, { progress: 0 });
+    expect(getNode(doc, id)!.icons.progress).toEqual(['none']);
+    setNodeTask(doc, id, { progress: 100 });
+    expect(getNode(doc, id)!.icons.progress).toEqual(['done']);
+  });
+
+  it('状态联动链同步徽章：进 done→progress 100+done 徽章；离开 done→progress 0+none 徽章', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
+    const id = childrenIds(doc, ROOT_NODE_ID)[0]!;
+    setNodeTask(doc, id, { status: 'done' });
+    expect(getNode(doc, id)!.task.progress).toBe(100);
+    expect(getNode(doc, id)!.icons.progress).toEqual(['done']);
+    setNodeTask(doc, id, { status: 'todo' }); // M7b-W1：改回待开始进度清零
+    expect(getNode(doc, id)!.task.progress).toBe(0);
+    expect(getNode(doc, id)!.icons.progress).toEqual(['none']);
+  });
+
+  it('setIcon progress 组反向联动：写档位同步百分比（p75→75），null 一并清除（徽章+进度键）', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
+    const id = childrenIds(doc, ROOT_NODE_ID)[0]!;
+    setIcon(doc, id, 'progress', 'p75');
+    expect(getNode(doc, id)!.icons.progress).toEqual(['p75']);
+    expect(getNode(doc, id)!.task.progress).toBe(75);
+    setIcon(doc, id, 'progress', null);
+    expect(getNode(doc, id)!.icons.progress).toBeUndefined();
+    expect(getNode(doc, id)!.task.progress).toBe(0); // 键删回读取缺省
+  });
+
+  it('同值守卫看两边：徽章+百分比均处目标态 → 零事务；仅百分比不一致（p25 徽章+30%）→ 仍写入对齐到 25', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
+    let n = 0;
+    doc.on('afterTransaction', () => {
+      n += 1;
+    });
+    const count = (): number => n;
+    const id = childrenIds(doc, ROOT_NODE_ID)[0]!;
+    setIcon(doc, id, 'progress', 'p50');
+    expect(count()).toBe(1);
+    setIcon(doc, id, 'progress', 'p50'); // 徽章 p50 + 进度 50 均同 → 零事务
+    expect(count()).toBe(1);
+    setNodeTask(doc, id, { progress: 30 }); // 徽章随百分比变 p25，进度 30
+    expect(getNode(doc, id)!.icons.progress).toEqual(['p25']);
+    setIcon(doc, id, 'progress', 'p25'); // 徽章同值但进度 30≠25 → 须写入对齐
+    expect(count()).toBe(3);
+    expect(getNode(doc, id)!.task.progress).toBe(25);
+  });
+
+  it('undo 一次回滚两处：progress 写入的徽章同步随任务字段一体回滚', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
+    const id = childrenIds(doc, ROOT_NODE_ID)[0]!;
+    const um = createUndoManager(doc);
+    setNodeTask(doc, id, { progress: 63 });
+    expect(getNode(doc, id)!.icons.progress).toEqual(['p62']);
+    undo(um);
+    expect(getNode(doc, id)!.task.progress).toBe(0);
+    expect(getNode(doc, id)!.icons.progress).toBeUndefined();
   });
 });
 

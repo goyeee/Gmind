@@ -577,6 +577,22 @@ describe('图标八组制收敛（M7b-W1，随 normalizeTree 全量执行）', (
     expect(getNode(doc, junk)!.icons).toEqual({}); // 未知组清除、不可解析 priority 删
   });
 
+  it('进度环收敛联动（2026-10-10 全量联动装载通道）：环 50% → p50 徽章 + task.progress=50 一并创建；已有任务进度 40 时以任务为准（徽章 p37、进度不覆写）', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [] });
+    const ring = nodeWithIcons(doc, ROOT_NODE_ID, 'RING', { progress: '50%' });
+    const tasked = nodeWithIcons(doc, ROOT_NODE_ID, 'TASKED', { progress: '75%' });
+    rawNode(doc, tasked).set('task', new Y.Map([['progress', 40]]));
+
+    normalizeTree(doc); // 次数随既有规则，不断言
+
+    // 无任务字段的旧环：徽章 p50 + 联动创建 task.progress=50（档位百分比单源）
+    expect(getNode(doc, ring)!.icons.progress).toEqual(['p50']);
+    expect(getNode(doc, ring)!.task.progress).toBe(50);
+    // 已有任务进度：结构化字段权威——徽章收敛到 stage(40)=p37，进度保持 40 不覆写
+    expect(getNode(doc, tasked)!.icons.progress).toEqual(['p37']);
+    expect(getNode(doc, tasked)!.task.progress).toBe(40);
+  });
+
   it('flag 与 star 同节点并存：M7b 落不同组（flag/other）、可并存（star 胜规则随三组制退役）', () => {
     const doc = createTemplateDoc({ title: 'T', children: [] });
     const id = nodeWithIcons(doc, ROOT_NODE_ID, 'FS', { flag: '红', star: '紫' });

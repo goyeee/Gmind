@@ -43,12 +43,14 @@ const authHeader = (token: string) => ({ Authorization: `Bearer ${token}` });
 const randomPhone = () => '138' + String(Math.floor(10000000 + Math.random() * 89999999));
 
 // 用例 1：owner 批量邀请成功 toast 计数；非法地址整批拒绝且逐条列出
+// （2026-10-11 起粘贴框折叠为次要入口：先点 invite-contacts-toggle 展开）
 test('成员面板邀请：粘贴多个地址批量邀请成功；非法地址逐条报错', async ({ page }) => {
   await openSeedDoc(page, '本周计划');
   await page.getByTestId('members-btn').click();
   const panel = page.getByTestId('member-panel');
   await expect(panel).toBeVisible();
   await expect(panel.getByTestId('invite-section')).toBeVisible(); // owner 可见邀请区
+  await panel.getByTestId('invite-contacts-toggle').click(); // 展开站外联系人粘贴框
   const input = page.getByTestId('invite-input');
   await input.fill('a@test.dev, 13900000001\nb@test.dev');
   await page.getByTestId('invite-submit').click();
@@ -95,6 +97,7 @@ test('成员面板邀请：混合批次 toast 分计数；M=0 保持旧文案；
   await openSeedDoc(page, '本周计划');
   await page.getByTestId('members-btn').click();
   await expect(page.getByTestId('invite-section')).toBeVisible();
+  await page.getByTestId('invite-contacts-toggle').click(); // 2026-10-11 起折叠为次要入口
 
   // textarea aria-label（M5 清偿）：以 label 定位即断言其存在
   const input = page.getByLabel('邀请联系人（邮箱或手机号，逗号/空格/换行分隔）');
@@ -113,4 +116,33 @@ test('成员面板邀请：混合批次 toast 分计数；M=0 保持旧文案；
   await input.fill('mix-a@test.dev, mix-c@test.dev');
   await page.getByTestId('invite-submit').click();
   await expect(page.getByTestId('toast')).toContainText('已邀请 0 位，2 位已在邀请中');
+});
+
+// 用例 4（2026-10-11 需求方裁定）：站内用户 picker——搜索过滤 → 勾选 → 一键拉取
+// 直接成为协作者（无需对方接受）；拉取后目录排除该用户。B 经 API 注册（登录即注册）。
+test('成员面板拉取站内用户：搜索过滤 → 勾选 → 一键拉取为协作者', async ({ page, request }) => {
+  // B：站内用户（API 注册即建号），昵称 = 用户 + 手机号后 4 位
+  const bPhone = randomPhone();
+  await apiLogin(request, bPhone);
+  const bNick = `用户${bPhone.slice(-4)}`;
+
+  await openSeedDoc(page, '本周计划');
+  await page.getByTestId('members-btn').click();
+  const panel = page.getByTestId('member-panel');
+  await expect(panel).toBeVisible();
+  await expect(panel.getByTestId('invite-user-list')).toBeVisible();
+
+  // 搜索过滤（手机号）→ 只剩 B；勾选 → 一键拉取
+  await panel.getByTestId('invite-user-search').fill(bPhone);
+  const row = panel.getByTestId('invite-user-row').filter({ hasText: bNick });
+  await expect(row).toHaveCount(1);
+  await expect(panel.getByTestId('invite-selected-count')).toHaveText('已选 0 人');
+  await expect(panel.getByTestId('invite-pull-submit')).toBeDisabled();
+  await row.click();
+  await expect(panel.getByTestId('invite-selected-count')).toHaveText('已选 1 人');
+  await panel.getByTestId('invite-pull-submit').click();
+  await expect(page.getByTestId('toast')).toContainText('已拉取 1 位协作者');
+  // 拉取后目录重取并排除 B（选择清空、计数归零）
+  await expect(panel.getByTestId('invite-selected-count')).toHaveText('已选 0 人');
+  await expect(panel.getByTestId('invite-user-row').filter({ hasText: bNick })).toHaveCount(0);
 });

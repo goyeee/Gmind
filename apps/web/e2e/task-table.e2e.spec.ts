@@ -6,8 +6,8 @@ import { expect, test, type Page } from '@playwright/test';
  * 1. 描述第二行（反馈任务 2）：标题格内标题行下方渲染描述第二行（.tt-title-desc，
  *    12px 灰字、单行省略、title 悬停看全文；有描述才渲染，无独立描述列——对齐
  *    mindgrid TreeTable 的 QuickEditor 两行式行内编辑）。
- * 2. 标题格标记单源渲染（反馈任务 1）：标记 chip 全部经 MarkerPanel 的 MarkerChip
- *    （engine drawMarkerBadge SVG 徽章，<svg viewBox="0 0 14 14"> + 定宽高 + flex
+ * 2. 标题格标记单源渲染（反馈任务 1）：标记 chip 全部经 MarkerChip（engine
+ *    drawMarkerBadge SVG 徽章，<svg viewBox="0 0 14 14"> + 定宽高 + flex
  *    收缩保护）——钉定「圆形图标不扁、完整显示」：chip 渲染盒恒 14×14，自定义
  *    kind（五角星等）走 SVG path 而非文本回落；「未开始」播放环同径。
  * 3. 双击收窄（反馈任务 5）：行其他区域（行号/状态等非标题格）双击一律无操作
@@ -44,14 +44,14 @@ async function selectNodeByText(page: Page, text: string): Promise<void> {
   await page.locator('.editor-canvas svg .gm-text', { hasText: text }).click();
 }
 
-/** 打开 TaskPanel →「在标记面板中编辑」→ 标记面板（2026-10-10 插入菜单删除后入口，
- *  与 marker-panel.e2e.spec.ts 同流程）。TaskPanel 已开时跳过 task-toggle（toggle 语义）。 */
+/** 打开 TaskPanel 标记区块并展开「其他」折叠组（2026-10-10 内嵌化：优先级/进度
+ *  平铺常显、其余组折叠），返回任务面板。TaskPanel 已开时跳过 task-toggle。 */
 async function openMarkerPanel(page: Page) {
-  const editBtn = page.getByTestId('task-panel-markers-edit');
-  if ((await editBtn.count()) === 0) await page.getByTestId('task-toggle').click();
-  await editBtn.click();
-  const panel = page.getByTestId('marker-panel');
+  if ((await page.getByTestId('task-panel').count()) === 0) await page.getByTestId('task-toggle').click();
+  const panel = page.getByTestId('task-panel');
   await expect(panel).toBeVisible();
+  const toggle = panel.getByTestId('task-panel-marker-toggle-other');
+  if ((await toggle.getAttribute('aria-expanded')) === 'false') await toggle.click();
   return panel;
 }
 
@@ -83,26 +83,28 @@ test('表格描述第二行：行内编辑写入描述 → 标题格下方灰字
 });
 
 // 用例 2（反馈任务 1）：标题格标记与画布/面板单源（drawMarkerBadge SVG）——
-// 画布给 周一 挂三组标记（优先级 P0 圆徽 / 进度「未开始」播放环 / 其他 五角星），
-// 切表格后钉定：chip 是 14×14 定尺寸 SVG（不扁），自定义 kind 走 path 而非文本回落。
+// 画布给叶子节点 周会对齐 挂三组标记（优先级 P0 圆徽 / 进度「未开始」播放环 /
+// 其他 五角星），切表格后钉定：chip 是 14×14 定尺寸 SVG（不扁），自定义 kind 走
+// path 而非文本回落。（2026-10-10 内嵌化：进度行 radio+联动，父节点只读——种进度
+// 档位须在叶子节点上，种子 周一/三/五 全为父级。）
 test('标题格标记单源渲染：SVG 徽章 14×14 不扁，自定义 kind 不回落文本', async ({ page }) => {
   test.setTimeout(90_000);
-  // 画布视图种标记（面板批量写入选中节点；单组替换/多组叠加语义不变）
+  // 画布视图种标记（任务面板内嵌行写入；单组替换/多组叠加语义不变）
   await registerAndLogin(page);
   await page.locator('.file-list li', { hasText: '本周计划' }).click();
   await expect(page).toHaveURL(/\/edit\//);
   await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '周一' })).toBeVisible();
-  await selectNodeByText(page, '周一');
+  await selectNodeByText(page, '周会对齐');
   const panel = await openMarkerPanel(page);
   await panel.getByTestId('marker-priority-p0').click(); // circleText 圆徽（此前被压扁的形）
-  await panel.getByTestId('marker-progress-none').click(); // progressNone 播放环
+  await panel.getByTestId('marker-progress-none').click(); // progressNone 播放环（radio 点档位）
   await panel.getByTestId('marker-other-important').click(); // star 自定义 kind（此前回落 ★ 文本）
-  await page.keyboard.press('Escape'); // 关面板再切视图
+  await page.getByTestId('task-toggle').click(); // 关任务面板再切视图
   await page.getByTestId('view-tab-table').click();
   await expect(page.locator('.task-table-root')).toBeVisible();
 
   const table = page.locator('.task-table-root');
-  const markers = table.locator('tbody tr').filter({ hasText: '周一' }).first().locator('.tt-markers');
+  const markers = table.locator('tbody tr').filter({ hasText: '周会对齐' }).first().locator('.tt-markers');
   // 三枚 chip 都在（data-marker-* 与画布 g.gm-marker-badge 同名属性）
   for (const v of ['p0', 'none', 'important']) {
     await expect(markers.locator(`[data-marker-value="${v}"]`)).toHaveCount(1);

@@ -45,7 +45,7 @@ import { nextChildText } from './defaultNodeText';
 import { api } from '../api/client';
 import { track } from '../api/events';
 import type { PresenceMember } from './collab';
-import { MarkerChip } from './MarkerPanel';
+import { MarkerChip } from './MarkerChip';
 import {
   Avatar,
   chipActive,

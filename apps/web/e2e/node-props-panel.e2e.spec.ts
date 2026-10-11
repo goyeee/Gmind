@@ -48,7 +48,7 @@ test('再点已选中节点 → 开 TaskPanel（只开不 toggle）；点其他�
   await clickNode(page, '周一');
   const panel = page.getByTestId('task-panel');
   await expect(panel).toBeVisible();
-  await expect(page.getByTestId('task-panel-title')).toHaveText('周一');
+  await expect(page.getByTestId('task-panel-title')).toHaveValue('周一');
 
   // 只开不 toggle：开着再点同一节点 → 保持开
   await clickNode(page, '周一');
@@ -57,11 +57,26 @@ test('再点已选中节点 → 开 TaskPanel（只开不 toggle）；点其他�
   // 点其他节点：面板不收（点节点不关——跟随选中切换内容，同 mindgrid）
   await clickNode(page, '周三');
   await expect(panel).toBeVisible();
-  await expect(page.getByTestId('task-panel-title')).toHaveText('周三');
+  await expect(page.getByTestId('task-panel-title')).toHaveValue('周三');
 
   // 点空白画布（角落，远离自适应居中的内容）→ 面板关闭（外点即关改判）
   await page.locator('.editor-canvas svg').click({ position: { x: 6, y: 6 } });
   await expect(panel).toHaveCount(0);
+});
+
+test('属性面板编辑实时同步画布：标题/描述键入即写（2026-10-10 预览反馈裁定）', async ({ page }) => {
+  await openSeedDoc(page, '本周计划');
+  await clickNode(page, '周一');
+  await clickNode(page, '周一'); // 再点开面板
+  await expect(page.getByTestId('task-panel')).toBeVisible();
+
+  // 标题：input 键入即写 setText → 画布节点文字同帧跟随
+  await page.getByTestId('task-panel-title').fill('周一改');
+  await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '周一改' })).toBeVisible();
+
+  // 描述：textarea 键入即写 setDescription → 画布描述行（gm-desc）实时跟随
+  await page.getByTestId('task-panel-desc').fill('面板实时描述');
+  await expect(page.locator('.editor-canvas svg text.gm-desc')).toHaveText('面板实时描述');
 });
 
 test('多选中点击先收敛为单选，不当场开 TaskPanel', async ({ page }) => {

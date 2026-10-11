@@ -1,6 +1,5 @@
 import {
   TASK_META_FONT_SIZE,
-  TASK_PROGRESS_W,
   TASK_ROW_H,
   taskRowContentWidth,
   type TaskRowSlots,
@@ -39,11 +38,9 @@ export interface MeasureNodeBoxOptions {
   description?: string;
   /**
    * 简洁模式（M7b 补课，mindgrid 账号级显示偏好「脑图简洁模式」）：true 时节点盒
-   * 收敛为「标题 + 标记 + 内联进度」紧凑盒——描述行不产出（descLine 恒缺省）、
-   * 任务行槽位不计入盒高/盒宽（任务详情由渲染层改为内联小字，见 render.ts
-   * gm-task-progress-inline）。有任务信息（taskRow 槽位存在）时盒宽下限追加
-   * TASK_PROGRESS_W（mindgrid COMPACT.PROGRESS_W=30 同值）为内联百分数预留槽位，
-   * 长标题不与其重叠。缺省 false = 原路径，输出逐字节不变（金样锁定）。
+   * 收敛为「标题 + 标记」紧凑盒——描述行不产出（descLine 恒缺省）、任务行槽位
+   * 不计入盒高/盒宽。内联进度槽宽预留已随渲染侧一并退役（2026-10-11 需求方裁定
+   * 「简洁模式不用展示百分比」）。缺省 false = 原路径，输出逐字节不变（金样锁定）。
    */
   compact?: boolean;
 }
@@ -72,8 +69,8 @@ const DESC_ELLIPSIS = '…';
  *   imageW !== undefined ? imageW + 2×nodePaddingX : 0,
  *   taskRowContentWidth(taskRow)（有任务信息时）,
  *   截断描述行宽 + 2×nodePaddingX + iconCount×iconSlotWidth（有描述时）, minNodeWidth)。
- * - compact=true（M7b 补课，简洁模式）：描述行不产出、任务行槽位不计高宽，盒宽下限
- *   追加内联进度槽（TASK_PROGRESS_W，有任务信息时）——紧凑盒=标题+标记+内联进度。
+ * - compact=true（M7b 补课，简洁模式）：描述行不产出、任务行槽位不计高宽——
+ *   紧凑盒=标题+标记（内联进度槽 2026-10-11 裁定退役，简洁模式不展示百分比）。
  * 纯函数、确定性：同一输入恒得同一输出。
  */
 export function measureNodeBox(
@@ -124,16 +121,13 @@ export function measureNodeBox(
             : 0,
         )
       : 0;
-  // 简洁模式内联进度槽宽（mindgrid COMPACT.PROGRESS_W=30 同值）：有任务信息
-  // （taskRow 槽位存在 = hasTaskInfo 口径）时盒宽下限追加槽宽——内联百分数画在
-  // 标题行右缘（渲染侧右对齐同值），长标题不与其重叠；无任务信息零参与。
-  const inlineProgressW = compact && options.taskRow ? TASK_PROGRESS_W : 0;
+  // 简洁模式内联进度槽宽已退役（2026-10-11 裁定：紧凑盒不含任务文字，零槽宽预留）。
   const descW =
     descLine !== undefined
       ? adapter.measureTextLine(descLine, descStyle) + theme.nodePaddingX * 2 + iconCount * theme.iconSlotWidth
       : 0;
   const w = Math.max(
-    maxLineW + theme.nodePaddingX * 2 + iconCount * theme.iconSlotWidth + inlineProgressW,
+    maxLineW + theme.nodePaddingX * 2 + iconCount * theme.iconSlotWidth,
     imageW,
     taskRowW,
     descW,
