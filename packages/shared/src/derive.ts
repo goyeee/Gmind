@@ -23,11 +23,13 @@ export interface DeriveTask {
   owners: string[];
 }
 
-/** 人员进度列拉平条目（需求方 2026-10-11 裁定的第 5 种自定义列类型 assignee；
- *  多列由调用方拉平传入——derive 不读 schema/custom 结构，保持结构化输入自治） */
+/** 人员进度列拉平条目（需求方 2026-10-11 裁定的自定义列类型 assignee；
+ *  多列由调用方拉平传入——derive 不读 schema/custom 结构，保持结构化输入自治；
+ *  weight=合成比重（2026-10-12 裁定：调用方按列 weighted 开关解析——平分模式恒 1） */
 export interface CustomAssigneeEntry {
   user: string;
   progress: number;
+  weight?: number;
 }
 
 /** 结构化输入节点：自持结构类型，不 import gmind-core/engine（避免反向依赖） */
@@ -100,20 +102,31 @@ export function childrenOf(nodes: DeriveNode[], parentId: string | null): Derive
   return nodes.filter((n) => normalizeParentId(n.parentId) === target).sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
 }
 
-/** 有效进度：有子节点时 = 直属子级有效进度的平均（递归）；叶子节点 = 所有
- * 「带进度的人」拉平平均（需求方 2026-10-11 人员进度列裁定）——标准负责人
- * （owners 非空时 task.progress 一项）+ customAssignees 每人一项；无任何参与项
- * 时回落 task.progress（无 task 视为 0；节点不存在亦为 0）。「全 100% 才能标
- * 完成」是 setNodeTask 门禁职责，不在本聚合函数内。 */
+/** 有效进度：有子节点时 = 直属子级有效进度的平均（递归）；叶子节点 = 所有「带进度
+ * 的人」的**加权**平均（需求方 2026-10-12 比重裁定）——标准负责人（owners 非空时
+ * task.progress 一项，权重恒 1）+ customAssignees 每人一项（weight 缺省 1；调用方
+ * 按列 weighted 开关解析：平分模式全 1 = 人数平分，自定义模式取每人比重）；
+ * 无任何参与项时回落 task.progress（无 task 视为 0；节点不存在亦为 0）。
+ * 「全 100% 才能标完成」是 setNodeTask 门禁职责，不在本聚合函数内。 */
 export function effectiveProgress(nodes: DeriveNode[], id: string): number {
   const kids = childrenOf(nodes, id);
   const node = nodes.find((n) => n.id === id);
   if (kids.length === 0) {
     const entries = node?.customAssignees ?? [];
-    const items: number[] = entries.map((e) => e.progress);
-    if ((node?.task?.owners?.length ?? 0) > 0) items.push(node!.task!.progress);
-    if (items.length === 0) return node?.task?.progress ?? 0;
-    return Math.round(items.reduce((a, b) => a + b, 0) / items.length);
+    const hasOwners = (node?.task?.owners?.length ?? 0) > 0;
+    let weightSum = 0;
+    let weighted = 0;
+    for (const e of entries) {
+      const w = e.weight ?? 1;
+      weightSum += w;
+      weighted += e.progress * w;
+    }
+    if (hasOwners) {
+      weightSum += 1;
+      weighted += node!.task!.progress;
+    }
+    if (weightSum === 0) return node?.task?.progress ?? 0;
+    return Math.round(weighted / weightSum);
   }
   const sum = kids.reduce((acc, k) => acc + effectiveProgress(nodes, k.id), 0);
   return Math.round(sum / kids.length);

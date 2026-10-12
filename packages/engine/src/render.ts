@@ -91,6 +91,7 @@ import {
   markerCountOf,
   markerDefOf,
   markerSignatureOf,
+  isRenderableMarkerGroup,
   type MarkerGlyphDef,
 } from './markers';
 
@@ -339,11 +340,14 @@ function syncOptional<T extends SVGElement>(
 
 /** 标记区徽标绘制（M7b-W1）：按固定组序展开各组值数组，逐值经 MARKER_CATALOG
  *  绘制彩色徽标；目录外值（未收敛窗口期）确定性忽略。M7b-W3 起徽标携带
- *  data-marker-group/data-marker-value（节点标记点击换组的页面层命中锚点）。 */
+ *  data-marker-group/data-marker-value（节点标记点击换组的页面层命中锚点）。
+ *  2026-10-12 起跳过画布退役的进度组（isRenderableMarkerGroup——进度改由任务行
+ *  头像弧环表达，数据链写而不画）。 */
 function markerDefsOf(icons: Record<string, unknown> | undefined): Array<{ def: MarkerGlyphDef; group: string }> {
   if (!icons) return [];
   const defs: Array<{ def: MarkerGlyphDef; group: string }> = [];
   for (const group of MARKER_ROW_ORDER) {
+    if (!isRenderableMarkerGroup(group)) continue;
     const values = icons[group];
     const list = Array.isArray(values) ? values : typeof values === 'string' && values !== '' ? [values] : [];
     for (const value of list) {
@@ -381,7 +385,10 @@ function avatarGroup(
   avatar?: string | null,
 ): SVGGElement {
   const g = el('g', {
-    class: progress !== null ? 'gm-task-assignee' : 'gm-task-owner-avatar',
+    // 角色判定按 data-assignee-user 锚点：owner 头像也可能带 data（data-owner-user
+    // 点击锚点，2026-10-12 裁定）——环由 progress 参数驱动、与角色无关。
+    class:
+      data !== null && 'data-assignee-user' in data ? 'gm-task-assignee' : 'gm-task-owner-avatar',
     ...(data ?? {}),
   });
   if (progress !== null) {
@@ -755,8 +762,10 @@ function applyNode(
   // 签名（任务数据+盒几何）不变则整行元素引用保持（重建为无状态绘制，代价极小
   // ——同标记行策略）。简洁模式恒隐藏（紧凑盒 = 纯标题 + 标记）。
   const ownerLabel = taskSlots?.ownerLabel ?? '';
+  // ownerSig 含头像环值（有人员进度列时环=task.progress，其变化须触发整行重建）。
+  const ownerRingPct = (taskSlots?.assigneeAvatars?.length ?? 0) > 0 ? (task?.progress ?? 0) : '';
   const ownerSig = (taskSlots?.ownerAvatars ?? [])
-    .map((n, i) => `${n}·${taskSlots?.ownerAvatarUrls?.[i] ?? ''}`)
+    .map((n, i) => `${n}·${taskSlots?.ownerAvatarUrls?.[i] ?? ''}·${ownerRingPct}`)
     .join('·');
   const assigneeSig = (taskSlots?.assigneeAvatars ?? [])
     .map((a) => `${a.user}:${a.progress}:${a.avatar ?? ''}`)
@@ -792,11 +801,26 @@ function applyNode(
       cursorX += ownerLabel.length * TASK_META_FONT_SIZE; // 仅用于与后续串联的近似推进（测量侧保证盒宽）
     }
     // 负责人圆形头像组（2026-10-11 头像化；有 avatar 画图片、缺省文字首字符）。
+    // 节点有人员进度列时，负责人个人进度也画成头像弧环（需求方 2026-10-12 裁定
+    // 「整齐」口径——任务行全员环形表达；环值=task.progress，右侧 % 仍=合成总进度）。
     {
       const ownerUrls = taskSlots?.ownerAvatarUrls ?? [];
       const ownerNames = taskSlots?.ownerAvatars ?? [];
+      // data-owner-user 锚点（2026-10-12 裁定：点负责人头像弹选盘快捷改其进度——
+      // 与人员列点头像同交互；web 层写回走 setNodeTask 而非 setCustomField）。
+      const ownerIds = (task?.owners ?? []).filter((o) => o !== '');
+      const ownerRing = (taskSlots?.assigneeAvatars?.length ?? 0) > 0;
       for (let i = 0; i < ownerNames.length; i += 1) {
-        parts.push(avatarGroup(cursorX + AVATAR_R, rowY, ownerNames[i]!, null, null, ownerUrls[i] ?? null));
+        parts.push(
+          avatarGroup(
+            cursorX + AVATAR_R,
+            rowY,
+            ownerNames[i]!,
+            ownerRing ? (task?.progress ?? 0) : null,
+            { 'data-owner-user': ownerIds[i] ?? '' },
+            ownerUrls[i] ?? null,
+          ),
+        );
         cursorX += AVATAR_SLOT;
       }
     }

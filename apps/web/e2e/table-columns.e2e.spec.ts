@@ -42,7 +42,7 @@ async function openSeedDocTable(page: Page, title: string): Promise<void> {
 async function addColumn(
   page: Page,
   name: string,
-  type: 'text' | 'person' | 'progress' | 'date',
+  type: 'text' | 'progress' | 'date' | 'assignee',
 ): Promise<void> {
   await page.getByTestId('table-col-add').click();
   await page.getByTestId('table-col-add-name').fill(name);

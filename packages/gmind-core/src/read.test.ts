@@ -477,7 +477,7 @@ describe('tableView 防御读取（getMeta.tableView）', () => {
     const doc = createTemplateDoc({ title: 'T', children: [] });
     setCustomColumns(doc, [
       { id: 'c1', name: '备注', type: 'text' },
-      { id: 'c2', name: '复核', type: 'person' },
+      { id: 'c2', name: '复核', type: 'assignee' },
     ]);
     // order 非字符串数组 → 缺省完整序
     doc.getMap('meta').set('tableView', { order: 'bad', hidden: [], pinned: [], sort: null });

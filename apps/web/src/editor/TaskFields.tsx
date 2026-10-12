@@ -224,7 +224,13 @@ export function deriveNodesOfDoc(doc: Y.Doc): DeriveNode[] {
       order: parent ? Math.max(0, parent.childIds.indexOf(id)) : 0,
       task: { ...snap.task, owners: [...snap.task.owners] },
       ...(assignees.length > 0
-        ? { customAssignees: assignees.map(({ user, progress }) => ({ user, progress })) }
+        ? {
+            customAssignees: assignees.map(({ user, progress, weight }) => ({
+              user,
+              progress,
+              weight,
+            })),
+          }
         : {}),
     });
   }
@@ -360,55 +366,106 @@ export function SmartDateInput({
 // ───────────────────── 自定义属性字段（表格自定义列消费侧，任务 2）─────────────────────
 
 /**
- * 人员进度列编辑器（assignee 类型，需求方 2026-10-11 裁定的第 5 种自定义列）：
- * 每人一行 [头像+昵称] [0-100 数字输入 %] [×移除]，底部成员多选添加（新人默认
- * 进度 0——「选了人就必须有进度」，0 即未开始）。整值替换提交（与 core 整值 LWW
- * 口径一致）：任何行变化构造新 Record 提交；移除到 0 人提交 null（删键）。
+ * 人员列编辑器（assignee 类型，2026-10-12 起为唯一人员列——原 person 纯名单类型
+ * 已按需求方裁定去除）：每人一行 [头像+昵称] [0-100 进度输入 %] [比重输入（仅自定义
+ * 比重模式）] [×移除]，底部成员多选添加（新人默认进度 0——「选了人就必须有进度」）。
+ * 比重（2026-10-12 裁定）：列级「按人数平分 / 自定义比重」开关（写列定义 weighted）；
+ * 平分模式存量的 weight 不参与合成（core 读侧解析）。整值替换提交（core 整值 LWW
+ * 口径）：任何行变化构造 v2 Record 提交；移除到 0 人提交 null（删键）。
+ * 值结构 v2 = Record<user, {progress, weight?}>；旧版 number 简形读侧兼容。
  * 表格单元格弹层与任务面板（CustomFieldInput assignee 分支）共用本组件。
  */
+export interface AssigneeRow {
+  user: string;
+  progress: number;
+  weight?: number;
+}
+
+/** 解析 assignee 值（v2 对象 / 旧 number 简形兼容）为行数组；坏形状项跳过。 */
+export function assigneeRowsOf(value: unknown): AssigneeRow[] {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return [];
+  const out: AssigneeRow[] = [];
+  for (const [user, raw] of Object.entries(value as Record<string, unknown>)) {
+    const norm = typeof raw === 'number' ? { progress: raw } : (raw as { progress?: unknown; weight?: unknown } | null);
+    if (typeof norm?.progress !== 'number') continue;
+    const weight = typeof norm.weight === 'number' && norm.weight > 0 ? norm.weight : undefined;
+    out.push(weight === undefined ? { user, progress: norm.progress } : { user, progress: norm.progress, weight });
+  }
+  return out;
+}
+
 export function AssigneeField({
   value,
   memberIndex,
   onCommit,
   testId,
+  def,
+  onToggleWeighted,
 }: {
   value: unknown;
   memberIndex: Map<string, MemberOption>;
-  onCommit: (v: Record<string, number> | null) => void;
+  onCommit: (v: Record<string, { progress: number; weight?: number }> | null) => void;
   testId: string;
+  /** 列定义（含 weighted 比重开关）；缺省 = 不显示开关（任务面板等只读模式场景）。 */
+  def?: CustomColumnDef;
+  /** 比重模式切换回调（写列 schema weighted）；缺省不渲染开关。 */
+  onToggleWeighted?: (weighted: boolean) => void;
 }): ReactElement {
-  const entries: Array<[string, number]> =
-    typeof value === 'object' && value !== null && !Array.isArray(value)
-      ? (Object.entries(value as Record<string, unknown>) as Array<[string, unknown]>)
-          .filter((entry): entry is [string, number] => typeof entry[1] === 'number')
-          .map(([u, p]) => [u, p])
-      : [];
-  const asRecord = (): Record<string, number> => Object.fromEntries(entries);
-  const commit = (next: Record<string, number>): void => {
+  const rows = assigneeRowsOf(value);
+  const weighted = def?.weighted === true;
+  const asRecord = (): Record<string, { progress: number; weight?: number }> =>
+    Object.fromEntries(rows.map((r) => [r.user, r.weight === undefined ? { progress: r.progress } : { progress: r.progress, weight: r.weight }]));
+  const commit = (next: Record<string, { progress: number; weight?: number }>): void => {
     onCommit(Object.keys(next).length > 0 ? next : null);
   };
   return (
     <span className="task-assignee" data-testid={testId}>
-      {entries.length === 0 && <span className="task-custom-placeholder">选择成员并更新进度</span>}
-      {entries.map(([user, progress]) => (
-        <span key={user} className="task-assignee-row" data-testid={`${testId}-row-${user}`}>
-          <Avatar userId={user} nickname={memberIndex.get(user)?.nickname ?? user.slice(0, 8)} avatar={memberIndex.get(user)?.avatar} />
+      {onToggleWeighted && (
+        <label className="task-assignee-weighted-toggle" data-testid={`${testId}-weighted-toggle`}>
+          <input
+            type="checkbox"
+            checked={weighted}
+            onChange={(e) => onToggleWeighted(e.target.checked)}
+          />
+          自定义比重
+        </label>
+      )}
+      {rows.length === 0 && <span className="task-custom-placeholder">选择成员并更新进度</span>}
+      {rows.map((row) => (
+        <span key={row.user} className="task-assignee-row" data-testid={`${testId}-row-${row.user}`}>
+          <Avatar userId={row.user} nickname={memberIndex.get(row.user)?.nickname ?? row.user.slice(0, 8)} avatar={memberIndex.get(row.user)?.avatar} />
           <span className="task-assignee-name">
-            {memberIndex.get(user)?.nickname ?? user.slice(0, 8)}
+            {memberIndex.get(row.user)?.nickname ?? row.user.slice(0, 8)}
           </span>
           <AssigneeProgressInput
-            testId={`${testId}-progress-${user}`}
-            progress={progress}
-            onCommit={(p) => commit({ ...asRecord(), [user]: p })}
+            testId={`${testId}-progress-${row.user}`}
+            progress={row.progress}
+            onCommit={(p) => {
+              const next = asRecord();
+              const cur = next[row.user]!;
+              next[row.user] = cur.weight === undefined ? { progress: p } : { progress: p, weight: cur.weight };
+              commit(next);
+            }}
           />
+          {weighted && (
+            <AssigneeWeightSelect
+              testId={`${testId}-weight-${row.user}`}
+              weight={row.weight ?? 1}
+              onCommit={(w) => {
+                const next = asRecord();
+                next[row.user] = { progress: next[row.user]!.progress, weight: w };
+                commit(next);
+              }}
+            />
+          )}
           <button
             type="button"
             className="task-assignee-remove"
-            data-testid={`${testId}-remove-${user}`}
+            data-testid={`${testId}-remove-${row.user}`}
             title="移除该成员"
             onClick={() => {
               const next = asRecord();
-              delete next[user];
+              delete next[row.user];
               commit(next);
             }}
           >
@@ -418,16 +475,59 @@ export function AssigneeField({
       ))}
       <MemberMultiSelect
         memberIndex={memberIndex}
-        selected={entries.map(([u]) => u)}
+        selected={rows.map((r) => r.user)}
         onToggle={(userId) => {
           const next = asRecord();
           if (userId in next) delete next[userId];
-          else next[userId] = 0; // 新人默认进度 0
+          else next[userId] = { progress: 0 }; // 新人默认进度 0
           commit(next);
         }}
         testIdPrefix={`${testId}-member`}
         emptyHint="暂无文档成员，邀请协作者后可指派"
       />
+    </span>
+  );
+}
+
+/** 自定义比重模式行内的比重下拉（需求方 2026-10-12 裁定：0.3~0.8 弱化档 + 1 平权，
+ *  下拉选择替代数字输入——避免填入过大数不好评估；只需将需弱化权重的人员调低）。
+ *  weight 缺省（未显式选择）= 1 平权；选中即提交、Esc 还原。 */
+const ASSIGNEE_WEIGHT_OPTIONS: Array<{ value: number; label: string }> = [
+  { value: 1, label: '1（平权）' },
+  { value: 0.8, label: '0.8' },
+  { value: 0.7, label: '0.7' },
+  { value: 0.6, label: '0.6' },
+  { value: 0.5, label: '0.5' },
+  { value: 0.4, label: '0.4' },
+  { value: 0.3, label: '0.3' },
+];
+
+function AssigneeWeightSelect({
+  weight,
+  onCommit,
+  testId,
+}: {
+  weight: number;
+  onCommit: (v: number) => void;
+  testId: string;
+}): ReactElement {
+  // 下拉只有固定档位：当前 weight 无精确匹配档（如旧数据 3）时显示数值占位，选中档位即归一。
+  const known = ASSIGNEE_WEIGHT_OPTIONS.some((o) => o.value === weight);
+  return (
+    <span className="task-assignee-weight" title="比重（合成总进度的权重，1 为平权，可弱化至 0.3）">
+      <select
+        data-testid={testId}
+        value={known ? weight : ''}
+        aria-label="比重"
+        onChange={(e) => onCommit(Number(e.target.value))}
+      >
+        {!known && <option value={weight}>{weight}</option>}
+        {ASSIGNEE_WEIGHT_OPTIONS.map((o) => (
+          <option key={o.value} value={o.value}>
+            {o.label}
+          </option>
+        ))}
+      </select>
     </span>
   );
 }
@@ -484,11 +584,10 @@ function AssigneeProgressInput({
  * 自定义属性单字段输入（TaskPanel「自定义属性」小节；原与已删除的 TaskQuickCard
  * 共用，2026-10-10 起 TaskPanel 独用）：按列
  * 类型渲染同族编辑器——text=单行输入（placeholder「填写…」，空提交=清空删键）/
- * person=MemberMultiSelect（空值占位「选择成员」，清空到 0 人提交 null）/
  * progress=0-100 数字输入（Enter/失焦提交，钳 0-100 取整，空=清空）/
- * date=SmartDateInput / assignee=AssigneeField（人员进度列）。即改即存：onCommit 由
- * 调用方接 core setCustomField + afterUserWrite，GmindCoreError 两段式文案在调用方
- * toast（TaskPanel write 模式）。
+ * date=SmartDateInput / assignee=AssigneeField（人员列；person 纯名单类型已随
+ * 2026-10-12 裁定去除）。即改即存：onCommit 由调用方接 core setCustomField +
+ * afterUserWrite，GmindCoreError 两段式文案在调用方 toast（TaskPanel write 模式）。
  *
  * 值口径：value 读自 getNode(doc,id).custom?.[colId]（防御归一后的 plain 值），
  * 非本列类型形状（crafted 遗留）按空值处理；未变更零提交（onCommit 内不重复写）。
@@ -503,7 +602,9 @@ export function CustomFieldInput({
   def: CustomColumnDef;
   value: unknown;
   memberIndex: Map<string, MemberOption>;
-  onCommit: (v: string | string[] | number | Record<string, number> | null) => void;
+  onCommit: (
+    v: string | number | Record<string, { progress: number; weight?: number }> | null,
+  ) => void;
   testIdPrefix: string;
 }): ReactElement {
   const testId = `${testIdPrefix}-${def.id}`;
@@ -512,29 +613,9 @@ export function CustomFieldInput({
       return (
         <CustomTextField def={def} value={value} onCommit={onCommit} testId={testId} />
       );
-    case 'person': {
-      const selected =
-        Array.isArray(value) && value.every((v) => typeof v === 'string') ? (value as string[]) : [];
-      return (
-        <span className="task-custom-person" data-testid={testId}>
-          {selected.length === 0 && <span className="task-custom-placeholder">选择成员</span>}
-          <MemberMultiSelect
-            memberIndex={memberIndex}
-            selected={selected}
-            onToggle={(userId) => {
-              const next = selected.includes(userId)
-                ? selected.filter((o) => o !== userId)
-                : [...selected, userId];
-              onCommit(next.length > 0 ? next : null); // 清空到 0 人 = 删键（null）
-            }}
-            testIdPrefix={`${testId}-member`}
-          />
-        </span>
-      );
-    }
     case 'assignee':
       return (
-        <AssigneeField value={value} memberIndex={memberIndex} onCommit={onCommit} testId={testId} />
+        <AssigneeField value={value} memberIndex={memberIndex} onCommit={onCommit} testId={testId} def={def} />
       );
     case 'progress':
       return (

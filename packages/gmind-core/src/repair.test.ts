@@ -862,17 +862,17 @@ describe('自定义列归一（表格自定义列，随 normalizeTree 全量执�
     });
   }
 
-  it('schema 外孤儿列键删除、值形状与列类型不符删键（text 非串/person 非串数组/progress 非法/date 非法）', () => {
+  it('schema 外孤儿列键删除、值形状与列类型不符删键（text 非串/assignee 非对象/progress 非法/date 非法）', () => {
     const doc = createTemplateDoc({ title: 'T', children: [] });
     setCustomColumns(doc, [
       { id: 't1', name: '文本列', type: 'text' },
-      { id: 'p1', name: '人员列', type: 'person' },
+      { id: 'p1', name: '人员列', type: 'assignee' },
       { id: 'g1', name: '进度列', type: 'progress' },
       { id: 'd1', name: '日期列', type: 'date' },
     ]);
     const id = nodeWithRawCustom(doc, ROOT_NODE_ID, 'A', {
       t1: 42, // text 非串
-      p1: 'U1', // person 非串数组
+      p1: 'U1', // assignee 非对象
       g1: 1.5, // progress 非法整数
       d1: '2026-02-30', // date 非法串
       orphan: 'x', // schema 外孤儿键
@@ -882,17 +882,17 @@ describe('自定义列归一（表格自定义列，随 normalizeTree 全量执�
     expect(normalizeTree(doc)).toBe(0); // 幂等
   });
 
-  it('合法值零修复：形状与列类型相符的键原样保留（含 person 串数组）', () => {
+  it('合法值零修复：形状与列类型相符的键原样保留（含 assignee 对象；旧 number 简形亦合法）', () => {
     const doc = createTemplateDoc({ title: 'T', children: [] });
     setCustomColumns(doc, [
       { id: 't1', name: '文本列', type: 'text' },
-      { id: 'p1', name: '人员列', type: 'person' },
+      { id: 'p1', name: '人员列', type: 'assignee' },
       { id: 'g1', name: '进度列', type: 'progress' },
       { id: 'd1', name: '日期列', type: 'date' },
     ]);
     const id = nodeWithRawCustom(doc, ROOT_NODE_ID, 'A', {
       t1: '文本',
-      p1: ['U1', 'U2'],
+      p1: { U1: { progress: 10 }, U2: 20 }, // v2 对象 + 旧 number 简形（read 归一）
       g1: 100,
       d1: '2026-10-01',
     });
@@ -901,7 +901,7 @@ describe('自定义列归一（表格自定义列，随 normalizeTree 全量执�
     expect(Buffer.from(docToState(doc)).equals(Buffer.from(state))).toBe(true);
     expect(getNode(doc, id)!.custom).toEqual({
       t1: '文本',
-      p1: ['U1', 'U2'],
+      p1: { U1: { progress: 10 }, U2: 20 },
       g1: 100,
       d1: '2026-10-01',
     });

@@ -521,11 +521,21 @@ export function drawMarkerBadge(def: MarkerGlyphDef): SVGGElement | null {
   return g;
 }
 
-/** 标记行徽标总数（布局槽位口径：各组值数组的元素数求和；防御非数组形状）。 */
+/** 画布不渲染的标记组（2026-10-12 需求方裁定：节点标题前的进度图标退役——
+ *  进度改由任务行头像弧环表达、快捷入口=点头像弹选盘）。数据链保留（setNodeTask
+ *  写进度仍联动徽章键——repair 装载通道消费，写而不画）；MARKER_ROW_ORDER 不动
+ *  （TaskPanel 组序仍含进度组），过滤只在 engine 渲染/布局三个消费点。 */
+export function isRenderableMarkerGroup(group: string): boolean {
+  return group !== 'progress';
+}
+
+/** 标记行徽标总数（布局槽位口径：各组值数组的元素数求和；防御非数组形状；
+ *  2026-10-12 起跳过画布退役的进度组——与渲染过滤同口径，槽位不留空）。 */
 export function markerCountOf(icons: Record<string, unknown> | undefined): number {
   if (!icons) return 0;
   let n = 0;
   for (const group of MARKER_ROW_ORDER) {
+    if (!isRenderableMarkerGroup(group)) continue;
     const values = icons[group];
     if (Array.isArray(values)) n += values.length;
     else if (typeof values === 'string' && values !== '') n += 1;
@@ -533,11 +543,13 @@ export function markerCountOf(icons: Record<string, unknown> | undefined): numbe
   return n;
 }
 
-/** 标记行签名（协调差分用：组序 + 逐值拼接；不变则徽标元素引用保持）。 */
+/** 标记行签名（协调差分用：组序 + 逐值拼接；不变则徽标元素引用保持；
+ *  2026-10-12 起跳过画布退役的进度组——仅进度徽章的节点不留空 gm-markers 容器）。 */
 export function markerSignatureOf(icons: Record<string, unknown> | undefined): string {
   if (!icons) return '';
   const parts: string[] = [];
   for (const group of MARKER_ROW_ORDER) {
+    if (!isRenderableMarkerGroup(group)) continue;
     const values = icons[group];
     if (Array.isArray(values)) for (const v of values) parts.push(`${group}:${String(v)}`);
     else if (typeof values === 'string' && values !== '') parts.push(`${group}:${values}`);

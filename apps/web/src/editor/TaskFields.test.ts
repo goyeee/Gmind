@@ -92,11 +92,31 @@ describe('deriveNodesOfDoc（M7c-C3/C4 抽公共）', () => {
     const nodes = deriveNodesOfDoc(doc);
     const n = nodes.find((x) => x.title === '任务X')!;
     expect(n.customAssignees).toEqual([
-      { user: 'uB', progress: 80 },
-      { user: 'uC', progress: 30 },
+      { user: 'uB', progress: 80, weight: 1 },
+      { user: 'uC', progress: 30, weight: 1 },
     ]);
     // (60 + 80 + 30) / 3 = 56.67 → 57（标准负责人一项 + 每人一项）
     expect(effectiveProgress(nodes, n.id)).toBe(57);
+  });
+
+  it('人员列自定义比重（2026-10-12 裁定）：列 weighted=true 时映射每人 weight，合成按加权平均', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: '任务W' }] });
+    const id = getNode(doc, ROOT_NODE_ID)!.childIds[0]!;
+    setCustomColumns(
+      doc,
+      [{ id: 'w1', name: '测试', type: 'assignee', weighted: true }],
+      ORIGIN_USER,
+    );
+    setNodeTask(doc, id, { owners: ['uA'], progress: 60 }, ORIGIN_USER);
+    // uB 进度 100 比重 3、uC 进度 0 比重 1 → (60×1 + 100×3 + 0×1) / 5 = 72
+    setCustomField(doc, id, 'w1', { uB: { progress: 100, weight: 3 }, uC: { progress: 0 } }, ORIGIN_USER);
+    const nodes = deriveNodesOfDoc(doc);
+    const n = nodes.find((x) => x.title === '任务W')!;
+    expect(n.customAssignees).toEqual([
+      { user: 'uB', progress: 100, weight: 3 },
+      { user: 'uC', progress: 0, weight: 1 },
+    ]);
+    expect(effectiveProgress(nodes, n.id)).toBe(72);
   });
 
   it('无 assignee 条目的节点不出现 customAssignees 键（快照零新增键面）', () => {
@@ -179,7 +199,7 @@ describe('CustomFieldInput（自定义属性单字段，任务 2 公共控件）
               testIdPrefix: 'cf',
             }),
             createElement(CustomFieldInput, {
-              def: { id: 'c2', name: '复核人', type: 'person' },
+              def: { id: 'c2', name: '复核人', type: 'assignee' },
               value: null,
               memberIndex,
               onCommit,

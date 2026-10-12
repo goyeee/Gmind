@@ -31,6 +31,7 @@ import {
   setImage,
   setIcon,
   setNodeSide,
+  setNodeTask,
   setNote,
   setStyle,
   setSummary,
@@ -87,7 +88,7 @@ import { todayStr } from '@gmind/shared';
 import { attachKeyboardMap, isEditableTarget, resolveDirectEditKey } from '../editor/keyboardMap';
 import { rootKidEffectiveSides, rootSiblingForceSide } from '../editor/rootSiblingSide';
 import { nextChildText } from '../editor/defaultNodeText';
-import { avatarSrcOf } from '../editor/TaskFields';
+import { avatarSrcOf, assigneeRowsOf } from '../editor/TaskFields';
 import { ActivityPanel } from '../editor/ActivityPanel';
 import { ThemePanel } from '../editor/ThemePanel';
 import {
@@ -481,13 +482,16 @@ export function EditorPage() {
     x: number;
     y: number;
   } | null>(null);
-  // 人员进度头像选盘（2026-10-11 第二步）：点击节点任务行成员头像 → 9 档选盘
-  // 快速更新该成员进度（对齐 A 的进度徽章交互标杆；写回 setCustomField 整值替换）。
+  // 人员进度/负责人头像选盘（2026-10-11/12 裁定）：点击节点任务行成员头像 → 9 档
+  // 选盘快速更新进度（对齐 A 的进度徽章交互标杆）。mode=assignee 写人员列
+  // （setCustomField 整值替换）；mode=owner 写标准负责人进度（setNodeTask）。
   const [assigneePicker, setAssigneePicker] = useState<{
+    mode: 'assignee' | 'owner';
     nodeId: string;
     user: string;
-    colId: string;
+    colId?: string;
     name: string;
+    avatar: string;
     progress: number;
     x: number;
     y: number;
@@ -575,6 +579,27 @@ export function EditorPage() {
     };
   }, [markerPicker]);
 
+  // —— 人员进度选盘（2026-10-11 第二步）Esc/外点关闭——与迷你选盘同机制（pointerdown，
+  // 画布 mousedown 被抑制口径同注）；.gm-task-assignee 豁免：选盘开着点头像时先收盘、
+  // 紧随 click 又 toggle 重开 → 闪关重弹——开合交给 onSvgClick 的 toggle 分支。 ——
+  useEffect(() => {
+    if (!assigneePicker) return;
+    const onDocPointerDown = (e: PointerEvent): void => {
+      if (!(e.target as Element | null)?.closest?.('.assignee-picker, .gm-task-assignee, .gm-task-owner-avatar')) {
+        setAssigneePicker(null);
+      }
+    };
+    const onKeyDown = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') setAssigneePicker(null);
+    };
+    document.addEventListener('pointerdown', onDocPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', onDocPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [assigneePicker]);
+
   // 任务快速设置弹层（M7c-C3）已随 2026-10-10 裁定整体退役（需求方：右键「任务设置」
   // 去除，由「再点已选中节点 → TaskPanel」取代——见文件头注与 spec
   // 2026-10-10-node-props-and-task-visual-design）：TaskQuickCard 组件、`,` 快捷键、
@@ -624,7 +649,7 @@ export function EditorPage() {
       if (
         el.closest('[data-popover-toggle]') ||
         el.closest(
-          '.editor-right, .editor-mobile-comments, .theme-panel, .structure-panel, .theme-wrap, .structure-wrap, .activity-panel, .help-panel, .find-bar, .member-panel, .version-panel, .marker-panel, .personal-menu, .gm-task-assignee, .assignee-picker',
+          '.editor-right, .editor-mobile-comments, .theme-panel, .structure-panel, .theme-wrap, .structure-wrap, .activity-panel, .help-panel, .find-bar, .member-panel, .version-panel, .marker-panel, .personal-menu, .gm-task-assignee, .gm-task-owner-avatar, .assignee-picker',
         ) ||
         exportWrapRef.current?.contains(el)
       ) {
@@ -730,21 +755,30 @@ export function EditorPage() {
     }
   };
 
-  /** 人员进度选盘写回（2026-10-11 第二步）：档位百分比 → setCustomField 整值替换
-   *  该成员进度（读现值合并后写回，校验先于事务在 core 内；完成后关盘）。 */
+  /** 人员进度/负责人选盘写回（2026-10-11/12 裁定）：档位百分比 → mode 分支——
+   *  assignee 写人员列（setCustomField 整值替换，校验先于事务在 core 内）；
+   *  owner 写标准负责人进度（setNodeTask{progress}，进度徽章联动保留——画布
+   *  徽章已退役写而不画）；完成后关盘。 */
   const applyAssigneePickerValue = (pct: number): void => {
     const p = assigneePicker;
     const d = doc;
     if (!p || !d) return;
     try {
-      const current = getNode(d, p.nodeId)?.custom?.[p.colId];
-      const base: Record<string, number> =
-        typeof current === 'object' && current !== null && !Array.isArray(current)
-          ? { ...(current as Record<string, number>) }
-          : {};
-      base[p.user] = pct;
-      setCustomField(d, p.nodeId, p.colId, base, ORIGIN_USER);
-      afterUserWrite();
+      if (p.mode === 'owner') {
+        if (pct !== (getNode(d, p.nodeId)?.task.progress ?? 0)) {
+          setNodeTask(d, p.nodeId, { progress: pct }, ORIGIN_USER);
+          afterUserWrite();
+        }
+      } else {
+        const current = getNode(d, p.nodeId)?.custom?.[p.colId ?? ''];
+        const base: Record<string, { progress: number; weight?: number }> =
+          typeof current === 'object' && current !== null && !Array.isArray(current)
+            ? { ...(current as Record<string, { progress: number; weight?: number }>) }
+            : {};
+        base[p.user] = { progress: pct };
+        setCustomField(d, p.nodeId, p.colId ?? '', base, ORIGIN_USER);
+        afterUserWrite();
+      }
     } catch (e) {
       showToast(e instanceof Error ? e.message : '进度更新失败，请调整后重试');
     } finally {
@@ -1940,14 +1974,11 @@ export function EditorPage() {
       const colId = assigneeG.getAttribute('data-assignee-col');
       if (nodeId && user && colId) {
         setContextMenu(null);
-        const current = getNode(doc, nodeId)?.custom?.[colId];
-        const progress =
-          typeof current === 'object' && current !== null && !Array.isArray(current)
-            ? (current as Record<string, unknown>)[user]
-            : undefined;
+        const row = assigneeRowsOf(getNode(doc, nodeId)?.custom?.[colId]).find((r) => r.user === user);
         // 再点同一头像 = toggle 收盘（统一外点已豁免 .gm-task-assignee，同徽章口径）。
         if (
           assigneePicker &&
+          assigneePicker.mode === 'assignee' &&
           assigneePicker.nodeId === nodeId &&
           assigneePicker.user === user &&
           assigneePicker.colId === colId
@@ -1956,12 +1987,44 @@ export function EditorPage() {
           return;
         }
         setAssigneePicker({
+          mode: 'assignee',
           nodeId,
           user,
           colId,
-          name:
-            memberIndexRef.current.get(user)?.nickname ?? user.slice(0, 8),
-          progress: typeof progress === 'number' ? progress : 0,
+          name: memberIndexRef.current.get(user)?.nickname ?? user.slice(0, 8),
+          avatar: avatarSrcOf(memberIndexRef.current.get(user)?.avatar ?? null, user),
+          progress: row?.progress ?? 0,
+          x: e.clientX,
+          y: e.clientY,
+        });
+        return;
+      }
+    }
+    // 负责人头像（2026-10-12 裁定：点负责人头像弹同款选盘快捷改其进度——写
+    // setNodeTask；与人员列点头像同交互同选盘，mode 区分写路径）。
+    const ownerG = target.closest('.gm-task-owner-avatar[data-owner-user]');
+    if (ownerG && !readOnly) {
+      const nodeId = target.closest('[data-node-id]')?.getAttribute('data-node-id');
+      const user = ownerG.getAttribute('data-owner-user');
+      if (nodeId && user) {
+        setContextMenu(null);
+        const progress = getNode(doc, nodeId)?.task.progress ?? 0;
+        if (
+          assigneePicker &&
+          assigneePicker.mode === 'owner' &&
+          assigneePicker.nodeId === nodeId &&
+          assigneePicker.user === user
+        ) {
+          setAssigneePicker(null);
+          return;
+        }
+        setAssigneePicker({
+          mode: 'owner',
+          nodeId,
+          user,
+          name: memberIndexRef.current.get(user)?.nickname ?? user.slice(0, 8),
+          avatar: avatarSrcOf(memberIndexRef.current.get(user)?.avatar ?? null, user),
+          progress,
           x: e.clientX,
           y: e.clientY,
         });
@@ -3676,7 +3739,12 @@ export function EditorPage() {
           aria-label="人员进度"
         >
           <div className="marker-picker-head">
-            <em className="marker-picker-label">{assigneePicker.name} 的进度</em>
+            {/* 当前要更新进度的人的信息（2026-10-12 裁定）：头像 + 昵称 + 当前进度。 */}
+            <span className="assignee-picker-who" data-testid="assignee-picker-who">
+              <img className="assignee-picker-avatar" src={assigneePicker.avatar} alt="" width={22} height={22} />
+              <em className="marker-picker-label">{assigneePicker.name}</em>
+              <span className="assignee-picker-current">当前 {assigneePicker.progress}%</span>
+            </span>
             <button
               type="button"
               data-testid="assignee-picker-close"

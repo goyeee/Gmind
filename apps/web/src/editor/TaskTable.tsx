@@ -49,9 +49,9 @@ import type { PresenceMember } from './collab';
 import { MarkerChip } from './MarkerChip';
 import {
   AssigneeField,
+  assigneeRowsOf,
   Avatar,
   chipActive,
-  MemberMultiSelect,
   SmartDateInput,
   STATUS_KEYS,
   STATUS_META,
@@ -132,15 +132,14 @@ interface ColumnSortValue {
   text: string;
 }
 
-/** 自定义列类型 → 展示标记/标签（列头小图标 + 添加浮层五选；目录单源 core）。
- *  assignee=人员进度列（需求方 2026-10-11 裁定新增）：区别于 person 纯名单，
- *  每人自带进度并参与总进度聚合与 done 门禁。 */
+/** 自定义列类型 → 展示标记/标签（列头小图标 + 添加浮层四选；目录单源 core）。
+ *  assignee=人员列（2026-10-12 裁定：原 person 纯名单类型去除，assignee 更名「人员」
+ *  统一承接——每人自带进度/比重，参与总进度聚合与 done 门禁）。 */
 const CUSTOM_TYPE_META: Record<CustomColumnType, { mark: string; label: string }> = {
   text: { mark: 'T', label: '文本' },
-  person: { mark: '人', label: '人员' },
   progress: { mark: '%', label: '进度' },
   date: { mark: '日', label: '日期' },
-  assignee: { mark: '进', label: '人员进度' },
+  assignee: { mark: '人', label: '人员' },
 };
 
 /** 新自定义列 id：crypto.randomUUID()（core 只约束非空唯一；web 未依赖 ulid 包
@@ -243,10 +242,9 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
   const [colMenu, setColMenu] = useState<{ x: number; y: number; colKey: string } | null>(null);
   /** 列头行内重命名（th 变输入框；Enter/失焦提交、Esc 取消）。 */
   const [renameCol, setRenameCol] = useState<string | null>(null);
-  /** 自定义 text/progress 单元格行内编辑（点击/双击进入）。 */
+  /** 自定义 text/progress/assignee 单元格编辑与弹层锚点（点击/双击进入；2026-10-12
+   *  person 列去除后 assignee 弹层复用本态，原 customPersonOpen 退役）。 */
   const [customEdit, setCustomEdit] = useState<{ nodeId: string; colId: string } | null>(null);
-  /** 自定义 person 单元格弹层锚点（nodeId+colId）。 */
-  const [customPersonOpen, setCustomPersonOpen] = useState<{ nodeId: string; colId: string } | null>(null);
   /** 列设置浮层（全列显隐勾选清单；非只读入口）。 */
   const [colSettingsOpen, setColSettingsOpen] = useState(false);
 
@@ -395,15 +393,11 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
       if (customType === 'text') {
         return { empty: !(typeof v === 'string' && v !== ''), numeric: false, num: 0, text: typeof v === 'string' ? v : '' };
       }
-      if (customType === 'person') {
-        const first = Array.isArray(v) && typeof v[0] === 'string' ? v[0] : '';
-        return { empty: first === '', numeric: false, num: 0, text: first !== '' ? nicknameOf(first) : '' };
-      }
       if (customType === 'progress') {
         return { empty: typeof v !== 'number', numeric: true, num: typeof v === 'number' ? v : 0, text: '' };
       }
       if (customType === 'assignee') {
-        // 按首人昵称排（与 person/owner 列同口径）
+        // 按首人昵称排（与 owner 列同口径）
         const first =
           typeof v === 'object' && v !== null && !Array.isArray(v)
             ? (Object.keys(v as Record<string, unknown>)[0] ?? '')
@@ -579,7 +573,7 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
       setStatusFilterOpen(false);
       setColAddOpen(false);
       setColMenu(null);
-      setCustomPersonOpen(null);
+      setCustomEdit(null);
       setColSettingsOpen(false);
     };
     window.addEventListener('keydown', onKey);
@@ -614,7 +608,7 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
   const commitCustomField = (
     id: string,
     colId: string,
-    value: string | string[] | number | Record<string, number> | null,
+    value: string | number | Record<string, { progress: number; weight?: number }> | null,
   ): void => {
     try {
       setCustomField(doc, id, colId, value);
@@ -1131,15 +1125,14 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
           </td>
         );
       default: {
-        // 自定义列单元格：按类型分派编辑器（text=点击变输入框 blur 提交、person=弹层
-        // 复用 MemberMultiSelect、progress=双击 ProgressEditor、date=SmartDateInput）；
-        // custom 值不参与派生（父级无 Σ，全部可编）。远端删列竞态（schema 无此列但
-        // canonical 尚未收敛的渲染帧）渲染空格占位。
+        // 自定义列单元格：按类型分派编辑器（text=点击变输入框 blur 提交、progress=
+        // 双击 ProgressEditor、date=SmartDateInput、assignee=弹层 AssigneeField——
+        // 人员列 v2 含比重开关）；custom 值不参与派生（父级无 Σ，全部可编）。
+        // 远端删列竞态（schema 无此列但 canonical 尚未收敛的渲染帧）渲染空格占位。
         const c = col.custom;
         if (!c) return <td key={col.key} data-col-key={col.key} />;
         const value = node.custom[c.id];
         const editing = customEdit?.nodeId === node.id && customEdit.colId === c.id;
-        const personOpen = customPersonOpen?.nodeId === node.id && customPersonOpen.colId === c.id;
         return (
           <td
             key={col.key}
@@ -1205,70 +1198,6 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
                   )}
                 </button>
               ))}
-            {c.type === 'person' &&
-              (() => {
-                const selected =
-                  Array.isArray(value) && value.every((v) => typeof v === 'string')
-                    ? (value as string[])
-                    : [];
-                return readOnly ? (
-                  <span className="tt-date-text">
-                    {selected.length > 0 ? selected.map(nicknameOf).join('、') : '—'}
-                  </span>
-                ) : (
-                  <span className="tt-pop-anchor">
-                    <button
-                      type="button"
-                      className="tt-owners-btn"
-                      title="点击选择成员（可多选）"
-                      onClick={() =>
-                        setCustomPersonOpen(personOpen ? null : { nodeId: node.id, colId: c.id })
-                      }
-                    >
-                      {selected.length === 0 ? (
-                        <span className="tt-custom-empty">选择成员</span>
-                      ) : (
-                        <>
-                          <span className="tt-avatars">
-                            {selected.slice(0, 3).map((o) => (
-                              <Avatar key={o} userId={o} nickname={nicknameOf(o)} avatar={memberIndex.get(o)?.avatar} />
-                            ))}
-                          </span>
-                          <span className="tt-owner-names">
-                            {selected.slice(0, 2).map(nicknameOf).join('、')}
-                            {selected.length > 2 && <span style={{ color: '#86909c' }}> +{selected.length - 2}</span>}
-                          </span>
-                        </>
-                      )}
-                    </button>
-                    {personOpen && (
-                      <>
-                        <div
-                          className="tt-overlay"
-                          onClick={() => setCustomPersonOpen(null)}
-                          onContextMenu={(e) => {
-                            e.preventDefault();
-                            setCustomPersonOpen(null);
-                          }}
-                        />
-                        <div className="tt-popover">
-                          <MemberMultiSelect
-                            memberIndex={memberIndex}
-                            selected={selected}
-                            onToggle={(userId) => {
-                              const next = selected.includes(userId)
-                                ? selected.filter((o) => o !== userId)
-                                : [...selected, userId];
-                              commitCustomField(node.id, c.id, next.length > 0 ? next : null); // 清空到 0 人 = 删键
-                            }}
-                            testIdPrefix="table-custom-member"
-                          />
-                        </div>
-                      </>
-                    )}
-                  </span>
-                );
-              })()}
             {c.type === 'progress' &&
               (readOnly ? (
                 <span className="tt-date-text">
@@ -1307,19 +1236,15 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
               ))}
             {c.type === 'assignee' &&
               (() => {
-                // 人员进度列（2026-10-11 裁定）：展示「昵称 80%」前 2 人 + 溢出；
-                // 点击弹层用公共 AssigneeField 编辑（整值替换提交）。
-                const entries: Array<[string, number]> =
-                  typeof value === 'object' && value !== null && !Array.isArray(value)
-                    ? (Object.entries(value as Record<string, unknown>) as Array<[string, unknown]>)
-                        .filter((entry): entry is [string, number] => typeof entry[1] === 'number')
-                        .map(([u, p]) => [u, p])
-                    : [];
+                // 人员列（2026-10-12 裁定，原「人员进度」更名；person 纯名单类型去除）：
+                // 展示「昵称 80%」前 2 人 + 溢出；点击弹层用公共 AssigneeField 编辑
+                // （v2 值结构 + 比重开关写列定义 weighted）。
+                const rows = assigneeRowsOf(value);
                 const open = customEdit?.nodeId === node.id && customEdit.colId === c.id;
                 return readOnly ? (
                   <span className="tt-date-text">
-                    {entries.length > 0
-                      ? entries.map(([u, p]) => `${nicknameOf(u)} ${p}%`).join('、')
+                    {rows.length > 0
+                      ? rows.map((r) => `${nicknameOf(r.user)} ${r.progress}%`).join('、')
                       : '—'}
                   </span>
                 ) : (
@@ -1331,16 +1256,16 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
                       title="点击分配人员并更新进度"
                       onClick={() => setCustomEdit(open ? null : { nodeId: node.id, colId: c.id })}
                     >
-                      {entries.length === 0 ? (
+                      {rows.length === 0 ? (
                         <span className="tt-custom-empty">分配人员</span>
                       ) : (
                         <span className="tt-owner-names">
-                          {entries
+                          {rows
                             .slice(0, 2)
-                            .map(([u, p]) => `${nicknameOf(u)} ${p}%`)
+                            .map((r) => `${nicknameOf(r.user)} ${r.progress}%`)
                             .join('、')}
-                          {entries.length > 2 && (
-                            <span style={{ color: '#86909c' }}> +{entries.length - 2}</span>
+                          {rows.length > 2 && (
+                            <span style={{ color: '#86909c' }}> +{rows.length - 2}</span>
                           )}
                         </span>
                       )}
@@ -1361,6 +1286,15 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
                             memberIndex={memberIndex}
                             testId="table-custom-assignee-editor"
                             onCommit={(v) => commitCustomField(node.id, c.id, v)}
+                            def={c}
+                            onToggleWeighted={(weighted) => {
+                              // 比重开关写列定义（setCustomColumns 整表替换，同事务收敛）。
+                              commitColumns(
+                                customColumns.map((col) =>
+                                  col.id === c.id ? { ...col, weighted: weighted || undefined } : col,
+                                ),
+                              );
+                            }}
                           />
                         </div>
                       </>
@@ -1682,7 +1616,7 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
                       title={
                         customColumns.length >= CUSTOM_COLUMN_LIMIT
                           ? `自定义列最多 ${CUSTOM_COLUMN_LIMIT} 列，请先删除不需要的列`
-                          : '添加自定义列（文本/人员/进度/日期）'
+                          : '添加自定义列（文本/进度/日期/人员）'
                       }
                       aria-label="添加自定义列"
                       disabled={customColumns.length >= CUSTOM_COLUMN_LIMIT}

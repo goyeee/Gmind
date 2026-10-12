@@ -1268,21 +1268,21 @@ describe('setCustomColumns（自定义列 schema 整表替换）', () => {
     const doc = createTemplateDoc({ title: 'T', children: [] });
     expect(getMeta(doc).customColumns).toEqual([]);
     setCustomColumns(doc, [
-      { id: 'c1', name: '负责人', type: 'person' },
+      { id: 'c1', name: '负责人', type: 'assignee' },
       { id: 'c2', name: '截止', type: 'date' },
     ]);
     expect(getMeta(doc).customColumns).toEqual([
-      { id: 'c1', name: '负责人', type: 'person' },
+      { id: 'c1', name: '负责人', type: 'assignee' },
       { id: 'c2', name: '截止', type: 'date' },
     ]);
     // 重排 + 改名走同一整表替换
     setCustomColumns(doc, [
       { id: 'c2', name: '截止日', type: 'date' },
-      { id: 'c1', name: '负责人', type: 'person' },
+      { id: 'c1', name: '负责人', type: 'assignee' },
     ]);
     expect(getMeta(doc).customColumns).toEqual([
       { id: 'c2', name: '截止日', type: 'date' },
-      { id: 'c1', name: '负责人', type: 'person' },
+      { id: 'c1', name: '负责人', type: 'assignee' },
     ]);
     // 清空 = 删除全部列
     setCustomColumns(doc, []);
@@ -1400,7 +1400,7 @@ describe('setCustomField（节点自定义列值）', () => {
     const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
     setCustomColumns(doc, [
       { id: 't1', name: '文本列', type: 'text' },
-      { id: 'p1', name: '人员列', type: 'person' },
+      { id: 'p1', name: '人员列', type: 'assignee' },
       { id: 'g1', name: '进度列', type: 'progress' },
       { id: 'd1', name: '日期列', type: 'date' },
     ]);
@@ -1411,24 +1411,24 @@ describe('setCustomField（节点自定义列值）', () => {
     const { doc, nodeId } = docWithCols();
     expect('custom' in (getNode(doc, nodeId)!)).toBe(false);
     setCustomField(doc, nodeId, 't1', '一句话');
-    setCustomField(doc, nodeId, 'p1', ['U1', 'U2']);
+    setCustomField(doc, nodeId, 'p1', { U1: { progress: 10 }, U2: { progress: 20 } });
     setCustomField(doc, nodeId, 'g1', 65);
     setCustomField(doc, nodeId, 'd1', '2026-10-01');
     expect(getNode(doc, nodeId)!.custom).toEqual({
       t1: '一句话',
-      p1: ['U1', 'U2'],
+      p1: { U1: { progress: 10 }, U2: { progress: 20 } },
       g1: 65,
       d1: '2026-10-01',
     });
-    // 整值替换（person 无 toggle 语义）
-    setCustomField(doc, nodeId, 'p1', ['U3']);
-    expect(getNode(doc, nodeId)!.custom!.p1).toEqual(['U3']);
+    // 整值替换（assignee 无元素级 toggle）
+    setCustomField(doc, nodeId, 'p1', { U3: { progress: 30 } });
+    expect(getNode(doc, nodeId)!.custom!.p1).toEqual({ U3: { progress: 30 } });
   });
 
-  it('person 去重保序（[U1,U2,U1] → [U1,U2]，与 owners 存储口径一致）', () => {
+  it('assignee 旧版 number 简形写入归一为 v2 结构（{U1:10} → {U1:{progress:10}}）', () => {
     const { doc, nodeId } = docWithCols();
-    setCustomField(doc, nodeId, 'p1', ['U1', 'U2', 'U1']);
-    expect(getNode(doc, nodeId)!.custom!.p1).toEqual(['U1', 'U2']);
+    setCustomField(doc, nodeId, 'p1', { U1: 10 } as unknown as Record<string, { progress: number }>);
+    expect(getNode(doc, nodeId)!.custom!.p1).toEqual({ U1: { progress: 10 } });
   });
 
   it('null/undefined 删键；对缺键 null 幂等', () => {
@@ -1456,17 +1456,19 @@ describe('setCustomField（节点自定义列值）', () => {
     expect(getNode(doc, nodeId)!.custom).toBeUndefined();
   });
 
-  it('非法矩阵（拒绝即零变更）：text 非串/超长、person 非数组/坏项/超上限、progress 小数/越界/NaN、date 非法', () => {
+  it('非法矩阵（拒绝即零变更）：text 非串/超长、assignee 非对象/坏进度/坏成员/超上限、progress 小数/越界/NaN、date 非法', () => {
     const { doc, nodeId } = docWithCols();
     setCustomField(doc, nodeId, 't1', '占位');
     const before = JSON.stringify(getNode(doc, nodeId)!.custom);
     const cases: Array<[string, unknown, string]> = [
       ['t1', 42, 'text 非串'],
       ['t1', '长'.repeat(CUSTOM_TEXT_MAX_LENGTH + 1), 'text 超长'],
-      ['p1', 'U1', 'person 非数组'],
-      ['p1', ['U1', 42], 'person 坏项'],
-      ['p1', [''], 'person 空串项'],
-      ['p1', Array.from({ length: MAX_TASK_OWNERS + 1 }, (_, i) => `U${i}`), 'person 超上限'],
+      ['p1', 'U1', 'assignee 非对象'],
+      ['p1', { U1: 'x' }, 'assignee 坏进度'],
+      ['p1', { U1: { progress: 1.5 } }, 'assignee 进度小数'],
+      ['p1', { U1: { progress: 10, weight: -1 } }, 'assignee 比重非正'],
+      ['p1', { '': 10 }, 'assignee 空串成员'],
+      ['p1', Object.fromEntries(Array.from({ length: MAX_TASK_OWNERS + 1 }, (_, i) => [`U${i}`, 0])), 'assignee 超上限'],
       ['g1', 1.5, 'progress 小数'],
       ['g1', -1, 'progress 负数'],
       ['g1', 101, 'progress 越界'],
@@ -1493,7 +1495,7 @@ describe('setCustomField（节点自定义列值）', () => {
     expect(JSON.stringify(getNode(doc, nodeId)!.custom)).toBe(before); // 全部拒绝：零变更
   });
 
-  it('同值守卫：同值零事务、null 对缺键零事务、person 去重后同值零事务（M7c-E4）', () => {
+  it('同值守卫：同值零事务、null 对缺键零事务、assignee 归一后同值零事务（M7c-E4）', () => {
     let n = 0;
     const { doc, nodeId } = docWithCols();
     doc.on('afterTransaction', () => {
@@ -1505,9 +1507,9 @@ describe('setCustomField（节点自定义列值）', () => {
     expect(n).toBe(1);
     setCustomField(doc, nodeId, 'g1', 50); // 同值：零事务
     expect(n).toBe(1);
-    setCustomField(doc, nodeId, 'p1', ['U1', 'U2']);
+    setCustomField(doc, nodeId, 'p1', { U1: { progress: 10 } });
     expect(n).toBe(2);
-    setCustomField(doc, nodeId, 'p1', ['U1', 'U2', 'U1']); // 去重后同值：零事务
+    setCustomField(doc, nodeId, 'p1', { U1: 10 }); // 旧形归一后同值：零事务
     expect(n).toBe(2);
   });
 
@@ -1619,11 +1621,14 @@ describe('人员进度列（assignee 类型，需求方 2026-10-11 裁定）', (
     return { doc, nodeId: childrenIds(doc, ROOT_NODE_ID)[0]! };
   }
 
-  it('合法写入读回（Record<userId, 0-100 整数>；空对象=列存在但无人）', () => {
+  it('合法写入读回（v2 {progress,weight?} 结构；空对象=列存在但无人）', () => {
     const { doc, nodeId } = docWithAssignee();
-    setCustomField(doc, nodeId, 'w1', { uB: 80, uD: 100 });
+    setCustomField(doc, nodeId, 'w1', { uB: { progress: 80 }, uD: { progress: 100 } });
     setCustomField(doc, nodeId, 'w2', {});
-    expect(getNode(doc, nodeId)!.custom).toEqual({ w1: { uB: 80, uD: 100 }, w2: {} });
+    expect(getNode(doc, nodeId)!.custom).toEqual({
+      w1: { uB: { progress: 80 }, uD: { progress: 100 } },
+      w2: {},
+    });
   });
 
   it('非法值拒绝：progress 越界/小数/非数、非对象、项数超限（校验先于事务，零变更）', () => {

@@ -893,8 +893,10 @@ describe('layout 确定性与金样', () => {
         0,
       ),
     );
-    // 同文档无 custom 节点：零头像槽，宽回归纯文本口径（几何不变）
-    expect(boxOf(result, 'n').w).toBe(Math.max(10 + theme.nodePaddingX * 2, theme.minNodeWidth));
+    // 同文档无 custom 节点：零头像槽；宽 = 任务行右侧 % 槽（2026-10-12 起任务行
+    // 存在即显示右侧 %，status=doing 无负责人/进度 → 行宽 42 = 12 pad + 30 槽，
+    // max(纯文本 34, minNodeWidth 40, 42) = 42）。
+    expect(boxOf(result, 'n').w).toBe(42);
   });
 
   // M7c-C1 描述行（只增不改）：有描述节点盒高加一行、descLine 随盒输出（单行省略）；

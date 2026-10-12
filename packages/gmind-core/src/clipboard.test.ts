@@ -258,17 +258,17 @@ describe('自定义列透传（SpecNode.custom → insertSpec）', () => {
     const doc = createTemplateDoc({ title: '中心', children: [] });
     setCustomColumns(doc, [
       { id: 't1', name: '文本列', type: 'text' },
-      { id: 'p1', name: '人员列', type: 'person' },
+      { id: 'p1', name: '人员列', type: 'assignee' },
     ]);
     const ids = insertSpec(doc, ROOT_NODE_ID, 0, [
       {
         text: 'P',
-        children: [{ text: 'P-1', children: [], custom: { t1: '子节点文本', p1: ['U2'] } }],
-        custom: { t1: '父节点文本', p1: ['U1'] },
+        children: [{ text: 'P-1', children: [], custom: { t1: '子节点文本', p1: { U2: { progress: 30 } } } }],
+        custom: { t1: '父节点文本', p1: { U1: { progress: 10 } } },
       },
     ]);
-    expect(getNode(doc, ids[0]!)!.custom).toEqual({ t1: '父节点文本', p1: ['U1'] });
-    expect(getNode(doc, ids[1]!)!.custom).toEqual({ t1: '子节点文本', p1: ['U2'] });
+    expect(getNode(doc, ids[0]!)!.custom).toEqual({ t1: '父节点文本', p1: { U1: { progress: 10 } } });
+    expect(getNode(doc, ids[1]!)!.custom).toEqual({ t1: '子节点文本', p1: { U2: { progress: 30 } } });
   });
 
   it('目标文档无该列 → 值静默丢弃且 schema 不变（列 schema 是 doc 级不动）', () => {

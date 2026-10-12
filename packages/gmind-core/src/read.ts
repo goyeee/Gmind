@@ -223,14 +223,15 @@ function readCustom(raw: unknown): Record<string, unknown> | undefined {
   return Object.keys(out).length > 0 ? out : undefined;
 }
 
-/** 人员进度列拉平条目（done 门禁与 derive 聚合映射共用）：schema 中 type='assignee'
- *  的各列值合并为 [{colId, colName, user, progress}]；空对象列/坏形状值跳过；
- *  无 assignee 列时恒 []（门禁不生效）。纯读函数。 */
+/** 人员进度列拉平条目（done 门禁与 derive 聚合共用）：weight=合成比重——列
+ * weighted（自定义比重开关）为真时取存值（缺省 1），为假（按人数平分）时恒 1
+ * （存量的 weight 不参与）；旧版 number 简形按 {progress, weight:1} 归一。纯读。 */
 export interface AssigneeEntry {
   colId: string;
   colName: string;
   user: string;
   progress: number;
+  weight: number;
 }
 
 export function assigneeEntriesOf(doc: Y.Doc, id: string): AssigneeEntry[] {
@@ -244,8 +245,11 @@ export function assigneeEntriesOf(doc: Y.Doc, id: string): AssigneeEntry[] {
   for (const col of schema) {
     const raw = custom[col.id];
     if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) continue;
-    for (const [user, progress] of Object.entries(raw as Record<string, unknown>)) {
-      if (typeof progress === 'number') out.push({ colId: col.id, colName: col.name, user, progress });
+    for (const [user, v] of Object.entries(raw as Record<string, unknown>)) {
+      const norm = typeof v === 'number' ? { progress: v } : (v as { progress?: unknown; weight?: unknown } | null);
+      if (typeof norm?.progress !== 'number') continue; // 坏形状项跳过（repair 删键兜底）
+      const weight = col.weighted === true && typeof norm.weight === 'number' && norm.weight > 0 ? norm.weight : 1;
+      out.push({ colId: col.id, colName: col.name, user, progress: norm.progress, weight });
     }
   }
   return out;

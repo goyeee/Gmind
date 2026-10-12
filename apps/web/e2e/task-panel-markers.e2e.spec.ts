@@ -127,36 +127,39 @@ test('任务面板标记：折叠组旗帜写入渲染与 pressed 回显，再�
   await expect(flag).toHaveAttribute('aria-pressed', 'false');
 });
 
-// 用例 3（核心）：进度图标↔百分比全量联动——点档位写百分比（面板数字/画布徽章/
-// pressed 三方同步）；改进度数字同步徽章档位；状态联动（已完成→100+done、回退
-// 待开始→0+none）链路同步。
-test('任务面板标记：进度图标与百分比全量联动——点档位/改数字/状态联动三方同步', async ({ page }) => {
+// 用例 3（核心）：进度档位↔百分比全量联动——点档位写百分比（面板数字/pressed
+// 同步；画布徽章 2026-10-12 起退役不渲染，数据链写而不画——此处断言画布无进度
+// 徽章）；改进度数字同步档位；状态联动（已完成→100+done、回退待开始→0+none）。
+test('任务面板标记：进度档位与百分比全量联动——点档位/改数字/状态联动（画布徽章已退役）', async ({ page }) => {
   await openSeedDoc(page, '本周计划');
   await selectNodeByText(page, '周报复盘'); // 叶子节点（种子 周一/三/五 全为父级：进度行按父级只读）
   const panel = await openTaskPanel(page);
   const progressInput = panel.getByTestId('task-panel-progress');
   // 初始（进度 0）：none 档 pressed（radio 恒有一档）
   await expect(panel.getByTestId('marker-progress-none')).toHaveAttribute('aria-pressed', 'true');
-  // 点 p50：面板数字 50 + 画布徽章 p50 + pressed 迁移
+  // 画布无进度徽章（2026-10-12 需求方裁定「标题前的进度图标不要了」——数据在而
+  // gm-markers 不渲染进度组；进度由任务行头像弧环/右侧 % 表达）。
+  await expect(markerBadgeByValue(page, '周报复盘', 'none')).toHaveCount(0);
+  // 点 p50：面板数字 50 + pressed 迁移（徽章数据链联动仍写——画布不渲染）
   await panel.getByTestId('marker-progress-p50').click();
   await expect(progressInput).toHaveValue('50');
-  await expect(markerBadgeByValue(page, '周报复盘', 'p50')).toHaveCount(1);
+  await expect(markerBadgeByValue(page, '周报复盘', 'p50')).toHaveCount(0); // 画布退役
   await expect(panel.getByTestId('marker-progress-p50')).toHaveAttribute('aria-pressed', 'true');
   await expect(panel.getByTestId('marker-progress-none')).toHaveAttribute('aria-pressed', 'false');
-  // 改数字 88：徽章/pressed 随档位换算（round(88/12.5)=7 → p87）
+  // 改数字 88：pressed 随档位换算（round(88/12.5)=7 → p87）
   await progressInput.fill('88');
   await page.keyboard.press('Enter');
-  await expect(markerBadgeByValue(page, '周报复盘', 'p87')).toHaveCount(1);
+  await expect(markerBadgeByValue(page, '周报复盘', 'p87')).toHaveCount(0); // 画布退役
   await expect(panel.getByTestId('marker-progress-p87')).toHaveAttribute('aria-pressed', 'true');
-  // 状态已完成：进度拉满 100 + done 徽章（联动链同步）
+  // 状态已完成：进度拉满 100 + done 档（联动链同步）
   await panel.getByTestId('task-panel-status-done').click();
   await expect(progressInput).toHaveValue('100');
-  await expect(markerBadgeByValue(page, '周报复盘', 'done')).toHaveCount(1);
+  await expect(markerBadgeByValue(page, '周报复盘', 'done')).toHaveCount(0); // 画布退役
   await expect(panel.getByTestId('marker-progress-done')).toHaveAttribute('aria-pressed', 'true');
-  // 回退待开始：进度清零 + none 徽章（M7b-W1 裁定链路）
+  // 回退待开始：进度清零 + none 档（M7b-W1 裁定链路）
   await panel.getByTestId('task-panel-status-todo').click();
   await expect(progressInput).toHaveValue('0');
-  await expect(markerBadgeByValue(page, '周报复盘', 'none')).toHaveCount(1);
+  await expect(markerBadgeByValue(page, '周报复盘', 'none')).toHaveCount(0); // 画布退役
   await expect(panel.getByTestId('marker-progress-none')).toHaveAttribute('aria-pressed', 'true');
 });
 

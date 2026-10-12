@@ -274,10 +274,10 @@ export function isValidDateStr(s: string): boolean {
 /* ── 表格自定义列约束（doc 级 schema + 节点 custom 值；setCustomColumns /
  *    setCustomField 校验、read 防御读取、repair 收敛的口径单源）────────────── */
 
-/** 列类型目录（需求方原话「可以自定义文本、人员、进度、日期类型的列」；
- *  assignee=人员进度列，需求方 2026-10-11 裁定新增——区别于 person 纯名单，
- *  每人自带进度并参与任务总进度聚合与 done 门禁）。 */
-export const CUSTOM_COLUMN_TYPES = ['text', 'person', 'progress', 'date', 'assignee'] as const;
+/** 列类型目录（2026-10-12 需求方裁定：person 纯名单类型去除——人员场景由 assignee
+ *  「人员」列（自带进度）统一承接；存量文档的 person 列由 canonicalCustomColumns
+ *  剔除 + repair 孤儿清理自动收敛，零数据迁移）。 */
+export const CUSTOM_COLUMN_TYPES = ['text', 'progress', 'date', 'assignee'] as const;
 export type CustomColumnType = (typeof CUSTOM_COLUMN_TYPES)[number];
 
 /** doc 级 schema 上限：最多 20 列，超出写入口抛 CUSTOM_COLUMN_OVERFLOW。 */
@@ -291,18 +291,26 @@ export const CUSTOM_TEXT_MAX_LENGTH = MAX_TEXT_LENGTH;
 
 /**
  * 自定义列定义（meta.customColumns 数组项）：id 由调用方生成（ULID 或 8 位随机
- * 均可，写入口只约束非空唯一）；name 1-30 字；type ∈ CUSTOM_COLUMN_TYPES。
+ * 均可，写入口只约束非空唯一）；name 1-30 字；type ∈ CUSTOM_COLUMN_TYPES；
+ * weighted（2026-10-12 比重裁定）仅 assignee 列有意义——true=按每人 weight 加权
+ * 合成总进度，缺省/false=按人数平分（存量的 weight 不参与）。
  */
 export interface CustomColumnDef {
   id: string;
   name: string;
   type: CustomColumnType;
+  weighted?: boolean;
 }
 
-/** 节点 custom 值联合：text=string、person=用户ID string[]（复用任务 owners 的
- *  项长/去重/上限规则）、progress=0-100 整数、date='YYYY-MM-DD'、assignee=
- *  Record<用户ID, 0-100 整数>（人员进度列，空对象=列存在但无人）；null=删键（无键）。 */
-export type CustomFieldValue = string | string[] | number | Record<string, number> | null;
+/** 节点 custom 值联合：text=string、progress=0-100 整数、date='YYYY-MM-DD'、assignee=
+ *  Record<用户ID, {progress: 0-100, weight?: 正数}>（人员列 v2，2026-10-12 比重裁定；
+ *  旧版 Record<用户ID, 0-100> 简形读侧兼容归一——见 read.assigneeEntriesOf）；
+ *  null=删键（无键）。 */
+export type CustomFieldValue =
+  | string
+  | number
+  | Record<string, number | { progress: number; weight?: number }>
+  | null;
 
 /**
  * meta.customColumns 防御读取/规范化（纯函数）：read.getMeta 透传、operations 两个
@@ -318,39 +326,48 @@ export function canonicalCustomColumns(raw: unknown): CustomColumnDef[] {
   const out: CustomColumnDef[] = [];
   for (const item of raw) {
     if (item === null || typeof item !== 'object') continue;
-    const { id, name, type } = item as Record<string, unknown>;
+    const { id, name, type, weighted } = item as Record<string, unknown>;
     if (typeof id !== 'string' || id === '') continue;
     if (seen.has(id)) continue;
     if (typeof name !== 'string' || name === '' || name.length > CUSTOM_COLUMN_NAME_MAX) continue;
     if (!(CUSTOM_COLUMN_TYPES as readonly string[]).includes(type as string)) continue;
     seen.add(id);
-    out.push({ id, name, type: type as CustomColumnType });
+    // weighted 仅透传真值（坏形状/非 assignee 列出现该键不剔除——repair 不管 schema
+    // 可选键，宽松保留无害；消费侧只在 assignee 列读它）。
+    out.push({ id, name, type: type as CustomColumnType, ...(weighted === true ? { weighted: true } : {}) });
     if (out.length >= CUSTOM_COLUMN_LIMIT) break;
   }
   return out;
 }
 
-/** custom 值与列类型的**形状**判定（repair 删键口径）：text=串、person=串数组、
- *  progress=0-100 整数、date=日历合法串、assignee=对象且每项值 0-100 整数。只判
- *  形状不做值域收敛（text 长度/person 去重上限/assignee 项长不在此处——写入口已
- *  归一，repair 保持「只删不改」的最小修复面，见 planCustomRepair 头注）。 */
+/** custom 值与列类型的**形状**判定（repair 删键口径）：text=串、progress=0-100 整数、
+ *  date=日历合法串、assignee=对象且每项值 0-100 整数（旧版 number 简形兼容——读侧
+ *  归一，见 read.assigneeEntriesOf）。只判形状不做值域收敛（text 长度/assignee 项长
+ *  不在此处——写入口已归一，repair 保持「只删不改」的最小修复面，见
+ *  planCustomRepair 头注）。 */
 export function isValidCustomValueOfType(type: CustomColumnType, value: unknown): boolean {
   switch (type) {
     case 'text':
       return typeof value === 'string';
-    case 'person':
-      return Array.isArray(value) && value.every((v) => typeof v === 'string');
     case 'progress':
       return typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= 100;
     case 'date':
       return typeof value === 'string' && isValidDateStr(value);
     case 'assignee':
+      if (typeof value === 'number') return Number.isInteger(value) && value >= 0 && value <= 100; // 旧版简形（纯进度）
       return (
         typeof value === 'object' &&
         value !== null &&
         !Array.isArray(value) &&
         Object.values(value as Record<string, unknown>).every(
-          (v) => typeof v === 'number' && Number.isInteger(v) && v >= 0 && v <= 100,
+          (v) =>
+            (typeof v === 'number' && Number.isInteger(v) && v >= 0 && v <= 100) || // 旧版简形
+            (typeof v === 'object' &&
+              v !== null &&
+              typeof (v as { progress?: unknown }).progress === 'number' &&
+              Number.isInteger((v as { progress: number }).progress) &&
+              (v as { progress: number }).progress >= 0 &&
+              (v as { progress: number }).progress <= 100),
         )
       );
   }

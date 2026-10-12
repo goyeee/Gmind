@@ -157,32 +157,21 @@ describe('renderScene：初次渲染', () => {
     expect(nodeG('c')?.querySelectorAll('.gm-marker-badge').length).toBe(0);
   });
 
-  it('进度组「未开始」（2026-10-01 需求方反馈任务 3）：none 画绿环+播放三角徽章（无扇形）', () => {
+  it('进度组画布徽章退役（2026-10-12 需求方裁定「标题前的进度图标不要了」）：icons.progress 数据在而 gm-markers 不渲染进度组（数据链写而不画，repair 装载通道仍消费）', () => {
     const data = baseData();
     data.set('b', { text: 'x', icons: { progress: ['none'] } });
     renderScene(createScene(svg), makeInput(baseLayout(), data));
-    const badge = nodeG('b')?.querySelector('.gm-marker-badge');
-    expect(badge).not.toBeNull();
-    expect(badge?.getAttribute('data-marker-value')).toBe('none');
-    // 参考图样式：绿色描边圆环（fill=none）+ 内部绿色实心播放三角（polygon）；
-    // 不再是 0% 空心环（旧扇形路径恒不落）。
-    const ring = badge?.querySelector('circle');
-    expect(ring?.getAttribute('fill')).toBe('none');
-    expect(ring?.getAttribute('stroke')).toBe('#34c724');
-    const play = badge?.querySelector('polygon');
-    expect(play?.getAttribute('fill')).toBe('#34c724');
-    expect(play?.getAttribute('points')).toBe('5,4 5,10 10,7');
-    expect(badge?.querySelector('path')).toBeNull();
+    expect(nodeG('b')?.querySelector('.gm-marker-badge')).toBeNull(); // 进度徽章不渲染
+    expect(nodeG('b')?.querySelector('g.gm-markers')).toBeNull(); // 仅进度组时不留空容器
   });
 
-  it('徽章悬停标题（2026-10-01 需求方反馈任务 4）：徽章首个子元素是 <title>（MARKER_CATALOG 中文 label）', () => {
+  it('徽章悬停标题（2026-10-01 需求方反馈任务 4）：徽章首个子元素是 <title>（MARKER_CATALOG 中文 label）；进度组 2026-10-12 起画布不渲染', () => {
     const data = baseData();
     data.set('b', { text: 'x', icons: { priority: ['p0'], progress: ['none'] } });
     renderScene(createScene(svg), makeInput(baseLayout(), data));
     const badges = nodeG('b')?.querySelectorAll('.gm-marker-badge');
-    expect(badges?.length).toBe(2);
+    expect(badges?.length).toBe(1); // 仅 priority 一枚（progress 组被过滤）
     expect(badges?.[0]?.querySelector('title')?.textContent).toBe('优先级 P0');
-    expect(badges?.[1]?.querySelector('title')?.textContent).toBe('进度 未开始');
   });
 
   it('multi 组叠加与组序：priority/other/emoji 三组徽标按固定组序展开，槽位逐枚递增', () => {
@@ -830,6 +819,56 @@ describe('renderScene：任务视觉（M7c-C2）', () => {
     expect(g2?.querySelector('path.gm-task-assignee-ring')).not.toBeNull();
   });
 
+  it('负责人头像进度环（2026-10-12 需求方裁定「整齐」口径）：节点有人员进度列时 owner 头像弧环=task.progress（右侧 % 仍=合成总进度）；无人员进度列时 owner 无环', () => {
+    // 有 assignee：owner 环 = task.progress 60（弧 path）
+    const data = baseData();
+    data.set('b', {
+      text: 'x',
+      task: {
+        owners: ['u1'],
+        ownerNames: ['张三'],
+        progress: 60,
+        assignees: [{ user: 'uB', name: '李四', progress: 100, colId: 'w1' }],
+      },
+    });
+    renderScene(createScene(svg), taskInput(data));
+    const owner = nodeG('b')?.querySelector('g.gm-task-owner-avatar');
+    expect(owner?.querySelector('path.gm-task-assignee-ring')).not.toBeNull(); // 60% 弧（owner 环）
+    expect(owner?.querySelector('circle.gm-task-avatar')).not.toBeNull();
+    // 右侧合成总进度保留：(60+100)/2=80
+    expect(nodeG('b')?.querySelector('text.gm-task-progress')?.textContent).toBe('80%');
+    // 无 assignee：owner 无环（原状）
+    data.set('b', { text: 'x', task: { owners: ['u1'], ownerNames: ['张三'], progress: 60 } });
+    renderScene(createScene(svg), taskInput(data));
+    const owner2 = nodeG('b')?.querySelector('g.gm-task-owner-avatar');
+    expect(owner2?.querySelector('.gm-task-assignee-ring')).toBeNull();
+    expect(nodeG('b')?.querySelector('text.gm-task-progress')?.textContent).toBe('60%');
+  });
+
+  it('负责人进度为 0 时右侧进度不消失（2026-10-12 修复）：任务行存在即显示右侧 %（0% 也是信息）', () => {
+    // 纯负责人、进度显式 0（右侧面板改 0 的场景）
+    const data = baseData();
+    data.set('b', { text: 'x', task: { owners: ['u1'], ownerNames: ['张三'], progress: 0 } });
+    renderScene(createScene(svg), taskInput(data));
+    expect(nodeG('b')?.querySelector('text.gm-task-progress')?.textContent).toBe('0%');
+    // 有人员列、owner 0：右侧 = 合成进度（不为 owner 个人值）
+    data.set('b', {
+      text: 'x',
+      task: {
+        owners: ['u1'],
+        ownerNames: ['张三'],
+        progress: 0,
+        assignees: [
+          { user: 'uB', name: '李四', progress: 100, colId: 'w1' },
+          { user: 'uC', name: '王五', progress: 50, colId: 'w1' },
+        ],
+      },
+    });
+    renderScene(createScene(svg), taskInput(data));
+    // 合成 = (0 + 100 + 50)/3 = 50
+    expect(nodeG('b')?.querySelector('text.gm-task-progress')?.textContent).toBe('50%');
+  });
+
   it('头像图片（2026-10-11 头像功能）：owner/assignee 有 avatar 画圆形裁剪 <image>（共享 clipPath），无 avatar 回退首字符 text', () => {
     const data = baseData();
     data.set('b', {
@@ -892,7 +931,7 @@ describe('renderScene：任务视觉（M7c-C2）', () => {
       nodeG(id)?.querySelector('text.gm-task-progress') ?? null;
     expect(progOf('b')?.textContent).toBe('40%'); // 叶自身
     expect(progOf('b')?.getAttribute('fill')).toBe('#86909c');
-    expect(progOf('c')).toBeNull(); // progress=0 不显示
+    expect(progOf('c')?.textContent).toBe('0%'); // 2026-10-12 修复：任务行存在即显示（progress=0 不再隐藏）
     expect(progOf('d')?.textContent).toBe('40%'); // 父 Σ 汇总（直属子级均值）
   });
 

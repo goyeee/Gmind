@@ -317,6 +317,27 @@ describe('人员进度列聚合口径（需求方 2026-10-11 裁定）', () => {
     expect(effectiveProgress([n], 'n')).toBe(83); // (100+100+50)/3 = 83.33 → 83
   });
 
+  it('自定义比重（2026-10-12 裁定）：weight 加权平均；weight 缺省 1；owner 权重恒 1', () => {
+    // owner 60（w=1）+ B 100（w=3）+ C 0（w=1）→ (60+300+0)/5 = 72
+    const n = node('n', null, {
+      task: task({ progress: 60, owners: ['a'] }),
+      customAssignees: [
+        { user: 'b', progress: 100, weight: 3 },
+        { user: 'c', progress: 0, weight: 1 },
+      ],
+    });
+    expect(effectiveProgress([n], 'n')).toBe(72);
+    // 全 weight 缺省 = 人数平分（与旧口径一致）
+    const flat = node('n2', null, {
+      task: task({ progress: 60, owners: ['a'] }),
+      customAssignees: [
+        { user: 'b', progress: 100 },
+        { user: 'c', progress: 30 },
+      ],
+    });
+    expect(effectiveProgress([flat], 'n2')).toBe(63); // (60+100+30)/3
+  });
+
   it('有子级时仍按子级均值；子的叶子值按新口径计算', () => {
     const leaf = node('leaf', 'p', {
       task: task({ progress: 60, owners: ['a'] }),

@@ -895,18 +895,19 @@ export function setTableView(
   });
 }
 
-/** 内部：custom 值校验/归一结果——ok 时 value 为写入值（person 去重保序）；违规时
+/** 内部：custom 值校验/归一结果——ok 时 value 为写入值（assignee 归 v2 结构）；违规时
  *  携带错误码与两段式文案（setCustomField 抛出用；clipboard 粘贴过滤按 ok 静默丢弃）。 */
 interface CustomValueCheck {
   ok: boolean;
-  value?: string | string[] | number | Record<string, number>;
+  value?: string | number | Record<string, { progress: number; weight?: number }>;
   code?: GmindCoreErrorCode;
   message?: string;
 }
 
 /** 内部：按列类型校验 custom 值（单源：setCustomField 抛错口径 + 粘贴过滤口径）。
- *  null/undefined（删键方向）恒 ok；person 复用任务 owners 规则（每项 1-64 字符、
- *  去重保序、≤MAX_TASK_OWNERS）；progress 整数 0-100；date 日历合法（isValidDateStr）。 */
+ *  null/undefined（删键方向）恒 ok；progress 整数 0-100；date 日历合法（isValidDateStr）；
+ *  assignee=人员列 v2（每人 {progress, weight?}——旧版 number 简形归一升级，2026-10-12
+ *  比重裁定：weight 缺省=按人数平分，自定义比重经列 weighted 开关生效）。 */
 function checkCustomValue(type: CustomColumnType, value: unknown): CustomValueCheck {
   if (value === null || value === undefined) return { ok: true }; // 删键方向，无值校验
   switch (type) {
@@ -926,37 +927,6 @@ function checkCustomValue(type: CustomColumnType, value: unknown): CustomValueCh
         };
       }
       return { ok: true, value };
-    case 'person': {
-      if (!Array.isArray(value)) {
-        return {
-          ok: false,
-          code: 'CUSTOM_FIELD_INVALID_VALUE',
-          message: '人员列的值必须是用户ID数组，请重新选择成员',
-        };
-      }
-      for (const item of value) {
-        if (
-          typeof item !== 'string' ||
-          item.length < TASK_OWNER_MIN_LENGTH ||
-          item.length > TASK_OWNER_MAX_LENGTH
-        ) {
-          return {
-            ok: false,
-            code: 'CUSTOM_FIELD_INVALID_VALUE',
-            message: `人员列的值非法（每项须为 ${TASK_OWNER_MIN_LENGTH}-${TASK_OWNER_MAX_LENGTH} 字符的用户ID），请重新选择成员`,
-          };
-        }
-      }
-      const deduped = [...new Set(value as string[])]; // 去重保序（与 owners 存储口径一致）
-      if (deduped.length > MAX_TASK_OWNERS) {
-        return {
-          ok: false,
-          code: 'CUSTOM_FIELD_INVALID_VALUE',
-          message: `人员列最多 ${MAX_TASK_OWNERS} 人（去重后），请精简后重试`,
-        };
-      }
-      return { ok: true, value: deduped };
-    }
     case 'progress':
       if (typeof value !== 'number' || !Number.isInteger(value) || value < 0 || value > 100) {
         return {
@@ -971,7 +941,7 @@ function checkCustomValue(type: CustomColumnType, value: unknown): CustomValueCh
         return {
           ok: false,
           code: 'CUSTOM_FIELD_INVALID_VALUE',
-          message: '人员进度列的值必须是「成员→进度」对象，请重新编辑后重试',
+          message: '人员列的值必须是「成员→进度」对象，请重新编辑后重试',
         };
       }
       const entries = Object.entries(value as Record<string, unknown>);
@@ -979,26 +949,39 @@ function checkCustomValue(type: CustomColumnType, value: unknown): CustomValueCh
         return {
           ok: false,
           code: 'CUSTOM_FIELD_INVALID_VALUE',
-          message: `人员进度列最多 ${MAX_TASK_OWNERS} 人，请精简后重试`,
+          message: `人员列最多 ${MAX_TASK_OWNERS} 人，请精简后重试`,
         };
       }
-      const out: Record<string, number> = {};
-      for (const [user, progress] of entries) {
+      // 归一为 v2 结构 {progress, weight?}：旧版 number 简形按 {progress: n} 升级
+      // （读侧全链路兼容旧形，写入口统一新结构）。
+      const out: Record<string, { progress: number; weight?: number }> = {};
+      for (const [user, raw] of entries) {
         if (user.length < TASK_OWNER_MIN_LENGTH || user.length > TASK_OWNER_MAX_LENGTH) {
           return {
             ok: false,
             code: 'CUSTOM_FIELD_INVALID_VALUE',
-            message: `人员进度列的成员标识非法（须为 ${TASK_OWNER_MIN_LENGTH}-${TASK_OWNER_MAX_LENGTH} 字符的用户ID），请重新选择成员`,
+            message: `人员列的成员标识非法（须为 ${TASK_OWNER_MIN_LENGTH}-${TASK_OWNER_MAX_LENGTH} 字符的用户ID），请重新选择成员`,
           };
         }
+        const norm =
+          typeof raw === 'number' ? { progress: raw } : (raw as { progress?: unknown; weight?: unknown } | null);
+        const progress = norm?.progress;
         if (typeof progress !== 'number' || !Number.isInteger(progress) || progress < 0 || progress > 100) {
           return {
             ok: false,
             code: 'CUSTOM_FIELD_INVALID_VALUE',
-            message: '人员进度列的进度必须是 0-100 的整数，请调整后重试',
+            message: '人员列的进度必须是 0-100 的整数，请调整后重试',
           };
         }
-        out[user] = progress;
+        const weight = norm?.weight;
+        if (weight !== undefined && (typeof weight !== 'number' || !(weight > 0) || weight > 1000)) {
+          return {
+            ok: false,
+            code: 'CUSTOM_FIELD_INVALID_VALUE',
+            message: '人员列的比重必须是 0.1~1000 的正数，请调整后重试',
+          };
+        }
+        out[user] = weight === undefined ? { progress } : { progress, weight };
       }
       return { ok: true, value: out };
     }
@@ -1103,11 +1086,11 @@ export function setCustomField(
 export function sanitizeCustomForDoc(
   doc: Y.Doc,
   custom: Record<string, unknown>,
-): Record<string, string | string[] | number | Record<string, number>> | null {
+): Record<string, NonNullable<CustomFieldValue>> | null {
   const schema = canonicalCustomColumns(doc.getMap('meta').get('customColumns'));
   if (schema.length === 0) return null;
   const typeById = new Map(schema.map((c) => [c.id, c.type] as const));
-  let out: Record<string, string | string[] | number | Record<string, number>> | null = null;
+  let out: Record<string, NonNullable<CustomFieldValue>> | null = null;
   for (const [colId, value] of Object.entries(custom)) {
     if (value === null || value === undefined) continue; // 删键方向对粘贴无意义
     const type = typeById.get(colId);

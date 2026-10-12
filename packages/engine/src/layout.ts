@@ -35,7 +35,7 @@ import {
   SUMMARY_CHIP_PAD_X,
   SUMMARY_FONT_SIZE,
 } from './render';
-import { assigneeColumnIdsOf, flattenAssigneeEntries, taskRowSlotsOf } from './taskvisual';
+import { assigneeColumnsOf, flattenAssigneeEntries, taskRowSlotsOf } from './taskvisual';
 import { themeTextStyleOf } from './themes';
 import type {
   DocReader,
@@ -126,8 +126,9 @@ function collectTree(
   styleOf: (id: string, depth: number) => TextStyle,
   compact: boolean,
 ): LayoutNode | null {
-  // 人员进度列 id 集（2026-10-11 第二步）：collectTree 级一次读取，节点拉平共用。
-  const assigneeColIds = assigneeColumnIdsOf(reader.getMeta().customColumns);
+  // 人员进度列（2026-10-11 第二步）：collectTree 级一次读取（含 weighted 比重开关，
+  // 2026-10-12 裁定），节点拉平共用。
+  const assigneeColumns = assigneeColumnsOf(reader.getMeta().customColumns);
   const visited = new Set<string>();
   const build = (id: string, depth: number): LayoutNode | null => {
     if (visited.has(id)) return null;
@@ -157,7 +158,7 @@ function collectTree(
     const taskRow = taskRowSlotsOf(
       {
         ...snap.task,
-        assignees: flattenAssigneeEntries(snap.custom, assigneeColIds),
+        assignees: flattenAssigneeEntries(snap.custom, assigneeColumns),
       },
       children.length > 0,
       depth,

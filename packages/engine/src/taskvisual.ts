@@ -61,6 +61,8 @@ export interface AssigneeVisual {
   colId: string;
   /** 头像地址（2026-10-11；缺省 = 无自定义，宿主稳定分配预置 SVG）。 */
   avatar?: string | null;
+  /** 合成比重（2026-10-12 裁定；flatten 时已按列 weighted 开关解析——平分模式恒 1）。 */
+  weight?: number;
 }
 
 /** 企微底色状态四色（todo 灰 / doing 蓝 / done 绿 / blocked 橙）。 */
@@ -206,7 +208,10 @@ export function taskRowSlotsOf(
     ownerAvatars,
     ownerAvatarUrls: task.ownerAvatarUrls ?? [],
     assigneeAvatars,
-    showProgress: isParent || (task.progress ?? 0) > 0,
+    // 任务行存在（hasTaskInfo 门槛已放行）即显示右侧有效进度——2026-10-12 修复：
+    // 负责人进度改 0 后右侧 % 不得消失（旧口径「仅 progress>0 显示」会把 0% 场景
+    // 整行隐藏，而 0% 也是信息；有人员列时右侧=合成进度，owner 0 更常见）。
+    showProgress: true,
   };
 }
 
@@ -242,8 +247,12 @@ function buildDeriveNodes(
     const t = v.task;
     // 人员进度列条目拉平（2026-10-11 Σ 口径修复）：engine 的 effectiveProgress
     // 与 TaskTable/任务面板同源（shared 单一实现）——此前缺此字段，节点任务行
-    // 百分比与表格合成进度不一致。
-    const customAssignees = (t?.assignees ?? []).map(({ user, progress }) => ({ user, progress }));
+    // 百分比与表格合成进度不一致。weight 由 flatten 按列 weighted 解析（缺省 1）。
+    const customAssignees = (t?.assignees ?? []).map(({ user, progress, weight }) => ({
+      user,
+      progress,
+      ...(weight !== undefined ? { weight } : {}),
+    }));
     deriveNodes.push({
       id,
       parentId: parentById.get(id) ?? null,
@@ -303,35 +312,41 @@ export function taskParentIds(layoutNodes: Array<{ id: string; parentId?: string
   return out;
 }
 
-/** meta.customColumns（raw）→ assignee 列 id 集（layout 通道；防御读：非数组/坏
- *  形状容忍，与 core canonicalCustomColumns 宽松口径对齐——engine 不 import core）。 */
-export function assigneeColumnIdsOf(raw: unknown): string[] {
+/** meta.customColumns（raw）→ assignee 列描述集（layout 通道；防御读：非数组/坏
+ *  形状容忍，与 core canonicalCustomColumns 宽松口径对齐——engine 不 import core）。
+ *  weighted（2026-10-12 比重裁定）仅透传 true。 */
+export function assigneeColumnsOf(raw: unknown): Array<{ id: string; weighted: boolean }> {
   if (!Array.isArray(raw)) return [];
-  const out: string[] = [];
+  const out: Array<{ id: string; weighted: boolean }> = [];
   for (const item of raw) {
     if (item === null || typeof item !== 'object') continue;
-    const { id, type } = item as Record<string, unknown>;
-    if (typeof id === 'string' && id !== '' && type === 'assignee') out.push(id);
+    const { id, type, weighted } = item as Record<string, unknown>;
+    if (typeof id === 'string' && id !== '' && type === 'assignee') {
+      out.push({ id, weighted: weighted === true });
+    }
   }
   return out;
 }
 
-/** 从节点 custom 值拉平人员进度列条目（layout 通道，2026-10-11 第二步）：按
- *  assignee 列 id 集顺序遍历、列内按对象键序；坏形状值跳过（name 先回退 ID 前 8
- *  位——layout 槽位宽度只按数量计，显示名由 render 通道的宿主成员目录派生覆盖）。 */
+/** 从节点 custom 值拉平人员列条目（layout 通道，2026-10-11 第二步）：按列序遍历、列内
+ *  按对象键序；坏形状值跳过；v1 number 简形兼容（按 {progress, weight:1} 归一）；
+ *  weight 按列 weighted 开关解析——false（按人数平分）恒 1，true 取存值（缺省 1）。 */
 export function flattenAssigneeEntries(
   custom: Record<string, unknown> | undefined,
-  assigneeColIds: string[],
+  columns: Array<{ id: string; weighted: boolean }>,
 ): AssigneeVisual[] {
-  if (!custom || assigneeColIds.length === 0) return [];
+  if (!custom || columns.length === 0) return [];
   const out: AssigneeVisual[] = [];
-  for (const colId of assigneeColIds) {
-    const raw = custom[colId];
+  for (const col of columns) {
+    const raw = custom[col.id];
     if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) continue;
-    for (const [user, progress] of Object.entries(raw as Record<string, unknown>)) {
-      if (typeof progress === 'number' && Number.isInteger(progress) && progress >= 0 && progress <= 100) {
-        out.push({ user, name: user.slice(0, 8), progress, colId });
-      }
+    for (const [user, v] of Object.entries(raw as Record<string, unknown>)) {
+      const norm = typeof v === 'number' ? { progress: v } : (v as { progress?: unknown; weight?: unknown } | null);
+      if (typeof norm?.progress !== 'number') continue;
+      if (!Number.isInteger(norm.progress) || norm.progress < 0 || norm.progress > 100) continue;
+      const weight =
+        col.weighted && typeof norm.weight === 'number' && norm.weight > 0 ? norm.weight : 1;
+      out.push({ user, name: user.slice(0, 8), progress: norm.progress, colId: col.id, weight });
     }
   }
   return out;
