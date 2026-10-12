@@ -13,8 +13,10 @@
   gap: 2px 4px;
   justify-items: center;
 }
-/* 标记按钮：34×34、hover 浅灰底、选中蓝描边环 */
-.marker-btn {
+/* 标记按钮：34×34、无边框透明底（2026-10-13 需求方反馈：裸 button 默认外框把
+   每个值都框起来，淹没选中回显——去框，选中态用蓝环+浅蓝底表达）、hover 浅灰底 */
+.marker-btn,
+.task-marker-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -28,17 +30,41 @@
   line-height: 1;
   cursor: pointer;
 }
-.marker-btn:hover:not(:disabled) {
+.marker-btn:hover:not(:disabled),
+.task-marker-btn:hover:not(:disabled) {
   background: #f2f3f5;
 }
-.marker-btn:disabled {
+.marker-btn:disabled,
+.task-marker-btn:disabled {
   opacity: 0.45;
   cursor: default;
 }
-.marker-btn.active {
+.marker-btn.active,
+.task-marker-btn.active {
   background: #f0f5ff;
   outline: 2px solid #3370ff;
   outline-offset: -1px;
+}
+
+/* 人员进度选盘头（2026-10-13 需求方反馈：显示所属列名——前端/测试…，去掉
+   「当前 x%」描述）：头像 + 列名 + 昵称一行排布。 */
+.assignee-picker-who {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.assignee-picker-avatar {
+  border-radius: 50%;
+  flex: none;
+}
+.assignee-picker-name {
+  font-weight: 600;
+  font-size: 12px;
+  color: #1f2329;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* ── M7b-W3 节点标记点击换组：迷你选盘浮层（HTML 层，锚定点击点）────────────── */

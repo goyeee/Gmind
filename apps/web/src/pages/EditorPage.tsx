@@ -490,6 +490,9 @@ export function EditorPage() {
     nodeId: string;
     user: string;
     colId?: string;
+    /** 所属列名（2026-10-13 需求方反馈：选盘头部显示列名——前端/测试…，让人知道
+     *  这位成员归哪列）；mode=owner 无列语义，固定「负责人」。 */
+    colName?: string;
     name: string;
     avatar: string;
     progress: number;
@@ -1991,6 +1994,8 @@ export function EditorPage() {
           nodeId,
           user,
           colId,
+          // 列名（2026-10-13 需求方反馈）：自定义列 schema 里按 colId 取显示名
+          colName: getMeta(doc).customColumns.find((c) => c.id === colId)?.name,
           name: memberIndexRef.current.get(user)?.nickname ?? user.slice(0, 8),
           avatar: avatarSrcOf(memberIndexRef.current.get(user)?.avatar ?? null, user),
           progress: row?.progress ?? 0,
@@ -2022,6 +2027,7 @@ export function EditorPage() {
           mode: 'owner',
           nodeId,
           user,
+          colName: '负责人',
           name: memberIndexRef.current.get(user)?.nickname ?? user.slice(0, 8),
           avatar: avatarSrcOf(memberIndexRef.current.get(user)?.avatar ?? null, user),
           progress,
@@ -3739,11 +3745,12 @@ export function EditorPage() {
           aria-label="人员进度"
         >
           <div className="marker-picker-head">
-            {/* 当前要更新进度的人的信息（2026-10-12 裁定）：头像 + 昵称 + 当前进度。 */}
+            {/* 头部（2026-10-13 需求方反馈）：所属列名（前端/测试…）+ 头像 + 昵称；
+                「当前 x%」描述去除——当前档位直接看网格内高亮（蓝环）。 */}
             <span className="assignee-picker-who" data-testid="assignee-picker-who">
+              <em className="marker-picker-label">{assigneePicker.colName}</em>
               <img className="assignee-picker-avatar" src={assigneePicker.avatar} alt="" width={22} height={22} />
-              <em className="marker-picker-label">{assigneePicker.name}</em>
-              <span className="assignee-picker-current">当前 {assigneePicker.progress}%</span>
+              <span className="assignee-picker-name">{assigneePicker.name}</span>
             </span>
             <button
               type="button"

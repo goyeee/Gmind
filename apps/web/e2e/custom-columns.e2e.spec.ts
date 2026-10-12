@@ -367,15 +367,16 @@ test('人员进度头像：节点展示圆形头像+进度环，点击弹选盘�
   await avatar.click();
   const picker = page.getByTestId('assignee-picker');
   await expect(picker).toBeVisible();
-  // 弹盘头部展示当前要更新进度的人的信息（2026-10-12 裁定）：头像 + 昵称 + 当前进度
+  // 弹盘头部展示（2026-10-13 需求方反馈改版）：所属列名 + 头像 + 昵称（「当前 x%」
+  // 描述已去除——当前档位看网格内蓝环高亮）
   const who = page.getByTestId('assignee-picker-who');
   await expect(who.locator('img.assignee-picker-avatar')).toHaveAttribute(
     'src',
     /\/avatars\/preset-\d\.svg/,
   );
+  await expect(who.locator('.marker-picker-label')).toHaveText('测试'); // 人员列名
   await expect(who).toContainText(`用户${phone.slice(-4)}`);
-  await expect(who).toContainText('当前 30%');
-  // 30% 不落任何档位（选盘高亮仅精确在档时）——先验失焦关闭，再重开选档
+  // 30% 不落任何档位（选盘高亮仅精确在档时）——先验失焦关闭，再重开选 done
   await page.locator('.editor-canvas svg').click({ position: { x: 8, y: 8 } }); // 盘外 pointerdown
   await expect(picker).toHaveCount(0); // 失焦即消失（原版选盘同机制）
   await avatar.click();
@@ -403,8 +404,8 @@ test('人员进度头像：节点展示圆形头像+进度环，点击弹选盘�
   await ownerAvatar.click();
   await expect(picker).toBeVisible();
   const whoOwner = page.getByTestId('assignee-picker-who');
+  await expect(whoOwner.locator('.marker-picker-label')).toHaveText('负责人'); // 列名位显示「负责人」
   await expect(whoOwner).toContainText(`用户${phone.slice(-4)}`);
-  await expect(whoOwner).toContainText('当前 0%');
   await page.getByTestId('assignee-picker-value-p75').click();
   await expect(picker).toHaveCount(0);
   // owner 环变 75% 弧；docState task.progress=75（写回经 setNodeTask）
