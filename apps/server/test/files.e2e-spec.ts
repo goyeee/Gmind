@@ -12,7 +12,7 @@ describe('files 域', () => {
     // 直接通过 SessionService 签发，登录接口在 Task 8 才有
     const { SessionService } = await import('../src/session/session.service');
     const redisMod = await import('ioredis');
-    const svc = new SessionService(new redisMod.default('redis://127.0.0.1:63790/1'));
+    const svc = new SessionService(new redisMod.default('redis://127.0.0.1:16379/1'));
     return (await svc.create(userId, false)).token;
   };
 

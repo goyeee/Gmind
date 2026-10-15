@@ -42,7 +42,7 @@ describe('文件内容端点（读取/回写/改名/打开）', () => {
     // 直接通过 SessionService 签发，登录接口在 Task 8 才有
     const { SessionService } = await import('../src/session/session.service');
     const redisMod = await import('ioredis');
-    const svc = new SessionService(new redisMod.default('redis://127.0.0.1:63790/1'));
+    const svc = new SessionService(new redisMod.default('redis://127.0.0.1:16379/1'));
     return (await svc.create(userId, false)).token;
   };
 
@@ -279,7 +279,7 @@ describe('PUT 陈旧快照写序守卫（准入 7.1）', () => {
   const tokenFor = async (userId: string): Promise<string> => {
     const { SessionService } = await import('../src/session/session.service');
     const redisMod = await import('ioredis');
-    const svc = new SessionService(new redisMod.default('redis://127.0.0.1:63790/1'));
+    const svc = new SessionService(new redisMod.default('redis://127.0.0.1:16379/1'));
     return (await svc.create(userId, false)).token;
   };
 
@@ -470,7 +470,7 @@ describe('POST /api/files 携带 docState（XMind 导入）', () => {
   const tokenFor = async (userId: string): Promise<string> => {
     const { SessionService } = await import('../src/session/session.service');
     const redisMod = await import('ioredis');
-    const svc = new SessionService(new redisMod.default('redis://127.0.0.1:63790/1'));
+    const svc = new SessionService(new redisMod.default('redis://127.0.0.1:16379/1'));
     return (await svc.create(userId, false)).token;
   };
 

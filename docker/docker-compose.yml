@@ -17,7 +17,8 @@ services:
   redis:
     image: ${REDIS_IMAGE}
     ports:
-      - '${REDIS_HOST_PORT:-63790}:6379'
+      # 新变量名有意区别于旧 REDIS_HOST_PORT：历史 docker/.env 的 63790 不再生效。
+      - '${GMIND_REDIS_HOST_PORT:-16379}:6379'
     healthcheck:
       test: ['CMD', 'redis-cli', 'ping']
       interval: 5s

@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # Gmind 开发环境公共配置与工具函数（被 dev-start/stop/restart/status/logs 引用，不直接执行）。
 
-# 固定端口约定（与 e2e 门禁一致）：server 3001、web 5174（3000 留给本机其他项目）。
+# 固定端口约定（与 e2e 门禁一致）：server 3001、web 5174（3000 留给本机其他项目）、
+# Redis 16379（低位固定端口，避开 Windows Hyper-V 高位动态保留区）。
 export PORT="${PORT:-3001}"
 export API_ORIGIN="${API_ORIGIN:-http://localhost:${PORT}}"
 export WEB_PORT="${WEB_PORT:-5174}"
+export REDIS_URL="${REDIS_URL:-redis://127.0.0.1:16379/0}"
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DATA_DIR="$REPO_ROOT/.data"

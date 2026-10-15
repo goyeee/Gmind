@@ -35,7 +35,7 @@ describe('文件四视图 + 删除 + last_modifier（FR-FIL-001）', () => {
     // 直接通过 SessionService 签发（同 file-content.e2e-spec.ts 模式）
     const { SessionService } = await import('../src/session/session.service');
     const redisMod = await import('ioredis');
-    const svc = new SessionService(new redisMod.default('redis://127.0.0.1:63790/1'));
+    const svc = new SessionService(new redisMod.default('redis://127.0.0.1:16379/1'));
     return (await svc.create(userId, false)).token;
   };
 
@@ -296,7 +296,7 @@ describe('文件复制与星标（FR-FIL-003/004）', () => {
   const tokenFor = async (userId: string): Promise<string> => {
     const { SessionService } = await import('../src/session/session.service');
     const redisMod = await import('ioredis');
-    const svc = new SessionService(new redisMod.default('redis://127.0.0.1:63790/1'));
+    const svc = new SessionService(new redisMod.default('redis://127.0.0.1:16379/1'));
     return (await svc.create(userId, false)).token;
   };
 
@@ -601,7 +601,7 @@ describe('标题全局搜索（FR-FIL-008）', () => {
   const tokenFor = async (userId: string): Promise<string> => {
     const { SessionService } = await import('../src/session/session.service');
     const redisMod = await import('ioredis');
-    const svc = new SessionService(new redisMod.default('redis://127.0.0.1:63790/1'));
+    const svc = new SessionService(new redisMod.default('redis://127.0.0.1:16379/1'));
     return (await svc.create(userId, false)).token;
   };
 

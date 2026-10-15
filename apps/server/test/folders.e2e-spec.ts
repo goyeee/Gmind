@@ -21,7 +21,7 @@ describe('文件夹域（FR-FIL-002）', () => {
   const tokenFor = async (uid: string): Promise<string> => {
     const { SessionService } = await import('../src/session/session.service');
     const redisMod = await import('ioredis');
-    const svc = new SessionService(new redisMod.default('redis://127.0.0.1:63790/1'));
+    const svc = new SessionService(new redisMod.default('redis://127.0.0.1:16379/1'));
     return (await svc.create(uid, false)).token;
   };
 

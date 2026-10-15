@@ -20,6 +20,17 @@ pnpm dev                 # server :3000 + web :5173
 
 > 说明：MinIO / MailHog 的容器定义已就绪，但镜像来自 Docker Hub；若所在网络拉取受限，二者可暂缺 —— M0 代码路径不依赖它们（文件上传与邮件链路属后续里程碑）。
 
+### 一键启停（端口约定固化：API :3001 + web :5174，与 e2e 门禁一致）
+
+| 平台 | 启动 | 停止 | 重启 | 状态 | 日志 |
+| --- | --- | --- | --- | --- | --- |
+| macOS / Linux | `scripts/dev-start.sh` | `scripts/dev-stop.sh` | `scripts/dev-restart.sh` | `scripts/dev-status.sh` | `scripts/dev-logs.sh` |
+| Windows PowerShell | `scripts\dev.ps1 start` | `scripts\dev.ps1 stop` | `scripts\dev.ps1 restart` | `scripts\dev.ps1 status` | `scripts\dev.ps1 logs` |
+
+- 进程脱离终端运行（关窗不影响），日志统一落 `.data/dev-server.log`，pid 记录于 `.data/dev-server.pids`。
+- 环境变量可覆盖：`PORT` / `WEB_PORT` / `REDIS_URL`（默认 `redis://127.0.0.1:16379/0`）。Redis 使用低位固定端口 16379，避开 Windows Hyper-V 高位动态保留区，也降低与本机默认 Redis（6379）的冲突。
+- 从旧的 63790 环境升级后，执行一次 `pnpm compose:up` 重建 Redis 端口映射。旧 `REDIS_HOST_PORT` 配置不再读取；确需改宿主端口时使用 `GMIND_REDIS_HOST_PORT` 并同步设置 `REDIS_URL`。
+
 ### 本机端口占用时的替代命令
 
 如果本机 3000 / 5173 已被无关应用占用（开发机实测如此），按下面这组命令跑，行为完全等价；环境变量名分别为 `PORT`、`API_ORIGIN`、`WEB_PORT`，不设置时默认值仍为 3000 / 5173 / 3000：

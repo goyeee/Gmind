@@ -34,7 +34,7 @@ describe('文档动态端点（M6 Task 8，FR-COL-007 提前）', () => {
   const tokenFor = async (userId: string): Promise<string> => {
     const { SessionService } = await import('../src/session/session.service');
     const redisMod = await import('ioredis');
-    const svc = new SessionService(new redisMod.default('redis://127.0.0.1:63790/1'));
+    const svc = new SessionService(new redisMod.default('redis://127.0.0.1:16379/1'));
     return (await svc.create(userId, false)).token;
   };
 

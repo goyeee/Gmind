@@ -116,7 +116,7 @@ describe('Hocuspocus 协同网关（鉴权/加载/同步/持久化/配额告警�
   const tokenFor = async (userId: string): Promise<string> => {
     const { SessionService } = await import('../src/session/session.service');
     const redisMod = await import('ioredis');
-    const svc = new SessionService(new redisMod.default('redis://127.0.0.1:63790/1'));
+    const svc = new SessionService(new redisMod.default('redis://127.0.0.1:16379/1'));
     return (await svc.create(userId, false)).token;
   };
 

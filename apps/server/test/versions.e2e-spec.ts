@@ -65,7 +65,7 @@ describe('版本快照（collab 网关 FR-VER-001）+ 90 天清理', () => {
   const tokenFor = async (uid: string): Promise<string> => {
     const { SessionService } = await import('../src/session/session.service');
     const redisMod = await import('ioredis');
-    const svc = new SessionService(new redisMod.default('redis://127.0.0.1:63790/1'));
+    const svc = new SessionService(new redisMod.default('redis://127.0.0.1:16379/1'));
     return (await svc.create(uid, false)).token;
   };
 
@@ -245,7 +245,7 @@ describe('版本恢复（REST FR-VER-004）+ events 埋点端点', () => {
   const tokenFor = async (uid: string): Promise<string> => {
     const { SessionService } = await import('../src/session/session.service');
     const redisMod = await import('ioredis');
-    const svc = new SessionService(new redisMod.default('redis://127.0.0.1:63790/1'));
+    const svc = new SessionService(new redisMod.default('redis://127.0.0.1:16379/1'));
     return (await svc.create(uid, false)).token;
   };
 
