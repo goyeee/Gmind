@@ -365,9 +365,12 @@ function applyFieldDiff(target: Y.Doc, id: string, s: NodeSnapshot): boolean {
   return changed;
 }
 
-/** image 按 key 对比（key 变更时 w/h 随快照值一并写回；缺失 ↔ 存在视为差异）。 */
+/** image 按 key + 尺寸 + 位置对比（任一项差异即写回整份快照值——含 2026-10-20 图文
+ *  四槽位 placement；缺失 ↔ 存在视为差异）。 */
 function diffImage(t: NodeSnapshot['image'], s: NodeSnapshot['image']): boolean {
-  return (t?.key ?? null) !== (s?.key ?? null);
+  if ((t?.key ?? null) !== (s?.key ?? null)) return true;
+  if (!t || !s) return false;
+  return t.w !== s.w || t.h !== s.h || (t.placement ?? null) !== (s.placement ?? null);
 }
 
 /** style 键集对比：并集内值不同者进 patch（快照缺失键 → null 删除）。 */

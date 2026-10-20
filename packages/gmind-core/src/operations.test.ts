@@ -8,6 +8,7 @@ import {
   addChild,
   applyStyle,
   deleteNodes,
+  moveImage,
   moveNode,
   setImage,
   setIcon,
@@ -145,6 +146,7 @@ describe('addChild', () => {
       expect((e as GmindCoreError).code).toBe('NODE_DELETED');
     }
   });
+
 });
 
 describe('setText', () => {
@@ -551,6 +553,63 @@ describe('setImage', () => {
     setImage(doc, id, null);
     expect(getNode(doc, id)!.image).toBeNull();
   });
+
+  it('placement 四值往返（2026-10-20 图文四槽位）；缺省不落键（读回无 placement）', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
+    const id = childrenIds(doc, ROOT_NODE_ID)[0]!;
+    setImage(doc, id, { key: 'k', w: 10, h: 20 });
+    expect(getNode(doc, id)!.image).toEqual({ key: 'k', w: 10, h: 20 });
+    for (const placement of ['top', 'bottom', 'left', 'right'] as const) {
+      setImage(doc, id, { key: 'k', w: 10, h: 20, placement });
+      expect(getNode(doc, id)!.image).toEqual({ key: 'k', w: 10, h: 20, placement });
+    }
+  });
+
+  it('placement 非法值抛 INVALID_IMAGE_PLACEMENT 且零写入（校验先于事务）', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
+    const id = childrenIds(doc, ROOT_NODE_ID)[0]!;
+    setImage(doc, id, { key: 'k', w: 10, h: 20, placement: 'left' });
+    const before = fullSnapshot(doc);
+    expect(() => setImage(doc, id, { key: 'k', w: 10, h: 20, placement: 'diag' as never })).toThrow(
+      GmindCoreError,
+    );
+    try {
+      setImage(doc, id, { key: 'bad', w: 1, h: 1, placement: 'diag' as never });
+    } catch (e) {
+      expect((e as GmindCoreError).code).toBe('INVALID_IMAGE_PLACEMENT');
+      expect((e as GmindCoreError).message).toBe('图片位置非法：diag / 仅支持 top、bottom、left、right');
+    }
+    expect(fullSnapshot(doc)).toBe(before);
+  });
+});
+
+describe('moveImage（跨节点移动图片，2026-10-20）', () => {
+  it('源清空 + 目标写入，单事务一步撤销；目标已有图直接替换', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }, { text: 'B' }] });
+    const [aId, bId] = childrenIds(doc, ROOT_NODE_ID) as [string, string];
+    setImage(doc, aId, { key: 'ka', w: 10, h: 10, placement: 'right' });
+    setImage(doc, bId, { key: 'kb', w: 20, h: 20 });
+    const um = createUndoManager(doc);
+    moveImage(doc, aId, bId, { key: 'ka', w: 10, h: 10, placement: 'top' });
+    expect(getNode(doc, aId)!.image).toBeNull();
+    expect(getNode(doc, bId)!.image).toEqual({ key: 'ka', w: 10, h: 10, placement: 'top' });
+    undo(um);
+    expect(getNode(doc, aId)!.image).toEqual({ key: 'ka', w: 10, h: 10, placement: 'right' });
+    expect(getNode(doc, bId)!.image).toEqual({ key: 'kb', w: 20, h: 20 });
+  });
+
+  it('同节点 / 缺失节点 / 非法 placement 均抛错且零写入', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
+    const aId = childrenIds(doc, ROOT_NODE_ID)[0]!;
+    setImage(doc, aId, { key: 'ka', w: 10, h: 10 });
+    const before = fullSnapshot(doc);
+    expect(() => moveImage(doc, aId, aId, { key: 'ka', w: 10, h: 10 })).toThrow(GmindCoreError);
+    expect(() => moveImage(doc, aId, 'nope', { key: 'ka', w: 10, h: 10 })).toThrow(GmindCoreError);
+    expect(() =>
+      moveImage(doc, aId, ROOT_NODE_ID, { key: 'ka', w: 10, h: 10, placement: 'diag' as never }),
+    ).toThrow(GmindCoreError);
+    expect(fullSnapshot(doc)).toBe(before);
+  });
 });
 
 describe('setIcon（M7b-W1 八组制多值）', () => {
@@ -731,6 +790,17 @@ describe('setNodeTask（M7a-T1）', () => {
     expect(getNode(doc, id)!.task).toMatchObject({ dueDate: null, progress: 10 });
   });
 
+  it('autoProgress 开关写入：true/false 显式持久；未提供不动', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
+    const id = childrenIds(doc, ROOT_NODE_ID)[0]!;
+    setNodeTask(doc, id, { autoProgress: true, progress: 60 });
+    expect(getNode(doc, id)!.task).toMatchObject({ autoProgress: true, progress: 60 });
+    setNodeTask(doc, id, { autoProgress: false });
+    expect(getNode(doc, id)!.task.autoProgress).toBe(false);
+    setNodeTask(doc, id, { progress: 70 });
+    expect(getNode(doc, id)!.task.autoProgress).toBe(false);
+  });
+
   it('空 patch 零变更（不开事务，状态字节级不变）', () => {
     const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
     const id = childrenIds(doc, ROOT_NODE_ID)[0]!;
@@ -793,6 +863,7 @@ describe('setNodeTask（M7a-T1）', () => {
       [{ startDate: '2026-02-30' }, 'TASK_INVALID_DATE'],
       [{ dueDate: '2026/02/28' }, 'TASK_INVALID_DATE'],
       [{ doneDate: '26-02-28' }, 'TASK_INVALID_DATE'],
+      [{ autoProgress: 'true' }, 'TASK_INVALID_AUTO_PROGRESS'],
     ];
     for (const [patch, code] of cases) {
       try {

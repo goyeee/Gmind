@@ -29,7 +29,7 @@ interface PlainNode {
   collapsed?: boolean;
   deleted?: boolean;
   icons?: Record<string, unknown>;
-  image?: { key: string; w: number; h: number } | null;
+  image?: { key: string; w: number; h: number; placement?: 'top' | 'bottom' | 'left' | 'right' } | null;
   task?: NodeTaskVisual;
   description?: string;
   /** 自定义列值（2026-10-11 第二步：assignee 列拉平来源）。 */
@@ -829,20 +829,45 @@ describe('layout 确定性与金样', () => {
     });
   }
 
-  // Task 12（T6 carry-in 裁决）：布局盒高必须计入图片高度。金样树不含图片（金样不变），
-  // 此不变量用例钉死含图节点：盒高 ≥ 图高、盒宽 ≥ 图宽 + 2×内边距。
-  it('图片节点：盒高计入图片高度（h = max(文本高, 图高)）', () => {
+  // 2026-10-20 图文四槽位：含图节点文字在上、图片在下（堆叠 + 8px 间距），content
+  // 几何随盒透传；无图节点走原路径（金样树不含图片 → 金样不变）。
+  it('图片节点：默认 bottom 堆叠（h = 文本高 + 8 + 图高），content 随盒透传；无图不变', () => {
     const reader = makeReader({
       root: { text: '根', children: ['img'] },
       img: { text: '图', image: { key: 'files/f/x.png', w: 16, h: 64 } },
     });
     const result = layout(reader, { structure: 'mindmap', theme, measure: stubAdapter, styleOf });
     const box = boxOf(result, 'img');
-    expect(box.h).toBe(64); // 文本高 20（fontSize 20 × ratio 1）< 图高 64 → 图高主导
-    expect(box.w).toBeGreaterThanOrEqual(16 + theme.nodePaddingX * 2); // 图自左内边距起绘制
-    // 无图文本节点不受影响（文本高主导）
+    expect(box.h).toBe(20 + 8 + 64); // 文本高 20 + 间距 8 + 图高 64
+    expect(box.w).toBeGreaterThanOrEqual(16 + theme.nodePaddingX * 2);
+    expect(box.content).toMatchObject({ textTop: 0, imageX: theme.nodePaddingX, imageTop: 28 });
+    // 无图文本节点不受影响（文本高主导，content 不出现）
     const plain = boxOf(result, 'root');
     expect(plain.h).toBe(20);
+    expect(plain.content).toBeUndefined();
+  });
+
+  it('图片 placement 透传布局：left 并排盒宽 = 图 + 8 + 文字 + 2×pad；坏值按 bottom', () => {
+    const base = { text: '图', image: { key: 'files/f/x.png', w: 16, h: 64 } };
+    const left = layout(
+      makeReader({ root: { text: '根', children: ['img'] }, img: { ...base, image: { ...base.image, placement: 'left' } } }),
+      { structure: 'mindmap', theme, measure: stubAdapter, styleOf },
+    );
+    const lBox = boxOf(left, 'img');
+    expect(lBox.h).toBe(64); // max(文本高 20, 图高 64)
+    expect(lBox.w).toBe(16 + 8 + 10 + theme.nodePaddingX * 2);
+    expect(lBox.content).toMatchObject({ textX: theme.nodePaddingX + 16 + 8 });
+
+    const bad = layout(
+      makeReader({
+        root: { text: '根', children: ['img'] },
+        img: { ...base, image: { ...base.image, placement: 'diag' as never } },
+      }),
+      { structure: 'mindmap', theme, measure: stubAdapter, styleOf },
+    );
+    const bBox = boxOf(bad, 'img');
+    expect(bBox.h).toBe(20 + 8 + 64); // 坏值 → bottom 堆叠
+    expect(bBox.content).toMatchObject({ imageTop: 28 });
   });
 
   // M7c-C2 任务信息行槽位（只增不改）：有任务信息的节点盒高加任务行、宽保底任务行

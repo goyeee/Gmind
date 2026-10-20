@@ -5,6 +5,7 @@ import {
   resolveShortcutAction,
   SHORTCUT_ACTION_IDS,
   SHORTCUT_LIST,
+  suppressesDefaultAction,
   type ShortcutKeySnapshot,
 } from './keyboardMap';
 
@@ -163,5 +164,25 @@ describe('resolveDirectEditKey（选中即可编辑：可打印字符直入 / �
     expect(resolveDirectEditKey(keys({ key: 'a', metaKey: true }))).toBeNull();
     expect(resolveDirectEditKey(keys({ key: 'a', altKey: true }))).toBeNull();
     expect(resolveDirectEditKey(keys({ key: ' ', ctrlKey: true }))).toBeNull();
+  });
+});
+
+/**
+ * Ctrl+V 放行默认行为的回归守卫（本轮图片粘贴缺陷）。
+ *
+ * 浏览器把「派发原生 paste 事件」算作 Ctrl+V 的默认行为：keydown 里
+ * preventDefault 会让 paste 事件根本不派发（本机 Chromium 实测：抑制 → 0 个 paste
+ * 事件，不抑制 → 1 个）。画布粘贴截图（FR-EDT-020）唯一入口就是页面侧 document
+ * paste 监听，被掐掉 = 键盘粘图全废（键盘路径只读文本 MIME，图片剪贴板读不到文本
+ * → 静默无操作）。故 paste 放行、其余动作抑制口径不变；真键盘 e2e 见
+ * image-interactions.e2e.spec.ts。
+ */
+describe('suppressesDefaultAction（默认行为抑制口径）', () => {
+  it('paste 是唯一放行项（其余全部抑制，与既有 preventDefault 口径一致）', () => {
+    expect(suppressesDefaultAction('paste')).toBe(false);
+    for (const id of SHORTCUT_ACTION_IDS) {
+      if (id === 'paste') continue;
+      expect(suppressesDefaultAction(id)).toBe(true);
+    }
   });
 });

@@ -15,6 +15,7 @@
  */
 
 export * from './types';
+export * from './imageLayout';
 export * from './measure';
 export * from './taskvisual';
 export * from './layout';

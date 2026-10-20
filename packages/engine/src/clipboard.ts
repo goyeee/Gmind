@@ -32,6 +32,7 @@ import {
   type IconGroup,
   type SpecNode,
 } from '@gmind/core';
+import type { ImagePlacement } from './imageLayout';
 import type { DocReader, NodeSnapshotLike } from './types';
 
 /** 内部格式：payload 森林（v:1）。 */
@@ -48,7 +49,7 @@ export interface PayloadNode {
   /** 任务一句话描述（M7c-C1；与 note 并存的独立字段，复制/粘贴对齐 note 现状）。 */
   description: string;
   href: string;
-  image: { key: string; w: number; h: number } | null;
+  image: { key: string; w: number; h: number; placement?: ImagePlacement } | null;
   /** 图标组值数组（M7b-W1 多值；组键 ∈ core ICON_GROUPS）。 */
   icons: Record<string, string[]>;
   style: Record<string, string>;
@@ -74,7 +75,11 @@ export interface IDocHandle extends DocReader {
   setNote(id: string, note: string, origin?: string): void;
   setDescription(id: string, text: string, origin?: string): void;
   setHref(id: string, href: string, origin?: string): void;
-  setImage(id: string, image: { key: string; w: number; h: number } | null, origin?: string): void;
+  setImage(
+    id: string,
+    image: { key: string; w: number; h: number; placement?: ImagePlacement } | null,
+    origin?: string,
+  ): void;
   setIcon(id: string, group: string, value: string | null, origin?: string): void;
   setStyle(id: string, patch: Record<string, string | number | null>, origin?: string): void;
   /**
@@ -151,7 +156,14 @@ function payloadFromSnapshot(reader: DocReader, snap: NodeSnapshotLike): Payload
     note: snap.note ?? '',
     description: snap.description ?? '',
     href: snap.href ?? '',
-    image: snap.image ? { key: snap.image.key, w: snap.image.w, h: snap.image.h } : null,
+    image: snap.image
+      ? {
+          key: snap.image.key,
+          w: snap.image.w,
+          h: snap.image.h,
+          ...(snap.image.placement !== undefined ? { placement: snap.image.placement } : {}),
+        }
+      : null,
     icons: copyIcons(snap.icons),
     style: snap.style ? { ...snap.style } : {},
     custom: copyCustom(snap),
@@ -323,7 +335,16 @@ async function pastePayloadNode(
     } else {
       key = node.image.key;
     }
-    doc.setImage(id, { key, w: node.image.w, h: node.image.h }, origin);
+    doc.setImage(
+      id,
+      {
+        key,
+        w: node.image.w,
+        h: node.image.h,
+        ...(node.image.placement !== undefined ? { placement: node.image.placement } : {}),
+      },
+      origin,
+    );
   }
   for (const [group, values] of Object.entries(node.icons)) {
     // M7b-W1 多值写回：先按目录+上限收敛（writableIconValues），single 组写首枚
@@ -442,6 +463,42 @@ export function readInternalFallback(): ClipboardPayload | null {
   return lastInternal;
 }
 
+/** 清空节点 payload 内存兜底（图片复制/剪切时互斥清理，避免陈旧节点内容抢先）。 */
+export function clearInternalFallback(): void {
+  lastInternal = null;
+}
+
+/**
+ * 内部「单张图片」payload（2026-10-20 图片右键复制/剪切）：系统剪贴板写 PNG 的同时
+ * 记一份文档内语义（key/w/h/placement + 来源 fileId），Ctrl+V 时优先用它——同文件
+ * 沿用原 key（不重复上传），跨文件经既有 copy 端点 remap。与节点 payload 互斥。
+ */
+export interface LastImagePayload {
+  key: string;
+  w: number;
+  h: number;
+  placement?: ImagePlacement;
+  fileId: string;
+}
+
+let lastImage: LastImagePayload | null = null;
+
+/** 写图片 payload（并清节点 payload：二者互斥，后复制者胜）。 */
+export function setLastImage(payload: LastImagePayload): void {
+  lastImage = payload;
+  lastInternal = null;
+}
+
+/** 读图片 payload（粘贴仲裁同步读取；null = 无）。 */
+export function getLastImage(): LastImagePayload | null {
+  return lastImage;
+}
+
+/** 清图片 payload（复制节点/文本时调用；反之 writeToSystemClipboard 也会清）。 */
+export function clearLastImage(): void {
+  lastImage = null;
+}
+
 /**
  * 写系统剪贴板：单次 ClipboardItem 携带 'text/plain'（文本大纲）与
  * 'web application/vnd.gmind+json'（内部 payload JSON）两 MIME。任一失败
@@ -465,32 +522,40 @@ export async function writeToSystemClipboard(payload: CopyResult): Promise<boole
       }),
     ]);
     lastInternal = payload.internal;
+    lastImage = null; // 节点/文本复制覆盖图片 payload（互斥）
     return true;
   } catch {
     lastInternal = payload.internal;
+    lastImage = null;
     return false;
   }
 }
 
 /**
  * 读系统剪贴板：优先取 gmind 自定义 MIME 的内部 payload（损坏 JSON 视为无），
- * 'text/plain' 作纯文本。语义：
- * - API 缺失（jsdom）/ read() 抛出（权限拒绝）→ { internal: lastInternal, text: null }
- *   （内存兜底）；
+ * 'text/plain' 作纯文本；`hasImage` 报告剪贴板是否含图片（任一 item 的任一 type
+ * 以 `image/` 开头）。语义：
+ * - API 缺失（jsdom）/ read() 抛出（权限拒绝）→ { internal: lastInternal, text: null,
+ *   hasImage: false }（内存兜底；无法判图，图片侧由原生 paste 事件路径兜）
  * - 读成功但无 gmind MIME（外部应用复制）→ internal 为 null，不回退 stale
  *   lastInternal（避免把更早复制的 Gmind 内容当成刚复制的）。
+ *
+ * `hasImage` 的用途（粘贴仲裁，仅增字段）：剪贴板同时含图片与文本时**图片优先**——
+ * 键盘路径读到 hasImage 即让路，避免「复制网页图片」这类图文同存的剪贴板被双写
+ * （文本节点 + 图片）。
  */
 export async function readFromSystemClipboard(): Promise<{
   internal: ClipboardPayload | null;
   text: string | null;
+  hasImage: boolean;
 }> {
   if (typeof navigator === 'undefined' || !navigator.clipboard || typeof navigator.clipboard.read !== 'function') {
-    return { internal: lastInternal, text: null };
+    return { internal: lastInternal, text: null, hasImage: false };
   }
   try {
     const items = await navigator.clipboard.read();
     const item = items[0];
-    if (!item) return { internal: lastInternal, text: null };
+    if (!item) return { internal: lastInternal, text: null, hasImage: false };
     let internal: ClipboardPayload | null = null;
     let text: string | null = null;
     if (item.types.includes(INTERNAL_MIME)) {
@@ -507,9 +572,10 @@ export async function readFromSystemClipboard(): Promise<{
         text = null;
       }
     }
-    return { internal, text };
+    const hasImage = items.some((it) => it.types.some((t) => t.startsWith('image/')));
+    return { internal, text, hasImage };
   } catch {
-    return { internal: lastInternal, text: null };
+    return { internal: lastInternal, text: null, hasImage: false };
   }
 }
 

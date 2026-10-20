@@ -58,15 +58,85 @@ describe('measureNodeBox', () => {
     expect(box.h).toBe(14 * 1.5);
   });
 
-  // T6 carry-in 裁决（Task 12 落地）：布局盒高必须计入图片高度。
-  it('图片高度计入：h = max(文本高, imageH)；无图不变', () => {
-    // 文本高 21 < 图高 64 → 图高主导
-    expect(measureNodeBox('你好', style, theme, { adapter: stubAdapter, imageH: 64 }).h).toBe(64);
-    // 文本高 63 > 图高 10 → 文本主导
+  // 2026-10-20 图文四槽位：图片不再与文本重叠，默认文字在上、图在下（堆叠计入 8px 间距）。
+  it('默认 bottom：盒高 = 文字高 + 8 + 图高；无图不变；content 仅含图节点产出', () => {
+    const box = measureNodeBox('你好', style, theme, { adapter: stubAdapter, imageH: 64 });
+    expect(box.h).toBe(21 + 8 + 64);
+    expect(box.content).toEqual({
+      w: 36,
+      h: 21 + 8 + 64,
+      textX: 8,
+      textTop: 0,
+      titleCenter: 10.5,
+      descCenter: 21,
+      imageX: 8,
+      imageTop: 21 + 8,
+      taskRowTop: 21 + 8 + 64,
+    });
     const multi = measureNodeBox('a\nb\nc', style, theme, { adapter: stubAdapter, imageH: 10 });
-    expect(multi.h).toBe(3 * 14 * 1.5);
-    // 缺省（无图）行为不变
-    expect(measureNodeBox('你好', style, theme, { adapter: stubAdapter }).h).toBe(21);
+    expect(multi.h).toBe(3 * 14 * 1.5 + 8 + 10);
+    // 缺省（无图）走原路径：h = 文本高，content 字段不出现
+    const plain = measureNodeBox('你好', style, theme, { adapter: stubAdapter });
+    expect(plain.h).toBe(21);
+    expect(plain.content).toBeUndefined();
+  });
+
+  it('四槽位几何：top 图在上、left/right 并排且垂直居中（宽高/内容坐标）', () => {
+    const top = measureNodeBox('你好', style, theme, {
+      adapter: stubAdapter,
+      imageW: 100,
+      imageH: 64,
+      imagePlacement: 'top',
+    });
+    expect(top.h).toBe(64 + 8 + 21);
+    expect(top.w).toBe(Math.max(20, 100) + 16);
+    expect(top.content).toMatchObject({
+      textX: 8,
+      textTop: 64 + 8,
+      titleCenter: 64 + 8 + 10.5,
+      imageX: 8,
+      imageTop: 0,
+    });
+
+    for (const placement of ['left', 'right'] as const) {
+      const side = measureNodeBox('你好', style, theme, {
+        adapter: stubAdapter,
+        imageW: 100,
+        imageH: 64,
+        imagePlacement: placement,
+      });
+      // 并排：盒高 = max(文字高, 图高) + 任务行(无)；宽 = 图 + 8 + 文字 + 2×pad
+      expect(side.h).toBe(64);
+      expect(side.w).toBe(100 + 8 + 20 + 16);
+      expect(side.content).toMatchObject({
+        textTop: (64 - 21) / 2,
+        imageTop: (64 - 64) / 2,
+      });
+      if (placement === 'left') {
+        expect(side.content).toMatchObject({ textX: 8 + 100 + 8, imageX: 8 });
+      } else {
+        expect(side.content).toMatchObject({ textX: 8, imageX: 8 + 20 + 8 });
+      }
+    }
+  });
+
+  it('含图 + 描述 + 任务行：描述跟随文字块、任务行恒贴底（bottom/left 一致）', () => {
+    const slots = { ownerLabel: '张三', ownerUnassigned: false, showProgress: true };
+    for (const placement of ['bottom', 'left'] as const) {
+      const box = measureNodeBox('ab', style, theme, {
+        adapter: stubAdapter,
+        imageW: 40,
+        imageH: 30,
+        imagePlacement: placement,
+        description: '描述',
+        taskRow: slots,
+      });
+      const content = box.content!;
+      expect(content.taskRowTop).toBe(box.h - TASK_ROW_H);
+      // 描述行在文字块内、标题下方：中心 = textTop + 标题高 + TASK_ROW_H/2
+      expect(content.descCenter).toBe(content.textTop + 21 + TASK_ROW_H / 2);
+      expect(content.titleCenter).toBe(content.textTop + 10.5);
+    }
   });
 
   it('图片宽度计入：w ≥ imageW + 2×nodePaddingX；文本更宽时文本主导', () => {

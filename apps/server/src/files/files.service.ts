@@ -609,7 +609,17 @@ export class FilesService {
       // get 形参上 undefined 与「迁移失败」null 语义合并（map 此前必有 set，undefined 不可达）
       const newKey = migrated.get(image.key) ?? null;
       if (newKey === null) continue;
-      setImage(doc, nodeId, { key: newKey, w: image.w, h: image.h }, ORIGIN_SYSTEM);
+      setImage(
+        doc,
+        nodeId,
+        {
+          key: newKey,
+          w: image.w,
+          h: image.h,
+          ...(image.placement !== undefined ? { placement: image.placement } : {}),
+        },
+        ORIGIN_SYSTEM,
+      );
     }
   }
 

@@ -1,0 +1,190 @@
+/* 节点图片大图预览（2026-10-15 需求方「双击支持预览大图」）——
+   遮罩范式同 version-preview，图片按视口约束。
+   2026-10-20 追加：底部半透明灰底工具栏（缩放/下载）、右上角关闭、图片右键复制。 */
+
+.image-preview-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1300;
+  background: rgba(20, 23, 28, 0.72);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 64px 24px 80px;
+  overflow: hidden;
+}
+
+/* 只包图片本身；点它之外的遮罩留白即关闭。 */
+.image-preview-stage {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  max-width: 100%;
+  max-height: 100%;
+}
+
+.image-preview-img {
+  display: block;
+  max-width: calc(100vw - 48px);
+  max-height: calc(100vh - 144px);
+  /* 原图小于视口时按原始像素展示（不放大），大于视口时等比缩到装得下 */
+  object-fit: contain;
+  border-radius: 4px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.32);
+  transform-origin: center center;
+  will-change: transform;
+  user-select: none;
+}
+
+/* 底部半透明灰底工具栏：不参与图片布局，固定贴视口下缘。 */
+.image-preview-toolbar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 2;
+  height: 56px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 16px env(safe-area-inset-bottom);
+  background: rgba(60, 64, 72, 0.58);
+  border-top: 1px solid rgba(255, 255, 255, 0.14);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  color: #fff;
+}
+
+.image-preview-toolbar button,
+.image-preview-download {
+  height: 32px;
+  min-width: 32px;
+  padding: 0 8px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.image-preview-toolbar button:hover,
+.image-preview-download:hover {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.image-preview-toolbar button:focus-visible,
+.image-preview-download:focus-visible {
+  outline: 2px solid rgba(255, 255, 255, 0.82);
+  outline-offset: 2px;
+}
+
+.image-preview-tool {
+  font-size: 18px;
+}
+
+.image-preview-zoom {
+  min-width: 58px;
+  font-variant-numeric: tabular-nums;
+}
+
+.image-preview-divider {
+  width: 1px;
+  height: 20px;
+  margin: 0 4px;
+  background: rgba(255, 255, 255, 0.25);
+}
+
+.image-preview-download svg {
+  flex: none;
+}
+
+/* 关闭钮固定在视口右上角，不随图片缩放。 */
+.image-preview-close {
+  position: fixed;
+  top: calc(20px + env(safe-area-inset-top, 0px));
+  right: calc(24px + env(safe-area-inset-right, 0px));
+  z-index: 3;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  background: rgba(31, 35, 41, 0.55);
+  color: #fff;
+  font-size: 20px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+.image-preview-close:hover {
+  background: rgba(31, 35, 41, 0.78);
+}
+
+.image-preview-close:focus-visible {
+  outline: 2px solid rgba(255, 255, 255, 0.82);
+  outline-offset: 2px;
+}
+
+/* 复制结果提示（成功/失败），2s 后自动消失。 */
+.image-preview-status {
+  position: fixed;
+  left: 50%;
+  bottom: 72px;
+  z-index: 3;
+  max-width: calc(100vw - 48px);
+  padding: 6px 12px;
+  border-radius: 6px;
+  background: rgba(55, 60, 68, 0.82);
+  color: #fff;
+  font-size: 13px;
+  text-align: center;
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+.image-preview-status-failed {
+  background: rgba(180, 40, 40, 0.86);
+}
+
+/* 图片右键菜单：与画布 .context-menu 同视觉语言。 */
+.image-preview-menu {
+  position: fixed;
+  z-index: 4;
+  min-width: 136px;
+  padding: 4px;
+  background: #fff;
+  border: 1px solid #e5e6eb;
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+}
+
+.image-preview-menu button {
+  display: block;
+  width: 100%;
+  padding: 8px 12px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: #1d2129;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.image-preview-menu button:hover {
+  background: #f2f3f5;
+}

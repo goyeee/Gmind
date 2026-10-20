@@ -216,8 +216,8 @@ test('跨文件粘贴：图片随迁到目标文件新 key；同文件粘贴沿�
   const hrefA = (await imageA.getAttribute('href')) as string;
   expect(hrefA).toContain('/api/images/files/');
 
-  // 右键菜单复制（含图节点；点节点组避免 gm-image 拦截文本命中）→ 同文件粘贴：key 前缀短路，沿用原 key 不产生副本
-  await nodeGroup(page, '周五').click({ button: 'right' });
+  // 右键菜单复制（含图节点；2026-10-20 起右键**图片**弹图片菜单，故点文字区取节点菜单）
+  await nodeGroup(page, '周五').locator('.gm-text').click({ button: 'right' });
   await page.getByTestId('context-menu').getByRole('button', { name: '复制' }).click();
   await page.keyboard.press('Control+V');
   const imagesA = page.locator('.editor-canvas svg image.gm-image');

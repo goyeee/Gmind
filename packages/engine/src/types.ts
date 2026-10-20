@@ -6,6 +6,7 @@
  * 读取文档快照，由 apps/web 侧的适配函数从 @gmind/core 桥接。
  */
 export type { StructureType } from '@gmind/shared';
+import type { ImagePlacement, PackedNodeContent } from './imageLayout';
 import type { NodeTaskVisual } from './taskvisual';
 
 /** 文本样式（与 DOM/Canvas 字体三元组一一对应）。 */
@@ -165,6 +166,12 @@ export interface NodeBox {
    * （行集与按 '\n' 显式分行一致）时缺省（字段不出现，金样逐字节不变）。
    */
   lines?: string[];
+  /**
+   * 图文四槽位内容几何（2026-10-20 只增）：**仅含图节点**出现，measure/layout 单源
+   * 产出、render 直用（文字/描述/标记/图片坐标）；无图节点字段不出现（金样逐字节
+   * 不变）。
+   */
+  content?: PackedNodeContent;
 }
 
 /** 边路由：两端锚点 + 线型。 */
@@ -280,8 +287,8 @@ export interface NodeSnapshotLike {
   description?: string;
   /** 超链接。 */
   href?: string;
-  /** 图片资源（对象存储 key + 原始宽高）。 */
-  image?: { key: string; w: number; h: number } | null;
+  /** 图片资源（对象存储 key + 原始宽高 + 图文四槽位 placement，2026-10-20）。 */
+  image?: { key: string; w: number; h: number; placement?: ImagePlacement } | null;
   /** 节点级样式覆盖（键值对）。 */
   style?: Record<string, string>;
   /**

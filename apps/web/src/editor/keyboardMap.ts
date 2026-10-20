@@ -230,6 +230,20 @@ export function resolveShortcutAction(e: ShortcutKeySnapshot): ShortcutActionId 
   }
 }
 
+/**
+ * 动作 id → 是否抑制浏览器默认行为。**paste 是唯一放行项**：浏览器把「派发原生
+ * paste 事件」当作 Ctrl+V 的默认行为，keydown 里 preventDefault 会让 paste 事件
+ * 根本不派发（本机 Chromium 实测：抑制 → 0 个 paste 事件，不抑制 → 1 个）。而
+ * 画布粘贴截图（FR-EDT-020 第三种插入方式）唯一入口就是 EditorPage 的 document
+ * paste 监听——它靠原生事件的 clipboardData 拿图片（这条通道不需要剪贴板读权限）。
+ * 抑制即等于关掉键盘粘图：键盘路径 handlePaste 只读文本 MIME，图片剪贴板读不到
+ * 文本，最终静默无操作。故此处放行，粘贴语义由键盘路径（内部节点/纯文本）与
+ * paste 事件路径（图片优先）分工完成。
+ */
+export function suppressesDefaultAction(action: ShortcutActionId): boolean {
+  return action !== 'paste';
+}
+
 /** 动作 id → deps 调用（对 ShortcutActionId 穷尽；never 兜底让漏 case 编译报错）。 */
 function dispatchAction(deps: KeyboardMapDeps, action: ShortcutActionId, e: KeyboardEvent): void {
   switch (action) {
@@ -304,7 +318,8 @@ export function attachKeyboardMap(deps: KeyboardMapDeps): () => void {
     // F2 抑制部分浏览器的重命名/查找语义、Tab 抑制焦点移动等均沿袭。
     // Space 不在本层绑定：2026-09-30 起由页面层「选中即可编辑」捕获监听接管
     // （进编辑并全选 + 空格平移手势退役），见 EditorPage 键盘直入编辑监听。
-    e.preventDefault();
+    // 唯一例外 Ctrl/Cmd+V（放行默认行为，理由见 suppressesDefaultAction 注释）。
+    if (suppressesDefaultAction(action)) e.preventDefault();
     dispatchAction(deps, action, e);
   };
 

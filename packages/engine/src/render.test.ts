@@ -260,7 +260,37 @@ describe('renderScene：初次渲染', () => {
     expect(img?.getAttribute('href')).toBe('/api/images/abc123');
     expect(img?.getAttribute('width')).toBe('120');
     expect(img?.getAttribute('height')).toBe('80');
+    expect(img?.getAttribute('data-image-placement')).toBe('bottom'); // 缺省 = 文字在上
+    expect(img?.getAttribute('data-no-node-drag')).toBe('1'); // 图片起拖归页面层换位
     expect(nodeG('a')?.querySelector('image.gm-image')).toBeNull();
+  });
+
+  it('图文四槽位（left）：图片 x/y、data-image-placement、文字 tspan 基线取测量 content 几何', () => {
+    const l = baseLayout();
+    l.nodes[1] = {
+      ...box('b', 60, -20, 144, 64),
+      content: {
+        w: 144,
+        h: 64,
+        textX: 116,
+        textTop: 21.5,
+        titleCenter: 32,
+        descCenter: 42,
+        imageX: 8,
+        imageTop: 0,
+        taskRowTop: 64,
+      },
+    };
+    const data = baseData();
+    data.set('b', { text: '图', image: { key: 'k', w: 100, h: 64, placement: 'left' } });
+    renderScene(createScene(svg), makeInput(l, data));
+    const img = nodeG('b')?.querySelector('image.gm-image');
+    expect(img?.getAttribute('x')).toBe('8');
+    expect(img?.getAttribute('y')).toBe('0');
+    expect(img?.getAttribute('data-image-placement')).toBe('left');
+    const tspan = nodeG('b')?.querySelector('text.gm-text tspan');
+    expect(tspan?.getAttribute('x')).toBe('116');
+    expect(tspan?.getAttribute('y')).toBe(String(32 + 14 * 0.35));
   });
 
   it('折叠徽标 +N：仅 collapsedCount>0 渲染，文案 +N，右侧节点在盒右侧', () => {
@@ -275,6 +305,73 @@ describe('renderScene：初次渲染', () => {
   it('折叠计数为 0 不渲染徽标', () => {
     renderScene(createScene(svg), makeInput(baseLayout({ a: 0 }), baseData()));
     expect(svg.querySelector('.gm-collapse-badge')).toBeNull();
+  });
+
+  it('折叠切换钮（2026-10-20）：仅「有可见子节点」的展开节点渲染；叶子无', () => {
+    // a 是 b/c 的父（parentId 反查），b/c 是叶子
+    const layout = baseLayout();
+    layout.nodes = [
+      box('a', -60, -10, 120, 20, 'right', 0),
+      { ...box('b', 60, -20, 100, 40), parentId: 'a' },
+      { ...box('c', 60, 20, 80, 20), parentId: 'a' },
+    ];
+    renderScene(createScene(svg), makeInput(layout, baseData()));
+    const toggle = svg.querySelector('.gm-collapse-toggle');
+    expect(toggle?.getAttribute('data-for-id')).toBe('a');
+    // right 侧 → 盒右（与 badgeTransform 同口径）；结构 = 命中圆 + fg(圆钮 + 「–」)
+    expect(toggle?.getAttribute('transform')).toBe('translate(120, 1)'); // w=120, h=20 → (120, 10-9)
+    expect(toggle?.querySelector('.gm-collapse-toggle-hit')?.getAttribute('r')).toBe('15'); // 9+6
+    expect(toggle?.querySelector('.gm-collapse-toggle-btn')).not.toBeNull();
+    expect(toggle?.querySelector('.gm-collapse-toggle-fg')?.textContent).toBe('–');
+    // 叶子节点零折叠语义：无切换钮也无徽标
+    expect(nodeG('b')?.querySelector('.gm-collapse-toggle')).toBeNull();
+    expect(nodeG('b')?.querySelector('.gm-collapse-badge')).toBeNull();
+    // 展开态默认无徽标（显隐由宿主 CSS 悬停控制，engine 只产出结构）
+    expect(nodeG('a')?.querySelector('.gm-collapse-badge')).toBeNull();
+  });
+
+  it('折叠切换钮与徽标互斥：折叠后切换钮让位徽标，展开恢复后切换钮回来且节点 g 引用不变', () => {
+    const layout = baseLayout();
+    layout.nodes = [
+      box('a', -60, -10, 120, 20, 'right', 0),
+      { ...box('b', 60, -20, 100, 40), parentId: 'a' },
+      { ...box('c', 60, 20, 80, 20), parentId: 'a' },
+    ];
+    const scene = createScene(svg);
+    renderScene(scene, makeInput(layout, baseData()));
+    const gA = nodeG('a') as SVGGElement;
+    expect(gA.querySelector('.gm-collapse-toggle')).not.toBeNull();
+    // 折叠 a：切换钮移除、徽标 +2 出现
+    renderScene(scene, makeInput(baseLayout({ a: 2 }), baseData()));
+    expect(gA.querySelector('.gm-collapse-toggle')).toBeNull();
+    expect(gA.querySelector('.gm-collapse-badge')?.textContent).toBe('+2');
+    // 展开恢复：徽标移除、切换钮重建
+    renderScene(scene, makeInput(layout, baseData()));
+    expect(gA.querySelector('.gm-collapse-badge')).toBeNull();
+    expect(gA.querySelector('.gm-collapse-toggle')).not.toBeNull();
+  });
+
+  it('节点失去可见子级（变叶子）后切换钮移除；主题重渲染时圆钮配色跟随更新', () => {
+    const layout = baseLayout();
+    layout.nodes = [
+      box('a', -60, -10, 120, 20, 'right', 0),
+      { ...box('b', 60, -20, 100, 40), parentId: 'a' },
+      { ...box('c', 60, 20, 80, 20), parentId: 'a' },
+    ];
+    const scene = createScene(svg);
+    renderScene(scene, makeInput(layout, baseData()));
+    expect(nodeG('a')?.querySelector('.gm-collapse-toggle')).not.toBeNull();
+    // b/c 不再渲染（如全部折叠到别处/删除）：a 成叶子 → 切换钮移除
+    const leafLayout = baseLayout();
+    leafLayout.nodes = [box('a', -60, -10, 120, 20, 'right', 0)];
+    renderScene(scene, makeInput(leafLayout, baseData()));
+    expect(nodeG('a')?.querySelector('.gm-collapse-toggle')).toBeNull();
+    // 主题切换（场景级重渲染、元素引用保持）：圆钮 fill/字色跟随新主题
+    const dark = { ...theme, collapseBadgeBg: '#123456', collapseBadgeFg: '#abcdef' };
+    renderScene(scene, { layout, theme: dark, styleOf, nodeData: baseData() });
+    const toggle = nodeG('a')?.querySelector('.gm-collapse-toggle');
+    expect(toggle?.querySelector('.gm-collapse-toggle-btn')?.getAttribute('fill')).toBe('#123456');
+    expect(toggle?.querySelector('text')?.getAttribute('fill')).toBe('#abcdef');
   });
 
   it('左侧节点徽标在盒左侧；org（down）节点徽标在盒下方', () => {
@@ -910,12 +1007,12 @@ describe('renderScene：任务视觉（M7c-C2）', () => {
     expect(nodeG('b')?.querySelector('.gm-task-owner-text')).toBeNull();
   });
 
-  it('有效进度：叶=自身百分比（progress>0 才显示）；父=Σ 直属子级均值；灰字', () => {
+  it('有效进度：叶=自身百分比（progress>0 才显示）；父开自动=Σ 直属子级均值（2026-10-20 起父级默认手动，不开不汇总）；灰字', () => {
     const data = baseData();
     data.set('b', { text: 'x', task: { progress: 40 } }); // 叶
     data.set('c', { text: 'y', task: { owners: ['u1'], progress: 0 } }); // 叶 0 → 不显示
-    // 父 d（有任务信息）子 e/f 各 30/50 → Σ = round(80/2) = 40
-    data.set('d', { text: 'D', task: { owners: ['u9'] } });
+    // 父 d（有任务信息，显式开自动）子 e/f 各 30/50 → Σ = round(80/2) = 40
+    data.set('d', { text: 'D', task: { owners: ['u9'], autoProgress: true } });
     data.set('e', { text: 'E', task: { progress: 30 } });
     data.set('f', { text: 'F', task: { progress: 50 } });
     const nodes = [
@@ -963,14 +1060,14 @@ describe('renderScene：任务视觉（M7c-C2）', () => {
     data.set('b', { text: 'x', task: { progress: 100, dueDate: '2026-09-01' } });
     renderScene(scene, taskInput(data));
     expect(chipRectOf('b')?.getAttribute('stroke')).toBe('#e5e6eb');
-    // 父 Σ ≥ 100：过期日期不判逾期（子甲 100 / 子乙 100）
+    // 父 Σ ≥ 100：过期日期不判逾期（父显式开自动；子甲 100 / 子乙 100）
     const nodes = [
       box('a', -60, -10, 120, 20, 'right', 0),
       box('b', 60, -20, 140, 40),
       { ...box('e', 240, -40, 80, 40), parentId: 'b' },
       { ...box('f', 240, 0, 80, 40), parentId: 'b' },
     ];
-    data.set('b', { text: 'x', task: { owners: ['u1'], dueDate: '2026-09-01' } });
+    data.set('b', { text: 'x', task: { owners: ['u1'], dueDate: '2026-09-01', autoProgress: true } });
     data.set('e', { text: 'E', task: { progress: 100 } });
     data.set('f', { text: 'F', task: { progress: 100 } });
     renderScene(scene, taskInput(data, nodes));

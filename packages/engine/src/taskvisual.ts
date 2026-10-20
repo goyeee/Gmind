@@ -28,6 +28,11 @@ export interface NodeTaskVisual {
   status?: TaskStatus;
   owners?: string[];
   /**
+   * 父级进度是否按子级自动汇总（2026-10-20 需求方裁定）。
+   * 缺省时 effectiveProgress 按兼容口径处理（有子节点视为自动）。
+   */
+  autoProgress?: boolean;
+  /**
    * 负责人显示名（2026-10-10 mindgrid 对齐：footer 行左栏文字名取代色点）：
    * 与 owners 同序的渲染期派生数据（宿主成员目录映射，不入 Yjs 文档）；
    * 缺省/缺位回退 owners 原值（ID）。
@@ -265,6 +270,7 @@ function buildDeriveNodes(
             dueDate: t.dueDate ?? null,
             doneDate: null,
             owners: t.owners ?? [],
+            ...(t.autoProgress !== undefined ? { autoProgress: t.autoProgress } : {}),
           }
         : undefined,
       ...(customAssignees.length > 0 ? { customAssignees } : {}),

@@ -157,6 +157,31 @@ describe('getNode', () => {
     expect(snap.collapsed).toBe(true);
   });
 
+  it('image 读取归一（2026-10-20 四槽位）：合法 placement 透传；非法值剔除该键；缺省即 {key,w,h}', () => {
+    const doc = new Y.Doc();
+    doc.transact(() => {
+      const nodes = doc.getMap('nodes');
+      const root = new Y.Map();
+      nodes.set(ROOT_NODE_ID, root);
+      const rootChildren = new Y.Array<string>();
+      root.set('children', rootChildren);
+      const mk = (id: string, image: unknown): void => {
+        const n = new Y.Map();
+        n.set('text', id);
+        n.set('parentId', ROOT_NODE_ID);
+        n.set('image', image);
+        nodes.set(id, n);
+        rootChildren.push([id]);
+      };
+      mk('ok', { key: 'k', w: 10, h: 20, placement: 'left' });
+      mk('bad', { key: 'k', w: 10, h: 20, placement: 'diag' });
+      mk('none', { key: 'k', w: 10, h: 20 });
+    });
+    expect(getNode(doc, 'ok')!.image).toEqual({ key: 'k', w: 10, h: 20, placement: 'left' });
+    expect(getNode(doc, 'bad')!.image).toEqual({ key: 'k', w: 10, h: 20 }); // 非法键被剔除
+    expect(getNode(doc, 'none')!.image).toEqual({ key: 'k', w: 10, h: 20 });
+  });
+
   it('description 读取防御：远端坏数据（非 string）归一为空串，不抛错', () => {
     const doc = new Y.Doc();
     doc.transact(() => {

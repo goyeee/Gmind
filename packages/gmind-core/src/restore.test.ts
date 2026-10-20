@@ -115,6 +115,24 @@ describe('restoreFromSnapshot', () => {
     expectConverged(base, snap);
   });
 
+  it('恢复：图片尺寸/位置差异也写回（2026-10-20 placement/w/h 纳入 image diff）', () => {
+    const base = makeDoc(); // root → [A[A1], B]
+    const aId = idOf(base, 'A');
+    setImage(base, aId, { key: 'files/f1/pic.png', w: 100, h: 80, placement: 'right' });
+    const snap = docFromState(docToState(base));
+    // 漂移：同 key、尺寸与位置变了（旧 diff 只比 key 会漏）
+    setImage(base, aId, { key: 'files/f1/pic.png', w: 60, h: 40, placement: 'top' });
+    const r = restoreFromSnapshot(base, snap);
+    expect(r).toEqual({ deleted: 0, created: 0, moved: 0, updated: 1 });
+    expect(getNode(base, aId)!.image).toEqual({
+      key: 'files/f1/pic.png',
+      w: 100,
+      h: 80,
+      placement: 'right',
+    });
+    expectConverged(base, snap);
+  });
+
   it('恢复：快照中已删节点以新 id 重建，内容完整（text/note/href/icons/image/style/collapsed）', () => {
     const base = makeDoc(); // root → [A[A1], B]
     const aId = idOf(base, 'A');

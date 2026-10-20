@@ -1218,6 +1218,18 @@ describe('DragController 边界与生命周期', () => {
     expect(onDrop).not.toHaveBeenCalled();
   });
 
+  it('图片本体 [data-no-node-drag] 上的 pointerdown 不启动拖拽（换位归页面层）', () => {
+    const img = document.createElementNS(SVG_NS, 'image');
+    img.setAttribute('data-no-node-drag', '1');
+    nodeEl('a').appendChild(img); // render.ts 中图片嵌在节点 g 内
+    img.dispatchEvent(
+      pe('pointerdown', { button: 0, clientX: CENTER.a.x, clientY: CENTER.a.y, pointerId: 1 }),
+    );
+    svg.dispatchEvent(pe('pointermove', { clientX: CENTER.b.x, clientY: CENTER.b.y, pointerId: 1 }));
+    svg.dispatchEvent(pe('pointerup', { clientX: CENTER.b.x, clientY: CENTER.b.y, pointerId: 1 }));
+    expect(onDrop).not.toHaveBeenCalled();
+  });
+
   it('非主键（button=2）不启动拖拽', () => {
     nodeEl('a').dispatchEvent(
       pe('pointerdown', { button: 2, clientX: CENTER.a.x, clientY: CENTER.a.y, pointerId: 1 }),

@@ -552,7 +552,7 @@ describe('文件复制与星标（FR-FIL-003/004）', () => {
     // 2) docState 挂图：上传 key 写入节点 image（前端真实链路即 docState 内嵌 key）
     const doc = createTemplateDoc({ title: '含图源', children: [{ text: '图节点' }] });
     const childId = getNode(doc, ROOT_NODE_ID).childIds[0];
-    setImage(doc, childId, { key: oldKey, w: 1, h: 1 });
+    setImage(doc, childId, { key: oldKey, w: 1, h: 1, placement: 'right' });
     const put = await authed(ownerToken, 'put', `/api/files/${fImage}/doc-state`)
       .send({ docState: Buffer.from(docToState(doc)).toString('base64'), lastEditorUserId: ownerId });
     expect(put.status).toBe(200);
@@ -569,6 +569,7 @@ describe('文件复制与星标（FR-FIL-003/004）', () => {
     const newKey = copyNode!.image!.key;
     expect(newKey.startsWith(`files/${copyId}/`)).toBe(true);
     expect(newKey).not.toBe(oldKey);
+    expect(copyNode?.image?.placement).toBe('right'); // 图文槽位随副本保留（2026-10-20）
 
     // 4) 源软删 → 彻底删除（purge 清 files/{sourceId}/ 前缀）
     expect((await authed(ownerToken, 'delete', `/api/files/${fImage}`)).status).toBe(200);

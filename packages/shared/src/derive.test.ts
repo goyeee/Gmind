@@ -39,7 +39,7 @@ describe('childrenOf（源自 mindgrid）', () => {
   });
 });
 
-describe('effectiveProgress（父=直属子级均值，递归）', () => {
+describe('effectiveProgress（父级按 autoProgress 区分自动/手动；叶=人员加权平均）', () => {
   it('叶子用自身 task.progress；无 task 视为 0；不存在的 id 为 0', () => {
     const leaf = node('leaf', null, { task: task({ progress: 40 }) });
     const noTask = node('noTask', null);
@@ -48,21 +48,33 @@ describe('effectiveProgress（父=直属子级均值，递归）', () => {
     expect(effectiveProgress([leaf], 'ghost')).toBe(0);
   });
 
-  it('父级 = 子级有效进度的算术平均（含缺省子节点），Math.round 取整', () => {
-    // P 的两个子级：A 有 task(100)，B 无 task（缺省计 0）→ P = 50
+  it('父级缺省 autoProgress → 默认手动，不汇总子级，取 task.progress', () => {
+    // P 的两个子级：A 有 task(100)，B 无 task；P 自身 progress=30 → 30
     const a = node('a', 'p', { task: task({ progress: 100 }) });
     const b = node('b', 'p');
-    const p = node('p', null);
-    expect(effectiveProgress([a, b, p], 'p')).toBe(50);
+    const p = node('p', null, { task: task({ progress: 30 }) });
+    expect(effectiveProgress([a, b, p], 'p')).toBe(30);
   });
 
-  it('多层级递归向上汇总（孙→子→父）', () => {
+  it('父级显式 autoProgress=true → 仍按子级平均', () => {
+    const a = node('a', 'p', { task: task({ progress: 80 }) });
+    const p = node('p', null, { task: task({ autoProgress: true, progress: 10 }) });
+    expect(effectiveProgress([a, p], 'p')).toBe(80);
+  });
+
+  it('父级显式 autoProgress=false → 不汇总子级，直接取 task.progress', () => {
+    const a = node('a', 'p', { task: task({ progress: 80 }) });
+    const p = node('p', null, { task: task({ autoProgress: false, progress: 35 }) });
+    expect(effectiveProgress([a, p], 'p')).toBe(35);
+  });
+
+  it('多层级递归向上汇总（自动汇总父级：孙→子→父）', () => {
     // X(100) ← P；Y(50) ← P ⇒ P = 75；G = avg(P=75, C=100) = 88（87.5 四舍五入）
     const x = node('x', 'p', { task: task({ progress: 100 }) });
     const y = node('y', 'p', { task: task({ progress: 50 }) });
-    const p = node('p', 'g');
+    const p = node('p', 'g', { task: task({ autoProgress: true }) });
     const c = node('c', 'g', { task: task({ progress: 100 }) });
-    const g = node('g', null);
+    const g = node('g', null, { task: task({ autoProgress: true }) });
     const nodes = [x, y, p, c, g];
     expect(effectiveProgress(nodes, 'p')).toBe(75);
     expect(effectiveProgress(nodes, 'g')).toBe(88);
@@ -71,7 +83,7 @@ describe('effectiveProgress（父=直属子级均值，递归）', () => {
   it('均值四舍五入：0 与 55 → 28（27.5 向上取整）', () => {
     const a = node('a', 'p', { task: task({ progress: 0 }) });
     const b = node('b', 'p', { task: task({ progress: 55 }) });
-    const p = node('p', null);
+    const p = node('p', null, { task: task({ autoProgress: true }) });
     expect(effectiveProgress([a, b, p], 'p')).toBe(28);
   });
 });
@@ -89,10 +101,12 @@ describe('isOverdue（逾期边界，源自 mindgrid）', () => {
     expect(isOverdue(n, [n], today)).toBe(false);
   });
 
-  it('有效进度 100 不算逾期（即便自身 progress 字段 < 100，以汇总值为准）', () => {
+  it('有效进度 100 不算逾期（自动汇总父级以汇总值为准）', () => {
     const k1 = node('k1', 'n', { task: task({ progress: 100 }) });
     const k2 = node('k2', 'n', { task: task({ progress: 100 }) });
-    const n = node('n', null, { task: task({ dueDate: '2026-09-27', progress: 0, status: 'doing' }) });
+    const n = node('n', null, {
+      task: task({ dueDate: '2026-09-27', progress: 0, status: 'doing', autoProgress: true }),
+    });
     expect(effectiveProgress([k1, k2, n], 'n')).toBe(100);
     expect(isOverdue(n, [k1, k2, n], today)).toBe(false);
   });
@@ -161,9 +175,12 @@ describe('sortValue（列排序键，照搬 mindgrid：todo<doing<blocked<done�
   const p = node('p', null, { title: '标题' });
   const nodes = [leaf, p];
 
-  it('progress 列返回有效进度（父级=汇总值）', () => {
+  it('progress 列返回有效进度（自动汇总父级=汇总值；手动父级=自身 progress）', () => {
     expect(sortValue(nodes, leaf, 'progress')).toBe(40);
-    expect(sortValue(nodes, p, 'progress')).toBe(40);
+    expect(sortValue(nodes, p, 'progress')).toBe(0); // p 未开自动，取自身 progress=0
+    const autoP = node('autoP', null, { task: task({ autoProgress: true }) });
+    const autoChild = node('autoChild', 'autoP', { task: task({ progress: 80 }) });
+    expect(sortValue([autoChild, autoP], autoP, 'progress')).toBe(80);
   });
 
   it('owner 列取首人名；未分配返回 \\uffff 排最后', () => {
@@ -344,7 +361,7 @@ describe('人员进度列聚合口径（需求方 2026-10-11 裁定）', () => {
       customAssignees: [{ user: 'b', progress: 100 }], // (60+100)/2 = 80
     });
     const other = node('other', 'p', { task: task({ progress: 20 }) });
-    const p = node('p', null);
+    const p = node('p', null, { task: task({ autoProgress: true }) });
     expect(effectiveProgress([leaf, other, p], 'p')).toBe(50); // (80+20)/2
   });
 });

@@ -37,10 +37,24 @@ export interface DocMeta {
   tableView?: TableViewMeta;
 }
 
+/** 图片相对文字的位置（图文四槽位，需求方 2026-10-20）：top=图在文字上方、bottom=图在
+ *  文字下方（默认）、left/right=图在文字左/右侧。 */
+export const IMAGE_PLACEMENTS = ['top', 'bottom', 'left', 'right'] as const;
+export type NodeImagePlacement = (typeof IMAGE_PLACEMENTS)[number];
+/** 缺省位置：文字在上、图片在下（旧数据无 placement 时的读侧归一锚点）。 */
+export const DEFAULT_IMAGE_PLACEMENT: NodeImagePlacement = 'bottom';
+
+/** placement 合法性判定（core 校验 / engine 读侧归一 / repair 同一口径单源）。 */
+export function isImagePlacement(value: unknown): value is NodeImagePlacement {
+  return typeof value === 'string' && (IMAGE_PLACEMENTS as readonly string[]).includes(value);
+}
+
 export interface NodeImage {
   key: string;
   w: number;
   h: number;
+  /** 图片相对文字的位置；缺省（键不出现）= bottom。非法值在读取时剔除（不改写 Yjs）。 */
+  placement?: NodeImagePlacement;
 }
 
 /**
@@ -55,6 +69,11 @@ export interface NodeTask {
   startDate: string | null;
   dueDate: string | null;
   doneDate: string | null;
+  /**
+   * 父级进度是否按子级自动汇总（2026-10-20 需求方裁定）。
+   * 缺省 undefined：读侧交由 derive.effectiveProgress 按兼容口径处理。
+   */
+  autoProgress?: boolean;
 }
 
 /** 任务字段缺省值（读取侧归一化锚点；冻结对象，调用方不得原地改）。 */
@@ -166,9 +185,11 @@ function readTask(raw: unknown): NodeTask {
   const status = raw.get('status');
   const progress = raw.get('progress');
   const owners = raw.get('owners');
+  const autoProgressRaw = raw.get('autoProgress');
   const asDate = (v: unknown): string | null =>
     typeof v === 'string' && isValidDateStr(v) ? v : null;
   const p = typeof progress === 'number' && Number.isFinite(progress) ? progress : 0;
+  const autoProgress = typeof autoProgressRaw === 'boolean' ? autoProgressRaw : undefined;
   return {
     status: (TASK_STATUSES as readonly string[]).includes(status as string)
       ? (status as NodeTask['status'])
@@ -178,6 +199,7 @@ function readTask(raw: unknown): NodeTask {
     startDate: asDate(raw.get('startDate')),
     dueDate: asDate(raw.get('dueDate')),
     doneDate: asDate(raw.get('doneDate')),
+    ...(autoProgress !== undefined ? { autoProgress } : {}),
   };
 }
 
@@ -255,12 +277,28 @@ export function assigneeEntriesOf(doc: Y.Doc, id: string): AssigneeEntry[] {
   return out;
 }
 
+/**
+ * 读取侧图片归一（需求方 2026-10-20 图文四槽位）：placement 非法值剔除（保留 key/w/h，
+ * 不改写 Yjs——远端坏数据不传染布局）；缺键不出现（旧文档快照零新增键面）。非对象
+ * 形状保持既有透传（原实现 `image ?? null`），行为不回归。
+ */
+function readImage(raw: unknown): NodeImage | null {
+  if (raw === undefined || raw === null) return null;
+  if (typeof raw !== 'object' || Array.isArray(raw)) return raw as NodeImage;
+  const obj = raw as Record<string, unknown>;
+  if (isImagePlacement(obj.placement)) return raw as NodeImage;
+  if (!('placement' in obj)) return raw as NodeImage;
+  const rest: Record<string, unknown> = { ...obj };
+  delete rest.placement;
+  return rest as unknown as NodeImage;
+}
+
 export function getNode(doc: Y.Doc, id: string): NodeSnapshot | null {
   const node = nodesMap(doc).get(id);
   if (!node) return null;
   const children = node.get('children') as Y.Array<string> | undefined;
   const style = node.get('style') as Y.Map<string> | undefined;
-  const image = node.get('image') as NodeImage | undefined;
+  const image = readImage(node.get('image'));
   // 侧别透传（防御非法值归 undefined；键缺失不出现——旧文档快照零新增键面）
   const side = node.get('side');
   // 自定义列值透传（防御归一见 readCustom；无键/空 Map 不出现该字段）

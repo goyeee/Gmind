@@ -410,6 +410,72 @@ body.painter-active .editor-canvas svg {
   stroke-width: 1;
 }
 
+/* 图片缩放手柄（2026-10-15 需求方「拖拽图片周边改尺寸」）：页面侧手柄层
+   g.gm-image-handles 挂在 g.gm-viewport 内（场景坐标，随平移/缩放），边长由
+   1/scale 补偿保持屏幕像素恒定；四角光标按对角方向给 resize 提示。 */
+.editor-canvas svg .gm-image-resize-handle {
+  fill: #fff;
+  stroke: #3370ff;
+  stroke-width: 1.5;
+  pointer-events: all;
+}
+.editor-canvas svg .gm-image-resize-handle[data-corner='nw'],
+.editor-canvas svg .gm-image-resize-handle[data-corner='se'] {
+  cursor: nwse-resize;
+}
+.editor-canvas svg .gm-image-resize-handle[data-corner='ne'],
+.editor-canvas svg .gm-image-resize-handle[data-corner='sw'] {
+  cursor: nesw-resize;
+}
+
+/* 图片聚焦选中轮廓（2026-10-20 需求方「点图片显示图片轮廓、点文字显示整节点轮廓」）：
+   画在 g.gm-image-handles 层（renderImageFocusOutline），贴图片矩形描边；此时整节点的
+   蓝色选中描边由 applySelectionClasses 内联退回主题边框（图片轮廓取而代之）。 */
+.editor-canvas svg .gm-image-focus-outline {
+  fill: none;
+  stroke: #3370ff;
+  stroke-width: 2.5;
+  pointer-events: none;
+}
+
+/* 图片拖拽换位（2026-10-20 图文四槽位）：鼠标悬停图片直接显示四向 move 光标，
+   按住图片本体即可换位（需求方同日走查：不要额外把手）；拖拽层本身不吃指针事件，
+   ghost 与引导带纯视觉。 */
+.editor-canvas:not(.canvas-readonly) svg .gm-image {
+  cursor: move;
+}
+.editor-canvas svg .gm-image-drag-layer {
+  pointer-events: none;
+}
+.editor-canvas svg .gm-image-drag-ghost {
+  opacity: 0.55;
+  pointer-events: none;
+}
+/* 四侧虚线引导带：命中槽位高亮实线（需求方 2026-10-20 裁定：不是与图片等大的虚框）。
+   小节点上带子只有十几像素，2026-10-20 走查反馈「看不到」——加外框 + 加粗虚线/填充。 */
+.editor-canvas svg .gm-image-drop-outline {
+  fill: none;
+  stroke: #3370ff;
+  stroke-width: 2;
+  stroke-dasharray: 6 4;
+  vector-effect: non-scaling-stroke;
+  opacity: 0.9;
+  pointer-events: none;
+}
+.editor-canvas svg .gm-image-drop-band {
+  fill: rgba(51, 112, 255, 0.1);
+  stroke: #3370ff;
+  stroke-width: 1.5;
+  stroke-dasharray: 5 4;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+.editor-canvas svg .gm-image-drop-band.is-active {
+  fill: rgba(51, 112, 255, 0.28);
+  stroke-width: 2.5;
+  stroke-dasharray: none;
+}
+
 /* 拖拽落点反馈（M7c-D1）：类由 engine drag 写在节点 g / 悬浮层 line 上——
    变子级=目标盒描边高亮；间隙插入=指示线（横线盖间隙，org 竖线）；
    禁止=红描边。> rect:first-of-type 只中节点盒矩形（不含任务条等后续 rect）。 */
@@ -433,6 +499,30 @@ body.painter-active .editor-canvas svg {
 .editor-canvas svg .gm-summary-label {
   cursor: pointer;
 }
+
+/* 折叠切换钮（2026-10-20 需求方裁定：展开态默认不显示折叠样式，悬停连接处再
+   显示）：engine 渲染结构（.gm-collapse-toggle[data-for-id] > .gm-collapse-toggle-hit
+   透明命中圆 + .gm-collapse-toggle-fg「–」圆钮），显隐完全由本处 CSS 控制——
+   fg 默认 opacity 0，悬停命中区（含其上的 fg）才显形；点击走页面 [data-for-id]
+   委托 → toggleCollapse（与折叠徽标 +N 同一交互通道）。只读画布整钮隐藏。 */
+.editor-canvas svg .gm-collapse-toggle .gm-collapse-toggle-hit {
+  pointer-events: all;
+}
+.editor-canvas svg .gm-collapse-toggle .gm-collapse-toggle-fg {
+  opacity: 0;
+  transition: opacity 0.12s ease;
+  pointer-events: none;
+}
+.editor-canvas svg .gm-collapse-toggle:hover .gm-collapse-toggle-fg {
+  opacity: 1;
+}
+.editor-canvas svg .gm-collapse-toggle:hover {
+  cursor: pointer;
+}
+.editor-canvas.canvas-readonly svg .gm-collapse-toggle {
+  display: none;
+}
+
 /* 概要标签行内编辑器：锚定 bracket 标签位置（left/top 为 svg 相对坐标） */
 .summary-label-editor {
   position: absolute;

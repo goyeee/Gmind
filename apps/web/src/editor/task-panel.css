@@ -121,6 +121,29 @@
 .task-progress-input:focus {
   border-color: #3370ff;
 }
+/* 进度行头部：标题 + 「自动计算」开关同一行 */
+.task-progress-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.task-progress-head .task-field-label {
+  margin-bottom: 0;
+}
+.task-auto-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: #4e5969;
+  cursor: pointer;
+  user-select: none;
+}
+.task-auto-toggle input[type='checkbox'] {
+  margin: 0;
+  cursor: pointer;
+}
 .task-progress-sigma {
   color: #3370ff;
   font-variant-numeric: tabular-nums;

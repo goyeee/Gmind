@@ -213,10 +213,15 @@ test('⑩ 改绑被占 409：错误文案含「已绑定其他账号」+ 换用�
   await registerAndLogin(page); // A：另一新账号
   await page.getByTestId('settings-entry').click();
   await expect(page.getByTestId('settings-page')).toBeVisible();
+  // dev StrictMode 下 reload 会跑两遍；等网络静默，避免第二次 me 响应把渠道重置回 email
+  await page.waitForLoadState('networkidle');
   // 等 me 身份装载完成再操作：reload() 异步到达时的 setChannel 会重置渠道选择
   // （手机号注册用户缺省换邮箱），先于装载的 selectOption 会被覆盖回 email
   await expect(page.getByTestId('rebind-section').locator('.settings-hint')).toContainText('当前绑定：手机号');
   await page.getByTestId('rebind-channel').selectOption('phone');
+  // React 受控 select 的 state 提交是异步的：等 placeholder 反射 phone 分支再填/提交，
+  // 否则紧接着的 click 可能读到旧 channel='email'（机器负载下稳定复现的测试竞态）。
+  await expect(page.getByTestId('rebind-identity')).toHaveAttribute('placeholder', '新手机号');
   await page.getByTestId('rebind-identity').fill(occupiedPhone);
   await page.getByTestId('rebind-code').fill('123456');
   await page.getByTestId('rebind-save').click();

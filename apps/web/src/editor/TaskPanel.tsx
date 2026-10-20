@@ -102,8 +102,11 @@ export function TaskPanel(props: TaskPanelProps): ReactElement {
   }, [nodeId]);
 
   const deriveNodes = useMemo(() => deriveNodesOfDoc(doc), [doc, docVersion]);
-  /** 自定义列 schema（meta.customColumns；无列不渲染小节——零噪音）。 */
+  /** 自定义列 schema（meta.customColumns；按类型拆分后分别塞进负责人/日期/其余区）。 */
   const customColumns = getMeta(doc).customColumns;
+  const ownerCustomColumns = customColumns.filter((c) => c.type === 'assignee');
+  const dateCustomColumns = customColumns.filter((c) => c.type === 'date');
+  const restCustomColumns = customColumns.filter((c) => c.type !== 'assignee' && c.type !== 'date');
   const docOwnerIds = useMemo(() => {
     const ids: string[] = [];
     for (const n of deriveNodes) for (const o of n.task?.owners ?? []) if (!ids.includes(o)) ids.push(o);
@@ -160,6 +163,8 @@ export function TaskPanel(props: TaskPanelProps): ReactElement {
   const owners = [...task.owners];
   const selfNode = deriveNodes.find((n) => n.id === snap.id);
   const hasChildren = childrenOf(deriveNodes, snap.id).length > 0;
+  // 父级自动汇总开关：显式设置按显式；未设置 → 默认手动（需求方 2026-10-20 裁定）。
+  const autoProgress = task.autoProgress ?? false;
   const eff = selfNode ? effectiveProgress(deriveNodes, snap.id) : task.progress;
   const overdue = selfNode ? isOverdue(selfNode, deriveNodes) : false;
   const today = todayStr();
@@ -186,7 +191,8 @@ export function TaskPanel(props: TaskPanelProps): ReactElement {
   // 父级 Σ 只读一致——父节点进度按子级自动汇总）。
   const activeStage = progressStageOf(task.progress);
   const clickProgressStage = (def: MarkerGlyphDef): void => {
-    if (hasChildren) return;
+    // 自动汇总父级：进度由子级决定，档位按钮只读。
+    if (autoProgress) return;
     write(() => setIcon(doc, snap.id, 'progress', def.value), '任务进度保存失败，请调整后重试');
   };
   // 其余组点击：single 组再点当前值取消（setIcon null）、multi 组 core toggle 直写。
@@ -279,6 +285,21 @@ export function TaskPanel(props: TaskPanelProps): ReactElement {
           onToggle={toggleOwner}
           testIdPrefix="task-panel-owner"
         />
+        {/* 人员相关自定义属性（assignee 类型）直接跟在负责人下面，不再挂「自定义属性」标题 */}
+        {ownerCustomColumns.map((col) => (
+          <div className="task-date-row" key={col.id} data-testid="task-panel-custom-row">
+            <span className="task-field-label">{col.name}</span>
+            <CustomFieldInput
+              def={col}
+              value={snap.custom?.[col.id]}
+              memberIndex={memberIndex}
+              onCommit={(v) =>
+                write(() => setCustomField(doc, snap.id, col.id, v), '自定义属性保存失败，请调整后重试')
+              }
+              testIdPrefix="task-panel-custom"
+            />
+          </div>
+        ))}
       </section>
 
       <section className="task-panel-section">
@@ -322,17 +343,17 @@ export function TaskPanel(props: TaskPanelProps): ReactElement {
           </div>
         </div>
         {/* 常显行：进度 radio（全量联动）——高亮=当前百分比档位；点档位=写百分比
-            （core 同步徽章）；父级只读（Σ 自动汇总）。 */}
+            （core 同步徽章）；自动汇总父级只读。 */}
         <div className="task-marker-row" data-testid="task-panel-marker-row-progress">
           <em className="task-marker-row-label">{MARKER_GROUP_LABELS.progress}</em>
           <div className="task-marker-grid">
             {(MARKER_CATALOG.progress as readonly MarkerGlyphDef[]).map((def) =>
-              markerValueButton('progress', def, activeStage === def.value, hasChildren, () =>
+              markerValueButton('progress', def, activeStage === def.value, autoProgress, () =>
                 clickProgressStage(def),
               ),
             )}
           </div>
-          {hasChildren && <span className="task-marker-hint">父节点进度按子级自动汇总</span>}
+          {autoProgress && <span className="task-marker-hint">父节点进度按子级自动汇总</span>}
         </div>
         {/* 折叠组：心情/数字/箭头/旗帜/其他/表情（点组名开合；已选计数回显）。 */}
         {COLLAPSED_MARKER_GROUPS.map((group) => {
@@ -402,12 +423,43 @@ export function TaskPanel(props: TaskPanelProps): ReactElement {
             }}
           />
         </div>
+        {/* 日期相关自定义属性（date 类型）并入日期组，同样去掉「自定义属性」标题 */}
+        {dateCustomColumns.map((col) => (
+          <div className="task-date-row" key={col.id} data-testid="task-panel-custom-row">
+            <span className="task-field-label">{col.name}</span>
+            <CustomFieldInput
+              def={col}
+              value={snap.custom?.[col.id]}
+              memberIndex={memberIndex}
+              onCommit={(v) =>
+                write(() => setCustomField(doc, snap.id, col.id, v), '自定义属性保存失败，请调整后重试')
+              }
+              testIdPrefix="task-panel-custom"
+            />
+          </div>
+        ))}
       </section>
 
       <section className="task-panel-section">
-        <span className="task-field-label">进度</span>
+        <div className="task-progress-head">
+          <span className="task-field-label">进度</span>
+          {hasChildren && (
+            <label className="task-auto-toggle" data-testid="task-panel-auto-progress-toggle">
+              <input
+                type="checkbox"
+                checked={autoProgress}
+                onChange={(e) => {
+                  const next = e.target.checked;
+                  // 开启自动：按子级覆盖当前进度；关闭自动：保留当前手动值。
+                  commitTask(next ? { autoProgress: true, progress: eff } : { autoProgress: false });
+                }}
+              />
+              自动计算
+            </label>
+          )}
+        </div>
         <ProgressField
-          hasChildren={hasChildren}
+          auto={autoProgress}
           effective={eff}
           progress={task.progress}
           testId="task-panel-progress"
@@ -415,12 +467,10 @@ export function TaskPanel(props: TaskPanelProps): ReactElement {
         />
       </section>
 
-      {/* 自定义属性（表格自定义列消费侧）：任务字段之后按 meta.customColumns 逐列
-          渲染 CustomFieldInput（同款编辑器/空值占位），即改即存 setCustomField。 */}
-      {customColumns.length > 0 && (
+      {/* 其余自定义属性（text/progress 等）：不挂「自定义属性」标题，按行渲染在进度之后。 */}
+      {restCustomColumns.length > 0 && (
         <section className="task-panel-section" data-testid="task-panel-custom-section">
-          <span className="task-field-label">自定义属性</span>
-          {customColumns.map((col) => (
+          {restCustomColumns.map((col) => (
             <div className="task-date-row" key={col.id} data-testid="task-panel-custom-row">
               <span className="task-field-label">{col.name}</span>
               <CustomFieldInput

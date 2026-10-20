@@ -1082,6 +1082,9 @@ export class DragController {
     // 标记徽标（M7b-W3 点击换组）：同折叠徽标让位纪律——徽标上的按下不进节点
     // 拖拽候选（click 归页面层「点徽章弹同组选盘」）。
     if (target?.closest('[data-marker-group]')) return;
+    // 图片本体（2026-10-20 图文四槽位）：图片上的按下归页面层「拖图换位」，
+    // 不再进节点拖拽候选（文字/边框上按下仍照旧拖动节点）。
+    if (target?.closest('[data-no-node-drag]')) return;
     const g = target?.closest('[data-node-id]');
     if (!g) return;
     const id = g.getAttribute('data-node-id');

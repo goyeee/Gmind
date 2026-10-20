@@ -213,9 +213,8 @@ test('任务面板：自定义属性三列可见，修改文本列值后表格�
   const panel = page.getByTestId('task-panel');
   await expect(panel).toBeVisible();
 
-  // 自定义属性小节：三列逐行渲染（text 输入 / assignee 人员编辑器占位「选择成员并更新进度」/ date 日期框）
-  const section = panel.getByTestId('task-panel-custom-section');
-  await expect(section).toBeVisible();
+  // 自定义属性按类型拆入各组：text/progress 留在进度下方无标题区；assignee 紧跟
+  // 负责人；date 并入日期组。三列逐行渲染，通过 data-testid="task-panel-custom-row" 定位。
   const textRow = panel.locator('[data-testid="task-panel-custom-row"]', { hasText: '备注' });
   await expect(textRow).toBeVisible();
   await expect(panel.locator('[data-testid="task-panel-custom-row"]', { hasText: '复核人' })).toContainText(

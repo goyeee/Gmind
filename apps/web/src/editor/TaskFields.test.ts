@@ -71,16 +71,21 @@ describe('deriveNodesOfDoc（M7c-C3/C4 抽公共）', () => {
     expect(getNode(doc, a2?.id ?? '')?.task.owners).toEqual(['u1', 'u2']);
   });
 
-  it('未设置字段的节点按读取侧缺省值（todo/0/null）；进度 Σ 与 shared 同口径', () => {
+  it('未设置字段的节点按读取侧缺省值（todo/0/null）；手动父级不汇总，开自动后 Σ 与 shared 同口径', () => {
     const doc = buildDoc();
-    const nodes = deriveNodesOfDoc(doc);
-    // 「任务A」只设了 status/dueDate：progress/startDate/doneDate/owners 走缺省
+    const aId = getNode(doc, ROOT_NODE_ID)!.childIds.find((id) => getNode(doc, id)?.text === '任务A');
+    expect(aId).toBeTruthy();
+    // 默认手动：父级 progress=0，effectiveProgress 不汇总子级
+    let nodes = deriveNodesOfDoc(doc);
     const a = nodes.find((n) => n.title === '任务A');
     expect(a?.task?.progress).toBe(0);
     expect(a?.task?.startDate).toBeNull();
     expect(a?.task?.owners).toEqual([]);
-    // 父「任务A」自身进度 0：Σ = 直属子级 (40+80)/2 = 60（effectiveProgress 单一实现）
-    expect(effectiveProgress(nodes, a?.id ?? '')).toBe(60);
+    expect(effectiveProgress(nodes, a?.id ?? '')).toBe(0);
+    // 开启自动汇总后：Σ = 直属子级 (40+80)/2 = 60
+    setNodeTask(doc, aId!, { autoProgress: true });
+    nodes = deriveNodesOfDoc(doc);
+    expect(effectiveProgress(nodes, aId!)).toBe(60);
   });
 
   it('人员进度列（assignee）条目拉平进 customAssignees；effectiveProgress 按 2026-10-11 口径合成', () => {

@@ -41,6 +41,11 @@
  *   无描述不渲染，DOM 与现状一致）、
  *   折叠徽标 <g class="gm-collapse-badge" data-for-id>（「+N」，N=collapsedCounts；
  *   位置按 box.side 确定：right→盒右、left→盒左、down→盒下）。
+ *   折叠切换钮 <g class="gm-collapse-toggle" data-for-id>（2026-10-20 需求方裁定
+ *   「展开态默认不显示折叠样式，悬停连接处再显示」）：仅「有可见子节点」的展开
+ *   节点渲染；透明命中圆常驻连接处捕获 hover，「–」圆钮（fg）由宿主 CSS 悬停
+ *   显形（engine 无 CSS 文件纪律）；点击走页面既有 [data-for-id] 委托，与折叠
+ *   徽标同一 toggleCollapse 通道。
  * - 边 <path data-edge-id>：bezier 为 `M from C c1 c2 to`（controls 恒 2 个，缺省退化）；
  *   elbow 为正交段（有 controls 走控制点折线，org 无 controls 按两端算中线拐点）。
  *   stroke/stroke-width 取 theme.edgeColor/edgeWidth，fill=none。
@@ -54,6 +59,7 @@ import type {
   SummaryBox,
   ThemeTokens,
 } from './types';
+import { imagePlacementOf, type ImagePlacement } from './imageLayout';
 import { DESC_FONT_SIZE } from './measure';
 import {
   TASK_BAR_W,
@@ -102,6 +108,13 @@ const BADGE_W = 28;
 const BADGE_H = 18;
 const BADGE_RX = 9;
 const BADGE_FONT_SIZE = 12;
+
+// 折叠切换钮（2026-10-20 需求方裁定「展开态默认不显示折叠样式，悬停连接处再显示」）：
+// 圆钮直径对齐徽标高度（18），命中圆外扩 6px 便于悬停；显隐由宿主 CSS 悬停控制
+// （engine 无 CSS 文件纪律，见文件头注），engine 只产出结构。
+const FOLD_TOGGLE_R = 9;
+const FOLD_TOGGLE_FONT_SIZE = 14;
+const FOLD_TOGGLE_HIT_PAD = 6;
 
 /** 概要横括线几何（M6 Task 6，确定性常量；跨侧概要 / org 结构沿用）：端子上挑 6px、label 12px 居中行下。 */
 const SUMMARY_TICK = 6;
@@ -204,6 +217,9 @@ export interface NodeEntry {
   descText: SVGTextElement | null;
   badge: SVGGElement | null;
   badgeText: SVGTextElement | null;
+  /** 折叠切换钮（2026-10-20：展开态悬停显形；无可见子节点/已折叠时 null）。 */
+  foldToggle: SVGGElement | null;
+  foldToggleText: SVGTextElement | null;
   /** 上次渲染的行内容签名（行集 join('\u0000')；tspan 仅在变化时重建）。 */
   lastText: string;
 }
@@ -252,7 +268,7 @@ export interface NodeVisual {
   icons?: Record<string, unknown>;
   note?: string;
   href?: string;
-  image?: { key: string; w: number; h: number } | null;
+  image?: { key: string; w: number; h: number; placement?: ImagePlacement } | null;
   /** 未解决评论数（FR-CMT-002）：>0 渲染右上角计数角标；仅存活节点携带。 */
   commentCount?: number;
   /**
@@ -477,6 +493,18 @@ function badgeTransform(b: NodeBox): string {
   }
 }
 
+/** 折叠切换钮定位（与 badgeTransform 同口径：right→盒右、left→盒左、down→盒下）。 */
+function foldTransform(b: NodeBox): string {
+  switch (b.side) {
+    case 'left':
+      return `translate(${fmt(-FOLD_TOGGLE_R * 2)}, ${fmt(b.h / 2 - FOLD_TOGGLE_R)})`;
+    case 'down':
+      return `translate(${fmt(b.w / 2 - FOLD_TOGGLE_R)}, ${fmt(b.h)})`;
+    default:
+      return `translate(${fmt(b.w)}, ${fmt(b.h / 2 - FOLD_TOGGLE_R)})`;
+  }
+}
+
 /** 评论角标 x：自右缘起被 link/note 各让一位（同 render 的确定性槽位公式）。 */
 function commentBadgeX(b: NodeBox, hasLink: boolean, hasNote: boolean): number {
   return (
@@ -528,6 +556,8 @@ function applyNode(
       descText: null,
       badge: null,
       badgeText: null,
+      foldToggle: null,
+      foldToggleText: null,
       lastText: '',
     };
     scene.nodeEntries.set(b.id, entry);
@@ -547,7 +577,12 @@ function applyNode(
 
   const fontSize = style.textStyle.fontSize;
   const iconCount = markerCountOf(visual.icons);
-  const textX = theme.nodePaddingX + iconCount * theme.iconSlotWidth;
+  // 图文四槽位（2026-10-20，只增）：含图节点由测量侧产出 content 几何（文字块左缘/
+  // 顶、标题中心、描述中心、图片坐标）；无图节点 content 缺省 → 全部回退旧口径，
+  // 基线/标记位与旧版逐字节一致（金样锁定）。
+  const content = b.content;
+  const blockX = content ? content.textX : theme.nodePaddingX;
+  const textX = blockX + iconCount * theme.iconSlotWidth;
   // 底部条带（M7c-C2 任务行 + M7c-C1 描述行）各占 TASK_ROW_H：主文本/标记行在其余
   // 区域垂直居中；任务行恒最底，描述行在其上（两者并存时）或独占底部条带（仅描述）。
   // 无任务行且无描述时 contentCenter === b.h/2，基线/标记位与旧版逐字节一致（只增不改）。
@@ -556,6 +591,7 @@ function applyNode(
   const taskSlots = taskRowSlotsOf(visual.task, taskCtx.parent, b.depth);
   const descLine = compact ? '' : (b.descLine ?? '');
   const contentCenter =
+    content?.titleCenter ??
     (b.h - (!compact && taskSlots ? TASK_ROW_H : 0) - (descLine !== '' ? TASK_ROW_H : 0)) / 2;
   text.setAttribute('x', fmt(textX));
   text.setAttribute('fill', style.textColor);
@@ -605,7 +641,9 @@ function applyNode(
     entry.descText.textContent = descLine;
     entry.descText.setAttribute('x', fmt(textX));
     entry.descText.setAttribute('font-family', style.textStyle.fontFamily);
-    const descCenter = taskSlots ? b.h - TASK_ROW_H - TASK_ROW_H / 2 : b.h - TASK_ROW_H / 2;
+    const descCenter =
+      content?.descCenter ??
+      (taskSlots ? b.h - TASK_ROW_H - TASK_ROW_H / 2 : b.h - TASK_ROW_H / 2);
     entry.descText.setAttribute('y', fmt(descCenter + DESC_FONT_SIZE * 0.35));
   }
 
@@ -630,7 +668,7 @@ function applyNode(
     defs.forEach(({ def, group }, i) => {
       const badge = drawMarkerBadge(def);
       if (!badge) return; // 未知值：确定性忽略（槽位仍由布局按值数预留）
-      const bx = theme.nodePaddingX + i * theme.iconSlotWidth + (theme.iconSlotWidth - MARKER_BADGE_SIZE) / 2;
+      const bx = blockX + i * theme.iconSlotWidth + (theme.iconSlotWidth - MARKER_BADGE_SIZE) / 2;
       badge.setAttribute('transform', `translate(${fmt(bx)}, ${fmt(contentCenter - MARKER_BADGE_SIZE / 2)})`);
       // 点击换组命中锚点（M7b-W3）：组/值随签名重建写入，签名不变则引用保持、
       // 属性亦不变，无需每帧回填。
@@ -646,7 +684,7 @@ function applyNode(
     entry.markers
       .querySelectorAll('g.gm-marker-badge')
       .forEach((badge, i) => {
-        const bx = theme.nodePaddingX + i * theme.iconSlotWidth + (theme.iconSlotWidth - MARKER_BADGE_SIZE) / 2;
+        const bx = blockX + i * theme.iconSlotWidth + (theme.iconSlotWidth - MARKER_BADGE_SIZE) / 2;
         badge.setAttribute('transform', `translate(${fmt(bx)}, ${fmt(contentCenter - MARKER_BADGE_SIZE / 2)})`);
       });
   }
@@ -721,22 +759,30 @@ function applyNode(
   }
 
   // image：href 走 /api/images/{key}；宽高直用 image.w/h（页面负责 ≤200px 钳制）。
-  // 属性回填：同一节点换图/换尺寸时原地更新（元素引用保持）。
+  // 位置（2026-10-20 图文四槽位）：含图节点用测量侧 content 几何（无图节点走旧口径
+  // x=nodePaddingX/y=0——但此支只在有图时创建，content 恒存在；兜底保留兼容手工盒）。
+  // 属性回填：同一节点换图/换尺寸/换位置时原地更新（元素引用保持）。
   const img = visual.image ?? null;
   entry.image = syncOptional(entry.image, img !== null, g, () =>
     el('image', {
       class: 'gm-image',
-      x: fmt(theme.nodePaddingX),
-      y: '0',
+      'data-no-node-drag': '1',
+      x: fmt(content?.imageX ?? theme.nodePaddingX),
+      y: fmt(content?.imageTop ?? 0),
       width: fmt(img?.w ?? 0),
       height: fmt(img?.h ?? 0),
+      'data-image-placement': imagePlacementOf(img),
       href: `/api/images/${img?.key ?? ''}`,
     }),
   );
   if (entry.image && img) {
+    entry.image.setAttribute('data-no-node-drag', '1');
     entry.image.setAttribute('href', `/api/images/${img.key}`);
     entry.image.setAttribute('width', fmt(img.w));
     entry.image.setAttribute('height', fmt(img.h));
+    entry.image.setAttribute('x', fmt(content?.imageX ?? theme.nodePaddingX));
+    entry.image.setAttribute('y', fmt(content?.imageTop ?? 0));
+    entry.image.setAttribute('data-image-placement', imagePlacementOf(img));
   }
 
   // —— 任务视觉（M7c-C2，只增不改；简洁模式 M7b 补课）——
@@ -898,7 +944,12 @@ function applyNode(
   // TASK_PROGRESS_W 槽宽预留一并移除）。
 
   // 折叠徽标：+N，仅 count>0；元素随有无增删（旧徽标元素移除，不保留引用）。
+  // 折叠切换钮（2026-10-20 需求方裁定）与徽标互斥：展开且有可见子节点 → 切换钮
+  // （默认隐形、悬停显形）；折叠 → 徽标 +N（N=被隐藏的存活后代数）。叶子两者皆无。
   if (collapsedCount > 0) {
+    entry.foldToggle?.remove();
+    entry.foldToggle = null;
+    entry.foldToggleText = null;
     if (!entry.badge) {
       const badge = el('g', { class: 'gm-collapse-badge', 'data-for-id': b.id });
       badge.appendChild(
@@ -929,6 +980,52 @@ function applyNode(
     entry.badge?.remove();
     entry.badge = null;
     entry.badgeText = null;
+    if (taskCtx.parent) {
+      if (!entry.foldToggle) {
+        const toggle = el('g', { class: 'gm-collapse-toggle', 'data-for-id': b.id });
+        // 命中圆：透明常驻连接处，专司 hover 捕获（显隐 fg 与点击都从它出发；
+        // pointer-events 由宿主 CSS 兜底 all，防 fill=transparent 各浏览器差异）。
+        toggle.appendChild(
+          el('circle', {
+            class: 'gm-collapse-toggle-hit',
+            cx: fmt(FOLD_TOGGLE_R),
+            cy: fmt(FOLD_TOGGLE_R),
+            r: fmt(FOLD_TOGGLE_R + FOLD_TOGGLE_HIT_PAD),
+            fill: 'transparent',
+          }),
+        );
+        const fg = el('g', { class: 'gm-collapse-toggle-fg' });
+        fg.appendChild(
+          el('circle', {
+            class: 'gm-collapse-toggle-btn',
+            cx: fmt(FOLD_TOGGLE_R),
+            cy: fmt(FOLD_TOGGLE_R),
+            r: fmt(FOLD_TOGGLE_R),
+          }),
+        );
+        const toggleText = el('text', {
+          x: fmt(FOLD_TOGGLE_R),
+          y: fmt(FOLD_TOGGLE_R + FOLD_TOGGLE_FONT_SIZE * 0.35),
+          'text-anchor': 'middle',
+          'font-size': fmt(FOLD_TOGGLE_FONT_SIZE),
+        });
+        toggleText.textContent = '–';
+        fg.appendChild(toggleText);
+        toggle.appendChild(fg);
+        g.appendChild(toggle);
+        entry.foldToggle = toggle;
+        entry.foldToggleText = toggleText;
+      }
+      entry.foldToggle.setAttribute('transform', foldTransform(b));
+      // 配色每次渲染重设（主题切换为场景级重渲染，元素引用保持——与节点盒同拍换色）。
+      const btn = entry.foldToggle.querySelector('.gm-collapse-toggle-btn');
+      btn?.setAttribute('fill', theme.collapseBadgeBg);
+      if (entry.foldToggleText) entry.foldToggleText.setAttribute('fill', theme.collapseBadgeFg);
+    } else {
+      entry.foldToggle?.remove();
+      entry.foldToggle = null;
+      entry.foldToggleText = null;
+    }
   }
 }
 

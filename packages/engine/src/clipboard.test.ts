@@ -16,6 +16,9 @@ import {
   writeToSystemClipboard,
   readFromSystemClipboard,
   readInternalFallback,
+  clearLastImage,
+  getLastImage,
+  setLastImage,
   INTERNAL_MIME,
   type ClipboardPayload,
   type IDocHandle,
@@ -36,7 +39,7 @@ interface StubNode {
   note: string;
   description: string;
   href: string;
-  image: { key: string; w: number; h: number } | null;
+  image: { key: string; w: number; h: number; placement?: 'top' | 'bottom' | 'left' | 'right' } | null;
   icons: Record<string, string[]>;
   style: Record<string, string>;
   /** 自定义列值（custom 透传测试桩：快照/setCustomFields 普通对象存取）。 */
@@ -233,7 +236,7 @@ describe('copyNodes（内部结构化 + 文本大纲双格式）', () => {
       note: '备注A',
       description: '描述A',
       href: 'https://a.example',
-      image: { key: 'img-a', w: 100, h: 80 },
+      image: { key: 'img-a', w: 100, h: 80, placement: 'top' },
       icons: { priority: ['high'] },
       style: { color: '#ff0000' },
     });
@@ -251,7 +254,7 @@ describe('copyNodes（内部结构化 + 文本大纲双格式）', () => {
     expect(a.note).toBe('备注A');
     expect(a.description).toBe('描述A');
     expect(a.href).toBe('https://a.example');
-    expect(a.image).toEqual({ key: 'img-a', w: 100, h: 80 });
+    expect(a.image).toEqual({ key: 'img-a', w: 100, h: 80, placement: 'top' });
     expect(a.icons).toEqual({ priority: ['high'] });
     expect(a.style).toEqual({ color: '#ff0000' });
     expect(a.children).toHaveLength(1);
@@ -287,7 +290,7 @@ describe('pasteNodes（内部 payload 粘贴）', () => {
         note: 'n1',
         description: '描述R1',
         href: 'https://h.example',
-        image: { key: 'old-key', w: 12, h: 34 },
+        image: { key: 'old-key', w: 12, h: 34, placement: 'right' },
         icons: { priority: ['p2'], other: ['done'] },
         style: { color: 'red' },
         children: [emptyNode('srcC', 'C1')],
@@ -338,7 +341,7 @@ describe('pasteNodes（内部 payload 粘贴）', () => {
     expect(r1.note).toBe('n1');
     expect(r1.description).toBe('描述R1');
     expect(r1.href).toBe('https://h.example');
-    expect(r1.image).toEqual({ key: 'new-old-key', w: 12, h: 34 });
+    expect(r1.image).toEqual({ key: 'new-old-key', w: 12, h: 34, placement: 'right' });
     expect(r1.icons).toEqual({ priority: ['p2'], other: ['done'] });
     expect(r1.style).toEqual({ color: 'red' });
 
@@ -515,7 +518,33 @@ describe('系统剪贴板（jsdom 降级 + 两 MIME）', () => {
   it('jsdom 无 clipboard API → write 返回 false，内存兜底持有 lastInternal', async () => {
     expect(await writeToSystemClipboard({ internal: payload, text: 'S' })).toBe(false);
     expect(readInternalFallback()).toBe(payload);
-    await expect(readFromSystemClipboard()).resolves.toEqual({ internal: payload, text: null });
+    await expect(readFromSystemClipboard()).resolves.toEqual({
+      internal: payload,
+      text: null,
+      hasImage: false,
+    });
+  });
+
+  it('图片 payload 与节点 payload 互斥：set/get/clear；写节点剪贴板清图片', async () => {
+    clearLastImage();
+    const image = {
+      key: 'files/f1/a.png',
+      w: 16,
+      h: 64,
+      placement: 'left' as const,
+      fileId: 'f1',
+    };
+    setLastImage(image);
+    expect(getLastImage()).toEqual(image);
+    expect(readInternalFallback()).toBeNull(); // set 图片清节点兜底
+
+    // 写节点/文本剪贴板（成功或失败路径）都清图片 payload：后复制者胜
+    await writeToSystemClipboard({ internal: payload, text: 'S' });
+    expect(getLastImage()).toBeNull();
+    expect(readInternalFallback()).toBe(payload);
+
+    clearLastImage();
+    expect(getLastImage()).toBeNull();
   });
 
   it('有 clipboard API → 单 ClipboardItem 携带两 MIME，返回 true（成功也更新 lastInternal）', async () => {
@@ -542,7 +571,11 @@ describe('系统剪贴板（jsdom 降级 + 两 MIME）', () => {
 
     // 成功也更新内存兜底：卸掉 API 后仍可读回
     delete (navigator as unknown as { clipboard?: unknown }).clipboard;
-    await expect(readFromSystemClipboard()).resolves.toEqual({ internal: payload, text: null });
+    await expect(readFromSystemClipboard()).resolves.toEqual({
+      internal: payload,
+      text: null,
+      hasImage: false,
+    });
   });
 
   it('read：系统剪贴板含 gmind MIME → internal 解析 + 纯文本', async () => {
@@ -553,7 +586,11 @@ describe('系统剪贴板（jsdom 降级 + 两 MIME）', () => {
       },
     ]);
     Object.defineProperty(navigator, 'clipboard', { value: { read }, configurable: true });
-    await expect(readFromSystemClipboard()).resolves.toEqual({ internal: payload, text: 'S' });
+    await expect(readFromSystemClipboard()).resolves.toEqual({
+      internal: payload,
+      text: 'S',
+      hasImage: false,
+    });
   });
 
   it('read：仅纯文本（外部应用复制）→ internal 为 null，不回退 stale lastInternal', async () => {
@@ -562,7 +599,11 @@ describe('系统剪贴板（jsdom 降级 + 两 MIME）', () => {
       { types: ['text/plain'], getType: async () => new Blob(['external']) },
     ]);
     Object.defineProperty(navigator, 'clipboard', { value: { read }, configurable: true });
-    await expect(readFromSystemClipboard()).resolves.toEqual({ internal: null, text: 'external' });
+    await expect(readFromSystemClipboard()).resolves.toEqual({
+      internal: null,
+      text: 'external',
+      hasImage: false,
+    });
   });
 
   it('read：read() 抛出（权限拒绝）→ 回退内存兜底 {internal: lastInternal, text: null}', async () => {
@@ -571,7 +612,11 @@ describe('系统剪贴板（jsdom 降级 + 两 MIME）', () => {
       throw new Error('denied');
     });
     Object.defineProperty(navigator, 'clipboard', { value: { read }, configurable: true });
-    await expect(readFromSystemClipboard()).resolves.toEqual({ internal: payload, text: null });
+    await expect(readFromSystemClipboard()).resolves.toEqual({
+      internal: payload,
+      text: null,
+      hasImage: false,
+    });
   });
 
   it('read：gmind MIME 内容损坏 → internal 为 null（text 仍可用）', async () => {
@@ -582,7 +627,41 @@ describe('系统剪贴板（jsdom 降级 + 两 MIME）', () => {
       },
     ]);
     Object.defineProperty(navigator, 'clipboard', { value: { read }, configurable: true });
-    await expect(readFromSystemClipboard()).resolves.toEqual({ internal: null, text: 'S' });
+    await expect(readFromSystemClipboard()).resolves.toEqual({
+      internal: null,
+      text: 'S',
+      hasImage: false,
+    });
+  });
+
+  // 图片优先仲裁的数据源：剪贴板同时含图片与文本（「复制网页图片」）时 hasImage=true，
+  // 键盘粘贴路径据此让路，图片交给原生 paste 事件路径（EditorPage onDocPaste）。
+  it('read：item.types 含 image/png → hasImage=true（图文同存时键盘路径据此让路）', async () => {
+    const read = vi.fn(async () => [
+      {
+        types: ['text/html', 'image/png'],
+        getType: async () => new Blob(['x']),
+      },
+    ]);
+    Object.defineProperty(navigator, 'clipboard', { value: { read }, configurable: true });
+    await expect(readFromSystemClipboard()).resolves.toEqual({
+      internal: null,
+      text: null,
+      hasImage: true,
+    });
+  });
+
+  it('read：图片只在非首 item → hasImage 仍为 true（逐 item 并集判定）', async () => {
+    const read = vi.fn(async () => [
+      { types: ['text/plain'], getType: async () => new Blob(['t']) },
+      { types: ['image/png'], getType: async () => new Blob(['x']) },
+    ]);
+    Object.defineProperty(navigator, 'clipboard', { value: { read }, configurable: true });
+    await expect(readFromSystemClipboard()).resolves.toEqual({
+      internal: null,
+      text: 't',
+      hasImage: true,
+    });
   });
 });
 

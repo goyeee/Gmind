@@ -163,12 +163,17 @@ test('任务面板标记：进度档位与百分比全量联动——点档位/�
   await expect(panel.getByTestId('marker-progress-none')).toHaveAttribute('aria-pressed', 'true');
 });
 
-// 用例 3b：父节点进度行只读（父级进度按子级自动汇总，与 ProgressField 只读一致）；
-// 优先级行不受限。
-test('任务面板标记：父节点进度行禁用（Σ 自动汇总），优先级可编', async ({ page }) => {
+// 用例 3b：父节点默认手动，开启「自动计算」后进度行只读（Σ 自动汇总），
+// 优先级行始终不受限。
+test('任务面板标记：父节点默认手动；开自动后进度行禁用且出现汇总提示', async ({ page }) => {
   await openSeedDoc(page, '本周计划');
   await selectNodeByText(page, '本周计划'); // 根节点（有子级）
   const panel = await openTaskPanel(page);
+  // 默认关闭自动：进度档位可点（无汇总提示）
+  await expect(panel.locator('.task-marker-hint')).toHaveCount(0);
+  await expect(panel.getByTestId('marker-progress-p50')).toBeEnabled();
+  // 开启自动计算
+  await panel.getByTestId('task-panel-auto-progress-toggle').locator('input').check();
   await expect(panel.locator('.task-marker-hint')).toHaveText('父节点进度按子级自动汇总');
   await expect(panel.getByTestId('marker-progress-p50')).toBeDisabled();
   // 优先级行不受父级限制

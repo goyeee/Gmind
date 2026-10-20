@@ -30,6 +30,7 @@ import {
   setHref,
   setImage,
   setIcon,
+  moveImage,
   setNodeSide,
   setNodeTask,
   setNote,
@@ -66,6 +67,10 @@ import {
   type NodeBox,
   navigate as navigateGeometry,
   type NodeVisual,
+  getLastImage,
+  setLastImage,
+  imagePlacementOf,
+  type ImagePlacement,
   pasteNodes,
   pasteText,
   readFromSystemClipboard,
@@ -109,10 +114,29 @@ import {
 } from '../editor/icons';
 import {
   clampImageSize,
+  imageFileFromClipboard,
   MAX_IMAGE_BYTES,
   readImageSize,
+  toPngBlob,
   uploadImage,
 } from '../editor/imageUpload';
+import {
+  createImageHandleLayer,
+  imageSceneRect,
+  renderImageFocusOutline,
+  renderImageHandles,
+  resizeImageSizeByDelta,
+  type ImageCorner,
+  type ImageRect,
+} from '../editor/imageHandles';
+import {
+  createImageDragLayer,
+  findNodeAt,
+  guideLayoutOf,
+  placementAt,
+  renderImageDrop,
+} from '../editor/imageDrag';
+import { ImagePreview } from '../editor/ImagePreview';
 import { HelpPanel } from '../editor/HelpPanel';
 import { MarkerChip } from '../editor/MarkerChip';
 import { MemberPanel } from '../editor/MemberPanel';
@@ -140,6 +164,7 @@ import { track } from '../api/events';
 import { api, apiPost, clearToken } from '../api/client';
 import './editor.css';
 import '../editor/marker-picker.css';
+import '../editor/image-preview.css';
 
 /**
  * 编辑器页面装配（/edit/:fileId）— M1b Task 11。
@@ -312,6 +337,11 @@ export function EditorPage() {
   const sceneRef = useRef<SceneRoot | null>(null);
   const viewportRef = useRef<Viewport | null>(null);
   const selectionRef = useRef<SelectionModel | null>(null);
+  // 图片聚焦选中（2026-10-20 需求方「点图片显示图片轮廓、点文字显示整节点轮廓」）：
+  // 只记「最近一次点击落在图片上」的节点 id；选区不匹配/图被移除时自动失效
+  // （applySelectionClasses 校验）。同 id 再点 selectOnly 不 emit，需显式重刷类。
+  const imageFocusRef = useRef<string | null>(null);
+  const applySelectionClassesRef = useRef<(() => void) | null>(null);
   const dragRef = useRef<DragController | null>(null);
   const overlayRef = useRef<TextEditorOverlay | null>(null);
   if (!overlayRef.current) overlayRef.current = new TextEditorOverlay();
@@ -398,6 +428,48 @@ export function EditorPage() {
   // screen 坐标供 move 阶段重绘。
   const marqueeRectRef = useRef<SVGRectElement | null>(null);
   const marqueeAnchorScreenRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+  // 图片缩放手柄（2026-10-15 需求方「拖拽图片周边改尺寸」）：层挂在 g.gm-viewport 内
+  // （场景坐标，自动跟随平移/缩放），尺寸按 1/scale 补偿保持屏幕像素恒定。
+  const imageHandleLayerRef = useRef<SVGGElement | null>(null);
+  // 装配后手柄同步入口 ref（缩放不触发重排，syncZoom 需主动刷新手柄尺寸）。
+  const syncImageHandlesRef = useRef<(() => void) | null>(null);
+  // 图片拖拽换位层（2026-10-20 图文四槽位）：拖拽 ghost + 四侧引导带。
+  // 同样挂在 g.gm-viewport 内最上层（场景坐标），尺寸按 1/scale 补偿。
+  const imageDragLayerRef = useRef<SVGGElement | null>(null);
+  // 拖拽中的源图（null = 未拖）：松手时一次落库（同节点改 placement 或跨节点 moveImage）。
+  const imageDragRef = useRef<{
+    nodeId: string;
+    key: string;
+    w: number;
+    h: number;
+    placement: ImagePlacement;
+    pointerId: number;
+    /** 按下时的屏幕坐标：位移超过阈值才真正起拖，短按仍走点击/双击。 */
+    startClientX: number;
+    startClientY: number;
+    /** false = 已按下但尚未越过阈值（不画 ghost/引导，不捕获指针）。 */
+    active: boolean;
+  } | null>(null);
+  // 拖拽中的状态（null = 未在拖）：起始尺寸/起始指针场景坐标/最后写出的尺寸。
+  const imageResizeRef = useRef<{
+    nodeId: string;
+    key: string;
+    placement?: ImagePlacement;
+    corner: ImageCorner;
+    pointerId: number;
+    w0: number;
+    h0: number;
+    startX: number;
+    startY: number;
+    /** 本帧待写尺寸（rAF 节流：每帧最多一次 setImage，方案甲）。 */
+    pending: { w: number; h: number } | null;
+    /** 已写出的尺寸（决定 pointerup 是否需要补写/是否进撤销栈）。 */
+    written: { w: number; h: number } | null;
+    raf: number;
+  } | null>(null);
+  // 大图预览（双击图片）：存 /api/images/{key}（服务端直出原图，不缩放）与源节点 id
+  // （预览内右键「复制图片」复用节点图片复制链路，保留文档内 payload）。
+  const [imagePreview, setImagePreview] = useState<{ src: string; nodeId: string } | null>(null);
   // 空白点击清空选择的位移判定（M6 Task 2）：pointerdown 记录按点坐标，click 期位移
   // >4px 即视为平移/框选拖拽的合成 click，不清空选择。
   const pointerPressRef = useRef<{ x: number; y: number } | null>(null);
@@ -502,7 +574,7 @@ export function EditorPage() {
   // 右键菜单（Task 12）：nodeId 为节点菜单锚点；summaryId 为概要菜单锚点（M6 T6，
   // 二者互斥——右键命中 bracket 时弹概要菜单，命中节点时弹节点菜单）
   const [contextMenu, setContextMenu] = useState<
-    | { x: number; y: number; nodeId: string; summaryId?: undefined }
+    | { x: number; y: number; nodeId: string; image?: boolean; summaryId?: undefined }
     | { x: number; y: number; nodeId?: undefined; summaryId: string }
     | null
   >(null);
@@ -900,6 +972,9 @@ export function EditorPage() {
   const syncZoom = (): void => {
     const vp = viewportRef.current;
     if (vp) setZoomPct(Math.round(vp.scale * 100));
+    // 缩放手柄的屏幕像素补偿（1/scale）随缩放刷新：缩放不触发 doc 更新/重排，
+    // 不主动刷会让手柄在 400% 下变巨块、25% 下看不见。
+    syncImageHandlesRef.current?.();
   };
 
   /** 加星切换（M3b 清偿包，FR-FIL-004）：乐观更新，请求失败回滚；PUT/DELETE 端点
@@ -1885,8 +1960,49 @@ export function EditorPage() {
     }
   };
 
+  // 内部图片 payload 粘贴的一次性让路标志（2026-10-20）：Ctrl+V 由键盘映射处理
+  // lastImage 时置位，紧随其后的原生 paste 事件（图片还躺在系统剪贴板）必须跳过
+  // onDocPaste 的上传链路，避免「粘贴图片」被双写（内部 payload + 新上传）。
+  const internalImagePasteRef = useRef(false);
+
+  /** 内部图片 payload 粘贴：沿用原 key（同文件）；跨文件经 copy 端点 remap。 */
+  const pasteImagePayload = async (
+    payload: NonNullable<ReturnType<typeof getLastImage>>,
+  ): Promise<void> => {
+    const d = doc;
+    if (!d) return;
+    try {
+      const key = await remapImageKey(payload.key);
+      setImage(
+        d,
+        primaryId(),
+        {
+          key,
+          w: payload.w,
+          h: payload.h,
+          ...(payload.placement !== undefined ? { placement: payload.placement } : {}),
+        },
+        ORIGIN_USER,
+      );
+      afterUserWrite();
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : '图片粘贴失败');
+    }
+  };
+
   const handlePaste = async (): Promise<void> => {
     if (!doc) return;
+    // 图片 payload 优先（2026-10-20 图片独立复制/剪切）：同文件沿用原 key、不重传；
+    // 置一次性让路标志，紧跟的原生 paste 事件不再走上传链路（避免双写）。
+    const lastImage = getLastImage();
+    if (lastImage) {
+      internalImagePasteRef.current = true;
+      setTimeout(() => {
+        internalImagePasteRef.current = false;
+      }, 0);
+      await pasteImagePayload(lastImage);
+      return;
+    }
     if (addBlockedByQuota()) return; // 粘贴会新增节点，同受配额拦截
     const selection = selectionRef.current;
     if (!selection) return;
@@ -1900,6 +2016,10 @@ export function EditorPage() {
     }
     try {
       const clip = await readFromSystemClipboard();
+      // 图片优先仲裁（本轮修复）：剪贴板含图片时让路——图片由原生 paste 事件路径
+      // 插入（onDocPaste），本路径不再落文本节点。否则「复制网页图片」这类
+      // 图文同存的剪贴板会被双写（文本节点 + 图片）。
+      if (clip.hasImage) return;
       const idx = getNode(doc, parentId)?.childIds.length ?? 0;
       if (clip.internal) {
         await pasteNodes(handleOf(doc), parentId, idx, clip.internal, undefined, remapImageKey);
@@ -1931,8 +2051,15 @@ export function EditorPage() {
       try {
         const { key } = await uploadImage(fileId, file);
         const { w, h } = clampImageSize(naturalW, naturalH);
-        // 插入目标：主选中节点（无选中/多选时 primaryId 降级为 root）
-        setImage(doc, primaryId(), { key, w, h }, ORIGIN_USER);
+        // 插入目标：主选中节点（无选中/多选时 primaryId 降级为 root）；换图保留原槽位。
+        const targetId = primaryId();
+        const placement = getNode(doc, targetId)?.image?.placement;
+        setImage(
+          doc,
+          targetId,
+          { key, w, h, ...(placement !== undefined ? { placement } : {}) },
+          ORIGIN_USER,
+        );
         afterUserWrite();
       } finally {
         URL.revokeObjectURL(url);
@@ -1949,6 +2076,9 @@ export function EditorPage() {
     const selection = selectionRef.current;
     if (!doc || !selection) return;
     const target = e.target as Element;
+    // 图片缩放手柄（2026-10-15）：点手柄不改选区、也不落下方空白兜底（否则会清空
+    // 选择，下一次拖拽就没手柄了）。与角标家族同一「让位」纪律，最先判定。
+    if (target.closest('.gm-image-resize-handle')) return;
     // FR-EDT-019：点击链接角标 → 新标签页打开（先于折叠徽标/节点选择处理，
     // 打开后直接 return，不触发选中切换）。href 服务端已白名单校验，此处
     // 仍防御性复查 http/https；noopener 隔离 opener。
@@ -2086,7 +2216,10 @@ export function EditorPage() {
       // 同一「拖拽不算点击」纪律）。
       const press = pointerPressRef.current;
       const moved = press ? Math.hypot(e.clientX - press.x, e.clientY - press.y) > 4 : false;
-      if (!e.shiftKey && !e.ctrlKey && !e.metaKey && !moved) selection.clear();
+      if (!e.shiftKey && !e.ctrlKey && !e.metaKey && !moved) {
+        imageFocusRef.current = null;
+        selection.clear();
+      }
       return;
     }
     // 格式刷（M6 Task 7）：模式激活时节点点击 = 应用格式并拦截（不让位给选中/
@@ -2100,6 +2233,7 @@ export function EditorPage() {
     // 框选 = 无修饰左键拖拽，不再依赖 Shift）
     if (e.shiftKey) return;
     if (e.ctrlKey || e.metaKey) {
+      imageFocusRef.current = null; // 多选无图片聚焦（聚焦口径 = 单选 + 点图片）
       selection.toggle(id);
       return;
     }
@@ -2108,12 +2242,282 @@ export function EditorPage() {
     // 与格式面板互斥沿用工具栏口径）；多选中的点击先收敛为单选，不当场开。
     // 双击已选中节点：第一次 click 会开面板、随后 dblclick 进就地编辑——并存
     // 行为同 mindgrid（spec 2026-10-10 §三 已记）。
+    //
+    // 图片聚焦（2026-10-20）：落点在 .gm-image → 只描图片轮廓；否则整节点蓝框。
+    // 需在 selectOnly **之前**置位（emit 同步进 applySelectionClasses）；同 id 再点
+    // 不 emit，故 selectOnly 后显式补刷一次类。
+    imageFocusRef.current = target.closest('.gm-image') ? id : null;
     const alreadySoleSelected = selection.selected.size === 1 && selection.selected.has(id);
     selection.selectOnly(id);
+    applySelectionClassesRef.current?.();
     if (alreadySoleSelected && !readOnly) {
       setFormatOpen(false);
       setTaskPanelOpen(true);
     }
+  };
+
+  // —— 图片缩放（拖角手柄，2026-10-15 需求方「拖拽图片周边改尺寸」）——
+
+  /**
+   * 起拖：记起始尺寸与起始指针场景坐标，抓指针。
+   * 位移口径（非绝对坐标）：拖拽中每次写都会重排、节点盒位置可能变化，绝对坐标
+   * 反解尺寸会与布局互相反馈（抖），故一律用「指针位移 → 缩放系数」（见 imageHandles）。
+   */
+  const beginImageResize = (
+    e: React.PointerEvent<SVGSVGElement>,
+    handle: Element,
+  ): void => {
+    const d = doc;
+    const vp = viewportRef.current;
+    const svgEl = svgRef.current;
+    const selection = selectionRef.current;
+    const corner = handle.getAttribute('data-corner') as ImageCorner | null;
+    if (!d || !vp || !svgEl || !selection || !corner) return;
+    if (selection.selected.size !== 1) return;
+    const nodeId = [...selection.selected][0];
+    const image = nodeId ? getNode(d, nodeId)?.image : null;
+    if (!nodeId || !image) return;
+    const scene = vp.toSceneFromEvent(e.nativeEvent);
+    imageResizeRef.current = {
+      nodeId,
+      key: image.key,
+      placement: image.placement,
+      corner,
+      pointerId: e.pointerId,
+      w0: image.w,
+      h0: image.h,
+      startX: scene.x,
+      startY: scene.y,
+      pending: null,
+      written: null,
+      raf: 0,
+    };
+    e.preventDefault(); // 抑制拖拽选中文本等浏览器默认行为（框选同款）
+    if (typeof svgEl.setPointerCapture === 'function') {
+      try {
+        svgEl.setPointerCapture(e.pointerId);
+      } catch {
+        /* 捕获失败可忽略：监听就在 svg 上 */
+      }
+    }
+  };
+
+  /**
+   * 拖拽中：位移 → 尺寸（等比 + 200/24 钳制），**rAF 节流写文档**（方案甲，需求方
+   * 2026-10-15 选定）：每帧最多一次 setImage，卡片/兄弟节点/连线/子树实时跟随；
+   * 不逐帧调 afterUserWrite（避免每帧广播 awareness 与拉视口），松手统一调一次。
+   * 撤销粒度：500ms 内的连续写被 Y.UndoManager captureTimeout 合并为一步。
+   */
+  const updateImageResize = (e: React.PointerEvent<SVGSVGElement>): void => {
+    const d = doc;
+    const pendingState = imageResizeRef.current;
+    const vp = viewportRef.current;
+    if (!d || !pendingState || !vp) return;
+    const scene = vp.toSceneFromEvent(e.nativeEvent);
+    const next = resizeImageSizeByDelta(
+      { w: pendingState.w0, h: pendingState.h0 },
+      pendingState.corner,
+      { dx: scene.x - pendingState.startX, dy: scene.y - pendingState.startY },
+    );
+    const last = pendingState.written ?? { w: pendingState.w0, h: pendingState.h0 };
+    if (next.w === last.w && next.h === last.h) {
+      pendingState.pending = null;
+      return;
+    }
+    pendingState.pending = next;
+    if (pendingState.raf !== 0) return;
+    pendingState.raf = requestAnimationFrame(() => {
+      const s = imageResizeRef.current;
+      if (!s || s !== pendingState) return;
+      s.raf = 0;
+      const w = s.pending ?? s.written;
+      if (!w) return;
+      setImage(d, s.nodeId, { key: s.key, w: w.w, h: w.h, placement: s.placement }, ORIGIN_USER);
+      s.written = w;
+      s.pending = null;
+    });
+  };
+
+  /**
+   * 松手：冲刷未落帧的尺寸，恰一次记撤销/广播收口（一次拖拽 = 一步撤销）；
+   * 置 justDraggedRef 吞掉浏览器合成的 click（否则会清选区/开面板）。
+   */
+  const endImageResize = (e: React.PointerEvent<SVGSVGElement>): void => {    const d = doc;
+    const s = imageResizeRef.current;
+    if (!d || !s) return;
+    if (s.raf !== 0) {
+      cancelAnimationFrame(s.raf);
+      s.raf = 0;
+    }
+    const finalSize = s.pending ?? s.written;
+    if (finalSize) {
+      const last = s.written;
+      if (!last || last.w !== finalSize.w || last.h !== finalSize.h) {
+        setImage(d, s.nodeId, { key: s.key, w: finalSize.w, h: finalSize.h, placement: s.placement }, ORIGIN_USER);
+      }
+      afterUserWrite();
+    }
+    imageResizeRef.current = null;
+    justDraggedRef.current = true;
+    setTimeout(() => {
+      justDraggedRef.current = false;
+    }, 0);
+    const svgEl = svgRef.current;
+    if (svgEl && typeof svgEl.releasePointerCapture === 'function') {
+      try {
+        svgEl.releasePointerCapture(e.pointerId);
+      } catch {
+        /* 已释放可忽略 */
+      }
+    }
+  };
+
+  // —— 图片拖拽换位（2026-10-20 图文四槽位）——
+
+  /** 清空 ghost/引导带（层可能尚未装配——重建场景窗口期）。 */
+  const clearImageDragOverlay = (): void => {
+    const layer = imageDragLayerRef.current;
+    if (!layer) return;
+    const scale = viewportRef.current?.scale ?? 1;
+    renderImageDrop(layer, null, scale);
+  };
+
+  /** 指针位置的拖拽目标（节点 + 四槽位命中）；无节点返回 null。 */
+  const imageDragTargetAt = (
+    scene: { x: number; y: number },
+  ): { nodeId: string; box: NodeBox; padX: number; placement: ImagePlacement } | null => {
+    const d = doc;
+    const box = findNodeAt(boxesRef.current, scene);
+    if (!d || !box) return null;
+    const theme = THEMES[resolveThemeId(getMeta(d).themeId)];
+    const layout = guideLayoutOf(box, theme.nodePaddingX);
+    return {
+      nodeId: box.id,
+      box,
+      padX: theme.nodePaddingX,
+      placement: placementAt(layout, scene),
+    };
+  };
+
+  /** 拖拽中：ghost 跟随指针 + 悬停节点的四侧虚线引导带（只预览，不写文档）。 */
+  const updateImageDrag = (e: React.PointerEvent<SVGSVGElement>): void => {
+    const s = imageDragRef.current;
+    const vp = viewportRef.current;
+    const layer = imageDragLayerRef.current;
+    if (!s || !vp) return;
+    if (!s.active) {
+      // 图片本体直接起拖，但要与单击选中/双击预览共存：位移超过 4px 才进入拖拽。
+      if (e.buttons === 0) {
+        cancelImageDrag(); // 在画布外松开后回到画布：不把旧按下误判成新拖拽
+        return;
+      }
+      if (Math.hypot(e.clientX - s.startClientX, e.clientY - s.startClientY) <= 4) return;
+      s.active = true;
+      const svgEl = svgRef.current;
+      if (svgEl && typeof svgEl.setPointerCapture === 'function') {
+        try {
+          svgEl.setPointerCapture(s.pointerId);
+        } catch {
+          /* 捕获失败可忽略：监听就在 svg 上 */
+        }
+      }
+    }
+    if (!layer) return;
+    const scene = vp.toSceneFromEvent(e.nativeEvent);
+    renderImageDrop(
+      layer,
+      {
+        pointer: scene,
+        href: `/api/images/${s.key}`,
+        image: { w: s.w, h: s.h },
+        target: imageDragTargetAt(scene),
+      },
+      vp.scale,
+    );
+  };
+
+  /**
+   * 开始拖图：图片本体直接起拖（需求方 2026-10-20 走查：不要额外把手）。
+   * 按下时只记待定状态、不 preventDefault/不捕获指针——短按仍走既有单击选中与
+   * 双击预览；越过位移阈值后由 updateImageDrag 激活。四角缩放手柄先于本函数拦。
+   */
+  const beginImageDrag = (e: React.PointerEvent<SVGSVGElement>): boolean => {
+    if (readOnly) return false;
+    const d = doc;
+    const imgEl = (e.target as Element).closest('.gm-image');
+    const nodeId = imgEl?.closest('[data-node-id]')?.getAttribute('data-node-id');
+    if (!d || !nodeId) return false;
+    const image = getNode(d, nodeId)?.image;
+    if (!image) return false;
+    imageDragRef.current = {
+      nodeId,
+      key: image.key,
+      w: image.w,
+      h: image.h,
+      placement: imagePlacementOf(image),
+      pointerId: e.pointerId,
+      startClientX: e.clientX,
+      startClientY: e.clientY,
+      active: false,
+    };
+    clearImageDragOverlay();
+    return true;
+  };
+
+  /** 松手落库：同节点 = 改 placement；跨节点 = moveImage 单事务（一步撤销，目标图直接替换）。 */
+  const endImageDrag = (e: React.PointerEvent<SVGSVGElement>): void => {
+    const d = doc;
+    const s = imageDragRef.current;
+    const vp = viewportRef.current;
+    if (!s) return;
+    imageDragRef.current = null;
+    clearImageDragOverlay();
+    const svgEl = svgRef.current;
+    if (svgEl && typeof svgEl.releasePointerCapture === 'function') {
+      try {
+        svgEl.releasePointerCapture(e.pointerId);
+      } catch {
+        /* 已释放可忽略 */
+      }
+    }
+    if (!s.active) return; // 未越过阈值：保留浏览器 click/dblclick（选中/预览）
+    justDraggedRef.current = true; // 吞掉浏览器合成的 click（同缩放手势）
+    setTimeout(() => {
+      justDraggedRef.current = false;
+    }, 0);
+    if (!d || !vp) return;
+    const scene = vp.toSceneFromEvent(e.nativeEvent);
+    const target = imageDragTargetAt(scene);
+    if (!target) return; // 落在画布空白：取消（不写、不删）
+    try {
+      if (target.nodeId === s.nodeId) {
+        if (target.placement === s.placement) return; // 原槽位：零写入
+        setImage(
+          d,
+          s.nodeId,
+          { key: s.key, w: s.w, h: s.h, placement: target.placement },
+          ORIGIN_USER,
+        );
+      } else {
+        moveImage(
+          d,
+          s.nodeId,
+          target.nodeId,
+          { key: s.key, w: s.w, h: s.h, placement: target.placement },
+          ORIGIN_USER,
+        );
+      }
+      afterUserWrite();
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : '图片移动失败');
+    }
+  };
+
+  /** 取消拖图（pointercancel，如系统中断）：清预览，不写文档。 */
+  const cancelImageDrag = (): void => {
+    if (!imageDragRef.current) return;
+    imageDragRef.current = null;
+    clearImageDragOverlay();
   };
 
   /**
@@ -2128,6 +2532,17 @@ export function EditorPage() {
     // onCommit→setText，无变化提交由 core setText 同值守卫消化（空转零写入）。
     if (overlay.isOpen) overlay.close(true);
     pointerPressRef.current = { x: e.clientX, y: e.clientY }; // 空白点击位移判定（M6 Task 2）
+    // 图片手柄优先（角标家族同一「让位」纪律）：手柄在独立层、不在节点 g 内，
+    // 不先拦会被下方兜底当空白处理（清选区/起框选）。
+    const handleEl = (e.target as Element).closest('.gm-image-resize-handle');
+    if (handleEl && !readOnly) {
+      beginImageResize(e, handleEl);
+      return;
+    }
+    // 图片本体直接起拖（2026-10-20 四槽位）：只记待定状态，越过 4px 才激活，
+    // 短按仍走点击/双击；文字/边框上的按键照旧进入节点拖动。空格平移优先。
+    if (viewportRef.current?.spacePressed) return;
+    if (beginImageDrag(e)) return;
     // 修饰键组合不进框选（Ctrl/Cmd=加减选、Shift=加选占位）；spacePressed 让位
     // 判定保留为防御：空格已收回进编辑（键盘直入编辑监听捕获层断掉 Viewport 的
     // 空格跟踪），spaceDown 仅在焦点处于输入控件等未拦路径残留——残留态下仍让位
@@ -2165,9 +2580,18 @@ export function EditorPage() {
   };
 
   const onSvgPointerMove = (e: React.PointerEvent<SVGSVGElement>): void => {
+    if (imageDragRef.current) {
+      updateImageDrag(e); // 图片换位拖拽优先（与 pointerdown 同序）
+      return;
+    }
+    if (imageResizeRef.current) {
+      updateImageResize(e); // 图片手柄拖拽优先（与 pointerdown 同序）
+      return;
+    }
     const selection = selectionRef.current;
     const vp = viewportRef.current;
-    if (!selection || !selection.isMarquee || !vp) return;
+    if (!selection || !vp) return;
+    if (!selection.isMarquee) return;
     const scene = vp.toSceneFromEvent(e.nativeEvent);
     selection.updateMarquee(scene.x, scene.y);
     const rect = marqueeRectRef.current;
@@ -2186,6 +2610,14 @@ export function EditorPage() {
 
   /** 结束框选：相交入选、空结果清空（PRD 框选语义），橡皮筋随手移除。 */
   const onSvgPointerUp = (e: React.PointerEvent<SVGSVGElement>): void => {
+    if (imageDragRef.current) {
+      endImageDrag(e); // 图片换位松手：一次落库 + 一次 afterUserWrite
+      return;
+    }
+    if (imageResizeRef.current) {
+      endImageResize(e); // 图片手柄松手：冲刷尺寸 + 一次 afterUserWrite
+      return;
+    }
     const selection = selectionRef.current;
     if (!selection || !selection.isMarquee) return;
     selection.endMarquee(boxesRef.current);
@@ -2201,8 +2633,40 @@ export function EditorPage() {
     }
   };
 
+  /** 指针取消：图片换位直接丢弃（不写文档）；其余手势沿用松手收口。 */
+  const onSvgPointerCancel = (e: React.PointerEvent<SVGSVGElement>): void => {
+    if (imageDragRef.current) {
+      cancelImageDrag();
+      return;
+    }
+    onSvgPointerUp(e);
+  };
+
+  /** 指针离开画布：未激活的待定拖拽直接取消；已激活由指针捕获继续跟随。 */
+  const onSvgPointerLeave = (): void => {
+    const s = imageDragRef.current;
+    if (s) {
+      if (!s.active) cancelImageDrag();
+      return;
+    }
+    clearImageDragOverlay();
+  };
+
   const onSvgDoubleClick = (e: React.MouseEvent<SVGSVGElement>): void => {
     if (justDraggedRef.current) return;
+    // 双击图片 → 大图预览（2026-10-15 需求方裁定）。**先于 readOnly 让路**：预览是
+    // 读操作，只读/移动端同样可用（与折叠徽标、评论角标同口径）。代价（已与需求方
+    // 对齐）：双击图片区不再进文本编辑——双击文字区仍进编辑，另有 F2 与键入直入。
+    const imgEl = (e.target as Element).closest('.gm-image');
+    if (imgEl) {
+      const d = doc;
+      const imgId = (e.target as Element)
+        .closest('[data-node-id]')
+        ?.getAttribute('data-node-id');
+      const key = d && imgId ? getNode(d, imgId)?.image?.key : null;
+      if (key && imgId) setImagePreview({ src: `/api/images/${key}`, nodeId: imgId });
+      return;
+    }
     if (readOnly) return; // 移动端只读：双击（双触）不进编辑（OPEN-T-005）
     const g = (e.target as Element).closest('[data-node-id]');
     const id = g?.getAttribute('data-node-id');
@@ -2215,13 +2679,23 @@ export function EditorPage() {
   const pendingContextMenuRef = useRef<{
     x: number;
     y: number;
-    hit: { summaryId?: string; nodeId?: string };
+    hit: { summaryId?: string; nodeId?: string; image?: boolean };
   } | null>(null);
 
   /** 命中解析：优先事件 target；被指针捕获重定向（target=svg）时按坐标恢复。 */
-  const resolveContextMenuHit = (e: React.MouseEvent<SVGSVGElement>): { summaryId?: string; nodeId?: string } => {
+  const resolveContextMenuHit = (
+    e: React.MouseEvent<SVGSVGElement>,
+  ): { summaryId?: string; nodeId?: string; image?: boolean } => {
     const hitAtPoint = (selector: string): Element | null =>
       document.elementFromPoint(e.clientX, e.clientY)?.closest(selector) ?? null;
+    // 图片命中优先（2026-10-20 独立右键菜单）：只读下也允许「复制图片」，故必须先于
+    // 只读早退判定。
+    const imgEl = (e.target as Element).closest('.gm-image') ?? hitAtPoint('.gm-image');
+    if (imgEl) {
+      const g = imgEl.closest('[data-node-id]');
+      const iid = g?.getAttribute('data-node-id');
+      if (iid) return { nodeId: iid, image: true };
+    }
     const sumG = (e.target as Element).closest('[data-summary-id]') ?? hitAtPoint('[data-summary-id]');
     if (sumG) {
       const sid = sumG.getAttribute('data-summary-id');
@@ -2233,7 +2707,11 @@ export function EditorPage() {
   };
 
   /** 菜单提交：概要与节点菜单互斥；节点含多选保持与单选（选中副作用随菜单一起提交）。 */
-  const commitContextMenu = (x: number, y: number, hit: { summaryId?: string; nodeId?: string }): void => {
+  const commitContextMenu = (
+    x: number,
+    y: number,
+    hit: { summaryId?: string; nodeId?: string; image?: boolean },
+  ): void => {
     if (hit.summaryId !== undefined) {
       setContextMenu({ x, y, summaryId: hit.summaryId });
       return;
@@ -2245,6 +2723,12 @@ export function EditorPage() {
     }
     const snap = getNode(doc, id);
     if (!snap || snap.deleted) return;
+    if (hit.image) {
+      // 图片菜单：不改选区（右键图片只是复制/剪切目标），只读下也允许复制。
+      if (!snap.image) return;
+      setContextMenu({ x, y, nodeId: id, image: true });
+      return;
+    }
     // 多选保持（M6 T6）：右键命中成员之一时不折叠选区——「添加概要」依赖多选片段
     const sel = selectionRef.current;
     if (!(sel && sel.selected.size > 1 && sel.selected.has(id))) {
@@ -2262,13 +2746,15 @@ export function EditorPage() {
     // 菜单修复）：headless/Linux Chromium 的 contextmenu 在 pointerup **之前**合成，
     // 此时 justPanned 尚未置位，须查进行中的平移态才能拦住拖拽释放。
     if (viewportRef.current?.justPanned || viewportRef.current?.panning) return;
-    if (readOnly) return; // 移动端只读：不弹右键菜单（长按 contextmenu 同拦）
+    // 图片独立菜单（2026-10-20）：只读下仍允许「复制图片」，因此命中先于只读早退；
+    // 非图片命中维持原口径（移动端只读不弹右键菜单）。
+    const hit = resolveContextMenuHit(e);
+    if (readOnly && !hit.image) return;
     // 命中恢复（2026-10-09 右键平移修复配套）：Viewport 在右键 pointerdown 即捕获
     // 指针（保平移阈值判定期间 move/up 不丢），Chromium 随后合成的 contextmenu
     // target 被重定向到 svg——closest 命中链断裂、菜单永不弹（与 viewport.ts 头注
     // 「捕获会把 click 重定向」同一陷阱）。target 未命中时按坐标 elementFromPoint
     // 恢复命中（几何查询不受指针捕获影响）。
-    const hit = resolveContextMenuHit(e);
     // 早到的 contextmenu（Linux/headless 紧随 pointerdown 合成，早于 move/pointerup）
     // 此刻无法预知会不会拖动——暂存到 pointerup 结算：拖拽平移丢弃、原地松开补弹
     // （结算见下方 useEffect 的 window 冒泡 pointerup，晚于 Viewport 的 svg 层处理，
@@ -2301,6 +2787,62 @@ export function EditorPage() {
     };
   }, []);
 
+  /**
+   * 复制 / 剪切节点图片（2026-10-20 图片独立右键菜单）：
+   * - 系统剪贴板写 PNG（非 PNG 先转码），供粘贴到外部应用；
+   * - 同时记文档内语义 payload（key/w/h/placement），Ctrl+V 粘回画布沿用原 key，
+   *   不重复上传；剪切 = 写成功后才清空节点图片（失败不清，避免丢图）。
+   */
+  const copyNodeImage = async (
+    nodeId: string,
+    cut: boolean,
+    silent = false,
+  ): Promise<boolean> => {
+    const d = doc;
+    const image = d ? getNode(d, nodeId)?.image : null;
+    if (!d || !image) return false;
+    if (
+      typeof ClipboardItem === 'undefined' ||
+      typeof navigator.clipboard?.write !== 'function'
+    ) {
+      if (!silent) {
+        showToast('当前浏览器不支持复制图片 / 请使用最新版 Chrome、Edge 或 Safari');
+      }
+      return false;
+    }
+    try {
+      // ClipboardItem 接收 Promise<Blob>：在用户手势内先发起 write，再等图片转码，
+      // 避免先 await fetch 丢失剪贴板写权限。
+      const png = fetch(`/api/images/${image.key}`).then(async (res) => {
+        if (!res.ok) throw new Error(`图片读取失败（${res.status}）`);
+        return toPngBlob(await res.blob());
+      });
+      await navigator.clipboard.write([new ClipboardItem({ 'image/png': png })]);
+      setLastImage({
+        key: image.key,
+        w: image.w,
+        h: image.h,
+        placement: image.placement,
+        fileId,
+      });
+      if (cut) {
+        setImage(d, nodeId, null, ORIGIN_USER);
+        afterUserWrite();
+        if (!silent) showToast('已剪切图片');
+      } else if (!silent) {
+        showToast('已复制图片');
+      }
+      return true;
+    } catch (e) {
+      if (!silent) {
+        showToast(
+          `图片复制失败：${e instanceof Error ? e.message : '未知错误'} / 请检查浏览器剪贴板权限后重试`,
+        );
+      }
+      return false;
+    }
+  };
+
   const runMenuAction = (action: string): void => {
     const menu = contextMenu;
     setContextMenu(null);
@@ -2318,6 +2860,12 @@ export function EditorPage() {
       return;
     }
     const nodeId = menu.nodeId as string;
+    if (menu.image) {
+      // 图片菜单：复制（只读可用）/ 剪切（写路径，只渲染于可编辑态）
+      if (action === 'image-copy') void copyNodeImage(nodeId, false);
+      else if (action === 'image-cut' && !readOnly) void copyNodeImage(nodeId, true);
+      return;
+    }
     switch (action) {
       case 'insert-child':
         openNewNodeEditor(nodeId, undefined, 'child', 'context');
@@ -2484,6 +3032,7 @@ export function EditorPage() {
 
     const selection = new SelectionModel();
     selectionRef.current = selection;
+    imageFocusRef.current = null; // 换文件/重装配：图片聚焦随选区模型一起重来
     selection.onChange = () => {
       applySelectionClasses();
       // 选区广播（FR-COL-002）：远端据此渲染我的彩色选区框/昵称标签
@@ -2499,10 +3048,92 @@ export function EditorPage() {
     const applySelectionClasses = (): void => {
       const scene = sceneRef.current;
       if (!scene) return;
-      for (const [id, entry] of scene.nodeEntries) {
-        entry.g.classList.toggle('gm-selected', selection.selected.has(id));
+      // 图片聚焦态校验（2026-10-20）：选区不再是单选该节点、节点被删、图被移除 →
+      // 聚焦自动失效（键盘导航/框选/清空/远端变更都经此处收敛）。
+      let focusId = imageFocusRef.current;
+      if (focusId) {
+        const snap = getNode(d, focusId);
+        const valid =
+          selection.selected.size === 1 &&
+          selection.selected.has(focusId) &&
+          !!snap &&
+          !snap.deleted &&
+          !!snap.image;
+        if (!valid) {
+          imageFocusRef.current = null;
+          focusId = null;
+        }
       }
+      const theme = THEMES[resolveThemeId(getMeta(d).themeId)];
+      for (const [id, entry] of scene.nodeEntries) {
+        const selected = selection.selected.has(id);
+        entry.g.classList.toggle('gm-selected', selected);
+        const imageFocused = focusId === id;
+        entry.g.classList.toggle('gm-image-focused', imageFocused);
+        // 图片聚焦时整节点退回**普通主题边框**，蓝色选中描边让给图片轮廓：
+        // 内联 style 高于 .gm-selected 的 CSS；失焦清空后 CSS 蓝框自动回落。
+        const rect = entry.g.querySelector<SVGRectElement>(':scope > rect');
+        if (rect) {
+          if (selected && imageFocused) {
+            const style = resolveNodeStyle(
+              theme,
+              depthById.get(id) ?? 0,
+              getNode(d, id)?.style ?? {},
+            );
+            rect.style.stroke = style.border;
+            rect.style.strokeWidth = String(theme.nodeBorderWidth);
+          } else {
+            rect.style.stroke = '';
+            rect.style.strokeWidth = '';
+          }
+        }
+      }
+      // 手柄与选中态同源（选区变化与每次重排都经此处）：单选 + 有图 + 非只读才出。
+      syncImageHandles();
     };
+    applySelectionClassesRef.current = applySelectionClasses;
+
+    /** 节点图片矩形（场景坐标）；无图/已删/无盒 → null。手柄与聚焦轮廓共用。 */
+    const nodeImageRectOf = (id: string): ImageRect | null => {
+      const snap = getNode(d, id);
+      if (!snap || snap.deleted || !snap.image) return null;
+      const box = boxesRef.current.find((b) => b.id === id);
+      if (!box) return null;
+      const theme = THEMES[resolveThemeId(getMeta(d).themeId)];
+      return imageSceneRect(box, snap.image, theme.nodePaddingX);
+    };
+
+    /**
+     * 当前应出手柄的图片矩形（场景坐标）；不该出返回 null。
+     * 口径：**单选**（多选不出，避免歧义）+ 节点存活且有 image + 非只读（写交互）。
+     */
+    const selectedImageRect = (): ImageRect | null => {
+      if (readOnly) return null;
+      if (selection.selected.size !== 1) return null;
+      const id = [...selection.selected][0];
+      return id ? nodeImageRectOf(id) : null;
+    };
+
+    /**
+     * 图片聚焦轮廓矩形（2026-10-20）：单选 + 点击落点在图片上（imageFocusRef）。
+     * **只读同样显示**——选中/轮廓是读操作，与双击预览同口径。
+     */
+    const focusedImageRect = (): ImageRect | null => {
+      const fid = imageFocusRef.current;
+      if (!fid) return null;
+      if (selection.selected.size !== 1 || !selection.selected.has(fid)) return null;
+      return nodeImageRectOf(fid);
+    };
+
+    /** 手柄层回填（选区变化 / 重排 / 缩放三处调用；scale 取当前视口）。 */
+    const syncImageHandles = (): void => {
+      const layer = imageHandleLayerRef.current;
+      const vp = viewportRef.current;
+      if (!layer || !vp) return;
+      renderImageFocusOutline(layer, focusedImageRect()); // 先轮廓（压手柄之下）
+      renderImageHandles(layer, selectedImageRect(), vp.scale);
+    };
+    syncImageHandlesRef.current = syncImageHandles;
 
     /** 重建场景 + 视口 + 拖拽（主题切换/首次装配；carry-in 裁决 3）。 */
     const rebuildScene = (): void => {
@@ -2526,6 +3157,11 @@ export function EditorPage() {
       const dragOverlay = document.createElementNS('http://www.w3.org/2000/svg', 'g');
       dragOverlay.setAttribute('class', 'gm-drag-overlay');
       wrapper.appendChild(dragOverlay);
+      // 图片缩放手柄层（2026-10-15）：场景坐标、最上层（浮在节点与拖拽指示之上）。
+      // 只读下不渲染内容（同步函数直接返回 null）。
+      imageHandleLayerRef.current = createImageHandleLayer(wrapper);
+      // 图片拖拽换位层（2026-10-20 四槽位）：ghost/引导带，手柄层之上最顶层。
+      imageDragLayerRef.current = createImageDragLayer(wrapper);
       svgEl.appendChild(wrapper);
       const vp = new Viewport(svgEl, wrapper);
       if (prev) {
@@ -2881,14 +3517,20 @@ export function EditorPage() {
     d.on('update', onDocUpdate);
     // 编辑态画布粘贴截图（FR-EDT-020）：document 冒泡监听；焦点在输入控件/
     // 覆盖层时让路（与键盘映射同一 isEditableTarget 判定）；剪贴板含图片文件时
-    // preventDefault 截停默认行为并走上传链路，否则不干预（文本粘贴走键盘映射
-    // Ctrl+V 通道与原生 paste 共存，二者对图片文件互斥）。
+    // preventDefault 截停默认行为并走上传链路（取图 files+items 并集），否则不干预
+    // ——无图片时不 preventDefault，让文本/内部 payload 粘贴走键盘映射 Ctrl+V 通道。
+    // **前置条件（本轮修复）**：键盘映射不得对 Ctrl+V 抑制默认行为，否则浏览器
+    // 根本不派发本监听要接的原生 paste 事件，本入口形同虚设（见 keyboardMap 注释）。
     const onDocPaste = (ev: ClipboardEvent): void => {
       if (readOnly) return; // 移动端只读：画布粘贴截图（写路径）一并禁用
+      // 内部图片 payload 已在键盘路径落库：原生 paste 的图片文件不再上传（防双写）。
+      if (internalImagePasteRef.current) {
+        internalImagePasteRef.current = false;
+        ev.preventDefault();
+        return;
+      }
       if (overlay.isOpen || isEditableTarget(ev.target)) return;
-      const file = Array.from(ev.clipboardData?.files ?? []).find((f) =>
-        f.type.startsWith('image/'),
-      );
+      const file = imageFileFromClipboard(ev.clipboardData);
       if (!file) return;
       ev.preventDefault();
       void insertPastedImage(file);
@@ -2941,6 +3583,12 @@ export function EditorPage() {
       sceneRef.current = null;
       selectionRef.current = null;
       boxesRef.current = [];
+      imageHandleLayerRef.current = null;
+      imageDragLayerRef.current = null;
+      imageDragRef.current = null;
+      syncImageHandlesRef.current = null;
+      applySelectionClassesRef.current = null;
+      imageFocusRef.current = null;
       layoutRef.current = null;
       themeRef.current = '';
       void manager.destroy();
@@ -3491,7 +4139,15 @@ export function EditorPage() {
       <div className="editor-main">
         {/* 表格视图（M7a-T4）：画布仅 CSS 隐藏（引擎场景/视口/选中不卸载，切回即恢复），
             概要行内编辑随画布容器一并隐藏。 */}
-        <div className={view === 'table' ? 'editor-canvas canvas-hidden' : 'editor-canvas'}>
+        <div
+          className={
+            view === 'table'
+              ? 'editor-canvas canvas-hidden'
+              : readOnly
+                ? 'editor-canvas canvas-readonly'
+                : 'editor-canvas'
+          }
+        >
           <svg
             ref={svgRef}
             onClick={(e) => {
@@ -3501,7 +4157,8 @@ export function EditorPage() {
             onPointerDown={onSvgPointerDown}
             onPointerMove={onSvgPointerMove}
             onPointerUp={onSvgPointerUp}
-            onPointerCancel={onSvgPointerUp}
+            onPointerCancel={onSvgPointerCancel}
+            onPointerLeave={onSvgPointerLeave}
             onDoubleClick={onSvgDoubleClick}
             onContextMenu={onSvgContextMenu}
             role="application"
@@ -3645,8 +4302,11 @@ export function EditorPage() {
         )}
       </div>
 
-      {/* 画布右键菜单：表格视图不渲染（M7a-T4，画布专属浮层随视图隐藏） */}
-      {!readOnly && contextMenu && view === 'mind' && (
+      {/* 画布右键菜单：表格视图不渲染（M7a-T4，画布专属浮层随视图隐藏）；
+          图片菜单只读下仍渲染「复制图片」（2026-10-20 四槽位裁定）。 */}
+      {(!readOnly || (contextMenu !== null && 'image' in contextMenu && contextMenu.image === true)) &&
+        contextMenu &&
+        view === 'mind' && (
         <div
           className="context-menu"
           data-testid="context-menu"
@@ -3658,6 +4318,18 @@ export function EditorPage() {
             <button data-testid="menu-remove-summary" onClick={() => runMenuAction('remove-summary')}>
               删除概要
             </button>
+          ) : 'image' in contextMenu && contextMenu.image ? (
+            /* 图片菜单（2026-10-20）：复制恒有；剪切仅在可编辑态出现 */
+            <>
+              <button data-testid="menu-image-copy" onClick={() => runMenuAction('image-copy')}>
+                复制图片
+              </button>
+              {!readOnly && (
+                <button data-testid="menu-image-cut" onClick={() => runMenuAction('image-cut')}>
+                  剪切图片
+                </button>
+              )}
+            </>
           ) : (
             ([
               // 右键「任务设置」已随 2026-10-10 裁定删除（由再点已选中节点开
@@ -3879,6 +4551,14 @@ export function EditorPage() {
         memberIndex={memberIndex}
       />
       <HelpPanel open={helpOpen} onClose={() => setHelpOpen(false)} />
+      {/* 图片大图预览（双击图片）：读操作，只读/移动端同样可开 */}
+      {imagePreview && (
+        <ImagePreview
+          src={imagePreview.src}
+          onClose={() => setImagePreview(null)}
+          onCopyImage={() => copyNodeImage(imagePreview.nodeId, false, true)}
+        />
+      )}
       {/* 主题/结构面板已迁入工具栏各自锚定 wrap（2026-09-30 需求方反馈任务 1：
           企微式按钮正下方贴靠下拉），此处的 fixed 右上挂载点随之移除。 */}
       {/* 查找替换条（M6 Task 3）：画布顶部浮层，开关/键位在页面侧；定位复用 locateNode

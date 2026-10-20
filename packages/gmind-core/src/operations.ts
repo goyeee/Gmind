@@ -30,7 +30,14 @@ import {
 } from './constants';
 import { GmindCoreError, type GmindCoreErrorCode } from './errors';
 import { ROOT_NODE_ID } from './doc';
-import { assigneeEntriesOf, getNode, requireAliveNode, subtreeIds, type NodeImage } from './read';
+import {
+  assigneeEntriesOf,
+  getNode,
+  isImagePlacement,
+  requireAliveNode,
+  subtreeIds,
+  type NodeImage,
+} from './read';
 import { normalizeTree, normalizeTreeFor, deriveNormalizeDirty } from './repair';
 import { ORIGIN_SYSTEM, ORIGIN_USER, type WriteOrigin } from './undo';
 
@@ -432,9 +439,19 @@ export function setHref(
   });
 }
 
+/** placement 校验（setImage/moveImage 同源，校验先于事务）。 */
+function assertImagePlacement(image: NodeImage): void {
+  if (image.placement !== undefined && !isImagePlacement(image.placement)) {
+    throw new GmindCoreError(
+      'INVALID_IMAGE_PLACEMENT',
+      `图片位置非法：${String(image.placement)} / 仅支持 top、bottom、left、right`,
+    );
+  }
+}
+
 /**
- * 设置节点图片（FR-EDT-020）：{key,w,h} 写入；null 清除（读回 null，spec §4.1 缺省语义）。
- * 校验（先于 transact）：存活。
+ * 设置节点图片（FR-EDT-020）：{key,w,h,placement?} 写入；null 清除（读回 null，spec §4.1
+ * 缺省语义）。校验（先于 transact）：存活 + placement 合法（缺省键不出现 = bottom）。
  */
 export function setImage(
   doc: Y.Doc,
@@ -443,9 +460,37 @@ export function setImage(
   origin: WriteOrigin = ORIGIN_USER,
 ): void {
   const node = requireAliveNode(doc, id);
+  if (image !== null) assertImagePlacement(image);
   withTransaction(doc, origin, () => {
     if (image === null) node.delete('image');
     else node.set('image', image);
+  });
+}
+
+/**
+ * 跨节点移动图片（需求方 2026-10-20 四槽位：允许把图片拖到其他节点）：源节点清空 +
+ * 目标节点写入，**单事务** → 一步撤销、一次广播。目标已有图直接覆盖（裁定：直接替换）。
+ * 校验（先于 transact）：两端存活、非同节点、placement 合法。
+ */
+export function moveImage(
+  doc: Y.Doc,
+  fromId: string,
+  toId: string,
+  image: NodeImage,
+  origin: WriteOrigin = ORIGIN_USER,
+): void {
+  if (fromId === toId) {
+    throw new GmindCoreError(
+      'INVALID_IMAGE_MOVE',
+      '移动图片的源与目标为同一节点 / 请改用 setImage 调整位置',
+    );
+  }
+  assertImagePlacement(image);
+  const from = requireAliveNode(doc, fromId);
+  const to = requireAliveNode(doc, toId);
+  withTransaction(doc, origin, () => {
+    from.delete('image');
+    to.set('image', image);
   });
 }
 
@@ -632,6 +677,12 @@ export function setNodeTask(
       '任务进度必须是 0-100 的整数，请调整后重试',
     );
   }
+  if (patch.autoProgress !== undefined && typeof patch.autoProgress !== 'boolean') {
+    throw new GmindCoreError(
+      'TASK_INVALID_AUTO_PROGRESS',
+      '自动计算进度开关必须是布尔值，请刷新后重试',
+    );
+  }
   let owners: string[] | undefined;
   if (patch.owners !== undefined) {
     if (!Array.isArray(patch.owners)) {
@@ -746,6 +797,7 @@ function writeTaskPatch(node: Y.Map<unknown>, patch: TaskPatch): void {
   const task = taskMapOf(node);
   if (patch.status !== undefined) task.set('status', patch.status);
   if (patch.progress !== undefined) task.set('progress', patch.progress);
+  if (patch.autoProgress !== undefined) task.set('autoProgress', patch.autoProgress);
   if (patch.owners !== undefined) task.set('owners', patch.owners);
   for (const key of ['startDate', 'dueDate', 'doneDate'] as const) {
     const v = patch[key];

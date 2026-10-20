@@ -25,6 +25,7 @@
  *   bezier 控制点水平外伸 max(60, dx×0.5)；org 取父下中点/子上中点，elbow。折叠节点无子边。
  * - 根盒中心恒为 (0,0)；输出 bbox 宽高为全部节点盒的极差。
  */
+import { imagePlacementOf, type PackedNodeContent } from './imageLayout';
 import { markerCountOf } from './markers';
 import { measureNodeBox } from './measure';
 // 概要标签避让/chip 几何（M7b → 2026-10-01 反馈任务 1）：字号/基线偏移/chip 矩形
@@ -79,6 +80,8 @@ interface LayoutNode {
   descLine?: string;
   /** 断行行集（长文本溢出修复）：测量贪心断行结果（未断行缺省），随盒透传渲染。 */
   lines?: string[];
+  /** 图文四槽位内容几何（2026-10-20 只增）：仅含图节点产出，随盒透传渲染。 */
+  content?: PackedNodeContent;
   /** 子树带高：max(自身高, Σ子带高 + V_GAP×(n-1))。 */
   subtreeH: number;
   /** 子树带宽：max(自身宽, Σ子带宽 + H_GAP×(n-1))。 */
@@ -172,6 +175,7 @@ function collectTree(
       iconCount,
       imageH: image ? image.h : undefined,
       imageW: image ? image.w : undefined,
+      imagePlacement: image ? imagePlacementOf(image) : undefined,
       taskRow,
       description: snap.description,
       compact,
@@ -198,6 +202,7 @@ function collectTree(
       subtreeW: box.w,
       ...(box.descLine !== undefined ? { descLine: box.descLine } : {}),
       ...(wrapped ? { lines: box.lines } : {}),
+      ...(box.content !== undefined ? { content: box.content } : {}),
       ...(persistedSide !== undefined ? { persistedSide } : {}),
     };
     if (collapsedCount !== undefined) node.collapsedCount = collapsedCount;
@@ -578,6 +583,9 @@ function flatten(
     // 断行行集（长文本溢出修复，只增不改）：发生贪心断行才随盒输出（渲染直绘，
     // 行结构单源 = 测量）；未断行字段不出现（金样逐字节不变）。
     ...(node.lines !== undefined ? { lines: node.lines } : {}),
+    // 图文四槽位内容几何（2026-10-20 只增）：仅含图节点出现（无图节点字段不出现，
+    // 金样逐字节不变）。
+    ...(node.content !== undefined ? { content: node.content } : {}),
   });
   if (node.collapsedCount !== undefined) collapsed.set(node.id, node.collapsedCount);
   for (const child of node.children) flatten(child, depth + 1, node.id, boxes, collapsed);

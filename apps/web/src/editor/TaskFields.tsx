@@ -238,26 +238,26 @@ export function deriveNodesOfDoc(doc: Y.Doc): DeriveNode[] {
 }
 
 /**
- * 进度字段（C3/C4 同款）：叶子 = 数字输入（Enter/失焦提交，钳 0-100 取整），
- * 父级 = Σ 有效进度只读（@gmind/shared effectiveProgress 口径）。
+ * 进度字段（C3/C4 同款）：自动汇总父级 = Σ 有效进度只读；
+ * 手动父级/叶子 = 数字输入（Enter/失焦提交，钳 0-100 取整）。
  */
 export function ProgressField({
-  hasChildren,
+  auto,
   effective,
   progress,
   onCommit,
   testId,
 }: {
-  hasChildren: boolean;
+  auto: boolean;
   effective: number;
   progress: number;
   onCommit: (v: number) => void;
   testId?: string;
 }): ReactElement {
-  if (hasChildren) {
+  if (auto) {
     return (
       <span className="task-progress-sigma" title="由子任务自动汇总">
-        Σ {effective}%（自动）
+        Σ {effective}%
       </span>
     );
   }
