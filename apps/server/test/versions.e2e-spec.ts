@@ -8,11 +8,13 @@ import { ulid } from 'ulid';
 import request from 'supertest';
 import {
   ROOT_NODE_ID,
+  canvasNodesMap,
   childrenIds,
   createTemplateDoc,
   docFromState,
   docToState,
   getNode,
+  listCanvases,
   markLastEditor,
   setText,
 } from '@gmind/core';
@@ -295,11 +297,15 @@ describe('版本恢复（REST FR-VER-004）+ events 埋点端点', () => {
     }, `doc_state persisted: ${text}`);
   };
 
-  /** 按文本查存活节点 id（排除 root 与墓碑）——重建节点以新 ULID 落地，断言按文本口径。 */
+  /** 按文本查存活节点 id（排除 root 与墓碑）——重建节点以新 ULID 落地，断言按文本口径。
+   * （读取路径随多画布遍历各画布 nodes 子图——单画布下与旧顶层 nodes 读等价。） */
   const findAliveByText = (doc: Y.Doc, text: string): string | null => {
-    for (const [id, node] of doc.getMap('nodes').entries()) {
-      const n = node as Y.Map<unknown>;
-      if (id !== ROOT_NODE_ID && n.get('deleted') !== true && n.get('text') === text) return id;
+    for (const canvas of listCanvases(doc)) {
+      for (const [id, node] of canvasNodesMap(doc, canvas.id).entries()) {
+        if (id !== ROOT_NODE_ID && node.get('deleted') !== true && node.get('text') === text) {
+          return id;
+        }
+      }
     }
     return null;
   };

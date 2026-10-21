@@ -1,5 +1,11 @@
 import { expect, test, type Page } from '@playwright/test';
 import * as Y from 'yjs';
+import { canvasNodesMap } from '@gmind/core';
+
+/** 多画布读取路径：经 core 画布访问器取节点子图——单画布文档与旧顶层 nodes 完全等价。 */
+function nodesMapOf(doc: Y.Doc): Y.Map<Y.Map<unknown>> {
+  return canvasNodesMap(doc);
+}
 
 /**
  * 编辑器页面（/edit/:fileId）E2E — M1b Task 11。
@@ -169,7 +175,7 @@ test('编辑器：双框编辑——标题 Tab 切描述框，长描述自适应
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
   Y.applyUpdate(doc, bytes);
-  const nodes = doc.getMap('nodes') as Y.Map<Y.Map<unknown>>;
+  const nodes = nodesMapOf(doc);
   const textOf = (id: string): string => String(nodes.get(id)?.get('text') ?? '');
   const rootKids = ((nodes.get('root')?.get('children') as Y.Array<string>)?.toArray() ?? []);
   const newId = rootKids.find((id) => textOf(id) === '需求评审');
@@ -366,7 +372,7 @@ test('编辑器：Shift+Tab 在节点与父之间插入新父', async ({ page })
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
   Y.applyUpdate(doc, bytes);
-  const nodes = doc.getMap('nodes') as Y.Map<Y.Map<unknown>>;
+  const nodes = nodesMapOf(doc);
   const childIds = (id: string): string[] =>
     ((nodes.get(id)?.get('children') as Y.Array<string> | undefined)?.toArray() ?? []);
   const textOf = (id: string): string => String(nodes.get(id)?.get('text') ?? '');
@@ -420,7 +426,7 @@ test('编辑器：复制节点后选中另一节点 Ctrl+V 粘贴为其子级', 
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
   Y.applyUpdate(doc, bytes);
-  const nodes = doc.getMap('nodes') as Y.Map<Y.Map<unknown>>;
+  const nodes = nodesMapOf(doc);
   const childIds = (id: string): string[] =>
     ((nodes.get(id)?.get('children') as Y.Array<string> | undefined)?.toArray() ?? []);
   const textOf = (id: string): string => String(nodes.get(id)?.get('text') ?? '');
@@ -474,17 +480,17 @@ async function readDocState(page: Page): Promise<Y.Doc> {
 }
 
 function rootKidsOf(doc: Y.Doc): string[] {
-  const nodes = doc.getMap('nodes') as Y.Map<Y.Map<unknown>>;
+  const nodes = nodesMapOf(doc);
   return ((nodes.get('root')?.get('children') as Y.Array<string> | undefined)?.toArray() ?? []);
 }
 
 function textNodeOf(doc: Y.Doc): (id: string) => string {
-  const nodes = doc.getMap('nodes') as Y.Map<Y.Map<unknown>>;
+  const nodes = nodesMapOf(doc);
   return (id) => String(nodes.get(id)?.get('text') ?? '');
 }
 
 function sideNodeOf(doc: Y.Doc): (id: string) => string {
-  const nodes = doc.getMap('nodes') as Y.Map<Y.Map<unknown>>;
+  const nodes = nodesMapOf(doc);
   return (id) => String(nodes.get(id)?.get('side') ?? '');
 }
 
@@ -537,7 +543,7 @@ test('编辑器：Enter 方向矩阵——左列二级主题 Enter 向上建同�
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
   Y.applyUpdate(doc, bytes);
-  const nodes = doc.getMap('nodes') as Y.Map<Y.Map<unknown>>;
+  const nodes = nodesMapOf(doc);
   const childIds = (id: string): string[] =>
     ((nodes.get(id)?.get('children') as Y.Array<string> | undefined)?.toArray() ?? []);
   const textOf = (id: string): string => String(nodes.get(id)?.get('text') ?? '');
@@ -710,7 +716,7 @@ test('编辑器：中心主题 Shift+Enter 逆时针镜像——前 3 落左列�
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
   Y.applyUpdate(doc, bytes);
-  const nodes = doc.getMap('nodes') as Y.Map<Y.Map<unknown>>;
+  const nodes = nodesMapOf(doc);
   const rootKids = ((nodes.get('root')?.get('children') as Y.Array<string> | undefined)?.toArray() ?? []);
   const textOf = (id: string): string => String(nodes.get(id)?.get('text') ?? '');
   const sideOf = (id: string): string => String(nodes.get(id)?.get('side') ?? '');

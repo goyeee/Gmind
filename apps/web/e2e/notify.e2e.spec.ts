@@ -131,11 +131,16 @@ test('M4 清偿：通知点击深链 ?node= → 装载后定位对应节点并�
       timeout: 15_000,
     })
     .toBe(true);
-  const childId = await pageA.evaluate(() => {
+  const childId = await pageA.evaluate(async () => {
+    const bare = ['/@id/', '@gmind/core'].join(''); // 动态拼串：vite dev 的 bare-id 路由
+    const core = (await import(bare)) as unknown as {
+      canvasNodesMap(doc: unknown): Map<string, { get(key: string): unknown }>;
+    };
     const hook = (window as unknown as { __gmind?: { getDoc(): unknown } }).__gmind;
     if (!hook) throw new Error('window.__gmind 未就绪');
-    const doc = hook.getDoc() as { getMap(name: string): Map<string, { get(key: string): unknown }> };
-    for (const [id, node] of doc.getMap('nodes').entries()) {
+    const doc = hook.getDoc() as unknown;
+    // 多画布读取路径：单画布文档与旧顶层 nodes 完全等价
+    for (const [id, node] of core.canvasNodesMap(doc).entries()) {
       if (node.get('text') === '基本操作') return id;
     }
     throw new Error('页面内未找到「基本操作」节点');

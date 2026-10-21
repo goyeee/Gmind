@@ -390,13 +390,16 @@ type DocSnapshot = Record<string, GuardNodeSnapshot | null>;
 
 /** 页面内按文本精确查节点 id（模板生成的 ULID 不可预知；同源 docState 各端 id 一致）。 */
 async function findNodeId(page: Page, text: string): Promise<string> {
-  return page.evaluate((t: string) => {
+  return page.evaluate(async (t: string) => {
+    const bare = ['/@id/', '@gmind/core'].join(''); // 动态拼串：vite dev 的 bare-id 路由
+    const core = (await import(bare)) as unknown as {
+      canvasNodesMap(doc: unknown): Map<string, { get(key: string): unknown }>;
+    };
     const hook = (window as unknown as { __gmind?: { getDoc(): unknown } }).__gmind;
     if (!hook) throw new Error('window.__gmind 未就绪');
-    const doc = hook.getDoc() as {
-      getMap(name: string): Map<string, { get(key: string): unknown }>;
-    };
-    for (const [id, node] of doc.getMap('nodes').entries()) {
+    const doc = hook.getDoc() as unknown;
+    // 多画布读取路径：单画布文档与旧顶层 nodes 完全等价
+    for (const [id, node] of core.canvasNodesMap(doc).entries()) {
       if (node.get('text') === t) return id;
     }
     throw new Error(`页面内未找到文本节点：${t}`);
@@ -437,12 +440,14 @@ async function snapshotDoc(page: Page): Promise<DocSnapshot> {
     const bare = ['/@id/', '@gmind/core'].join('');
     const core = (await import(bare)) as unknown as {
       getNode(doc: unknown, id: string): GuardNodeSnapshot | null;
+      canvasNodesMap(doc: unknown): { keys(): Iterable<string> };
     };
     const hook = (window as unknown as { __gmind?: { getDoc(): unknown } }).__gmind;
     if (!hook) throw new Error('window.__gmind 未就绪');
-    const doc = hook.getDoc() as { getMap(name: string): { keys(): Iterable<string> } };
+    const doc = hook.getDoc() as unknown;
     const out: DocSnapshot = {};
-    for (const id of doc.getMap('nodes').keys()) out[id] = core.getNode(doc, id);
+    // 多画布读取路径：单画布文档与旧顶层 nodes keys 完全等价
+    for (const id of core.canvasNodesMap(doc).keys()) out[id] = core.getNode(doc, id);
     return out;
   });
 }

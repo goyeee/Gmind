@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type * as Y from 'yjs';
-import { addChild, childrenIds, createTemplateDoc, ROOT_NODE_ID, setDescription } from '@gmind/core';
+import { addChild, canvasNodesMap, childrenIds, createTemplateDoc, ROOT_NODE_ID, setDescription } from '@gmind/core';
 import { docToXmindTree } from './xmind-export';
 
 /** docToXmindTree 环防护（M4 挂账清偿）：walk 的 visited 集合——childIds 环
@@ -16,7 +16,8 @@ describe('docToXmindTree（环防护，防御性）', () => {
     // 是 crafted doc_state / 外部裸写的防御场景。不触发 normalize（transact 直调），
     // 环保持原样进入读路径。
     doc.transact(() => {
-      const node = doc.getMap('nodes').get(childId) as Y.Map<unknown>;
+      // 多画布读取路径（刻意裸写夹具同口径）：单画布下与旧顶层 nodes 等价
+      const node = canvasNodesMap(doc).get(childId) as Y.Map<unknown>;
       (node.get('children') as Y.Array<string>).push([ROOT_NODE_ID]);
     });
 

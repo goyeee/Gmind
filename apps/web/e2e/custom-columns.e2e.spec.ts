@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import * as Y from 'yjs';
+import { canvasNodesMap } from '@gmind/core';
 
 /**
  * 表格自定义列 E2E（M7c 消费侧：TaskTable 动态列 + 表头管理 + 任务面板自定义属性）。
@@ -79,9 +80,14 @@ async function waitForDoc(page: Page, check: (doc: Y.Doc) => boolean): Promise<Y
   throw new Error('waitForDoc: 自动保存落库超时（条件未满足）');
 }
 
+/** 多画布读取路径：经 core 画布访问器取节点子图——单画布文档与旧顶层 nodes 完全等价。 */
+function nodesMapOf(doc: Y.Doc): Y.Map<Y.Map<unknown>> {
+  return canvasNodesMap(doc);
+}
+
 /** 按文本精确查节点 id（模板 ULID 不可预知）。 */
 function findNodeByText(doc: Y.Doc, text: string): string {
-  const nodes = doc.getMap('nodes') as Y.Map<Y.Map<unknown>>;
+  const nodes = nodesMapOf(doc);
   for (const [id, node] of nodes.entries()) {
     if (String(node.get('text') ?? '') === text) return id;
   }
@@ -90,7 +96,7 @@ function findNodeByText(doc: Y.Doc, text: string): string {
 
 /** 节点 custom Y.Map（无则 undefined）。 */
 function customOf(doc: Y.Doc, nodeId: string): Y.Map<unknown> | undefined {
-  const node = (doc.getMap('nodes') as Y.Map<Y.Map<unknown>>).get(nodeId);
+  const node = nodesMapOf(doc).get(nodeId);
   const custom = node?.get('custom');
   return custom instanceof Y.Map ? custom : undefined;
 }
@@ -411,7 +417,7 @@ test('人员进度头像：节点展示圆形头像+进度环，点击弹选盘�
   await expect(ownerAvatar.locator('path.gm-task-assignee-ring')).toBeVisible();
   await waitForDoc(page, (d) => {
     const id = findNodeByText(d, '方案评审');
-    const task = (d.getMap('nodes').get(id) as Y.Map<unknown>).get('task') as Y.Map<unknown> | undefined;
+    const task = nodesMapOf(d).get(id)?.get('task') as Y.Map<unknown> | undefined;
     return task?.get('progress') === 75;
   });
 

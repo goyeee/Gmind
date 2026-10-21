@@ -10,6 +10,7 @@ import type * as Y from 'yjs';
 import {
   ROOT_NODE_ID,
   addChild,
+  canvasNodesMap,
   childrenIds,
   countAliveReachable,
   countNodes,
@@ -157,11 +158,12 @@ describe('文件内容端点（读取/回写/改名/打开）', () => {
 
   it('PUT 600 节点其中 200 墓碑（可达 400）→ 200 且 nodeCount=400（配额只看可达活跃）', async () => {
     // 经 core 操作层构建：600 子节点后删除 200 个（墓碑语义，nodes 条目永不清除）
+    // （读取路径随多画布走 canvasNodesMap 缺省画布——语义与旧顶层 nodes 读一致）
     const doc = createTemplateDoc({
       title: '墓碑文档',
       children: Array.from({ length: 600 }, (_, i) => ({ text: `n${i}` })),
     });
-    const rootChildren = (doc.getMap('nodes').get(ROOT_NODE_ID) as Y.Map<unknown>).get(
+    const rootChildren = (canvasNodesMap(doc).get(ROOT_NODE_ID) as Y.Map<unknown>).get(
       'children',
     ) as Y.Array<string>;
     deleteNodes(doc, rootChildren.toArray().slice(0, 200));
