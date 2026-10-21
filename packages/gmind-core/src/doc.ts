@@ -154,9 +154,8 @@ export function docFromState(state: Uint8Array): Y.Doc {
   const doc = new Y.Doc();
   Y.applyUpdate(doc, state);
   // 旧形状 → 多画布迁移（多画布 Task 2）：必须在 normalizeTree 之前执行——迁移后
-  // 顶层 nodes 已清空，旧规则⑥会把 top-level root 重建回来污染文档（repair 守卫
-  // 见 repair.ts 前置守卫，Task 5 多画布口径接管后删除）。确定性：画布 id/name
-  // 常量、structure/theme 取 meta 现值，两副本装载结果一致。
+  // 形状才进收敛（Task 5 起 normalizeTree 逐存活画布跑规则 ⓪-⑨）。确定性：画布
+  // id/name 常量、structure/theme 取 meta 现值，两副本装载结果一致。
   migrateLegacyToCanvases(doc);
   // 导入即收敛（Task 9 修复轮 2）：导入/恢复是唯一「外部状态直入」的入口，状态可能
   // 携带残缺写入的规则违例（换父败者侧、孤儿等）——入口处全量 normalize 一次，

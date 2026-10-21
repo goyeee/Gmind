@@ -1,35 +1,81 @@
 import { describe, expect, it } from 'vitest';
 import * as Y from 'yjs';
 import type { Transaction } from 'yjs';
-import { ROOT_NODE_ID, createTemplateDoc, docFromState, docToState } from './doc';
+import { ROOT_NODE_ID, createTemplateDoc, docFromState, docToState, migrateLegacyToCanvases } from './doc';
+import { LEGACY_CANVAS_ID, canvasNodesMap, canvasOrderArr, canvasesMap } from './canvas';
 import { ORIGIN_SYSTEM, ORIGIN_USER, addChild, deleteNodes, moveNode, setCustomColumns, setDescription, setText, withTransaction } from './operations';
 import { childrenIds, getMeta, getNode, subtreeIds } from './read';
 import type { NodeSnapshot } from './read';
 import { normalizeTree } from './repair';
 
-/** 按文本查节点 id（测试辅助；模板生成的 ULID 不可预知，同源克隆的 id 一致）。 */
-function findIdByText(doc: Y.Doc, text: string): string {
-  for (const [id, node] of doc.getMap('nodes').entries()) {
+/** 按文本查节点 id（测试辅助；模板生成的 ULID 不可预知，同源克隆的 id 一致）。
+ *  多画布 Task 5：缺省读第一画布（既有单画布用例零感知）。 */
+function findIdByText(doc: Y.Doc, text: string, canvasId?: string): string {
+  for (const [id, node] of canvasNodesMap(doc, canvasId).entries()) {
     if ((node as Y.Map<unknown>).get('text') === text) return id;
   }
   throw new Error(`test helper: node with text "${text}" not found`);
 }
 
-/** 全文档节点快照（getNode 全量）——交错一致性按此逐节点 deep-equal。 */
-function fullSnapshot(doc: Y.Doc): Record<string, NodeSnapshot | null> {
+/** 单画布节点快照（getNode 全量）——交错一致性按此逐节点 deep-equal。 */
+function fullSnapshot(doc: Y.Doc, canvasId?: string): Record<string, NodeSnapshot | null> {
   const out: Record<string, NodeSnapshot | null> = {};
-  for (const id of doc.getMap('nodes').keys()) out[id] = getNode(doc, id);
+  for (const id of canvasNodesMap(doc, canvasId).keys()) out[id] = getNode(doc, id, canvasId);
   return out;
 }
 
 /** 裸取节点 Y.Map（破坏场景用；绕过操作层校验模拟并发残留）。 */
-function rawNode(doc: Y.Doc, id: string): Y.Map<unknown> {
-  return doc.getMap('nodes').get(id) as Y.Map<unknown>;
+function rawNode(doc: Y.Doc, id: string, canvasId?: string): Y.Map<unknown> {
+  return canvasNodesMap(doc, canvasId).get(id) as Y.Map<unknown>;
 }
 
 /** 裸取 children Y.Array（破坏场景用）。 */
-function rawChildren(doc: Y.Doc, id: string): Y.Array<string> {
-  return rawNode(doc, id).get('children') as Y.Array<string>;
+function rawChildren(doc: Y.Doc, id: string, canvasId?: string): Y.Array<string> {
+  return rawNode(doc, id, canvasId).get('children') as Y.Array<string>;
+}
+
+/** 手工多画布文档（确定性 id，repair 用例直接引用）：每画布 根 + 指定子节点。 */
+function multiCanvasDoc(
+  specs: Array<{ canvasId: string; rootId: string; childIds: string[] }>,
+): Y.Doc {
+  const doc = new Y.Doc();
+  doc.transact(() => {
+    for (const spec of specs) {
+      const canvas = new Y.Map<unknown>();
+      canvas.set('name', `画布-${spec.canvasId}`);
+      canvas.set('rootId', spec.rootId);
+      canvas.set('structureType', 'mindmap');
+      canvas.set('themeId', 'gmind-light');
+      const nodes = new Y.Map<Y.Map<unknown>>();
+      const root = new Y.Map<unknown>();
+      root.set('text', `R-${spec.canvasId}`);
+      root.set('parentId', '');
+      const rootChildren = new Y.Array<string>();
+      root.set('children', rootChildren);
+      nodes.set(spec.rootId, root);
+      for (const childId of spec.childIds) {
+        const child = new Y.Map<unknown>();
+        child.set('text', childId);
+        child.set('parentId', spec.rootId);
+        child.set('children', new Y.Array<string>());
+        nodes.set(childId, child);
+        rootChildren.push([childId]);
+      }
+      canvas.set('nodes', nodes);
+      canvas.set('summaries', new Y.Map<unknown>());
+      canvasesMap(doc).set(spec.canvasId, canvas);
+      canvasOrderArr(doc).push([spec.canvasId]);
+    }
+  });
+  return doc;
+}
+
+/** 双画布基线：c1（根 'root'，子 c1-a）+ c2（根 'root2'，子 c2-b）。 */
+function twoCanvasDoc(): Y.Doc {
+  return multiCanvasDoc([
+    { canvasId: 'c1', rootId: ROOT_NODE_ID, childIds: ['c1-a'] },
+    { canvasId: 'c2', rootId: 'root2', childIds: ['c2-b'] },
+  ]);
 }
 
 /** 从 base 状态克隆出两份同源文档（单机模拟并发的基线）。 */
@@ -71,7 +117,7 @@ describe('normalizeTree 破坏场景修复（spec §4.2 规则逐条）', () => 
 
     expect(normalizeTree(doc)).toBe(2);
     expect(childrenIds(doc, p1Id)).toEqual([]);
-    expect(doc.getMap('nodes').size).toBe(2); // root + P1，无副作用写入
+    expect(canvasNodesMap(doc).size).toBe(2); // root + P1，无副作用写入
   });
 
   it('children 含墓碑 id → 条目被清除，节点本体保留（快照可还原）', () => {
@@ -143,7 +189,7 @@ describe('normalizeTree 破坏场景修复（spec §4.2 规则逐条）', () => 
     const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
     const aId = findIdByText(doc, 'A');
     doc.transact(() => {
-      doc.getMap('nodes').delete(ROOT_NODE_ID);
+      canvasNodesMap(doc).delete(ROOT_NODE_ID);
     });
 
     expect(normalizeTree(doc)).toBe(2); // 重建 root(1) + 追加 A(1)
@@ -366,7 +412,7 @@ describe('normalizeTreeFor 事务脏区增量（与全量等价，Task 9 修复�
     const subtreeOf = (id: string): string[] => {
       const out: string[] = [];
       const walk = (nodeId: string): void => {
-        const node = doc.getMap('nodes').get(nodeId) as Y.Map<unknown> | undefined;
+        const node = canvasNodesMap(doc).get(nodeId) as Y.Map<unknown> | undefined;
         if (!node || node.get('deleted') === true) return;
         out.push(nodeId);
         for (const childId of getNode(doc, nodeId)!.childIds) walk(childId);
@@ -445,7 +491,7 @@ describe('normalizeTreeFor 事务脏区增量（与全量等价，Task 9 修复�
       rawChildren(doc, p2Id).push([xId]);
     });
     const holders = (): number =>
-      [...doc.getMap('nodes').values()].filter((n) =>
+      [...canvasNodesMap(doc).values()].filter((n) =>
         ((n as Y.Map<unknown>).get('children') as Y.Array<string> | undefined)?.toArray().includes(xId),
       ).length;
     expect(holders()).toBe(2); // 残缺在库：X 同时挂在 P1 与 P2
@@ -468,7 +514,7 @@ describe('parentId 环破坏（全量扫描专属规则：导入/64 写清扫执
     const xId = findIdByText(doc, 'X');
     const yId = findIdByText(doc, 'Y');
     doc.transact(() => {
-      const nodes = doc.getMap('nodes');
+      const nodes = canvasNodesMap(doc);
       const rootChildren = (nodes.get(ROOT_NODE_ID) as Y.Map<unknown>).get(
         'children',
       ) as Y.Array<string>;
@@ -701,7 +747,7 @@ describe('描述 description 归一（M7c-C1，随 normalizeTree 全量执行）
 describe('侧别 side 归一（逆时针定侧）', () => {
   /** 裸写 side 键（绕过操作层校验，模拟远端坏数据 / crafted doc_state）。 */
   function rawSetSide(doc: Y.Doc, id: string, value: unknown): void {
-    (doc.getMap('nodes').get(id) as Y.Map<unknown>).set('side', value);
+    (canvasNodesMap(doc).get(id) as Y.Map<unknown>).set('side', value);
   }
 
   it('非 left/right（含非字符串）→ 删键，修复数各计 1（回填不在此层——挂 docFromState）', () => {
@@ -758,7 +804,7 @@ describe('侧别 side 归一（逆时针定侧）', () => {
 describe('旧文档 side 回填（docFromState：root 子级缺键 → 索引兜底回填）', () => {
   /** 裸写 side 键（本 describe 局部辅助，与上方归一 describe 同款）。 */
   function rawSide(doc: Y.Doc, id: string, value: unknown): void {
-    (doc.getMap('nodes').get(id) as Y.Map<unknown>).set('side', value);
+    (canvasNodesMap(doc).get(id) as Y.Map<unknown>).set('side', value);
   }
 
   it('无 side 的 root 子级按索引回填：1~3 右、第 4 个起左，幂等且字节稳定', () => {
@@ -976,5 +1022,169 @@ describe('自定义列归一（表格自定义列，随 normalizeTree 全量执�
     const doc = docFromState(docToState(base));
     expect(getMeta(doc).customColumns).toEqual([{ id: 'c1', name: '文本列', type: 'text' }]);
     expect(getNode(doc, id)!.custom).toEqual({ c1: '留' });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 多画布作用域收敛（多画布 Task 5）：规则 ⓪-⑧ 全部按「画布内作用域」执行，
+// 新增画布级规则 ⑨（画布根防御）与 ⑩（画布序与墓碑收敛）。R1 过渡守卫删除后，
+// 新形状文档的收敛由本套件钉死。
+// ---------------------------------------------------------------------------
+
+describe('多画布作用域收敛（规则⑨⑩，Task 5）', () => {
+  it('c1 的孤儿修复不影响 c2：作用域相互隔离，c2 子图零触碰', () => {
+    const doc = twoCanvasDoc();
+    // c1 制造孤儿：裸删 root children 条目（节点存活、parentId 仍指 root）
+    doc.transact(() => {
+      rawChildren(doc, ROOT_NODE_ID, 'c1').delete(0, 1);
+    });
+    const c2Snap = fullSnapshot(doc, 'c2');
+
+    expect(normalizeTree(doc)).toBe(1); // ⑤ 挂回 1 处
+    expect(childrenIds(doc, ROOT_NODE_ID, 'c1')).toEqual(['c1-a']);
+    expect(fullSnapshot(doc, 'c2')).toEqual(c2Snap); // c2 零触碰
+    expect(normalizeTree(doc)).toBe(0); // 幂等
+  });
+
+  it('⑨ c2 根缺失 → 重建该 root（text/parentId 空、空 children），c2 存活孤儿挂回，c1 不动', () => {
+    const doc = twoCanvasDoc();
+    doc.transact(() => {
+      canvasNodesMap(doc, 'c2').delete('root2');
+    });
+
+    expect(normalizeTree(doc)).toBe(2); // 重建 root2(1) + 孤儿 c2-b 挂回(1)
+    const root2 = getNode(doc, 'root2', 'c2')!;
+    expect(root2.text).toBe('');
+    expect(root2.parentId).toBe('');
+    expect(root2.childIds).toEqual(['c2-b']);
+    expect(childrenIds(doc, ROOT_NODE_ID, 'c1')).toEqual(['c1-a']); // c1 不动
+    expect(normalizeTree(doc)).toBe(0); // 幂等
+  });
+
+  it('⑨ c2 根墓碑 → 整键重建覆盖墓碑（不逐条改写其 children——冻结不变量推广）', () => {
+    const doc = twoCanvasDoc();
+    doc.transact(() => {
+      rawNode(doc, 'root2', 'c2').set('deleted', true);
+    });
+
+    expect(normalizeTree(doc)).toBe(2); // 重建(1) + 孤儿挂回(1)
+    const root2 = getNode(doc, 'root2', 'c2')!;
+    expect(root2.deleted).toBe(false);
+    expect(root2.text).toBe('');
+    expect(root2.childIds).toEqual(['c2-b']);
+    expect(normalizeTree(doc)).toBe(0); // 幂等
+  });
+
+  it('⑩ 画布序收敛：重复项去重保首个、幽灵/墓碑项移除、缺失存活画布按 canvasId 升序补入', () => {
+    const doc = twoCanvasDoc(); // order [c1, c2]
+    doc.transact(() => {
+      // 墓碑画布 c3（冻结：nodes/summaries 不进修复面）
+      const tomb = new Y.Map<unknown>();
+      tomb.set('name', '画布-c3');
+      tomb.set('rootId', 'root3');
+      tomb.set('deleted', true);
+      canvasesMap(doc).set('c3', tomb);
+      // 存活但不在 order 的画布 c4
+      const live = new Y.Map<unknown>();
+      live.set('name', '画布-c4');
+      live.set('rootId', 'root4');
+      const nodes = new Y.Map<Y.Map<unknown>>();
+      const root4 = new Y.Map<unknown>();
+      root4.set('text', 'R4');
+      root4.set('parentId', '');
+      root4.set('children', new Y.Array<string>());
+      nodes.set('root4', root4);
+      live.set('nodes', nodes);
+      live.set('summaries', new Y.Map<unknown>());
+      canvasesMap(doc).set('c4', live);
+      canvasOrderArr(doc).push(['c1', 'ghost-canvas', 'c3']); // 重复 c1 + 幽灵 + 墓碑项
+    });
+
+    // 修复：重复 c1(1) + ghost(1) + c3 墓碑项(1) + c4 补入(1) = 4
+    expect(normalizeTree(doc)).toBe(4);
+    expect(canvasOrderArr(doc).toArray()).toEqual(['c1', 'c2', 'c4']);
+    expect(normalizeTree(doc)).toBe(0); // 幂等
+    // 冻结不变量推广：c3 墓碑画布的字段不被触碰（连 nodes 键都不补建）
+    const tomb = canvasesMap(doc).get('c3') as Y.Map<unknown>;
+    expect(tomb.get('deleted')).toBe(true);
+    expect(tomb.get('nodes')).toBeUndefined();
+  });
+
+  it('⑩ 双副本并发迁移同一旧文档：order 重复 canvas-1 去重保首个后两副本收敛一致（2026-10-21 裁定补）', () => {
+    // 旧形状文档（顶层 nodes；createTemplateDoc 已是新形状，手工搭旧壳）
+    const legacy = new Y.Doc();
+    legacy.transact(() => {
+      const nodes = legacy.getMap('nodes');
+      const root = new Y.Map<unknown>();
+      root.set('text', 'R');
+      root.set('parentId', '');
+      root.set('children', new Y.Array<string>());
+      nodes.set(ROOT_NODE_ID, root);
+      const a = new Y.Map<unknown>();
+      a.set('text', 'A');
+      a.set('parentId', ROOT_NODE_ID);
+      a.set('children', new Y.Array<string>());
+      nodes.set('a', a);
+      (root.get('children') as Y.Array<string>).push(['a']);
+    });
+    const state = Y.encodeStateAsUpdate(legacy);
+    const docA = new Y.Doc();
+    Y.applyUpdate(docA, state);
+    const docB = new Y.Doc();
+    Y.applyUpdate(docB, state);
+    // 两副本在并发窗口内各自迁移（未互通）：双方 push 的 'canvas-1' 都留存
+    migrateLegacyToCanvases(docA);
+    migrateLegacyToCanvases(docB);
+    Y.applyUpdate(docA, Y.encodeStateAsUpdate(docB));
+    Y.applyUpdate(docB, Y.encodeStateAsUpdate(docA));
+    expect(canvasOrderArr(docA).toArray()).toEqual([LEGACY_CANVAS_ID, LEGACY_CANVAS_ID]);
+
+    expect(normalizeTree(docA)).toBe(1); // 去重 1 处（保首个）
+    expect(normalizeTree(docB)).toBe(1);
+    expect(canvasOrderArr(docA).toArray()).toEqual([LEGACY_CANVAS_ID]);
+    expect(canvasOrderArr(docB).toArray()).toEqual([LEGACY_CANVAS_ID]);
+    expect(normalizeTree(docA)).toBe(0); // 幂等
+    expect(normalizeTree(docB)).toBe(0);
+    // 收敛一致：迁移后内容两端相同
+    expect(getNode(docA, 'a', LEGACY_CANVAS_ID)?.text).toBe('A');
+    expect(fullSnapshot(docA, LEGACY_CANVAS_ID)).toEqual(fullSnapshot(docB, LEGACY_CANVAS_ID));
+  });
+
+  it('⑦ 概要收敛按画布作用域接线（Task 6 函数本体前的调用点钉死）：c2 断裂片段收敛、c1 不动', () => {
+    const doc = multiCanvasDoc([
+      { canvasId: 'c1', rootId: ROOT_NODE_ID, childIds: ['c1-a'] },
+      { canvasId: 'c2', rootId: 'root2', childIds: ['c2-b1', 'c2-b2'] },
+    ]);
+    // c2 概要条目：同父连续片段 [b1, b2]
+    doc.transact(() => {
+      const canvas = canvasesMap(doc).get('c2') as Y.Map<unknown>;
+      const summaries = canvas.get('summaries') as Y.Map<unknown>;
+      const entry = new Y.Map<unknown>();
+      const ids = new Y.Array<string>();
+      ids.insert(0, ['c2-b1', 'c2-b2']);
+      entry.set('nodeIds', ids);
+      entry.set('label', 'S');
+      summaries.set('sum-1', entry);
+      // 裸墓碑 b2（绕过 deleteNodes，片段断裂残留）
+      (canvasNodesMap(doc, 'c2').get('c2-b2') as Y.Map<unknown>).set('deleted', true);
+    });
+
+    // 修复：③ root2 children 清除墓碑条目(1) + ⑦ 片段收敛为 [b1](1) = 2
+    expect(normalizeTree(doc)).toBe(2);
+    expect(childrenIds(doc, 'root2', 'c2')).toEqual(['c2-b1']);
+    const entry = (canvasesMap(doc).get('c2') as Y.Map<unknown>)
+      .get('summaries') as Y.Map<unknown>;
+    const s = entry.get('sum-1') as Y.Map<unknown>;
+    expect((s.get('nodeIds') as Y.Array<string>).toArray()).toEqual(['c2-b1']);
+    expect(s.get('label')).toBe('S'); // label 不动
+    expect(childrenIds(doc, ROOT_NODE_ID, 'c1')).toEqual(['c1-a']); // c1 不动
+    expect(normalizeTree(doc)).toBe(0); // 幂等
+  });
+
+  it('R1 守卫语义恢复：side 回填按画布作用域逐存活画布执行（各画布 root 子级按各自索引兜底）', () => {
+    const doc = twoCanvasDoc(); // 两画布子级均无 side 键（旧文档形状）
+    const loaded = docFromState(docToState(doc));
+    expect(getNode(loaded, 'c1-a', 'c1')!.side).toBe('right');
+    expect(getNode(loaded, 'c2-b', 'c2')!.side).toBe('right');
   });
 });

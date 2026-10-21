@@ -1,6 +1,7 @@
 import * as Y from 'yjs';
 import { ulid } from 'ulid';
 import { ROOT_NODE_ID } from './doc';
+import { canvasesMap } from './canvas';
 import { MAX_TEXT_LENGTH } from './constants';
 import { GmindCoreError } from './errors';
 import { getNode } from './read';
@@ -32,11 +33,6 @@ export interface SummarySnapshot {
 
 function summariesMap(doc: Y.Doc): Y.Map<Y.Map<unknown>> {
   return doc.getMap('summaries');
-}
-
-/** 与 read.ts/repair.ts 同款类型化访问（Y.Map 泛型丢失问题）。 */
-function nodesMap(doc: Y.Doc): Y.Map<Y.Map<unknown>> {
-  return doc.getMap('nodes');
 }
 
 /** 条目防御读取：形状不符（远端坏数据）返回 null，绝不抛错（镜像 read.ts 风格）。 */
@@ -164,6 +160,34 @@ export interface SummaryRepairPlan {
 }
 
 /**
+ * repair 收敛的作用域解析（多画布 Task 5 接线；本模块全面画布化在 Task 6 完成）：
+ * - canvasId 显式传入 → 该画布的 nodes/summaries 子图（画布不存在或键形状不符 →
+ *   返回 null，调用方按无可修处理，绝不抛错、绝不补建——规划期零写入纪律）；
+ * - canvasId 缺省（undefined）→ 旧形状顶层 nodes/summaries（legacy 作用域哨兵，
+ *   repair 的 legacy 路径专用；Task 6 将把缺省语义收敛为「解析画布」）。
+ */
+function repairScopeMaps(
+  doc: Y.Doc,
+  canvasId: string | undefined,
+): { nodes: Y.Map<Y.Map<unknown>>; summaries: Y.Map<Y.Map<unknown>> } | null {
+  if (canvasId === undefined) {
+    return {
+      nodes: doc.getMap('nodes') as Y.Map<Y.Map<unknown>>,
+      summaries: doc.getMap('summaries') as Y.Map<Y.Map<unknown>>,
+    };
+  }
+  const canvas = canvasesMap(doc).get(canvasId);
+  if (canvas === undefined || canvas.get('deleted') === true) return null; // 墓碑画布冻结
+  const nodes = canvas.get('nodes');
+  const summaries = canvas.get('summaries');
+  if (!(nodes instanceof Y.Map) || !(summaries instanceof Y.Map)) return null;
+  return {
+    nodes: nodes as Y.Map<Y.Map<unknown>>,
+    summaries: summaries as Y.Map<Y.Map<unknown>>,
+  };
+}
+
+/**
  * 规划概要收敛（文档状态纯函数，replica 一致）：
  * - 成员「离开片段」的判定 = 节点缺失 / 墓碑 / parentId 已变 / 不在父 childIds 中
  *   （父 id 取片段首个仍存在成员的 parentId——同父是片段不变量）；
@@ -172,11 +196,14 @@ export interface SummaryRepairPlan {
  *   （并列取最前）——保证收敛结果仍是合法片段（validSummarySegment 通过）；
  * - label 一概不动；干净概要零计划（不产生写入）。
  * 返回 null 表示无需修复。
+ * 多画布（Task 5）：canvasId 作用域（缺省 = legacy 顶层，见 repairScopeMaps）。
  */
-export function planSummaryRepair(doc: Y.Doc): SummaryRepairPlan | null {
-  const nodes = nodesMap(doc);
+export function planSummaryRepair(doc: Y.Doc, canvasId?: string): SummaryRepairPlan | null {
+  const maps = repairScopeMaps(doc, canvasId);
+  if (maps === null) return null;
+  const { nodes, summaries } = maps;
   const plan: SummaryRepairPlan = { removeIds: [], updates: [] };
-  for (const [id, entry] of summariesMap(doc).entries()) {
+  for (const [id, entry] of summaries.entries()) {
     const snap = readEntry(entry);
     if (!snap) continue; // 畸形条目：repair 不治形状（读侧已防御跳过），确定性不动
     // 片段父：同父不变量下取首个仍存在成员的 parentId；全不存在时无法归属 → 删除。
@@ -237,10 +264,17 @@ export function planSummaryRepair(doc: Y.Doc): SummaryRepairPlan | null {
   return plan;
 }
 
-/** 应用概要修复计划（必须在调用方已开启的事务内执行）；返回修复计数。 */
-export function applySummaryRepair(doc: Y.Doc, plan: SummaryRepairPlan | null): number {
+/** 应用概要修复计划（必须在调用方已开启的事务内执行）；返回修复计数。
+ *  canvasId 作用域口径同 planSummaryRepair（Task 5 接线）。 */
+export function applySummaryRepair(
+  doc: Y.Doc,
+  plan: SummaryRepairPlan | null,
+  canvasId?: string,
+): number {
   if (plan === null) return 0;
-  const summaries = summariesMap(doc);
+  const maps = repairScopeMaps(doc, canvasId);
+  if (maps === null) return 0; // 防御：计划后理论不可达
+  const summaries = maps.summaries;
   for (const id of plan.removeIds) summaries.delete(id);
   for (const u of plan.updates) {
     const entry = summaries.get(u.id);

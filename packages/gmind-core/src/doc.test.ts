@@ -69,6 +69,9 @@ function createLegacyDoc(): Y.Doc {
     meta.set('title', '旧文档');
     meta.set('structureType', 'logic');
     meta.set('themeId', 'dark');
+    // custom 列 schema（装载即收敛会把 schema 外 custom 键当孤儿清除——夹具带上
+    // 'flag' 列定义，钉的是迁移深拷贝保真而非收敛豁免）。
+    meta.set('customColumns', [{ id: 'flag', name: '旗标', type: 'text' }]);
     const nodes = doc.getMap<Y.Map<unknown>>('nodes');
     const root = new Y.Map<unknown>();
     root.set('text', '旧根');
@@ -83,10 +86,12 @@ function createLegacyDoc(): Y.Doc {
       child.set('children', new Y.Array<string>());
       if (id === 'child-1') {
         // 嵌套 Y 类型字段（icons: Map<组, Array<string>>；task/custom: Map；数组内嵌 Y.Map）
+        // 组键用目录内合法组（emoji，值本身即字形不走目录）：装载即收敛（normalize）
+        // 会清除目录外旧组键——本用例钉的是深拷贝保真，不是收敛豁免。
         const icons = new Y.Map<unknown>();
         const groupIcons = new Y.Array<string>();
         groupIcons.push(['⭐', '🔥']);
-        icons.set('组一', groupIcons);
+        icons.set('emoji', groupIcons);
         child.set('icons', icons);
         const task = new Y.Map<unknown>();
         task.set('status', 'done');
@@ -147,7 +152,7 @@ describe('docFromState 装载迁移（旧形状 → 多画布）', () => {
     const a = docFromState(docToState(legacy));
     const child = canvasNodesMap(a).get('child-1') as Y.Map<unknown>;
     const icons = child.get('icons') as Y.Map<unknown>;
-    expect((icons.get('组一') as Y.Array<string>).toArray()).toEqual(['⭐', '🔥']);
+    expect((icons.get('emoji') as Y.Array<string>).toArray()).toEqual(['⭐', '🔥']);
     const task = child.get('task') as Y.Map<unknown>;
     expect(task.get('status')).toBe('done');
     expect(task.get('assignee')).toBe('张三');
@@ -158,13 +163,13 @@ describe('docFromState 装载迁移（旧形状 → 多画布）', () => {
     // 深拷贝而非引用搬运：源文档自身嵌套内容不被掏空（旧壳删键后 GC 会回收被透传的类型）
     const legacyChild = legacy.getMap('nodes').get('child-1') as Y.Map<unknown>;
     const legacyIcons = legacyChild.get('icons') as Y.Map<unknown>;
-    expect((legacyIcons.get('组一') as Y.Array<string>).toArray()).toEqual(['⭐', '🔥']);
+    expect((legacyIcons.get('emoji') as Y.Array<string>).toArray()).toEqual(['⭐', '🔥']);
   });
 
   it('迁移确定性：两副本（同 clientID）装载同一旧文档产出字节级一致状态', () => {
     // docFromState 内部自建 Y.Doc（clientID 随机），字节级比较需固定 clientID 手工
-    // 复刻装载步骤（docFromState 其余步骤对新形状均为零写入：normalize 守卫返回 0、
-    // side 回填读空顶层 nodes 为空计划）。
+    // 复刻装载步骤（applyUpdate + migrate；本用例不跑 normalize/side 回填——
+    // 装载通道的收敛在 docFromState 内、确定性由「状态纯函数」保证，迁移本身亦确定性）。
     const legacy = createLegacyDoc();
     const state = docToState(legacy);
     const loadReplica = (clientID: number): Y.Doc => {

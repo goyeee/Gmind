@@ -65,12 +65,13 @@ const state = core.docToState(doc); // 序列化；docFromState(state) 还原（
 - `type StyleScope = 'subtree' | 'single'`
 - `applyStyle(doc: Y.Doc, rootIds: string[], patch: Record<string, string | number | null>, scope: StyleScope, origin?: WriteOrigin): void`
 
-### repair（自愈/规范化，均以 system origin 写入）
+### repair（自愈/规范化，均以 system origin 写入；多画布口径：规则逐存活画布执行 + 画布级 ⑨⑩）
 
-- 环破坏仅在全量扫描执行（导入/64 写清扫），按最大 ULID 断环回 root。
-- `normalizeTree(doc: Y.Doc, origin?: string): number` — 全量收敛，返回修复写入数
-- `normalizeTreeFor(doc: Y.Doc, origin: string, dirtyNodeIds: Set<string>): number` — 增量收敛指定脏区
-- `deriveNormalizeDirty(doc: Y.Doc, tr: Y.Transaction): Set<string> | null` — 从事务派生脏节点集
+- 环破坏仅在全量扫描执行（导入/64 写清扫），按最大 ULID 断环回本画布 rootId。
+- `normalizeTree(doc: Y.Doc, origin?: string): number` — 全量收敛（逐存活画布 + 画布序），返回修复写入数
+- `normalizeTreeFor(doc: Y.Doc, origin: string, dirty: NormalizeDirty): number` — 增量收敛指定脏区
+- `deriveNormalizeDirty(doc: Y.Doc, tr: Y.Transaction): NormalizeDirty | null` — 从事务派生脏区（canvasId → 脏 nodeId 集映射）
+- `type NormalizeDirty = Map<string, Set<string>>` — 增量脏区（'' = 旧形状顶层作用域哨兵）
 
 ### undo（撤销/重做，仅跟踪 ORIGIN_USER 事务，FR-EDT-004）
 
