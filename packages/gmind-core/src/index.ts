@@ -16,6 +16,9 @@
 export * from './constants';
 export * from './errors';
 
+// canvas（多画布结构访问器与读侧；写侧操作在后续 Task 接入）
+export * from './canvas';
+
 // read（只读快照与存活查询）
 export * from './read';
 

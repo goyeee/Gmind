@@ -19,7 +19,9 @@ export type GmindCoreErrorCode =
   /** 表格视图列体系（meta.tableView 统一列序/隐藏/固定/排序）：入参形状非法。 */
   | 'TABLE_VIEW_INVALID'
   /** 节点图片位置（图文四槽位，需求方 2026-10-20）：placement 非法 / 同节点移动。 */
-  | 'INVALID_IMAGE_PLACEMENT' | 'INVALID_IMAGE_MOVE';
+  | 'INVALID_IMAGE_PLACEMENT' | 'INVALID_IMAGE_MOVE'
+  /** 多画布（迁移期读侧）：解析后的画布不存在或已删除。 */
+  | 'CANVAS_NOT_FOUND';
 
 export class GmindCoreError extends Error {
   constructor(readonly code: GmindCoreErrorCode, message: string) {
