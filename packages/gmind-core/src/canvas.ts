@@ -32,7 +32,7 @@ function aliveOrder(doc: Y.Doc): string[] {
   });
 }
 
-/** 画布 id 解析：显式 > meta.activeCanvasId > 首个存活 > LEGACY 常量。全部不存活时回退首个存活。 */
+/** 画布 id 解析：显式 > meta.activeCanvasId > 首个存活 > LEGACY 常量。全部不存活时返回 LEGACY_CANVAS_ID 常量。 */
 export function resolveCanvasId(doc: Y.Doc, canvasId?: string): string {
   const order = aliveOrder(doc);
   const candidates = [
@@ -49,8 +49,19 @@ export function resolveCanvasId(doc: Y.Doc, canvasId?: string): string {
   return LEGACY_CANVAS_ID; // 空文档/迁移前：由调用方决定是否需要真实存在
 }
 
+/**
+ * 画布级 Y.Map 访问器。显式传入 canvasId 时不存在或已删除即抛 CANVAS_NOT_FOUND
+ * （禁止静默回退）；缺省（undefined）时经 resolveCanvasId 回退链解析，解析落空同样抛错。
+ */
 export function canvasMapOf(doc: Y.Doc, canvasId?: string): Y.Map<unknown> {
-  const id = resolveCanvasId(doc, canvasId);
+  if (canvasId !== undefined) {
+    const m = canvasesMap(doc).get(canvasId);
+    if (m === undefined || m.get('deleted') === true) {
+      throw new GmindCoreError('CANVAS_NOT_FOUND', '画布不存在');
+    }
+    return m;
+  }
+  const id = resolveCanvasId(doc);
   const m = canvasesMap(doc).get(id);
   if (m === undefined || m.get('deleted') === true) {
     throw new GmindCoreError('CANVAS_NOT_FOUND', '画布不存在');

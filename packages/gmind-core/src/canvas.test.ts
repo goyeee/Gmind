@@ -6,6 +6,7 @@ import {
   canvasMapOf,
   canvasNodesMap,
   canvasOrderArr,
+  canvasSummariesMap,
   canvasesMap,
   ensureCanvasShape,
   listCanvases,
@@ -91,17 +92,24 @@ describe('canvas 结构访问器（双画布文档）', () => {
     expect(canvasMapOf(doc, 'c2').get('name')).toBe('画布二');
   });
 
-  it('canvasMapOf 对不存在/已删除 id 沿回退链解析，落空时抛 CANVAS_NOT_FOUND', () => {
+  it('canvasMapOf 显式 id 不存在/已删除即抛 CANVAS_NOT_FOUND，不回退到其他存活画布', () => {
     const doc = buildTwoCanvasDoc();
-    // 显式 id 不存在 → 回退 meta.activeCanvasId（c2）
-    expect(canvasMapOf(doc, 'nope').get('name')).toBe('画布二');
-    // 显式 id 是墓碑 → 同样被跳过
-    expect(canvasMapOf(doc, 'c-tomb').get('name')).toBe('画布二');
+    // doc 里有其他存活画布（c1/c2），但显式 id 不存在仍硬失败
+    expect(() => canvasMapOf(doc, 'nope')).toThrowError(
+      expect.objectContaining({ code: 'CANVAS_NOT_FOUND' }),
+    );
+    // 显式 id 是墓碑 → 同样抛
+    expect(() => canvasMapOf(doc, 'c-tomb')).toThrowError(
+      expect.objectContaining({ code: 'CANVAS_NOT_FOUND' }),
+    );
+    // 缺省（undefined）时回退链正常解析，仍命中存活画布
+    expect(canvasMapOf(doc).get('name')).toBe('画布二');
+    expect(canvasMapOf(doc, 'c1').get('name')).toBe('画布一');
     // 全链路落空（无任何画布）→ 解析落 LEGACY_CANVAS_ID 且不存在 → 抛错
     expect(() => canvasMapOf(new Y.Doc())).toThrowError(
       expect.objectContaining({ code: 'CANVAS_NOT_FOUND' }),
     );
-    // order 全墓碑 + 显式 id 缺失：同样抛 CANVAS_NOT_FOUND
+    // order 全墓碑 + 缺省：同样抛 CANVAS_NOT_FOUND
     const dead = new Y.Doc();
     dead.transact(() => {
       const tomb = new Y.Map<unknown>();
@@ -109,7 +117,7 @@ describe('canvas 结构访问器（双画布文档）', () => {
       canvasesMap(dead).set('c1', tomb);
       canvasOrderArr(dead).push(['c1']);
     });
-    expect(() => canvasMapOf(dead, 'nope')).toThrowError(
+    expect(() => canvasMapOf(dead)).toThrowError(
       expect.objectContaining({ code: 'CANVAS_NOT_FOUND' }),
     );
   });
@@ -119,8 +127,28 @@ describe('canvas 结构访问器（双画布文档）', () => {
     const nodes = canvasNodesMap(doc, 'c1');
     expect(nodes).toBeInstanceOf(Y.Map);
     expect(nodes.size).toBe(0);
+    const summaries = canvasSummariesMap(doc, 'c1');
+    expect(summaries).toBeInstanceOf(Y.Map);
+    expect(summaries.size).toBe(0);
     expect(rootIdOf(doc, 'c1')).toBe('root');
     expect(rootIdOf(doc, 'c2')).toBe('root-b');
+  });
+
+  it('rootIdOf 在 rootId 缺失/空串时回退 ROOT_NODE_ID', () => {
+    const doc = new Y.Doc();
+    doc.transact(() => {
+      const c = new Y.Map<unknown>();
+      c.set('rootId', '');
+      canvasesMap(doc).set('c1', c);
+      canvasOrderArr(doc).push(['c1']);
+    });
+    expect(rootIdOf(doc, 'c1')).toBe('root');
+    const doc2 = new Y.Doc();
+    doc2.transact(() => {
+      canvasesMap(doc2).set('c1', new Y.Map<unknown>());
+      canvasOrderArr(doc2).push(['c1']);
+    });
+    expect(rootIdOf(doc2, 'c1')).toBe('root');
   });
 });
 
