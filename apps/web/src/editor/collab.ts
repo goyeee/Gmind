@@ -1,5 +1,5 @@
 import { HocuspocusProvider } from '@hocuspocus/provider';
-import { attachRemoteNormalization, docFromState, docToState, ROOT_NODE_ID } from '@gmind/core';
+import { attachRemoteNormalization, canvasesMap, docFromState, docToState } from '@gmind/core';
 import { colorForUser, type RemoteCursor } from '@gmind/engine';
 import { avatarSrcOf } from './TaskFields';
 import * as Y from 'yjs';
@@ -337,7 +337,8 @@ export async function loadDocFromIndexedDB(fileId: string): Promise<Y.Doc | null
   const idb = new IndexeddbPersistence(fileId, raw);
   try {
     await idb.whenSynced;
-    if (!raw.getMap('nodes').has(ROOT_NODE_ID)) {
+    // 多画布收口：读取路径适配，语义不变——缓存副本含存活画布即结构完整可用（旧判顶层 nodes.has(ROOT_NODE_ID)）
+    if (canvasesMap(raw).size === 0) {
       // 副本为空：无 root 即从未在本机装载过，无法恢复
       await idb.destroy();
       raw.destroy();
