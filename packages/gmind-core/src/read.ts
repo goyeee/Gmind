@@ -1,6 +1,6 @@
 import * as Y from 'yjs';
 import type { StructureType } from '@gmind/shared';
-import { ROOT_NODE_ID } from './doc';
+import { canvasMapOf, canvasNodesMap, rootIdOf } from './canvas';
 import {
   canonicalCustomColumns,
   canonicalTableView,
@@ -125,40 +125,44 @@ export interface NodeSnapshot {
   custom?: Record<string, unknown>;
 }
 
-function nodesMap(doc: Y.Doc): Y.Map<Y.Map<unknown>> {
-  return doc.getMap('nodes');
-}
-
 function asString(v: unknown, fallback = ''): string {
   return typeof v === 'string' ? v : fallback;
 }
 
-export function getMeta(doc: Y.Doc): DocMeta {
+/** 读侧 meta：title/customColumns/tableView 读 doc 级 meta（全画布共享）；
+ * structureType/themeId 读解析画布（canvasMapOf 缺省路径=第一画布；显式 canvasId
+ * 不存在即抛 CANVAS_NOT_FOUND，同 Task 1 裁定不回退）。 */
+export function getMeta(doc: Y.Doc, canvasId?: string): DocMeta {
   const meta = doc.getMap('meta');
   const customColumns = canonicalCustomColumns(meta.get('customColumns'));
+  const canvas = canvasMapOf(doc, canvasId);
   return {
     title: asString(meta.get('title')),
-    structureType: (meta.get('structureType') as StructureType | undefined) ?? 'mindmap',
-    themeId: asString(meta.get('themeId'), 'gmind-light'),
+    structureType: (canvas.get('structureType') as StructureType | undefined) ?? 'mindmap',
+    themeId: asString(canvas.get('themeId'), 'gmind-light'),
     customColumns,
     tableView: canonicalTableView(meta.get('tableView'), customColumns),
   };
 }
 
 /** 仅写入提供的键；默认 user origin（改名/结构切换可撤销，FR-EDT-012）。
+ *  structureType/themeId 写解析画布级（随画布隔离）；title 仍写 doc meta。
  *  customColumns / tableView 不在本 patch 受理面——二者的唯一写入口分别是
  *  operations.setCustomColumns / setTableView（校验/归一/同值守卫一体），
- *  类型上以 Omit 排除。 */
+ *  类型上以 Omit 排除。canvasId 为末位可选参（缺省=第一画布）。 */
 export function setDocMeta(
   doc: Y.Doc,
   patch: Partial<Omit<DocMeta, 'customColumns' | 'tableView'>>,
   origin: WriteOrigin = ORIGIN_USER,
+  canvasId?: string,
 ): void {
+  // 校验先于事务：画布解析（含显式 id 不存在抛错）在事务外完成。
+  const canvas = canvasMapOf(doc, canvasId);
   doc.transact(() => {
     const meta = doc.getMap('meta');
     if (patch.title !== undefined) meta.set('title', patch.title);
-    if (patch.structureType !== undefined) meta.set('structureType', patch.structureType);
-    if (patch.themeId !== undefined) meta.set('themeId', patch.themeId);
+    if (patch.structureType !== undefined) canvas.set('structureType', patch.structureType);
+    if (patch.themeId !== undefined) canvas.set('themeId', patch.themeId);
   }, origin);
 }
 
@@ -256,12 +260,12 @@ export interface AssigneeEntry {
   weight: number;
 }
 
-export function assigneeEntriesOf(doc: Y.Doc, id: string): AssigneeEntry[] {
+export function assigneeEntriesOf(doc: Y.Doc, id: string, canvasId?: string): AssigneeEntry[] {
   const schema = canonicalCustomColumns(doc.getMap('meta').get('customColumns')).filter(
     (c) => c.type === 'assignee',
   );
   if (schema.length === 0) return [];
-  const custom = getNode(doc, id)?.custom;
+  const custom = getNode(doc, id, canvasId)?.custom;
   if (!custom) return [];
   const out: AssigneeEntry[] = [];
   for (const col of schema) {
@@ -293,8 +297,8 @@ function readImage(raw: unknown): NodeImage | null {
   return rest as unknown as NodeImage;
 }
 
-export function getNode(doc: Y.Doc, id: string): NodeSnapshot | null {
-  const node = nodesMap(doc).get(id);
+export function getNode(doc: Y.Doc, id: string, canvasId?: string): NodeSnapshot | null {
+  const node = canvasNodesMap(doc, canvasId).get(id);
   if (!node) return null;
   const children = node.get('children') as Y.Array<string> | undefined;
   const style = node.get('style') as Y.Map<string> | undefined;
@@ -322,26 +326,34 @@ export function getNode(doc: Y.Doc, id: string): NodeSnapshot | null {
   };
 }
 
-export function childrenIds(doc: Y.Doc, id: string): string[] {
-  return getNode(doc, id)?.childIds ?? [];
+export function childrenIds(doc: Y.Doc, id: string, canvasId?: string): string[] {
+  return getNode(doc, id, canvasId)?.childIds ?? [];
 }
 
-export function isAlive(doc: Y.Doc, id: string): boolean {
-  const node = nodesMap(doc).get(id);
+export function isAlive(doc: Y.Doc, id: string, canvasId?: string): boolean {
+  const node = canvasNodesMap(doc, canvasId).get(id);
   return node !== undefined && node.get('deleted') !== true;
 }
 
-/** 先序遍历（含自身）；includeDeleted=false 时跳过墓碑子树。
+/** 先序遍历（含自身）；includeDeleted=false 时跳过墓碑子树。rootId 缺省自解析画布的
+ * rootIdOf 起算（多画布 Task 3）；canvasId 缺省=第一画布。
  * visited 集合防御 children/parentId 环（并发换父交换合并或 crafted doc_state 可产生
  * 2 节点环）：已访问 id 直接跳过，保证任意形状下终止——环的最终治理由全量扫描的
  * 断环规则负责（repair.ts normalizeTree），遍历层只保证不挂起。 */
-export function subtreeIds(doc: Y.Doc, id: string, includeDeleted = false): string[] {
+export function subtreeIds(
+  doc: Y.Doc,
+  rootId?: string,
+  canvasId?: string,
+  includeDeleted = false,
+): string[] {
+  const nodes = canvasNodesMap(doc, canvasId);
+  const start = rootId ?? rootIdOf(doc, canvasId);
   const out: string[] = [];
   const visited = new Set<string>();
   const walk = (nodeId: string): void => {
     if (visited.has(nodeId)) return; // 环防御：跳过已访问
     visited.add(nodeId);
-    const node = nodesMap(doc).get(nodeId);
+    const node = nodes.get(nodeId);
     if (!node) return;
     const deleted = node.get('deleted') === true;
     if (deleted && !includeDeleted) return;
@@ -349,55 +361,60 @@ export function subtreeIds(doc: Y.Doc, id: string, includeDeleted = false): stri
     const children = node.get('children') as Y.Array<string> | undefined;
     if (children) for (const childId of children) walk(childId);
   };
-  walk(id);
+  walk(start);
   return out;
 }
 
 /** 向根回溯；visited 集合防御 parentId 环（同 subtreeIds），成环时止于重复节点前。 */
-export function pathToRoot(doc: Y.Doc, id: string): string[] {
+export function pathToRoot(doc: Y.Doc, id: string, canvasId?: string): string[] {
+  const nodes = canvasNodesMap(doc, canvasId);
   const out: string[] = [];
   const visited = new Set<string>();
   let cur: string | undefined = id;
   while (cur !== undefined && cur !== '' && !visited.has(cur)) {
     visited.add(cur);
     out.push(cur);
-    const node = nodesMap(doc).get(cur);
+    const node = nodes.get(cur);
     if (!node) break;
     cur = asString(node.get('parentId')) || undefined;
   }
   return out;
 }
 
-/** 存活节点数（不含中心主题）。 */
-export function countAlive(doc: Y.Doc): number {
+/** 存活节点数（不含该画布 root）。 */
+export function countAlive(doc: Y.Doc, canvasId?: string): number {
+  const rootId = rootIdOf(doc, canvasId);
   let n = 0;
-  for (const [id, node] of nodesMap(doc).entries()) {
-    if (id !== ROOT_NODE_ID && node.get('deleted') !== true) n += 1;
+  for (const [id, node] of canvasNodesMap(doc, canvasId).entries()) {
+    if (id !== rootId && node.get('deleted') !== true) n += 1;
   }
   return n;
 }
 
-/** 配额口径（FR-ACC-003「文档节点数 ≤500」＝活跃文档规模）：自 root 沿 children
- * 可达的存活节点数（不含 root）。与 countAlive/countNodes 的差异：
+/** 配额口径（FR-ACC-003「文档节点数 ≤500」，多画布裁定 1：配额按画布）：自该画布
+ * root（rootIdOf(doc, canvasId)）沿 children 可达的存活节点数（不含 root）。
+ * 与 countAlive/countNodes 的差异：
  * - 墓碑（deleted=true，永不清除、随编辑累积）不计入——否则长期编辑的正常文档会
  *   被 countNodes 的墓碑余额推过上限，永久无法保存（M1 验收修复轮裁决）；
  * - 自 root 不可达的孤儿（parentId 指向缺失/墓碑/为空，normalize 确定性跳过）不计入；
- * docFromState 已在入口全量 normalize，可达集合即「有意义的活跃规模」。
+ *  docFromState 已在入口全量 normalize，可达集合即「有意义的活跃规模」。
  * visited 集合防御 children 侧环（同 subtreeIds，并发换父交换合并或 crafted state
  * 可产生），保证任意形状下终止。 */
-export function countAliveReachable(doc: Y.Doc): number {
-  const root = nodesMap(doc).get(ROOT_NODE_ID);
+export function countAliveReachable(doc: Y.Doc, canvasId?: string): number {
+  const nodes = canvasNodesMap(doc, canvasId);
+  const rootId = rootIdOf(doc, canvasId);
+  const root = nodes.get(rootId);
   if (!root || root.get('deleted') === true) return 0;
   const children = root.get('children') as Y.Array<string> | undefined;
   if (!children) return 0;
   let n = 0;
-  const visited = new Set<string>([ROOT_NODE_ID]);
+  const visited = new Set<string>([rootId]);
   const stack: string[] = [...children.toArray()];
   while (stack.length > 0) {
     const id = stack.pop() as string;
     if (visited.has(id)) continue; // 环防御：跳过已访问
     visited.add(id);
-    const node = nodesMap(doc).get(id);
+    const node = nodes.get(id);
     if (!node || node.get('deleted') === true) continue; // 墓碑子树整枝剪除
     n += 1;
     const next = node.get('children') as Y.Array<string> | undefined;
@@ -410,17 +427,19 @@ export function countAliveReachable(doc: Y.Doc): number {
  * collapsed=true 且 childIds.length>0 的个数。可达口径与 countAliveReachable 一致——
  * 提示的 N 必须等于导出实际展开的处数（cloneExpanded 只展开可达集）；childIds 为空
  * 的「空折叠」不产生视觉折叠态，不计。visited 集合防御 children 侧环（同上）。 */
-export function countCollapsedWithChildren(doc: Y.Doc): number {
-  const root = nodesMap(doc).get(ROOT_NODE_ID);
+export function countCollapsedWithChildren(doc: Y.Doc, canvasId?: string): number {
+  const nodes = canvasNodesMap(doc, canvasId);
+  const rootId = rootIdOf(doc, canvasId);
+  const root = nodes.get(rootId);
   if (!root || root.get('deleted') === true) return 0;
   let n = 0;
   const visited = new Set<string>();
-  const stack: string[] = [ROOT_NODE_ID];
+  const stack: string[] = [rootId];
   while (stack.length > 0) {
     const id = stack.pop() as string;
     if (visited.has(id)) continue; // 环防御：跳过已访问
     visited.add(id);
-    const node = nodesMap(doc).get(id);
+    const node = nodes.get(id);
     if (!node || node.get('deleted') === true) continue; // 墓碑子树整枝剪除
     const children = node.get('children') as Y.Array<string> | undefined;
     const childIds = children ? children.toArray() : [];
@@ -431,8 +450,8 @@ export function countCollapsedWithChildren(doc: Y.Doc): number {
 }
 
 /** 内部取节点：缺失抛 NODE_NOT_FOUND，墓碑抛 NODE_DELETED。 */
-export function requireAliveNode(doc: Y.Doc, id: string): Y.Map<unknown> {
-  const node = nodesMap(doc).get(id);
+export function requireAliveNode(doc: Y.Doc, id: string, canvasId?: string): Y.Map<unknown> {
+  const node = canvasNodesMap(doc, canvasId).get(id);
   if (!node) throw new GmindCoreError('NODE_NOT_FOUND', '节点不存在');
   if (node.get('deleted') === true) throw new GmindCoreError('NODE_DELETED', '节点已删除');
   return node;

@@ -243,7 +243,7 @@ function nodesMap(doc: Y.Doc): Y.Map<Y.Map<unknown>> {
 /** 内部：将 nodeId 及其全部后代标记为墓碑（deleted=true），children 数组保留不动（快照可还原）。 */
 function tombstoneSubtree(doc: Y.Doc, nodeId: string): void {
   const nodes = nodesMap(doc);
-  for (const id of subtreeIds(doc, nodeId, true)) {
+  for (const id of subtreeIds(doc, nodeId, undefined, true)) {
     nodes.get(id)?.set('deleted', true);
   }
 }

@@ -33,15 +33,17 @@ const state = core.docToState(doc); // 序列化；docFromState(state) 还原（
 - `interface DocMeta { title: string; structureType: StructureType; themeId: string }` — `StructureType` 来自 `@gmind/shared`
 - `interface NodeImage { key: string; w: number; h: number }`
 - `interface NodeSnapshot { id; text; parentId; childIds; note; href; image: NodeImage | null; icons: Partial<Record<IconGroup, string>>; style: Record<string, string>; collapsed; deleted }`
-- `getMeta(doc: Y.Doc): DocMeta`
-- `setDocMeta(doc: Y.Doc, patch: Partial<DocMeta>, origin = 'user'): void`
-- `getNode(doc: Y.Doc, id: string): NodeSnapshot | null`
-- `childrenIds(doc: Y.Doc, id: string): string[]`
-- `isAlive(doc: Y.Doc, id: string): boolean`
-- `subtreeIds(doc: Y.Doc, id: string, includeDeleted = false): string[]`
-- `pathToRoot(doc: Y.Doc, id: string): string[]`
-- `countAlive(doc: Y.Doc): number`
-- `requireAliveNode(doc: Y.Doc, id: string): Y.Map<unknown>` — 缺失/墓碑分别抛 NODE_NOT_FOUND / NODE_DELETED
+- `getMeta(doc: Y.Doc, canvasId?: string): DocMeta` — structureType/themeId 读解析画布（缺省=第一画布），title/customColumns/tableView 读 doc meta
+- `setDocMeta(doc: Y.Doc, patch: Partial<DocMeta>, origin = 'user', canvasId?: string): void` — structureType/themeId 写画布级，title 仍写 meta
+- `getNode(doc: Y.Doc, id: string, canvasId?: string): NodeSnapshot | null`
+- `childrenIds(doc: Y.Doc, id: string, canvasId?: string): string[]`
+- `isAlive(doc: Y.Doc, id: string, canvasId?: string): boolean`
+- `subtreeIds(doc: Y.Doc, rootId?: string, canvasId?: string, includeDeleted = false): string[]` — rootId 缺省自解析画布的 rootId 起算
+- `pathToRoot(doc: Y.Doc, id: string, canvasId?: string): string[]`
+- `countAlive(doc: Y.Doc, canvasId?: string): number`
+- `countAliveReachable(doc: Y.Doc, canvasId?: string): number` — 配额口径（FR-ACC-003，按画布自各画布 root 起算）
+- `countCollapsedWithChildren(doc: Y.Doc, canvasId?: string): number`
+- `requireAliveNode(doc: Y.Doc, id: string, canvasId?: string): Y.Map<unknown>` — 缺失/墓碑分别抛 NODE_NOT_FOUND / NODE_DELETED；显式 canvasId 不存在抛 CANVAS_NOT_FOUND
 
 ### operations（写操作与事务；origin 默认 ORIGIN_USER）
 
