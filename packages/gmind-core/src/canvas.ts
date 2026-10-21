@@ -100,8 +100,27 @@ export function rootIdOf(doc: Y.Doc, canvasId?: string): string {
   return typeof r === 'string' && r !== '' ? r : ROOT_NODE_ID;
 }
 
-export function listCanvases(doc: Y.Doc): CanvasInfo[] {
-  const canvases = canvasesMap(doc);
+/**
+ * 全部存活画布的存活节点 id 集（含各画布有效 rootId）。多画布收口：读取路径适配，语义不变
+ * ——对齐旧「顶层 nodes 且 deleted!==true」口径跨全部存活画布求并集；墓碑画布、
+ * crafted 值（非 Y.Map）按 repair 层裁定确定性跳过。
+ */
+export function allAliveNodeIds(doc: Y.Doc): Set<string> {
+  const alive = new Set<string>();
+  for (const c of canvasesMap(doc).values()) {
+    if (!(c instanceof Y.Map) || c.get('deleted') === true) continue; // 多画布收口：读取路径适配，语义不变（墓碑画布不计）
+    const rootId = c.get('rootId');
+    alive.add(typeof rootId === 'string' && rootId !== '' ? rootId : ROOT_NODE_ID);
+    const nodes = c.get('nodes');
+    if (!(nodes instanceof Y.Map)) continue; // crafted 防御：非 Y.Map 确定性跳过（对齐 repair 层裁定）
+    for (const [id, node] of nodes.entries()) {
+      if (node instanceof Y.Map && node.get('deleted') !== true) alive.add(id);
+    }
+  }
+  return alive;
+}
+
+export function listCanvases(doc: Y.Doc): CanvasInfo[] {  const canvases = canvasesMap(doc);
   return aliveOrder(doc).map((id) => {
     const c = canvases.get(id) as Y.Map<unknown>;
     const name = c.get('name');

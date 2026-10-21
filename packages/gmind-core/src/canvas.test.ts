@@ -3,6 +3,7 @@ import * as Y from 'yjs';
 import {
   LEGACY_CANVAS_ID,
   MAX_CANVAS_NAME_LENGTH,
+  allAliveNodeIds,
   canvasMapOf,
   canvasNodesMap,
   canvasOrderArr,
@@ -176,6 +177,55 @@ describe('canvas 结构访问器（crafted 值防御）', () => {
       expect.objectContaining({ code: 'CANVAS_NOT_FOUND' }),
     );
     expect(canvasMapOf(doc).get('name')).toBe('画布一');
+  });
+});
+
+describe('allAliveNodeIds（多画布收口：读取路径适配）', () => {
+  it('双画布各 2 存活 + 1 墓碑节点 + 墓碑画布内节点不计；rootId 恒在集内', () => {
+    const doc = new Y.Doc();
+    doc.transact(() => {
+      const node = (deleted = false) => {
+        const n = new Y.Map<unknown>();
+        if (deleted) n.set('deleted', true);
+        return n;
+      };
+      const c1 = new Y.Map<unknown>();
+      c1.set('rootId', 'root-a');
+      const n1 = new Y.Map<Y.Map<unknown>>();
+      n1.set('a1', node());
+      n1.set('a2', node());
+      n1.set('a3', node(true)); // 墓碑节点：不计
+      c1.set('nodes', n1);
+      const c2 = new Y.Map<unknown>();
+      c2.set('rootId', 'root-b');
+      const n2 = new Y.Map<Y.Map<unknown>>();
+      n2.set('b1', node());
+      n2.set('b2', node());
+      c2.set('nodes', n2);
+      const tomb = new Y.Map<unknown>();
+      tomb.set('deleted', true); // 墓碑画布：内部节点不计
+      const nt = new Y.Map<Y.Map<unknown>>();
+      nt.set('t1', node());
+      tomb.set('nodes', nt);
+      canvasesMap(doc).set('c1', c1);
+      canvasesMap(doc).set('c2', c2);
+      canvasesMap(doc).set('c-tomb', tomb);
+    });
+    expect([...allAliveNodeIds(doc)].sort()).toEqual(['a1', 'a2', 'b1', 'b2', 'root-a', 'root-b']);
+  });
+
+  it('空 doc 返回空集；rootId 缺失回退 ROOT_NODE_ID；crafted nodes 值跳过', () => {
+    const doc = new Y.Doc();
+    expect(allAliveNodeIds(doc).size).toBe(0);
+    doc.transact(() => {
+      const c = new Y.Map<unknown>();
+      canvasesMap(doc).set('c1', c); // 无 rootId → 回退 ROOT_NODE_ID
+      canvasesMap(doc).set('c2', 'crafted' as unknown as Y.Map<unknown>); // crafted 画布跳过
+      const c3 = new Y.Map<unknown>();
+      c3.set('nodes', 42 as unknown as Y.Map<Y.Map<unknown>>); // crafted nodes 跳过
+      canvasesMap(doc).set('c3', c3);
+    });
+    expect(allAliveNodeIds(doc)).toEqual(new Set(['root']));
   });
 });
 
