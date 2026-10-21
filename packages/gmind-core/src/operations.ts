@@ -831,11 +831,14 @@ function writeTaskPatch(node: Y.Map<unknown>, patch: TaskPatch): void {
 // ══ 表格自定义列（doc 级 schema + 节点 custom 值）════════════════════════════
 
 /** 内部：自定义列孤儿清理的节点遍历范围——全部存活画布的 nodes 子图（列 schema 是
- *  doc 级，删列清孤儿须覆盖所有画布）；无画布（装载迁移前旧形状窗口）回退顶层 nodes。 */
+ *  doc 级，删列清孤儿须覆盖所有画布）；无画布（装载迁移前旧形状窗口）回退顶层 nodes。
+ *  墓碑画布确定性跳过（Task 6 收口登记，对齐 deleteCanvas 冻结口径）：墓碑内容整体
+ *  冻结、作快照还原依据保留，孤儿键随内容一并冻结——解冻（restore 整画布重建/复活）
+ *  时按快照内容原样恢复，概不追补清理（与概要裁定 6 同精神：冻结态不做收敛性写入）。 */
 function allNodesMapsForCleanup(doc: Y.Doc): Y.Map<Y.Map<unknown>>[] {
   const maps: Y.Map<Y.Map<unknown>>[] = [];
   for (const canvas of canvasesMap(doc).values()) {
-    if (canvas.get('deleted') === true) continue;
+    if (canvas.get('deleted') === true) continue; // 墓碑画布冻结：孤儿键随内容一并冻结
     maps.push(ensureCanvasShape(canvas as Y.Map<unknown>).nodes);
   }
   if (maps.length === 0) maps.push(doc.getMap('nodes') as Y.Map<Y.Map<unknown>>);

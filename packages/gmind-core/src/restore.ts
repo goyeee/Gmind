@@ -7,6 +7,7 @@ import {
   type IconGroup,
 } from './constants';
 import { ROOT_NODE_ID } from './doc';
+import { canvasesMap, canvasOrderArr } from './canvas';
 import {
   addChild,
   deleteNodes,
@@ -22,18 +23,20 @@ import {
   withTransaction,
   type WriteOrigin,
 } from './operations';
-import { getMeta, getNode, setDocMeta, type DocMeta, type NodeSnapshot } from './read';
+import { getNode, type NodeSnapshot } from './read';
 
 /** 恢复写来源（M4 Task 7，FR-VER-004）：撤销栈仅跟踪 ORIGIN_USER（undo.ts），
  *  restore 事务整体不进任何客户端的撤销栈——恢复是文档级事实修正，Ctrl+Z 不回滚。 */
 export const ORIGIN_RESTORE: WriteOrigin = 'restore';
 
-/** 恢复结果计数（计划 op 口径，事务内执行时累加）：
+/** 恢复结果计数（计划 op 口径，事务内执行时累加；**节点 op 口径**——画布级操作
+ * （画布置墓碑/整画布重建/画布名与结构主题回滚）是文档级事实修正，不计入下列四元组，
+ * 见 restoreFromSnapshot 头注「画布集合回滚」）：
  * - deleted：顶层删除 op 数（父同被删的深层随子树整枝，不逐节点计）；
  * - created：重建节点数（快照存活而当前墓碑/缺失的节点以新 ULID 重建，Yjs 墓碑永久）；
  * - moved：实际执行的 moveNode 数（落位检查通过者不计）；
  * - updated：内容字段（④ 全字段）有写入的交集节点数；重建节点的字段回填计入 created，
- *   不计 updated；meta 的 structureType/themeId 属文档级，不进节点计数。 */
+ *   不计 updated。 */
 export interface RestoreResult {
   deleted: number;
   created: number;
@@ -41,11 +44,75 @@ export interface RestoreResult {
   updated: number;
 }
 
+/** 画布集合口径：并集迭代用的画布只读视图（规划期零写入）。 */
+interface CanvasView {
+  canvasId: string;
+  /** 画布 Y.Map（源 doc 内）；undefined = 该 doc 无此画布（含畸形值按缺失——
+   *  crafted doc_state 防御，对齐 repair 规则⑩ 的畸形值按墓碑口径）。 */
+  canvas: Y.Map<unknown> | undefined;
+  /** 存活 = Y.Map 且 deleted !== true。 */
+  alive: boolean;
+  rootId: string;
+}
+
+/** 单画布节点恢复计划（画布内「可达集先序 diff」逻辑①-④的参数化产物；
+ *  快照视图 snapById/sAlive 随计划携带，执行期不再回读 snapshot）。 */
+interface CanvasNodePlan {
+  canvasId: string;
+  rootId: string;
+  /** 快照存活节点先序集 + 快照视图（id → NodeSnapshot）。 */
+  sAlive: string[];
+  snapById: Map<string, NodeSnapshot>;
+  /** 快照 id → target id 映射：交集节点预映射自身；重建者在 ② 执行期回填。 */
+  idMap: Map<string, string>;
+  deleteIds: string[];
+  createSnapIds: string[];
+  places: Array<{ snapId: string; snapIndex: number }>;
+  fieldDiffs: Array<{ snapId: string; snap: NodeSnapshot }>;
+  /** 零操作短路门（事务前状态判定；执行期 ③ 以现场状态复核）。 */
+  moveNeeded: boolean;
+}
+
+/** 画布集合回滚计划（多画布 Task 6）：集合级操作（画布置墓碑/整画布重建/画布元数据）。 */
+interface CanvasSetPlan {
+  /** target 存活而 snapshot 无（缺失/墓碑/畸形）→ 置墓碑 deleted=true＋移出 order。 */
+  tombstones: string[];
+  /** snapshot 存活而 target 缺失/墓碑/畸形/rootId 不配 → 整画布深拷贝重建＋补入 order。
+   *  copy 为规划期建好的深拷贝（未接入 target，事务内 set 接入）。 */
+  rebuilds: Array<{ canvasId: string; copy: Y.Map<unknown> }>;
+  /** 配对画布（id 相同、双存活、rootId 相同）的 name/structureType/themeId 回滚。 */
+  metaPatches: Array<{ canvas: Y.Map<unknown>; patch: CanvasMetaPatch }>;
+}
+
+/** 画布级元数据 diff 补丁（对齐 meta⑤ 先例：title 恒排除的推广——画布级无 title）。 */
+interface CanvasMetaPatch {
+  name?: string;
+  structureType?: string;
+  themeId?: string;
+}
+
 /**
  * 将 target 就地恢复为 snapshot 的内容（结构 op-diff，单事务，ORIGIN_RESTORE）。
- * 前置：两 doc 均为已 normalize 的本项目文档。快照中存活而当前墓碑的节点以新 ULID 重建。
+ * 前置：两 doc 均为已 normalize（= 已迁移多画布形状）的本项目文档——装载通道
+ * docFromState 恒保证；旧形状窗口（顶层 nodes）不在恢复受理面（画布并集为空 →
+ * 零操作，如实登记）。快照中存活而当前墓碑的节点以新 ULID 重建。
  *
- * ── 算法（binding，plan 全部在事务外算好——校验先于事务纪律）────────────────
+ * ── 画布集合回滚（多画布 Task 6）────────────────────────────────────────
+ * 画布集合并集按 canvasId 对齐（id 相同才配对——画布增删随快照回滚）：
+ * - snapshot 存活、target 缺失/墓碑/畸形/rootId 不配 → **整画布深拷贝重建**
+ *   （doc.ts deepCopyValue 先例：Yjs 共享类型不可换父，逐键自底向上重建）＋补入
+ *   order 末尾；rootId 不配（同 id 不同根，crafted 边角）同属重建分支——逐画布
+ *   节点 diff 以配对根为前提，根不配时整画布回滚是唯一收敛口径。
+ * - target 存活、snapshot 无 → 画布置墓碑 deleted=true＋移出 order（对齐
+ *   deleteCanvas 冻结口径：nodes/summaries 内容不动，作还原依据保留）；
+ * - 双存活且 rootId 相同 → 画布内复用既有「可达集先序 diff」逻辑（根取画布
+ *   rootId），画布的 name/structureType/themeId 纳入 diff（对齐 meta⑤ 先例）。
+ * 画布序**位置**不做 diff（计划未列；repair 规则⑩ 保证集合与序的最低收敛）。
+ * 上述画布级 op 是 core 内部文档级修正：直接写 canvases/canvasOrder 根类型（与
+ * repair 规则⑩ 的 apply 同先例）；公开画布管理 op（addCanvas/deleteCanvas）在
+ * Task 7 落地，届时可换回公开 op。画布级 op 不计入 RestoreResult 四元组。
+ *
+ * ── 画布内算法（binding，plan 全部在事务外算好——校验先于事务纪律）────────
  * ① 删除：target 存活而快照无。只删「顶层」= 删除对象中父级不是删除对象者（删除对象
  *   集合内父被删的深层随 deleteNodes 的整枝墓碑走，不重复落 op）——交集外的多余子树
  *   （父在快照中存活）正是靠本条移除。deleteNodes 墓碑整棵子树并从父 children 摘除。
@@ -69,32 +136,129 @@ export interface RestoreResult {
  *   image 按 key 对比（key 变更时 w/h 随快照值一并写回）；style 按键集对比
  *   （补/改/删键，value null 删）。重建节点的字段回填 = addChild 后立即走同一 diff
  *   例程（新节点必全量不同）。
- * ⑤ meta：structureType/themeId diff → setDocMeta。**title 排除**——meta.title 镜像的
- *   是工作区文件名（useEditorDoc.setTitle 同步 meta 与 PATCH /files），版本恢复是文档
- *   内容回滚，若回写快照 title 会把用户在快照之后的改名一并吃掉，且 files.title 行值
- *   不随之变更（画布与列表名号劈叉）——恢复不改名，title 恒保留 target 现值。
+ * ⑤ 元数据：画布的 name/structureType/themeId 按画布 diff（见「画布集合回滚」）；
+ *   meta.title 恒排除——meta.title 镜像的是工作区文件名（useEditorDoc.setTitle 同步
+ *   meta 与 PATCH /files），版本恢复是文档内容回滚，若回写快照 title 会把用户在快照
+ *   之后的改名一并吃掉，且 files.title 行值不随之变更（画布与列表名号劈叉）——
+ *   恢复不改名，title 恒保留 target 现值。
  *
- * ── 概要（summaries）×恢复口径（M6 终审登记，未实现 diff）── 恢复 diff 范围＝
- *   nodes + meta（title 排除先例见⑤）；doc 级 summaries Y.Map **不在恢复范围**——
- *   恢复不回滚概要集、快照概要也不随版本重生。恢复后经 withTransaction 事务后
- *   normalize 的 summary repair（repair.ts 规则⑦ planSummaryRepair）按**存活片段**
- *   收敛：成员被①删除/换父断裂即收敛存活子段，全失效即删概要（summary.ts 三态）；
- *   ②重建节点为新 ULID，不在任何既有概要的 nodeIds 内，不复活旧概要。口径待需求方
- *   裁定（纳入恢复 or 维持现状），裁定前不实现 summaries diff——登记于
- *   docs/m6-acceptance.md 待裁定清单。
+ * ── 概要（summaries）×恢复口径（裁定 6 钉死，2026-10-21，引
+ *   docs/superpowers/specs/2026-10-21-multi-canvas-ruling.md §一.6＝m6-acceptance
+ *   待裁定项 3 选项 B）── 恢复 diff 范围＝nodes＋画布级元数据（title 排除先例见⑤）；
+ *   **summaries 不在恢复范围**——恢复不回滚概要集、快照概要也不随版本重生。恢复后
+ *   概要保持 target 现状，经 repair 的概要收敛（repair.ts 规则⑦ planSummaryRepair）
+ *   按**存活片段**自愈：成员被①删除/换父断裂即收敛存活子段，全失效即删概要
+ *   （summary.ts 三态）；②重建节点为新 ULID，不在任何既有概要的 nodeIds 内，不复活
+ *   旧概要。此口径已了结 M6 验收「待裁定项 3」（裁定记录 §一.6）。
  *
- * ── 零操作短路 ── diff 为空（无删/无建/无字段差/meta 差/无落位需求）直接返回全零，
- * 不开事务。落位需求按事务前状态判定——其余四类全空时事务前后状态一致，判定精确；
- * 任一非空则必然开事务，该判定仅作短路门，不影响执行路径（③执行期以现场状态复核）。
+ * ── 零操作短路 ── diff 为空（无删/无建/无字段差/无画布级 op/无落位需求）直接返回
+ * 全零，不开事务。落位需求按事务前状态判定——其余几类全空时事务前后状态一致，判定
+ * 精确；任一非空则必然开事务，该判定仅作短路门，不影响执行路径（③执行期以现场状
+ * 态复核）。
  */
 export function restoreFromSnapshot(target: Y.Doc, snapshot: Y.Doc): RestoreResult {
   // ——全部读取与 diff 计算在事务外（校验先于事务纪律）——
-  const tAlive = reachableAliveIds(target); // root 先序遍历 childIds（visited 防环）
-  const sAlive = reachableAliveIds(snapshot);
+  const tCanvases = canvasesMap(target);
+  const sCanvases = canvasesMap(snapshot);
+
+  /** 源 doc 画布只读视图。 */
+  const viewOf = (canvases: Y.Map<Y.Map<unknown>>, canvasId: string): CanvasView => {
+    const canvas = canvases.get(canvasId);
+    if (!(canvas instanceof Y.Map)) {
+      return { canvasId, canvas: undefined, alive: false, rootId: ROOT_NODE_ID };
+    }
+    const rootId = canvas.get('rootId');
+    return {
+      canvasId,
+      canvas: canvas as Y.Map<unknown>,
+      alive: canvas.get('deleted') !== true,
+      rootId: typeof rootId === 'string' && rootId !== '' ? rootId : ROOT_NODE_ID,
+    };
+  };
+
+  // 画布集合并集（按 canvasId 升序——Y.Map 迭代序是本地插入序，非 CRDT 收敛状态，
+  // 不可依赖；对齐 repair.ts repairScopes 的排序纪律）。
+  const unionIds = [...new Set([...tCanvases.keys(), ...sCanvases.keys()])].sort();
+
+  const canvasSetPlan: CanvasSetPlan = { tombstones: [], rebuilds: [], metaPatches: [] };
+  const nodePlans: CanvasNodePlan[] = [];
+
+  for (const canvasId of unionIds) {
+    const t = viewOf(tCanvases, canvasId);
+    const s = viewOf(sCanvases, canvasId);
+    if (s.alive && s.canvas !== undefined) {
+      if (t.alive && t.canvas !== undefined && t.rootId === s.rootId) {
+        // 双存活配对（rootId 同）：画布内可达集先序 diff + 画布级元数据 diff。
+        nodePlans.push(planCanvasNodeDiff(target, snapshot, canvasId, s.rootId));
+        const patch = canvasMetaDiff(t.canvas, s.canvas);
+        if (Object.keys(patch).length > 0) canvasSetPlan.metaPatches.push({ canvas: t.canvas, patch });
+      } else {
+        // target 缺失/墓碑/畸形/rootId 不配 → 整画布深拷贝重建（副本规划期建好，
+        // 事务内 set 接入——deepCopyValue 先例：新 Y 类型未接入前只写不读）。
+        canvasSetPlan.rebuilds.push({ canvasId, copy: deepCopyValue(s.canvas) as Y.Map<unknown> });
+      }
+    } else if (t.alive && t.canvas !== undefined) {
+      // snapshot 无（缺失/墓碑/畸形）而 target 存活 → 画布置墓碑＋移出 order。
+      canvasSetPlan.tombstones.push(canvasId);
+    }
+    // 双无 / 双墓碑：零操作（冻结内容已是还原终态，如实不动）。
+  }
+
+  // 零操作短路：画布级 op 与全部画布节点 op 皆空 → 全零，不开事务。
+  if (
+    canvasSetPlan.tombstones.length === 0 &&
+    canvasSetPlan.rebuilds.length === 0 &&
+    canvasSetPlan.metaPatches.length === 0 &&
+    nodePlans.every(
+      (p) =>
+        p.deleteIds.length === 0 &&
+        p.createSnapIds.length === 0 &&
+        p.fieldDiffs.length === 0 &&
+        !p.moveNeeded,
+    )
+  ) {
+    return { deleted: 0, created: 0, moved: 0, updated: 0 };
+  }
+
+  return withTransaction(target, ORIGIN_RESTORE, () => {
+    const result: RestoreResult = { deleted: 0, created: 0, moved: 0, updated: 0 };
+    // ── 画布集合回滚（先集合后节点：重建/墓碑的画布不在节点 diff 集合内，两不相交）
+    const order = canvasOrderArr(target);
+    for (const canvasId of canvasSetPlan.tombstones) {
+      tCanvases.get(canvasId)?.set('deleted', true);
+      for (let i = order.toArray().indexOf(canvasId); i !== -1; i = order.toArray().indexOf(canvasId)) {
+        order.delete(i, 1); // 重复项一并移除（对齐规则⑩去重口径）
+      }
+    }
+    for (const rb of canvasSetPlan.rebuilds) {
+      tCanvases.set(rb.canvasId, rb.copy);
+      if (!order.toArray().includes(rb.canvasId)) order.push([rb.canvasId]); // 补末尾（位置不做 diff）
+    }
+    for (const mp of canvasSetPlan.metaPatches) {
+      if (mp.patch.name !== undefined) mp.canvas.set('name', mp.patch.name);
+      if (mp.patch.structureType !== undefined) mp.canvas.set('structureType', mp.patch.structureType);
+      if (mp.patch.themeId !== undefined) mp.canvas.set('themeId', mp.patch.themeId);
+    }
+    // ── 逐画布节点 diff（①-④；op 经 core 写 API，canvasId 作用域）
+    for (const plan of nodePlans) {
+      applyCanvasNodeDiff(target, plan, result);
+    }
+    return result;
+  });
+}
+
+/** 单画布「可达集先序 diff」计划（①-④ + 落位门；全部在事务外算好）。 */
+function planCanvasNodeDiff(
+  target: Y.Doc,
+  snapshot: Y.Doc,
+  canvasId: string,
+  rootId: string,
+): CanvasNodePlan {
+  const tAlive = reachableAliveIds(target, canvasId, rootId); // 根先序遍历 childIds（visited 防环）
+  const sAlive = reachableAliveIds(snapshot, canvasId, rootId);
   const tAliveSet = new Set(tAlive);
-  const sAliveSet = new Set(sAlive);
   const snapById = new Map<string, NodeSnapshot>();
-  for (const id of sAlive) snapById.set(id, getNode(snapshot, id)!);
+  for (const id of sAlive) snapById.set(id, getNode(snapshot, id, canvasId)!);
   // parent 映射表：快照 id → target id。交集节点（存活于双方）映射自身；重建节点在
   // ② 执行期以 addChild 返回的新 id 回填——因此 ③ 的 mappedParent 统一执行期解析。
   const idMap = new Map<string, string>();
@@ -102,17 +266,15 @@ export function restoreFromSnapshot(target: Y.Doc, snapshot: Y.Doc): RestoreResu
     if (tAliveSet.has(id)) idMap.set(id, id);
   }
   const mappedParentOf = (snapId: string): string | undefined =>
-    snapById.get(snapId)!.parentId === ROOT_NODE_ID
-      ? ROOT_NODE_ID
-      : idMap.get(snapById.get(snapId)!.parentId);
+    snapById.get(snapId)!.parentId === rootId ? rootId : idMap.get(snapById.get(snapId)!.parentId);
 
-  // ① 删除计划：删除对象 = target 存活（可达口径）而快照无、非 root；顶层 = 父不在
+  // ① 删除计划：删除对象 = target 存活（可达口径）而快照无、非根；顶层 = 父不在
   //   删除对象集合（父也删 → 随子树整枝，不重复计）。
-  const deleteCandidates = tAlive.filter(
-    (id) => id !== ROOT_NODE_ID && !sAliveSet.has(id),
-  );
+  const deleteCandidates = tAlive.filter((id) => id !== rootId && !snapById.has(id));
   const deleting = new Set(deleteCandidates);
-  const deleteIds = deleteCandidates.filter((id) => !deleting.has(getNode(target, id)!.parentId));
+  const deleteIds = deleteCandidates.filter(
+    (id) => !deleting.has(getNode(target, id, canvasId)!.parentId),
+  );
 
   // ② 重建计划：快照先序（sAlive 即先序），父必已映射（先序 + 交集预映射）。
   const createSnapIds = sAlive.filter((id) => !idMap.has(id));
@@ -120,107 +282,147 @@ export function restoreFromSnapshot(target: Y.Doc, snapshot: Y.Doc): RestoreResu
   // ③ 落位计划：快照存活节点按先序逐一登记（交集 + 重建者）；mappedParent/snapIndex
   //   执行期解析（重建父的事务内 id 事务前未知）。
   const places = sAlive
-    .filter((id) => id !== ROOT_NODE_ID)
+    .filter((id) => id !== rootId)
     .map((id) => ({ snapId: id, snapIndex: snapIndexInSnapshot(snapById, id) }));
 
-  // ④ 字段 diff 计划（交集，root 的中心主题文本等字段同为文档内容、一并参与）：
+  // ④ 字段 diff 计划（交集，根的中心主题文本等字段同为文档内容、一并参与）：
   //   重建者的回填在 ② 执行期走同一例程，不入本表。
   const fieldDiffs = sAlive
     .filter((id) => idMap.has(id))
     .map((id) => ({ snapId: id, snap: snapById.get(id)! }))
-    .filter(({ snapId, snap }) => hasFieldDiff(getNode(target, snapId)!, snap));
+    .filter(({ snapId, snap }) => hasFieldDiff(getNode(target, snapId, canvasId)!, snap));
 
-  // ⑤ meta diff（title 排除，见函数头裁定注释）。
-  const metaPatch = metaDiff(getMeta(target), getMeta(snapshot));
-
-  // 落位需求的零操作门（事务前状态判定；精确性论证见「零操作短路」注释）。
+  // 落位需求的零操作门（事务前状态判定；精确性论证见 restoreFromSnapshot 头注）。
   const moveNeeded = sAlive.some((id) => {
-    if (id === ROOT_NODE_ID || !idMap.has(id)) return false; // 重建者必伴随 ②，门已开
+    if (id === rootId || !idMap.has(id)) return false; // 重建者必伴随 ②，门已开
     const mappedParent = mappedParentOf(id);
     if (mappedParent === undefined) return true; // 父为重建节点：必落位
-    const t = getNode(target, id)!;
+    const t = getNode(target, id, canvasId)!;
     if (t.parentId !== mappedParent) return true;
-    return (getNode(target, mappedParent)?.childIds.indexOf(id) ?? -1) !== snapIndexInSnapshot(snapById, id);
+    return (getNode(target, mappedParent, canvasId)?.childIds.indexOf(id) ?? -1) !== snapIndexInSnapshot(snapById, id);
   });
 
-  // ——diff 为空：直接返回全零，不开事务——
-  if (
-    deleteIds.length === 0 &&
-    createSnapIds.length === 0 &&
-    fieldDiffs.length === 0 &&
-    Object.keys(metaPatch).length === 0 &&
-    !moveNeeded
-  ) {
-    return { deleted: 0, created: 0, moved: 0, updated: 0 };
+  return { canvasId, rootId, sAlive, snapById, idMap, deleteIds, createSnapIds, places, fieldDiffs, moveNeeded };
+}
+
+/** 单画布节点 diff 执行（①-④；必须在恢复事务内执行，op 经 core 写 API）。 */
+function applyCanvasNodeDiff(target: Y.Doc, plan: CanvasNodePlan, result: RestoreResult): void {
+  const { canvasId, rootId, snapById, idMap } = plan;
+  const mappedParentOf = (snapId: string): string | undefined =>
+    snapById.get(snapId)!.parentId === rootId ? rootId : idMap.get(snapById.get(snapId)!.parentId);
+  // ① 删除：一次批量（deleteNodes 单事务语义，墓碑整枝 + 摘除父 children）
+  if (plan.deleteIds.length > 0) {
+    deleteNodes(target, plan.deleteIds, ORIGIN_RESTORE, canvasId);
+    result.deleted += plan.deleteIds.length;
   }
-
-  return withTransaction(target, ORIGIN_RESTORE, () => {
-    const result: RestoreResult = { deleted: 0, created: 0, moved: 0, updated: 0 };
-    // ① 删除：一次批量（deleteNodes 单事务语义，墓碑整枝 + 摘除父 children）
-    if (deleteIds.length > 0) {
-      deleteNodes(target, deleteIds, ORIGIN_RESTORE);
-      result.deleted = deleteIds.length;
+  // ② 重建（快照先序；父先于子 → mappedParent 必已就绪）：addChild 落位快照下标，
+  //    字段回填走 ④ 同一 diff 例程（计入 created，不计 updated）。
+  for (const snapId of plan.createSnapIds) {
+    const snap = snapById.get(snapId)!;
+    const mappedParent = mappedParentOf(snapId);
+    if (mappedParent === undefined) {
+      throw new Error(`restore: parent of ${snapId} not resolvable (plan broken)`);
     }
-    // ② 重建（快照先序；父先于子 → mappedParent 必已就绪）：addChild 落位快照下标，
-    //    字段回填走 ④ 同一 diff 例程（计入 created，不计 updated）。
-    for (const snapId of createSnapIds) {
-      const snap = snapById.get(snapId)!;
-      const mappedParent = mappedParentOf(snapId);
-      if (mappedParent === undefined) {
-        throw new Error(`restore: parent of ${snapId} not resolvable (plan broken)`);
-      }
-      const newId = addChild(target, mappedParent, { text: snap.text, index: snapIndexInSnapshot(snapById, snapId) }, ORIGIN_RESTORE);
-      idMap.set(snapId, newId);
-      applyFieldDiff(target, newId, snap);
-      result.created += 1;
+    const newId = addChild(
+      target,
+      mappedParent,
+      { text: snap.text, index: snapIndexInSnapshot(snapById, snapId) },
+      ORIGIN_RESTORE,
+      canvasId,
+    );
+    idMap.set(snapId, newId);
+    applyFieldDiff(target, newId, snap, canvasId);
+    result.created += 1;
+  }
+  // ③ 落位（快照先序；现场复核父映射与同层位置，不符才 moveNode）
+  for (const place of plan.places) {
+    const id = idMap.get(place.snapId)!;
+    const mappedParent = mappedParentOf(place.snapId);
+    if (mappedParent === undefined) {
+      throw new Error(`restore: parent of ${place.snapId} not resolvable (plan broken)`);
     }
-    // ③ 落位（快照先序；现场复核父映射与同层位置，不符才 moveNode）
-    for (const place of places) {
-      const id = idMap.get(place.snapId)!;
-      const mappedParent = mappedParentOf(place.snapId);
-      if (mappedParent === undefined) {
-        throw new Error(`restore: parent of ${place.snapId} not resolvable (plan broken)`);
-      }
-      const t = getNode(target, id)!;
-      if (
-        t.parentId === mappedParent &&
-        getNode(target, mappedParent)?.childIds.indexOf(id) === place.snapIndex
-      ) {
-        continue; // 已在位（重建节点常态）：零写入
-      }
-      moveNode(target, id, mappedParent, place.snapIndex, ORIGIN_RESTORE);
-      result.moved += 1;
+    const t = getNode(target, id, canvasId)!;
+    if (
+      t.parentId === mappedParent &&
+      getNode(target, mappedParent, canvasId)?.childIds.indexOf(id) === place.snapIndex
+    ) {
+      continue; // 已在位（重建节点常态）：零写入
     }
-    // ④ 内容字段（交集，事务前 diff 就位的节点逐个执行）
-    for (const diff of fieldDiffs) {
-      if (applyFieldDiff(target, diff.snapId, diff.snap)) result.updated += 1;
-    }
-    // ⑤ meta（title 恒不动）
-    if (Object.keys(metaPatch).length > 0) setDocMeta(target, metaPatch, ORIGIN_RESTORE);
-    return result;
-  });
+    moveNode(target, id, mappedParent, place.snapIndex, ORIGIN_RESTORE, canvasId);
+    result.moved += 1;
+  }
+  // ④ 内容字段（交集，事务前 diff 就位的节点逐个执行）
+  for (const diff of plan.fieldDiffs) {
+    if (applyFieldDiff(target, diff.snapId, diff.snap, canvasId)) result.updated += 1;
+  }
 }
 
 // ── 文件内私有 helper ────────────────────────────────────────────────────────
 
-/** root 先序遍历 childIds 收集存活节点（visited 防环，口径同 countAliveReachable：
- *  只走 children、跳过墓碑；normalize 前置保证 parentId/children 一致）。 */
-function reachableAliveIds(doc: Y.Doc): string[] {
+/**
+ * 递归深拷贝一个已接入文档的 Y 值（doc.ts deepCopyValue 先例：Yjs 共享类型不可
+ * 换父/不可多重引用——必须逐键逐元素重建；新 Y 类型未接入前只写不读，故一律自底
+ * 向上构建，最外层由调用方接入文档）。
+ */
+function deepCopyValue(value: unknown): unknown {
+  if (value instanceof Y.Map) {
+    const m = new Y.Map<unknown>();
+    value.forEach((v, k) => {
+      m.set(k, deepCopyValue(v));
+    });
+    return m;
+  }
+  if (value instanceof Y.Array) {
+    const arr = new Y.Array<unknown>();
+    // value 是源文档已接入类型，读取合法；元素可能是标量或 Y.Map（嵌套 map 同理递归）
+    arr.push(value.toArray().map(deepCopyValue));
+    return arr;
+  }
+  return value; // 标量原样（name/rootId/structureType/themeId/text/parentId…）
+}
+
+/** 画布级元数据 diff（对齐 meta⑤ 先例）：name/structureType/themeId 按画布对比，
+ *  读取侧规范化口径（listCanvases 同款回退：name『画布』/structureType『mindmap』/
+ *  themeId『gmind-light』）——快照侧为已 normalize 文档，规范化值即回滚目标值。 */
+function canvasMetaDiff(t: Y.Map<unknown>, s: Y.Map<unknown>): CanvasMetaPatch {
+  const patch: CanvasMetaPatch = {};
+  const nameOf = (c: Y.Map<unknown>): string => {
+    const v = c.get('name');
+    return typeof v === 'string' && v !== '' ? v : '画布';
+  };
+  const structureOf = (c: Y.Map<unknown>): string => {
+    const v = c.get('structureType');
+    return typeof v === 'string' && v !== '' ? v : 'mindmap';
+  };
+  const themeOf = (c: Y.Map<unknown>): string => {
+    const v = c.get('themeId');
+    return typeof v === 'string' && v !== '' ? v : 'gmind-light';
+  };
+  if (nameOf(t) !== nameOf(s)) patch.name = nameOf(s);
+  if (structureOf(t) !== structureOf(s)) patch.structureType = structureOf(s);
+  if (themeOf(t) !== themeOf(s)) patch.themeId = themeOf(s);
+  return patch;
+}
+
+/** 根先序遍历 childIds 收集存活节点（visited 防环，口径同 countAliveReachable：
+ *  只走 children、跳过墓碑；normalize 前置保证 parentId/children 一致）。
+ *  多画布（Task 6）：自该画布 rootId 起算，节点读画布子图。 */
+function reachableAliveIds(doc: Y.Doc, canvasId: string, rootId: string): string[] {
   const out: string[] = [];
   const visited = new Set<string>();
   const walk = (id: string): void => {
     if (visited.has(id)) return; // 环防御：跳过已访问
     visited.add(id);
-    const node = getNode(doc, id);
+    const node = getNode(doc, id, canvasId);
     if (node === null || node.deleted) return;
     out.push(id);
     for (const childId of node.childIds) walk(childId);
   };
-  walk(ROOT_NODE_ID);
+  walk(rootId);
   return out;
 }
 
-/** 节点在快照父 children 中的下标（normalize 前置保证parentId 指回该父，找不到为 -1 的
+/** 节点在快照父 children 中的下标（normalize 前置保证 parentId 指回该父，找不到为 -1 的
  *  情形仅存在于畸形输入，届时 addChild/moveNode 的钳制语义兜底为 append）。 */
 function snapIndexInSnapshot(snapById: Map<string, NodeSnapshot>, id: string): number {
   const snap = snapById.get(id)!;
@@ -295,23 +497,23 @@ function hasTaskDiff(t: NodeSnapshot['task'], s: NodeSnapshot['task']): boolean 
 
 /** ④ 写入：逐项对比并经 core op 落写（origin 传 ORIGIN_RESTORE；本函数在恢复事务内
  *  调用，嵌套 withTransaction 复用外层事务）。返回是否有任何写入。 */
-function applyFieldDiff(target: Y.Doc, id: string, s: NodeSnapshot): boolean {
-  const t = getNode(target, id)!;
+function applyFieldDiff(target: Y.Doc, id: string, s: NodeSnapshot, canvasId: string): boolean {
+  const t = getNode(target, id, canvasId)!;
   let changed = false;
   if (t.text !== s.text) {
-    setText(target, id, s.text, ORIGIN_RESTORE);
+    setText(target, id, s.text, ORIGIN_RESTORE, canvasId);
     changed = true;
   }
   if (t.note !== s.note) {
-    setNote(target, id, s.note, ORIGIN_RESTORE);
+    setNote(target, id, s.note, ORIGIN_RESTORE, canvasId);
     changed = true;
   }
   if (t.href !== s.href) {
-    setHref(target, id, s.href, ORIGIN_RESTORE);
+    setHref(target, id, s.href, ORIGIN_RESTORE, canvasId);
     changed = true;
   }
   if (t.collapsed !== s.collapsed) {
-    setCollapsed(target, id, s.collapsed, ORIGIN_RESTORE);
+    setCollapsed(target, id, s.collapsed, ORIGIN_RESTORE, canvasId);
     changed = true;
   }
   for (const group of ICON_GROUPS as readonly IconGroup[]) {
@@ -323,13 +525,13 @@ function applyFieldDiff(target: Y.Doc, id: string, s: NodeSnapshot): boolean {
     const tValue = canonicalSnapIcons(group, t.icons[group]);
     if (tValue.length !== snapValue.length || tValue.some((v, i) => v !== snapValue[i])) {
       if (snapValue.length === 0) {
-        setIcon(target, id, group, null, ORIGIN_RESTORE);
+        setIcon(target, id, group, null, ORIGIN_RESTORE, canvasId);
       } else if (MARKER_GROUP_MODE[group] === 'single') {
-        setIcon(target, id, group, snapValue[0] as string, ORIGIN_RESTORE);
+        setIcon(target, id, group, snapValue[0] as string, ORIGIN_RESTORE, canvasId);
       } else {
         // multi 组：先清组再逐枚 toggle 追加（setIcon 多值语义下等价于整组覆写）
-        setIcon(target, id, group, null, ORIGIN_RESTORE);
-        for (const v of snapValue) setIcon(target, id, group, v, ORIGIN_RESTORE);
+        setIcon(target, id, group, null, ORIGIN_RESTORE, canvasId);
+        for (const v of snapValue) setIcon(target, id, group, v, ORIGIN_RESTORE, canvasId);
       }
       changed = true;
     }
@@ -350,16 +552,17 @@ function applyFieldDiff(target: Y.Doc, id: string, s: NodeSnapshot): boolean {
         doneDate: s.task.doneDate,
       },
       ORIGIN_RESTORE,
+      canvasId,
     );
     changed = true;
   }
   if (diffImage(t.image, s.image)) {
-    setImage(target, id, s.image, ORIGIN_RESTORE);
+    setImage(target, id, s.image, ORIGIN_RESTORE, canvasId);
     changed = true;
   }
   const stylePatch = stylePatchOf(t.style, s.style);
   if (Object.keys(stylePatch).length > 0) {
-    setStyle(target, id, stylePatch, ORIGIN_RESTORE);
+    setStyle(target, id, stylePatch, ORIGIN_RESTORE, canvasId);
     changed = true;
   }
   return changed;
@@ -382,13 +585,5 @@ function stylePatchOf(
   for (const key of new Set([...Object.keys(t), ...Object.keys(s)])) {
     if (t[key] !== s[key]) patch[key] = s[key] ?? null;
   }
-  return patch;
-}
-
-/** ⑤ meta diff：structureType/themeId 不同才写；title 恒排除（见 restoreFromSnapshot 头注）。 */
-function metaDiff(t: DocMeta, s: DocMeta): Partial<DocMeta> {
-  const patch: Partial<DocMeta> = {};
-  if (t.structureType !== s.structureType) patch.structureType = s.structureType;
-  if (t.themeId !== s.themeId) patch.themeId = s.themeId;
   return patch;
 }

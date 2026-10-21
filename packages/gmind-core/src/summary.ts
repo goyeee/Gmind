@@ -1,7 +1,7 @@
 import * as Y from 'yjs';
 import { ulid } from 'ulid';
 import { ROOT_NODE_ID } from './doc';
-import { canvasesMap } from './canvas';
+import { canvasesMap, canvasMapOf, resolveCanvasId } from './canvas';
 import { MAX_TEXT_LENGTH } from './constants';
 import { GmindCoreError } from './errors';
 import { getNode } from './read';
@@ -9,14 +9,18 @@ import { withTransaction } from './operations';
 import { ORIGIN_USER, type WriteOrigin } from './undo';
 
 /**
- * 概要（summary bracket，FR-EDT-023 / M6 Task 6 企微对标）。
+ * 概要（summary bracket，FR-EDT-023 / M6 Task 6 企微对标；多画布 Task 6 全面画布化）。
  *
- * 数据口径（M6 Global Constraints 裁定）：doc 级 `summaries` Y.Map
+ * 数据口径（M6 Global Constraints 裁定）：`summaries` Y.Map
  * （id → {nodeIds: string[], label: string}），nodeIds 为**同父连续兄弟片段**，
- * 按父 children 序规范化存储。写入走 withTransaction（唯一写入口、校验先于事务）；
- * 片段断裂（节点删除/换父）由 repair 在每次 normalize 时收敛（见 planSummaryRepair，
- * repair.ts 的 normalizeTree / normalizeTreeFor 统一接线）：
- * 片段内全部消失 → 删概要；部分 → 保留存活子段（label 不动）。
+ * 按父 children 序规范化存储。多画布（Task 6）：summaries 住**画布子图**
+ * （canvasMap.summaries，与 nodes 同生共死）；全部公开函数带可选 canvasId——
+ * 显式 id 缺省 = 经 resolveCanvasId 解析（activeCanvasId 兼容层，web/server 零改动），
+ * 写层硬失败 CANVAS_NOT_FOUND（canvas.ts 访问器契约；墓碑画布冻结不可写）。
+ * 写入走 withTransaction（唯一写入口、校验先于事务）；片段断裂（节点删除/换父）
+ * 由 repair 在每次 normalize 时收敛（见 planSummaryRepair，repair.ts 的
+ * normalizeTree / normalizeTreeFor 统一接线）：片段内全部消失 → 删概要；
+ * 部分 → 保留存活子段（label 不动）。
  *
  * 模块环说明：本模块 import operations（withTransaction），operations import repair，
  * repair import 本模块（planSummaryRepair/applySummaryRepair）——三方均为函数调用期
@@ -31,8 +35,10 @@ export interface SummarySnapshot {
   label: string;
 }
 
-function summariesMap(doc: Y.Doc): Y.Map<Y.Map<unknown>> {
-  return doc.getMap('summaries');
+/** 画布概要子图只读视图（绝不补建——读取零写入纪律）：键缺失/形状不符 → null。 */
+function readCanvasSummaries(canvas: Y.Map<unknown>): Y.Map<Y.Map<unknown>> | null {
+  const s = canvas.get('summaries');
+  return s instanceof Y.Map ? (s as Y.Map<Y.Map<unknown>>) : null;
 }
 
 /** 条目防御读取：形状不符（远端坏数据）返回 null，绝不抛错（镜像 read.ts 风格）。 */
@@ -49,22 +55,25 @@ function readEntry(entry: unknown): SummarySnapshot | null {
 
 /**
  * 校验片段并返回规范化顺序（父 children 序）的 nodeIds；非法返回 null。
- * 规则（M6 口径）：≥1 个成员、全部存在且存活、不含 root、互不重复、同父，
+ * 规则（M6 口径）：≥1 个成员、全部存在且存活、不含该画布根、互不重复、同父，
  * 且各成员在父 childIds 中的下标构成连续区间。
+ * 多画布（Task 6）：canvasId 作用域（缺省 = 解析画布，同 setSummary）。
  */
-export function validSummarySegment(doc: Y.Doc, nodeIds: string[]): string[] | null {
+export function validSummarySegment(doc: Y.Doc, nodeIds: string[], canvasId?: string): string[] | null {
   if (nodeIds.length === 0) return null;
   if (new Set(nodeIds).size !== nodeIds.length) return null;
-  const first = getNode(doc, nodeIds[0] as string);
-  if (!first || first.deleted || nodeIds[0] === ROOT_NODE_ID) return null;
+  // 画布根解析先于遍历（canvasMapOf 缺省=解析画布；显式缺失抛 CANVAS_NOT_FOUND）。
+  const canvasRootId = rootIdOfCanvas(doc, canvasId);
+  const first = getNode(doc, nodeIds[0] as string, canvasId);
+  if (!first || first.deleted || nodeIds[0] === canvasRootId) return null;
   const parentId = first.parentId;
   if (parentId === '') return null; // 无父（root）不成片段
-  const parent = getNode(doc, parentId);
+  const parent = getNode(doc, parentId, canvasId);
   if (!parent || parent.deleted) return null;
   const indexed: Array<{ id: string; idx: number }> = [];
   for (const id of nodeIds) {
-    if (id === ROOT_NODE_ID) return null;
-    const snap = getNode(doc, id);
+    if (id === canvasRootId) return null;
+    const snap = getNode(doc, id, canvasId);
     if (!snap || snap.deleted || snap.parentId !== parentId) return null;
     const idx = parent.childIds.indexOf(id);
     if (idx === -1) return null;
@@ -79,38 +88,58 @@ export function validSummarySegment(doc: Y.Doc, nodeIds: string[]): string[] | n
   return indexed.map((e) => e.id);
 }
 
+/** 内部：画布根解析（canvasMapOf 契约：显式缺失/墓碑抛 CANVAS_NOT_FOUND）。 */
+function rootIdOfCanvas(doc: Y.Doc, canvasId?: string): string {
+  const r = canvasMapOf(doc, canvasId).get('rootId');
+  return typeof r === 'string' && r !== '' ? r : ROOT_NODE_ID;
+}
+
 /**
  * 创建/更新概要，返回概要 id。
  * 校验（先于 transact，拒绝即零变更，SUMMARY_INVALID）：片段合法（见
  * validSummarySegment）；label 长度 ≤ MAX_TEXT_LENGTH。同片段重复提交（label 行内
  * 编辑口径）复用既有条目仅改 label；nodeIds 一致性按规范化序比较。
+ * 多画布（Task 6）：概要写入 canvasId 指向的画布子图（缺省 = 解析画布）；
+ * 显式 canvasId 不存在/墓碑 → CANVAS_NOT_FOUND（canvas.ts 访问器契约）。
  */
 export function setSummary(
   doc: Y.Doc,
   nodeIds: string[],
   label: string,
   origin: WriteOrigin = ORIGIN_USER,
+  canvasId?: string,
 ): string {
   if (label.length > MAX_TEXT_LENGTH) {
     throw new GmindCoreError('SUMMARY_INVALID', '概要标签长度已达上限');
   }
-  const segment = validSummarySegment(doc, nodeIds);
+  // 画布解析先于事务（校验先于事务；显式缺失抛 CANVAS_NOT_FOUND）。
+  const canvas = canvasMapOf(doc, canvasId);
+  const segment = validSummarySegment(doc, nodeIds, canvasId);
   if (segment === null) {
     throw new GmindCoreError('SUMMARY_INVALID', '概要需选择同一父节点下的连续节点');
   }
   // 既有同片段条目复用（先于事务的只读探测；并发窗口内两侧各建一条也可收敛——
-  // repair 不删重叠概要，渲染层各自成 bracket）
+  // repair 不删重叠概要，渲染层各自成 bracket）。summaries 键缺失/畸形 → 无复用可探。
   let reuseId: string | null = null;
-  for (const [id, entry] of summariesMap(doc).entries()) {
-    const snap = readEntry(entry);
-    if (snap && snap.nodeIds.length === segment.length && snap.nodeIds.every((v, i) => v === segment[i])) {
-      reuseId = id;
-      break;
+  const existing = readCanvasSummaries(canvas);
+  if (existing !== null) {
+    for (const [id, entry] of existing.entries()) {
+      const snap = readEntry(entry);
+      if (snap && snap.nodeIds.length === segment.length && snap.nodeIds.every((v, i) => v === segment[i])) {
+        reuseId = id;
+        break;
+      }
     }
   }
   const id = reuseId ?? ulid();
   withTransaction(doc, origin, () => {
-    const summaries = summariesMap(doc);
+    // summaries 子图：优先复用画布既有键；缺失/畸形则同事务补建（装载容错口径，
+    // 与 operations.addChild 对 canvasNodesMap 的 ensureCanvasShape 同先例）。
+    let summaries = existing;
+    if (summaries === null) {
+      summaries = new Y.Map<Y.Map<unknown>>();
+      canvas.set('summaries', summaries);
+    }
     let entry = summaries.get(id);
     if (entry === undefined) {
       entry = new Y.Map<unknown>();
@@ -132,18 +161,30 @@ export function setSummary(
   return id;
 }
 
-/** 删除概要；不存在的 id 静默 no-op（零写入）。 */
-export function removeSummary(doc: Y.Doc, id: string, origin: WriteOrigin = ORIGIN_USER): void {
-  if (!summariesMap(doc).has(id)) return;
+/** 删除概要；不存在的 id 静默 no-op（零写入）。
+ *  多画布（Task 6）：canvasId 作用域（缺省 = 解析画布）。 */
+export function removeSummary(
+  doc: Y.Doc,
+  id: string,
+  origin: WriteOrigin = ORIGIN_USER,
+  canvasId?: string,
+): void {
+  const canvas = canvasMapOf(doc, canvasId); // 显式缺失/墓碑抛 CANVAS_NOT_FOUND
+  const summaries = readCanvasSummaries(canvas);
+  if (summaries === null || !summaries.has(id)) return;
   withTransaction(doc, origin, () => {
-    summariesMap(doc).delete(id);
+    summaries.delete(id);
   });
 }
 
-/** 全部概要快照（id 升序；畸形条目确定性跳过）。 */
-export function listSummaries(doc: Y.Doc): SummarySnapshot[] {
+/** 全部概要快照（id 升序；畸形条目确定性跳过）。
+ *  多画布（Task 6）：canvasId 作用域（缺省 = 解析画布）。 */
+export function listSummaries(doc: Y.Doc, canvasId?: string): SummarySnapshot[] {
+  const canvas = canvasMapOf(doc, canvasId); // 显式缺失/墓碑抛 CANVAS_NOT_FOUND
   const out: SummarySnapshot[] = [];
-  for (const [id, entry] of summariesMap(doc).entries()) {
+  const summaries = readCanvasSummaries(canvas);
+  if (summaries === null) return out;
+  for (const [id, entry] of summaries.entries()) {
     const snap = readEntry(entry);
     if (snap) out.push({ ...snap, id });
   }
@@ -160,24 +201,19 @@ export interface SummaryRepairPlan {
 }
 
 /**
- * repair 收敛的作用域解析（多画布 Task 5 接线；本模块全面画布化在 Task 6 完成）：
- * - canvasId 显式传入 → 该画布的 nodes/summaries 子图（画布不存在或键形状不符 →
- *   返回 null，调用方按无可修处理，绝不抛错、绝不补建——规划期零写入纪律）；
- * - canvasId 缺省（undefined）→ 旧形状顶层 nodes/summaries（legacy 作用域哨兵，
- *   repair 的 legacy 路径专用；Task 6 将把缺省语义收敛为「解析画布」）。
+ * repair 收敛的作用域解析（多画布 Task 6）：
+ * - canvasId 显式传入 → 该画布的 nodes/summaries 子图；
+ * - canvasId 缺省（undefined）→ 经 resolveCanvasId 解析（第一画布兼容层）；
+ * - 画布不存在/墓碑/键形状不符 → 返回 null（调用方按无可修处理，绝不抛错、
+ *   绝不补建——规划期零写入纪律；墓碑画布冻结）。
  */
 function repairScopeMaps(
   doc: Y.Doc,
   canvasId: string | undefined,
 ): { nodes: Y.Map<Y.Map<unknown>>; summaries: Y.Map<Y.Map<unknown>> } | null {
-  if (canvasId === undefined) {
-    return {
-      nodes: doc.getMap('nodes') as Y.Map<Y.Map<unknown>>,
-      summaries: doc.getMap('summaries') as Y.Map<Y.Map<unknown>>,
-    };
-  }
-  const canvas = canvasesMap(doc).get(canvasId);
-  if (canvas === undefined || canvas.get('deleted') === true) return null; // 墓碑画布冻结
+  const id = canvasId ?? resolveCanvasId(doc);
+  const canvas = canvasesMap(doc).get(id);
+  if (!(canvas instanceof Y.Map) || canvas.get('deleted') === true) return null; // 墓碑画布冻结
   const nodes = canvas.get('nodes');
   const summaries = canvas.get('summaries');
   if (!(nodes instanceof Y.Map) || !(summaries instanceof Y.Map)) return null;
@@ -196,7 +232,7 @@ function repairScopeMaps(
  *   （并列取最前）——保证收敛结果仍是合法片段（validSummarySegment 通过）；
  * - label 一概不动；干净概要零计划（不产生写入）。
  * 返回 null 表示无需修复。
- * 多画布（Task 5）：canvasId 作用域（缺省 = legacy 顶层，见 repairScopeMaps）。
+ * 多画布（Task 6）：canvasId 作用域（缺省 = 解析画布，见 repairScopeMaps）。
  */
 export function planSummaryRepair(doc: Y.Doc, canvasId?: string): SummaryRepairPlan | null {
   const maps = repairScopeMaps(doc, canvasId);
@@ -265,7 +301,7 @@ export function planSummaryRepair(doc: Y.Doc, canvasId?: string): SummaryRepairP
 }
 
 /** 应用概要修复计划（必须在调用方已开启的事务内执行）；返回修复计数。
- *  canvasId 作用域口径同 planSummaryRepair（Task 5 接线）。 */
+ *  canvasId 作用域口径同 planSummaryRepair（Task 6；缺省 = 解析画布）。 */
 export function applySummaryRepair(
   doc: Y.Doc,
   plan: SummaryRepairPlan | null,
