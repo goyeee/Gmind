@@ -337,8 +337,9 @@ export async function loadDocFromIndexedDB(fileId: string): Promise<Y.Doc | null
   const idb = new IndexeddbPersistence(fileId, raw);
   try {
     await idb.whenSynced;
-    // 多画布收口：读取路径适配，语义不变——缓存副本含存活画布即结构完整可用（旧判顶层 nodes.has(ROOT_NODE_ID)）
-    if (canvasesMap(raw).size === 0) {
+    // 多画布收口：读取路径适配，语义不变——缓存副本含存活画布即结构完整可用（旧判顶层 nodes.has(ROOT_NODE_ID)）。
+    // 兼容旧格式离线副本：旧格式顶层 nodes 非空（docFromState 负责迁移），不应误判为空副本。
+    if (canvasesMap(raw).size === 0 && raw.getMap('nodes').size === 0) {
       // 副本为空：无 root 即从未在本机装载过，无法恢复
       await idb.destroy();
       raw.destroy();

@@ -3,7 +3,15 @@ import request from 'supertest';
 import { ulid } from 'ulid';
 import type { INestApplication } from '@nestjs/common';
 import { DataSource } from 'typeorm';
-import { createTemplateDoc, docFromState, docToState, getNode, ROOT_NODE_ID, setImage } from '@gmind/core';
+import {
+  canvasNodesMap,
+  createTemplateDoc,
+  docFromState,
+  docToState,
+  getNode,
+  ROOT_NODE_ID,
+  setImage,
+} from '@gmind/core';
 import { createTestApp } from './support/app-test';
 import { FileEntity } from '../src/files/file.entity';
 
@@ -311,7 +319,8 @@ describe('文件复制与星标（FR-FIL-003/004）', () => {
   const textsOf = (stateB64: string): string[] => {
     const doc = docFromState(new Uint8Array(Buffer.from(stateB64, 'base64')));
     const texts: string[] = [];
-    doc.getMap('nodes').forEach((node) => texts.push(String(node.get('text'))));
+    // 多画布收口：读取路径适配，语义不变（缺省画布 = 旧口径单画布）
+    canvasNodesMap(doc).forEach((node) => texts.push(String(node.get('text'))));
     return texts.sort();
   };
 
