@@ -19,6 +19,9 @@ export * from './errors';
 // canvas（多画布结构访问器与读侧；写侧操作在后续 Task 接入）
 export * from './canvas';
 
+// canvas-ops（Task 7：画布管理写操作——web 计划三的唯一接口面）
+export * from './canvas-ops';
+
 // read（只读快照与存活查询）
 export * from './read';
 

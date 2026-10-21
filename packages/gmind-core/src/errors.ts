@@ -21,7 +21,10 @@ export type GmindCoreErrorCode =
   /** 节点图片位置（图文四槽位，需求方 2026-10-20）：placement 非法 / 同节点移动。 */
   | 'INVALID_IMAGE_PLACEMENT' | 'INVALID_IMAGE_MOVE'
   /** 多画布（迁移期读侧）：解析后的画布不存在或已删除。 */
-  | 'CANVAS_NOT_FOUND';
+  | 'CANVAS_NOT_FOUND'
+  /** 多画布画布管理写（Task 7）：画布名为空（trim 后）/ 超长（>50，与
+   *  MAX_CANVAS_NAME_LENGTH 对齐）/ 删除最后一张存活画布（文案两段式=原因+下一步）。 */
+  | 'CANVAS_NAME_EMPTY' | 'CANVAS_NAME_TOO_LONG' | 'CANVAS_LAST_FORBIDDEN';
 
 export class GmindCoreError extends Error {
   constructor(readonly code: GmindCoreErrorCode, message: string) {
