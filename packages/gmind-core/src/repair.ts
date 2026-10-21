@@ -1,6 +1,7 @@
 import * as Y from 'yjs';
 import type { AbstractType, YEvent } from 'yjs';
 import { ROOT_NODE_ID } from './doc';
+import { canvasesMap } from './canvas';
 import {
   ICON_GROUPS,
   ICON_LEGACY_MAP,
@@ -153,6 +154,10 @@ function findParentCycleBreaks(
 }
 
 export function normalizeTree(doc: Y.Doc, origin: string = ORIGIN_SYSTEM): number {
+  // 多画布过渡守卫（需求方 2026-10-21 裁定 R1，Task 5 删除）：新形状文档（canvases
+  // 非空）由后续 Task 多画布口径接管——迁移后顶层 nodes 已清空，旧规则⑥会把
+  // top-level root 重建回来污染文档。
+  if (canvasesMap(doc).size > 0) return 0;
   const nodes = nodesMap(doc);
   let repairs = 0;
 
@@ -450,6 +455,8 @@ export function deriveNormalizeDirty(doc: Y.Doc, tr: Y.Transaction): Set<string>
  * 返回修复次数。root 缺失（规则⑥）超出脏区表达力 → 委托全量。
  */
 export function normalizeTreeFor(doc: Y.Doc, origin: string, dirtyNodeIds: Set<string>): number {
+  // 多画布过渡守卫（同 normalizeTree 前置守卫，Task 5 删除）。
+  if (canvasesMap(doc).size > 0) return 0;
   const nodes = nodesMap(doc);
   if (nodes.get(ROOT_NODE_ID) === undefined) return normalizeTree(doc, origin); // 规则⑥ 仅全量
   let repairs = 0;
