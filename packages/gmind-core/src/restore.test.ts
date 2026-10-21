@@ -414,6 +414,26 @@ describe('restoreFromSnapshot 多画布（Task 6）', () => {
     expect(normalizeTree(base, ORIGIN_SYSTEM)).toBe(0);
   });
 
+  it('整画布重建分支钉死（控制器裁定）：画布随快照复活且概要 = 快照概要；复活后经 repair 自愈收敛（与裁定 6 不冲突——裁定 6 管配对画布概要 diff 不进恢复范围）', () => {
+    const base = makeDoc();
+    const c2 = appendCanvas(base, '画布二', ['P', 'Q']);
+    const pId = aliveIdOf(base, 'P', c2);
+    const qId = aliveIdOf(base, 'Q', c2);
+    const sid = setSummary(base, [pId, qId], '快照概要', ORIGIN_USER, c2); // 概要随快照存在（同父连续段）
+    const snap = docFromState(docToState(base)); // 快照含 c2 及其概要
+    tombstoneCanvas(base, c2); // 快照后删除画布二（墓碑：内容冻结）
+    setText(base, idOf(base, 'A'), '改了'); // 同时漂移 c1
+    const r = restoreFromSnapshot(base, snap);
+    expect(getNode(base, idOf(base, 'A'))!.text).toBe('A'); // c1 回滚
+    expect(r.updated).toBe(1);
+    // 钉死：画布复活，且其概要 = 快照概要（画布是恢复的最小单位，概要作为画布内容
+    // 的一部分随快照复活——整画布重建分支口径，与裁定 6「配对画布概要 diff 不进
+    // 恢复范围」互不冲突）
+    expect(listCanvases(base).map((c) => c.id)).toContain(c2);
+    expect(listSummaries(base, c2)).toEqual([{ id: sid, nodeIds: [pId, qId], label: '快照概要' }]);
+    expect(normalizeTree(base, ORIGIN_SYSTEM)).toBe(0); // 复活后经 repair 自愈收敛
+  });
+
   it('target 多出的画布置墓碑＋移出 order（画布删除随快照回滚）；c1 不受影响', () => {
     const base = makeDoc();
     const snap = docFromState(docToState(base)); // 快照只有 c1

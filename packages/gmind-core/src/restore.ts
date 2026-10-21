@@ -6,7 +6,7 @@ import {
   iconValuesOf,
   type IconGroup,
 } from './constants';
-import { ROOT_NODE_ID } from './doc';
+import { ROOT_NODE_ID, deepCopyValue } from './doc';
 import { canvasesMap, canvasOrderArr } from './canvas';
 import {
   addChild,
@@ -150,6 +150,12 @@ interface CanvasMetaPatch {
  *   按**存活片段**自愈：成员被①删除/换父断裂即收敛存活子段，全失效即删概要
  *   （summary.ts 三态）；②重建节点为新 ULID，不在任何既有概要的 nodeIds 内，不复活
  *   旧概要。此口径已了结 M6 验收「待裁定项 3」（裁定记录 §一.6）。
+ *   **整画布重建分支例外（控制器裁定，2026-10-21，同引 §一.6）**：画布是恢复的最小
+ *   单位，概要作为画布内容的一部分随快照整体复活——snapshot 存活而 target 墓碑/缺失
+ *   的画布经整画布深拷贝重建后，其 summaries = 快照值（restore.test「整画布重建分支
+ *   钉死」用例）。复活后概要与复活节点同 id（深拷贝保留原 id），仍由 repair 按存活
+ *   片段自愈收敛。与裁定 6 不冲突：裁定 6 管的是「配对画布」的概要 diff 不进恢复
+ *   范围；本分支是画布整体复活，概要不单独 diff。
  *
  * ── 零操作短路 ── diff 为空（无删/无建/无字段差/无画布级 op/无落位需求）直接返回
  * 全零，不开事务。落位需求按事务前状态判定——其余几类全空时事务前后状态一致，判定
@@ -360,26 +366,10 @@ function applyCanvasNodeDiff(target: Y.Doc, plan: CanvasNodePlan, result: Restor
 // ── 文件内私有 helper ────────────────────────────────────────────────────────
 
 /**
- * 递归深拷贝一个已接入文档的 Y 值（doc.ts deepCopyValue 先例：Yjs 共享类型不可
- * 换父/不可多重引用——必须逐键逐元素重建；新 Y 类型未接入前只写不读，故一律自底
- * 向上构建，最外层由调用方接入文档）。
+ * 递归深拷贝一个已接入文档的 Y 值：复用 doc.ts 的 deepCopyValue（评审 minor——
+ * 防本地副本漂移；doc.ts 已导出共享）。纪律见 doc.ts 头注：Yjs 共享类型不可换父，
+ * 逐键自底向上重建，最外层由调用方接入文档。
  */
-function deepCopyValue(value: unknown): unknown {
-  if (value instanceof Y.Map) {
-    const m = new Y.Map<unknown>();
-    value.forEach((v, k) => {
-      m.set(k, deepCopyValue(v));
-    });
-    return m;
-  }
-  if (value instanceof Y.Array) {
-    const arr = new Y.Array<unknown>();
-    // value 是源文档已接入类型，读取合法；元素可能是标量或 Y.Map（嵌套 map 同理递归）
-    arr.push(value.toArray().map(deepCopyValue));
-    return arr;
-  }
-  return value; // 标量原样（name/rootId/structureType/themeId/text/parentId…）
-}
 
 /** 画布级元数据 diff（对齐 meta⑤ 先例）：name/structureType/themeId 按画布对比，
  *  读取侧规范化口径（listCanvases 同款回退：name『画布』/structureType『mindmap』/

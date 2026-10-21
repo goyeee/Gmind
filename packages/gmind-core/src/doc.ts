@@ -37,8 +37,10 @@ export function isLegacyDocShape(doc: Y.Doc): boolean {
 /** 递归深拷贝一个已接入文档的 Y 值（Yjs 共享类型不可换父/不可多重引用——迁移必须
  *  逐键逐元素重建，否则旧壳删键 GC 后新画布引用变空壳，远端副本解码发散）。
  *  纪律：新 Y 类型未接入前只写不读，故一律自底向上构建（子值先拷好再 set/push 进
- *  父级），最外层由调用方接入文档。 */
-function deepCopyValue(value: unknown): unknown {
+ *  父级），最外层由调用方接入文档。
+ *  2026-10-22 评审 minor 收口：导出与 restore.ts 共享（原 restore.ts 有同名本地副本，
+ *  防漂移已删，仅此一份实现）。 */
+export function deepCopyValue(value: unknown): unknown {
   if (value instanceof Y.Map) {
     const m = new Y.Map<unknown>();
     value.forEach((v, k) => {
