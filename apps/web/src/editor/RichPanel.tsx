@@ -52,8 +52,12 @@ const FONT_SIZES = [12, 14, 16, 18, 20, 24, 36];
 export interface RichPanelProps {
   doc: Y.Doc;
   fileId: string;
-  /** 选中节点 id；无选中（空选区/多选）为空串——此时样式区置灰，节点区隐藏。 */
+  /** 选中节点 id；无选中（空选区/多选）为空串——空选时样式区置灰，多选时见 selectedIds。 */
   nodeId: string;
+  /** 全部选中 id（2026-10-21 需求方裁定：多选也支持格式设置颜色）——多选（>1）时
+   *  样式区保持可用，色钮/字号/作用域对整个选区生效（applyStyle 天然支持多 root，
+   *  子树重叠经 Set 去重）；描述/链接/图片等单节点区隐藏。 */
+  selectedIds: string[];
   /** 选中节点快照（M6 Task 2 企微对标）：样式区回显数据源；无选中为 null。 */
   selected: NodeSnapshot | null;
   afterUserWrite: () => void;
@@ -63,7 +67,7 @@ export interface RichPanelProps {
 }
 
 export function RichPanel(props: RichPanelProps): ReactElement {
-  const { doc, fileId, nodeId, selected, afterUserWrite, showToast, onClose } = props;
+  const { doc, fileId, nodeId, selectedIds, selected, afterUserWrite, showToast, onClose } = props;
   const [href, setHrefValue] = useState('');
   // 描述草稿（受控本地态，TaskPanel 同款裁决）：仅切换选中节点时回灌，失焦提交
   const [desc, setDescValue] = useState('');
@@ -122,21 +126,26 @@ export function RichPanel(props: RichPanelProps): ReactElement {
   };
 
   /** 样式 patch（FR-EDT-015）：applyStyle subtree/single 作用域 + 统一 capUndoStack。
+   *  多选（2026-10-21）：目标=整个选区（applyStyle 多 root + 子树重叠 Set 去重）。
    *  清除项写 null 删键（writeStylePatch 语义）。 */
+  const isMulti = nodeId === '' && selectedIds.length > 1;
+  const styleTargets = nodeId !== '' ? [nodeId] : selectedIds;
   const applyStylePatch = (patch: Record<string, string | number | null>): void => {
-    write(() => applyStyle(doc, [nodeId], patch, styleScope));
+    write(() => applyStyle(doc, styleTargets, patch, styleScope));
   };
 
   /**
    * 样式区（FR-EDT-015 + M6 Task 2 随选中联动回显）：填充/文字色色钮按
    * node.style.fill/color 回显 aria-pressed；字号 select 回显 style.fontSize；
-   * 作用域 select 为面板级偏好（不随节点）。无选中（node=null）→ fieldset
-   * disabled 整区置灰 + 提示「选中节点后设置样式」。
+   * 作用域 select 为面板级偏好（不随节点）。无选中（node=null 且非多选）→ fieldset
+   * disabled 整区置灰 + 提示「选中节点后设置样式」；多选（multi=true）→ 启用但
+   * 不回显（选区样式可能不一），提示「已选 N 个节点」。
    */
-  const styleSection = (node: NodeSnapshot | null): ReactElement => {
+  const styleSection = (node: NodeSnapshot | null, multiCount = 0): ReactElement => {
+    const enabled = node !== null || multiCount > 0;
     const style = node?.style ?? {};
     const swatch = (kind: 'fill' | 'color', c: { name: string; value: string }): ReactElement => {
-      const active = style[kind] === c.value;
+      const active = node !== null && style[kind] === c.value; // 多选不回显（选区样式可能不一）
       return (
         <button
           key={`${kind}-${c.value}`}
@@ -151,10 +160,15 @@ export function RichPanel(props: RichPanelProps): ReactElement {
       );
     };
     return (
-      <fieldset className="field" data-testid="style-section" disabled={!node}>
-        {!node && (
+      <fieldset className="field" data-testid="style-section" disabled={!enabled}>
+        {!enabled && (
           <p className="style-hint" data-testid="style-hint">
             选中节点后设置样式
+          </p>
+        )}
+        {multiCount > 0 && (
+          <p className="style-hint" data-testid="style-multi-hint">
+            已选 {multiCount} 个节点，样式应用到整个选区
           </p>
         )}
         <em className="style-label">填充</em>
@@ -222,6 +236,16 @@ export function RichPanel(props: RichPanelProps): ReactElement {
   };
 
   if (!snap || snap.deleted) {
+    // 多选（2026-10-21 裁定）：样式区启用作用于整个选区；单节点区（描述/链接/图片）隐藏
+    if (isMulti) {
+      return (
+        <aside className="rich-panel" data-testid="rich-panel">
+          {panelHead}
+          <h3>样式</h3>
+          {styleSection(null, selectedIds.length)}
+        </aside>
+      );
+    }
     return (
       <aside className="rich-panel" data-testid="rich-panel">
         {panelHead}

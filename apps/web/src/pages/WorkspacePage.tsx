@@ -1,96 +1,246 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from 'react';
-import { useNavigate } from 'react-router-dom';
-import type { FileListItemDetailed, FolderItem } from '@gmind/shared';
-import { api, apiDel, apiPatch, apiPost, apiPut, clearToken } from '../api/client';
+import { useCallback, useEffect, useRef, useState, Fragment, type MouseEvent, type ReactElement } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import type { FileListItemDetailed } from '@gmind/shared';
+import { createTemplateDoc, docToState } from '@gmind/core';
+import { api, apiDel, apiPatch, apiPost, apiPut } from '../api/client';
 import { GUIDE_DONE_KEY, GuideOverlay, type GuideStep } from './GuideOverlay';
 import { degradedSummary, importXmindFile } from '../editor/xmind-import';
-import { onNotifyEvent, type NotifyItem } from '../notify';
+import { TEMPLATE_CATALOG, type WorkspaceTemplate } from '../editor/templates';
+import { useRealThumb } from '../editor/thumbnail';
+import { WorkspaceShell } from './WorkspaceShell';
+import './workspace.css';
 
-/** 四视图（FR-FIL-001）：GET /api/files?view= 的合法值与页签文案。 */
-type View = 'mine' | 'shared' | 'starred' | 'recent';
+/**
+ * 工作台（2026-10-20 整体重设计，spec 2026-10-20-workspace-redesign-design）：
+ * 外壳（左侧栏导航 + 顶栏通知铃/头像 + 用户卡菜单）由 WorkspaceShell 共享组件
+ * 承载（2026-10-21 抽取——回收站/账号设置/账号管理同壳）；本页只保留顶栏左槽
+ * （搜索/导入/新建脑图）与内容区（问候语 → 快速创建卡 → 文件卡片流）。
+ * 视图以 URL search param 为唯一事实源（?view=recent/starred/collab/templates），
+ * 外壳侧栏跨页导航与本页内切换同一条通道。文件夹概念已下线（server folders
+ * 休眠不删）。文件卡片 = 装饰性缩略图（fileId 哈希取色，不渲染真实文档内容）+
+ * 标题（行内重命名）+ 相对时间·所属 + 星标 + hover ⋯ 菜单。
+ */
 
-const VIEW_TABS: Array<{ key: View; label: string }> = [
-  { key: 'mine', label: '我的文件' },
-  { key: 'shared', label: '与我协作' },
-  { key: 'starred', label: '星标' },
-  { key: 'recent', label: '最近打开' },
-];
+/** 视图（FR-FIL-001 口径扩展）：侧栏一级导航。 */
+type View = 'mine' | 'recent' | 'starred' | 'collab' | 'templates';
 
-/** 命名类弹窗的三种用途（统一 data-testid="rename-modal"，e2e 可稳定定位）： */
-type PromptState =
-  | { kind: 'file-rename'; fileId: string; title: string }
-  | { kind: 'folder-create'; parentId: string | null }
-  | { kind: 'folder-rename'; folderId: string; name: string };
+const VIEW_PARAMS: ReadonlySet<string> = new Set(['recent', 'starred', 'collab', 'templates']);
+
+/** 最近使用的归属筛选（协作文件带协作图标 + 筛选，2026-10-20 裁定 3）。 */
+type RecentFilter = 'all' | 'mine' | 'collab';
 
 function msgOf(e: unknown): string {
   return e instanceof Error ? e.message : '操作失败';
 }
 
-/** 三步引导内容与目标（M5 Task 3，NFR-USE-001，裁定=全部落工作台页内）：
- *  ①高亮新建按钮；②高亮首个种子文件行（打开任意文档即可加节点）；③行菜单需点击才
- *  弹出、高亮脆弱——裁定简化为同样高亮首行，文案指路「打开文档 → 分享/成员入口」。 */
-const GUIDE_STEPS: GuideStep[] = [
-  { selector: '[data-testid="new-file-btn"]', title: '创建你的第一份脑图', sub: '点击新建，空白文档即刻开始' },
-  { selector: '.file-list li.file-row', title: '添加节点组织思路', sub: '打开任意文档，Tab 建子级、Enter 建同级' },
-  { selector: '.file-list li.file-row', title: '邀请伙伴协作', sub: '打开文档，通过分享链接或成员面板邀请' },
-];
-
-function fmtTime(iso: string): string {
-  return new Date(iso).toLocaleString();
+/** 相对时间（卡片用）：刚刚 / N 分钟前 / N 小时前 / 昨天 / N 天前 / 日期。 */
+function relTime(iso: string): string {
+  const diff = Date.now() - new Date(iso).getTime();
+  const min = Math.floor(diff / 60000);
+  if (min < 1) return '刚刚';
+  if (min < 60) return `${min} 分钟前`;
+  const hour = Math.floor(min / 60);
+  if (hour < 24) return `${hour} 小时前`;
+  const day = Math.floor(hour / 24);
+  if (day === 1) return '昨天';
+  if (day < 30) return `${day} 天前`;
+  const d = new Date(iso);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
-/** 搜索结果标题高亮（M3b 清偿包，FR-FIL-008）：首个匹配片段（大小写不敏感，与服务端
- *  utf8mb4_unicode_ci 的 LIKE 口径对齐）包 <mark data-testid="search-hit">；未命中
- *  （如搜索态内改名后标题不再含 q）原样返回不折行。 */
-function highlightTitle(title: string, q: string): ReactNode {
-  const idx = q ? title.toLowerCase().indexOf(q.toLowerCase()) : -1;
-  if (idx === -1) return title;
+/** 时段问候语（首页用）。 */
+function greeting(): string {
+  const h = new Date().getHours();
+  if (h < 6) return '夜深了';
+  if (h < 12) return '上午好';
+  if (h < 18) return '下午好';
+  return '晚上好';
+}
+
+/** 装饰性缩略图取色板（企微色系；fileId 哈希取模，同文件恒定同色）。 */
+const THUMB_COLORS = ['#3370ff', '#0d9488', '#7c3aed', '#ea580c', '#db2777', '#0891b1'];
+
+function thumbColor(seed: string): string {
+  let h = 0;
+  for (const ch of seed) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return THUMB_COLORS[h % THUMB_COLORS.length]!;
+}
+
+/** 装饰性脑图缩略图（参考图同款：色块 root + 三分支，不渲染真实文档内容）。 */
+function Thumb({ seed, accent }: { seed: string; accent?: string }): ReactElement {
+  const color = accent ?? thumbColor(seed);
   return (
-    <>
-      {title.slice(0, idx)}
-      <mark data-testid="search-hit">{title.slice(idx, idx + q.length)}</mark>
-      {title.slice(idx + q.length)}
-    </>
+    <svg className="file-thumb-svg" viewBox="0 0 120 64" aria-hidden>
+      <rect x="8" y="26" width="34" height="14" rx="7" fill={color} />
+      <line x1="42" y1="33" x2="72" y2="12" stroke="#c5cdd8" strokeWidth="1.5" />
+      <line x1="42" y1="33" x2="72" y2="33" stroke="#c5cdd8" strokeWidth="1.5" />
+      <line x1="42" y1="33" x2="72" y2="54" stroke="#c5cdd8" strokeWidth="1.5" />
+      <rect x="72" y="6" width="40" height="12" rx="6" fill="#fff" stroke="#e5e6eb" />
+      <rect x="72" y="27" width="40" height="12" rx="6" fill="#fff" stroke="#e5e6eb" />
+      <rect x="72" y="48" width="40" height="12" rx="6" fill="#fff" stroke="#e5e6eb" />
+    </svg>
+  );
+}
+
+/** 引导三步（M5 Task 3 保留，目标 testid 随重设计更新）：新建 → 打开文档编辑 → 协作。 */
+const GUIDE_STEPS: GuideStep[] = [
+  { selector: '[data-testid="new-file-btn"]', title: '创建你的第一份脑图', sub: '点击新建，空白文档即刻开始' },
+  { selector: '.file-card', title: '添加节点组织思路', sub: '打开任意文档，Tab 建子级、Enter 建同级' },
+  { selector: '.file-card', title: '邀请伙伴协作', sub: '打开文档，成员面板一键拉取站内用户' },
+];
+
+/** FileCard 回调集（模块级组件的 props 收口——组件必须定义在模块顶层：函数体内
+ *  定义 = 每次渲染全新组件类型，整棵卸载重挂，输入框无法驻留/打字丢焦）。 */
+interface FileCardProps {
+  f: FileListItemDetailed;
+  meId: string | undefined;
+  renaming: boolean;
+  renameDraft: string;
+  menuOpen: boolean;
+  onOpen(): void;
+  onMenuToggle(): void;
+  onRenameStart(): void;
+  onRenameDraft(v: string): void;
+  onRenameCommit(): void;
+  onRenameCancel(): void;
+  onStar(): void;
+  onCopy(): void;
+  onShare(): void;
+  onDelete(): void;
+}
+
+/** 文件卡片（重设计主形态）：装饰性缩略图 + 标题（行内重命名）+ 相对时间·所属 +
+ *  星标 + hover ⋯ 菜单（重命名/复制/复制分享链接/删除——后两项 owner-only）。 */
+function FileCard(p: FileCardProps): ReactElement {
+  const { f, meId } = p;
+  const collab = meId !== undefined && f.ownerUserId !== meId;
+  const stop = (e: MouseEvent) => e.stopPropagation();
+  // 真实内容缩略图（2026-10-21）：有快照出真图，无快照回退装饰性示意图
+  const realThumb = useRealThumb(f.id);
+  return (
+    <div className="file-card" data-testid="file-card" onClick={() => !p.renaming && p.onOpen()}>
+      <div className="file-thumb">
+        {realThumb ? <img className="file-thumb-img" data-testid="file-thumb-img" src={realThumb} alt="" /> : <Thumb seed={f.id} />}
+        <button
+          className={'card-star' + (f.starred ? ' starred' : '')}
+          data-testid="star-btn"
+          title={f.starred ? '取消星标' : '加星标'}
+          onClick={(e) => {
+            stop(e);
+            p.onStar();
+          }}
+        >
+          {f.starred ? '★' : '☆'}
+        </button>
+      </div>
+      <div className="file-card-body">
+        {p.renaming ? (
+          <input
+            className="card-rename-input"
+            data-testid="rename-input"
+            autoFocus
+            value={p.renameDraft}
+            onClick={stop}
+            onChange={(e) => p.onRenameDraft(e.target.value)}
+            onBlur={p.onRenameCommit}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') p.onRenameCommit();
+              if (e.key === 'Escape') p.onRenameCancel();
+            }}
+          />
+        ) : (
+          <div className="card-title" title={f.title}>
+            {collab && (
+              <span className="card-collab-icon" title="协作文件" aria-label="协作文件">
+                🤝
+              </span>
+            )}
+            {f.title}
+          </div>
+        )}
+        <div className="card-meta">
+          {relTime(f.updatedAt)} · {collab ? (f.ownerName ?? '协作') : '个人'}
+        </div>
+      </div>
+      <div className="card-ops" onClick={stop}>
+        <button
+          className="card-menu-btn"
+          data-testid="card-menu-btn"
+          title="更多操作"
+          aria-label="更多操作"
+          onClick={p.onMenuToggle}
+        >
+          ⋯
+        </button>
+        {p.menuOpen && (
+          <div className="card-menu" data-testid="card-menu">
+            <button onClick={p.onRenameStart}>重命名</button>
+            <button onClick={p.onCopy}>复制</button>
+            {f.ownerUserId === meId && (
+              <button data-testid="share-action" onClick={p.onShare}>
+                复制分享链接
+              </button>
+            )}
+            {f.ownerUserId === meId && (
+              <button className="danger" onClick={p.onDelete}>
+                删除
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** 卡片网格（空态文案随视图；testid 供 e2e 区分首页双网格——最近/我的同文件
+ *  双卡并存，操作类断言须按网格定界）。 */
+function CardGrid({
+  list,
+  empty,
+  testid,
+  renderCard,
+}: {
+  list: FileListItemDetailed[];
+  empty: string;
+  testid?: string;
+  renderCard: (f: FileListItemDetailed, scope: string) => ReactElement;
+}): ReactElement {
+  return (
+    <div className="file-grid" data-testid={testid ?? 'file-grid'}>
+      {list.map((f) => (
+        <Fragment key={f.id}>{renderCard(f, testid ?? 'file-grid')}</Fragment>
+      ))}
+      {list.length === 0 && <p className="grid-empty">{empty}</p>}
+    </div>
   );
 }
 
 export function WorkspacePage() {
   const navigate = useNavigate();
-  // me（M3b 清偿包 + 账号管理）：id 供行菜单 owner-only 判定；systemRole 供「账号管理」
-  // 入口的超管门（GET /users/me 的 fullUser 已带 systemRole，member/失败均不渲染入口）
-  const [me, setMe] = useState<{ id: string; nickname: string; systemRole?: 'super_admin' | 'member' } | null>(null);
-  const [view, setView] = useState<View>('mine');
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [me, setMe] = useState<{ id: string; nickname: string; systemRole?: 'super_admin' | 'member'; avatar?: string | null } | null>(null);
   const [items, setItems] = useState<FileListItemDetailed[]>([]);
-  const [folders, setFolders] = useState<FolderItem[]>([]);
-  /** 选中的文件夹（客户端过滤：mine 视图条目按 folderId+后代筛，裁定口径）。 */
-  const [folderId, setFolderId] = useState<string | null>(null);
-  /** 非 null 即搜索结果态：替换列表与页签，清除按钮返回。 */
+  const [recentItems, setRecentItems] = useState<FileListItemDetailed[]>([]);
+  const [recentFilter, setRecentFilter] = useState<RecentFilter>('all');
   const [search, setSearch] = useState<{ q: string; results: FileListItemDetailed[] } | null>(null);
   const [searchText, setSearchText] = useState('');
   const [error, setError] = useState('');
-  const [prompt, setPrompt] = useState<PromptState | null>(null);
-  const [promptValue, setPromptValue] = useState('');
-  const [promptError, setPromptError] = useState('');
-  const [moveTarget, setMoveTarget] = useState<FileListItemDetailed | null>(null);
-  const [moveTo, setMoveTo] = useState('');
   const [menuFor, setMenuFor] = useState<string | null>(null);
-  // 站内通知（M3b Task 8，FR-CMT-005）：未读角标 + 通知下拉；事件由 notify.ts 的
-  // SSE 连接分发（App.tsx 建连），此处只消费
-  const [unread, setUnread] = useState(0);
-  const [notifs, setNotifs] = useState<NotifyItem[]>([]);
-  const [bellOpen, setBellOpen] = useState(false);
-  // 分享/复制等动作的轻提示（M3b Task 4，FR-SHR-001）：复用 EditorPage 的 toast 形态
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState('');
+  const [previewTpl, setPreviewTpl] = useState<WorkspaceTemplate | null>(null);
   const [toast, setToast] = useState('');
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
-  // XMind 导入入口（M4 Task 4）：隐藏 file input，由「导入」按钮代点
   const importInputRef = useRef<HTMLInputElement | null>(null);
-  // 三步新手引导（M5 Task 3，NFR-USE-001）：完成/跳过后置 false（组件内同时写
-  // gmind.guide.done，此后刷新/重进均不再触发）
   const [guideOpen, setGuideOpen] = useState(false);
 
-  // Ctrl/Cmd+Shift+F 聚焦搜索框（M3b 清偿包，FR-FIL-008）：document 级监听，
-  // Shift 使 key 为 'F'，统一按小写比较；Ctrl 与 Cmd（macOS）都算命中。
+  /** 视图以 URL 为唯一事实源（2026-10-21 外壳抽取：侧栏跨页导航 → /workspace?view=x）。 */
+  const rawView = searchParams.get('view') ?? 'mine';
+  const view: View = VIEW_PARAMS.has(rawView) ? (rawView as View) : 'mine';
+
+  // Ctrl/Cmd+Shift+F 聚焦搜索框（M3b 清偿包，FR-FIL-008）
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
       if ((e.ctrlKey || e.metaKey) && e.shiftKey && !e.altKey && e.key.toLowerCase() === 'f') {
@@ -102,87 +252,44 @@ export function WorkspacePage() {
     return () => document.removeEventListener('keydown', onKey);
   }, []);
 
+  /** 视图 → 服务端 view 参数（协作空间 = shared，2026-10-20 裁定 3）。 */
+  const viewParam = (v: View): string =>
+    v === 'collab' ? 'shared' : v === 'templates' ? 'mine' : v;
+
+  /** 列表装载序号（2026-10-21 修竞态）：URL 驱动视图后并发 loadFiles（视图 effect ×
+   *  动作后 refresh）可能乱序回包——慢的旧响应会把新视图的列表盖掉（星标取消后 starred
+   *  视图仍见该卡的 e2e 红案）。只认最后一次发起的响应。 */
+  const loadSeq = useRef(0);
   const loadFiles = useCallback(async (v: View) => {
-    setItems(await api<FileListItemDetailed[]>(`/files?view=${v}`));
+    const seq = ++loadSeq.current;
+    const data = await api<FileListItemDetailed[]>(`/files?view=${viewParam(v)}`);
+    if (seq === loadSeq.current) setItems(data);
   }, []);
-  const loadFolders = useCallback(async () => {
-    setFolders(await api<FolderItem[]>('/folders'));
+  const loadRecent = useCallback(async () => {
+    setRecentItems(await api<FileListItemDetailed[]>('/files?view=recent'));
   }, []);
 
+  // 挂载：身份 + 首页「最近文件」流（失败静默，非关键路径）
   useEffect(() => {
-    void api<{ id: string; nickname: string; systemRole?: 'super_admin' | 'member' }>('/users/me').then(setMe).catch(() => undefined);
-    void loadFiles('mine').catch((e) => setError(msgOf(e)));
-    void loadFolders().catch((e) => setError(msgOf(e)));
-  }, [loadFiles, loadFolders]);
+    void api<{ id: string; nickname: string; systemRole?: 'super_admin' | 'member'; avatar?: string | null }>('/users/me')
+      .then(setMe)
+      .catch(() => undefined);
+    void loadRecent().catch(() => undefined);
+  }, [loadRecent]);
 
-  // 引导触发（M5 Task 3）：localStorage 缺 gmind.guide.done 即触发（浏览器本地口径，
-  // M5 登记差异）；等首批文件就位再开——第 2/3 步高亮首个文件行。新注册用户必有
-  // 3 个种子文件；旧用户清空文件的极端态不开引导（可接受，验收口径=新用户首进）。
+  // 视图切换（含外壳侧栏跨页带参进入）→ 装载对应列表；模板库纯客户端目录无请求
+  useEffect(() => {
+    if (view === 'templates') return;
+    void loadFiles(view).catch((e) => setError(msgOf(e)));
+  }, [view, loadFiles]);
+
+  // 引导触发（M5 Task 3）：完成/跳过前首进即开
   useEffect(() => {
     if (!guideOpen && localStorage.getItem(GUIDE_DONE_KEY) === null && items.length > 0) {
       setGuideOpen(true);
     }
   }, [items, guideOpen]);
 
-  // ---- 通知中心（M3b Task 8，FR-CMT-005）----------------------------------
-  const loadUnread = useCallback(async () => {
-    try {
-      const { count } = await api<{ count: number }>('/notifications/unread-count');
-      setUnread(count);
-    } catch {
-      // 铃铛是非关键路径：失败保持现状（不进全局 error 条）
-    }
-  }, []);
-  const loadNotifs = useCallback(async () => {
-    try {
-      setNotifs(await api<NotifyItem[]>('/notifications'));
-    } catch {
-      // 同上：下拉打开失败静默，保留旧列表
-    }
-  }, []);
-
-  useEffect(() => {
-    void loadUnread();
-  }, [loadUnread]);
-
-  // SSE 推送到达：未读数重取；下拉展开时连列表一起刷新
-  useEffect(
-    () =>
-      onNotifyEvent(() => {
-        void loadUnread();
-        if (bellOpen) void loadNotifs();
-      }),
-    [loadUnread, loadNotifs, bellOpen],
-  );
-
-  function toggleBell(): void {
-    const next = !bellOpen;
-    setBellOpen(next);
-    if (next) void loadNotifs();
-  }
-
-  /** 点击通知条目：未读则标记已读（POST :id/read）+ 角标重取，随后按 payload.fileId
-   *  跳转编辑页（mention/reply 均锚定文件）；payload 带 nodeId 时拼深链
-   *  /edit/:fileId?node=:nodeId（M4 清偿包：编辑页装载后定位该节点）；
-   *  无 fileId 的通知仅关闭下拉。 */
-  async function openNotification(n: NotifyItem): Promise<void> {
-    setBellOpen(false);
-    if (n.readAt === null) {
-      try {
-        await apiPost(`/notifications/${n.id}/read`);
-      } catch {
-        // 已读失败不阻断跳转（下次进入工作台角标自会纠正）
-      }
-      void loadUnread();
-    }
-    const fileId = n.payload?.fileId;
-    if (fileId) {
-      const nodeId = n.payload?.nodeId;
-      navigate(nodeId ? `/edit/${fileId}?node=${encodeURIComponent(nodeId)}` : `/edit/${fileId}`);
-    }
-  }
-
-  /** 变更后回刷：搜索态重跑同一关键词（更新 results），列表态回刷当前视图。 */
   async function refresh(): Promise<void> {
     if (search) {
       const results = await api<FileListItemDetailed[]>(`/search?q=${encodeURIComponent(search.q)}`);
@@ -190,6 +297,7 @@ export function WorkspacePage() {
       return;
     }
     await loadFiles(view);
+    if (view === 'mine') await loadRecent();
   }
 
   function withReload(fn: () => Promise<unknown>): () => void {
@@ -201,27 +309,13 @@ export function WorkspacePage() {
     };
   }
 
-  async function switchView(v: View): Promise<void> {
-    setView(v);
-    setFolderId(null);
+  /** 视图切换 = 写 URL（外壳侧栏同一通道）；本地瞬态（搜索/菜单/重命名）一律收敛。 */
+  function switchView(v: View): void {
     setSearch(null);
     setSearchText('');
     setMenuFor(null);
-    try {
-      await loadFiles(v);
-    } catch (e) {
-      setError(msgOf(e));
-    }
-  }
-
-  /** 点击文件夹行：客户端过滤 + 必要时切回 mine 视图（过滤只作用于 mine 条目）。 */
-  function openFolder(id: string | null): void {
-    setFolderId(id);
-    setMenuFor(null);
-    if (view !== 'mine') {
-      setView('mine');
-      void loadFiles('mine').catch((e) => setError(msgOf(e)));
-    }
+    setRenamingId(null);
+    setSearchParams(v === 'mine' ? {} : { view: v });
   }
 
   async function runSearch(): Promise<void> {
@@ -237,8 +331,6 @@ export function WorkspacePage() {
     }
   }
 
-  /** 清除搜索：回页签并回刷底层列表（fix round 1——搜索态的变更只重跑了搜索、
-   *  未回刷 items，不清列表会出现已删文件复现/旧标题/旧星标的陈旧列表）。 */
   async function clearSearch(): Promise<void> {
     setSearch(null);
     setSearchText('');
@@ -252,32 +344,35 @@ export function WorkspacePage() {
 
   async function createFile(): Promise<void> {
     try {
-      await apiPost('/files', {});
-      // 新文件落在根目录：退出过滤/搜索/其他视图，保证「新建即见」（M0 验收口径）
-      setView('mine');
-      setFolderId(null);
-      setSearch(null);
-      setSearchText('');
-      await loadFiles('mine');
+      const created = await apiPost<{ id: string }>('/files', {});
+      navigate(`/edit/${created.id}`); // 2026-10-20 重设计：新建即开（参考图「空白脑图」卡语义）
     } catch (e) {
       setError(msgOf(e));
     }
   }
 
-  /** XMind 导入（M4 Task 4，FR-IO-001/002）：file → xmind-import 胶水（错误已按
-   *  FR-IO-001 归因为 Error.message）→ POST /api/files 携带 docState 建文件 →
-   *  与新建脑图同款回刷（退出过滤/搜索/其他视图，「导入即见」）。降级提示 toast
-   *  （degraded.length > 0，FR-IO-002）；失败 toast 显示归因文案（不进全局 error 条，
-   *  导入失败不阻断工作台其余操作）。 */
+  /** 使用模板（2026-10-20 裁定 5）：客户端 createTemplateDoc 直出 docState →
+   *  POST /files（导入落库路径）→ 建完即开。 */
+  async function createFromTemplate(tpl: WorkspaceTemplate): Promise<void> {
+    try {
+      const doc = createTemplateDoc(tpl.spec);
+      const state = btoa(String.fromCharCode(...docToState(doc)));
+      doc.destroy();
+      const created = await apiPost<{ id: string }>('/files', { title: tpl.spec.title, docState: state });
+      setPreviewTpl(null);
+      navigate(`/edit/${created.id}`);
+    } catch (e) {
+      setError(msgOf(e));
+    }
+  }
+
+  /** XMind 导入（M4 Task 4 保留）：入口收进顶栏「导入」文字钮。 */
   async function importXmind(file: File): Promise<void> {
     try {
       const { title, state, degraded } = await importXmindFile(file);
       await apiPost('/files', { title, docState: state });
-      setView('mine');
-      setFolderId(null);
-      setSearch(null);
-      setSearchText('');
-      await loadFiles('mine');
+      switchView('mine');
+      await loadFiles('mine'); // 已在 mine 时 URL 不变、视图 effect 不触发——手动补装
       if (degraded.length > 0) showToast(degradedSummary(degraded));
     } catch (e) {
       showToast(msgOf(e));
@@ -290,9 +385,6 @@ export function WorkspacePage() {
     setToast(message);
   }
 
-  /** 复制分享链接（M3b Task 4，FR-SHR-001）：POST /api/files/:id/share（owner only，
-   *  重复创建返回既有 active token）→ 剪贴板写 `${origin}/s/${token}` → toast。
-   *  剪贴板失败（非安全上下文/权限拒绝）以错误提示兜底，不静默。 */
   async function copyShareLink(fileId: string): Promise<void> {
     setMenuFor(null);
     try {
@@ -304,184 +396,75 @@ export function WorkspacePage() {
     }
   }
 
-  /** mine 视图条目的客户端文件夹过滤：选中文件夹及其全部后代（folders 深度升序，
-   *  单趟扫不净时迭代收敛——防御性，规模个人级可忽略）。 */
-  const visibleItems = useMemo(() => {
-    if (view !== 'mine' || folderId === null) return items;
-    const under = new Set<string>([folderId]);
-    let grew = true;
-    while (grew) {
-      grew = false;
-      for (const f of folders) {
-        if (f.parentId !== null && under.has(f.parentId) && !under.has(f.id)) {
-          under.add(f.id);
-          grew = true;
-        }
-      }
-    }
-    return items.filter((f) => f.folderId !== null && under.has(f.folderId));
-  }, [items, folders, folderId, view]);
-
-  function openPrompt(p: PromptState): void {
-    setPrompt(p);
-    setPromptValue(p.kind === 'folder-create' ? '' : p.kind === 'folder-rename' ? p.name : p.title);
-    setPromptError('');
-    setMenuFor(null);
-  }
-
-  async function confirmPrompt(): Promise<void> {
-    if (!prompt) return;
-    const value = promptValue.trim();
+  /** 行内重命名提交（2026-10-20：对话框退役）：Enter 提交 / Esc 取消，空值不提交。 */
+  async function commitRename(f: FileListItemDetailed): Promise<void> {
+    const value = renameDraft.trim();
+    setRenamingId(null);
+    if (!value || value === f.title) return;
     try {
-      if (prompt.kind === 'file-rename') {
-        if (!value) return setPromptError('名称不能为空');
-        await apiPatch(`/files/${prompt.fileId}`, { title: value });
-      } else if (prompt.kind === 'folder-create') {
-        if (!value) return setPromptError('文件夹名称不能为空');
-        await apiPost('/folders', { name: value, parentId: prompt.parentId ?? undefined });
-        await loadFolders();
-      } else {
-        if (!value) return setPromptError('文件夹名称不能为空');
-        await apiPatch(`/folders/${prompt.folderId}`, { name: value });
-        await Promise.all([loadFolders(), loadFiles(view)]);
-      }
-      setPrompt(null);
-      await refresh();
-    } catch (e) {
-      setPromptError(msgOf(e));
-    }
-  }
-
-  async function confirmMove(): Promise<void> {
-    if (!moveTarget) return;
-    try {
-      await apiPatch(`/files/${moveTarget.id}`, { folderId: moveTo === '' ? null : moveTo });
-      setMoveTarget(null);
+      await apiPatch(`/files/${f.id}`, { title: value });
       await refresh();
     } catch (e) {
       setError(msgOf(e));
     }
-  }
-
-  /** 文件夹删除（context op）：window.confirm 二次确认；整棵子树文件入回收站。 */
-  async function deleteFolder(f: FolderItem): Promise<void> {
-    if (!window.confirm(`删除文件夹「${f.name}」？其中全部文件将进入回收站。`)) return;
-    try {
-      await apiDel(`/folders/${f.id}`);
-      if (folderId !== null && subtreeContains(f.id, folderId)) setFolderId(null);
-      await Promise.all([loadFolders(), loadFiles(view)]);
-    } catch (e) {
-      setError(msgOf(e));
-    }
-  }
-
-  /** 子树判定（folders 深度升序，迭代收敛；与 visibleItems 同一套客户端组树口径）。 */
-  function subtreeContains(ancestorId: string, targetId: string): boolean {
-    const byParent = new Map<string | null, string[]>();
-    for (const f of folders) {
-      const list = byParent.get(f.parentId) ?? [];
-      list.push(f.id);
-      byParent.set(f.parentId, list);
-    }
-    const frontier = [ancestorId];
-    while (frontier.length > 0) {
-      const cur = frontier.pop() as string;
-      if (cur === targetId) return true;
-      frontier.push(...(byParent.get(cur) ?? []));
-    }
-    return false;
   }
 
   const stop = (e: MouseEvent) => e.stopPropagation();
+  const isCollab = (f: FileListItemDetailed): boolean => me !== null && f.ownerUserId !== me.id;
 
-  /** 渲染用条目：搜索态用搜索结果，列表态用视图条目（mine 再按文件夹过滤）。 */
-  const shownItems = search ? search.results : visibleItems;
+  /** 最近使用筛选（全部/个人/协作，客户端过滤）。 */
+  const recentShown = recentItems.filter((f) =>
+    recentFilter === 'all' ? true : recentFilter === 'collab' ? isCollab(f) : !isCollab(f),
+  );
+
+  const shownItems = search ? search.results : items;
+
+  /** 卡片渲染闭包（模块级 FileCard/CardGrid 的回调装配）。renamingId/menuFor 带网格
+   *  作用域前缀（`${scope}:${fileId}`）——首页最近/我的双网格同文件双卡并存，不区分
+   *  会双 autoFocus 输入框抢焦点互 blur 同归于尽（2026-10-20 实测实证）。 */
+  const renderCard = (f: FileListItemDetailed, scope: string): ReactElement => (
+    <FileCard
+      f={f}
+      meId={me?.id}
+      renaming={renamingId === `${scope}:${f.id}`}
+      renameDraft={renameDraft}
+      menuOpen={menuFor === `${scope}:${f.id}`}
+      onOpen={() => navigate(`/edit/${f.id}`)}
+      onMenuToggle={() => setMenuFor(menuFor === `${scope}:${f.id}` ? null : `${scope}:${f.id}`)}
+      onRenameStart={() => {
+        setRenamingId(`${scope}:${f.id}`);
+        setRenameDraft(f.title);
+        setMenuFor(null);
+      }}
+      onRenameDraft={setRenameDraft}
+      onRenameCommit={() => void commitRename(f)}
+      onRenameCancel={() => setRenamingId(null)}
+      onStar={withReload(() => (f.starred ? apiDel(`/files/${f.id}/star`) : apiPut(`/files/${f.id}/star`)))}
+      onCopy={withReload(() => apiPost(`/files/${f.id}/copy`))}
+      onShare={() => void copyShareLink(f.id)}
+      onDelete={withReload(() => apiDel(`/files/${f.id}`))}
+    />
+  );
 
   return (
-    <div className="workspace">
-      <header className="workspace-header">
-        <h2>Gmind 工作台</h2>
-        <input
-          className="search-input"
-          data-testid="search-input"
-          ref={searchInputRef}
-          placeholder="搜索文件标题，回车确认"
-          value={searchText}
-          onChange={(e) => setSearchText(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') void runSearch();
-          }}
-        />
-        <div className="header-actions">
-          <div className="notify-wrap">
-            <button className="notify-bell" data-testid="notify-bell" title="通知" onClick={toggleBell}>
-              <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
-                <path
-                  d="M12 22a2.2 2.2 0 0 0 2.2-2.2H9.8A2.2 2.2 0 0 0 12 22Zm7-5.6v-1.1l-1.8-1.8V9.8A5.2 5.2 0 0 0 13.3 4.7V4a1.3 1.3 0 1 0-2.6 0v.7A5.2 5.2 0 0 0 6.8 9.8v3.7L5 15.3v1.1Z"
-                  fill="currentColor"
-                />
-              </svg>
-              {unread > 0 && (
-                <span className="notify-badge" data-testid="notify-badge">
-                  {unread > 99 ? '99+' : unread}
-                </span>
-              )}
-            </button>
-            {bellOpen && (
-              <div className="notify-dropdown" data-testid="notify-list">
-                {notifs.length === 0 && <div className="notify-empty">暂无通知</div>}
-                {notifs.map((n) => (
-                  <div
-                    key={n.id}
-                    className={'notify-item' + (n.readAt === null ? ' unread' : '')}
-                    data-testid="notify-item"
-                    onClick={() => void openNotification(n)}
-                  >
-                    <span className="notify-item-head">
-                      <span className="notify-type">{n.type === 'mention' ? '提及' : n.type === 'reply' ? '回复' : '通知'}</span>
-                      <span className="notify-text">
-                        {n.type === 'mention'
-                          ? `${n.payload?.commenterName ?? '有人'} 在「${n.payload?.title ?? '文件'}」中提到了你`
-                          : n.type === 'reply'
-                            ? `${n.payload?.commenterName ?? '有人'} 在「${n.payload?.title ?? '文件'}」中回复了你`
-                            : n.payload?.title ?? ''}
-                      </span>
-                    </span>
-                    {n.payload?.content && <span className="notify-content">{n.payload.content}</span>}
-                    <span className="notify-time">{fmtTime(n.createdAt)}</span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-          <button onClick={() => navigate('/trash')}>回收站</button>
-          {/* 账号设置入口（M5 Task 1，FR-ACC-002 收口）：改密/换绑/通知偏好 */}
-          <button data-testid="settings-entry" onClick={() => navigate('/settings')}>
-            账号设置
-          </button>
-          {/* 账号管理入口（移植 mindgrid 账号体系）：仅 super_admin 渲染——me 未就绪/
-              member/请求失败都不出按钮；member 直敲 /admin/users 由 AdminGuard 403 兜底 */}
-          {me?.systemRole === 'super_admin' && (
-            <button data-testid="admin-users-entry" onClick={() => navigate('/admin/users')}>
-              账号管理
-            </button>
-          )}
-          {/* 退出登录（需求方 2026-10-04）：服务端会话作废（POST /api/auth/logout）+
-              本地 token 清除后回登录页；失败也照常登出（会话最迟随过期失效） */}
-          <button
-            data-testid="logout-button"
-            onClick={() => {
-              void api('/auth/logout', { method: 'POST' }).catch(() => undefined);
-              clearToken();
-              navigate('/login');
+    <WorkspaceShell
+      activeNav={search ? null : view}
+      topbar={
+        <>
+          <input
+            className="search-input"
+            data-testid="search-input"
+            ref={searchInputRef}
+            placeholder="搜索脑图，回车确认"
+            value={searchText}
+            onChange={(e) => setSearchText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') void runSearch();
             }}
-          >
-            退出登录
-          </button>
-          <button data-testid="import-button" onClick={() => importInputRef.current?.click()}>
+          />
+          <button className="ws-import" data-testid="import-button" onClick={() => importInputRef.current?.click()}>
             导入
           </button>
-          {/* accept 仅为系统选择器提示；e2e setInputFiles 直接注入 bytes 不受其约束 */}
           <input
             ref={importInputRef}
             type="file"
@@ -490,144 +473,161 @@ export function WorkspacePage() {
             style={{ display: 'none' }}
             onChange={(e) => {
               const file = e.target.files?.[0];
-              e.target.value = ''; // 复位以允许连续导入同名文件
+              e.target.value = '';
               if (file) void importXmind(file);
             }}
           />
-          {/* data-testid 同时是引导第 1 步的高亮目标（见 GUIDE_STEPS） */}
-          <button className="primary" data-testid="new-file-btn" onClick={() => void createFile()}>
-            新建脑图
+          <button className="ws-create" data-testid="new-file-btn" onClick={() => void createFile()}>
+            ＋ 新建脑图
           </button>
-          <span className="user-nickname" data-testid="user-nickname">
-            {me?.nickname ?? ''}
-          </span>
-        </div>
-      </header>
-
+        </>
+      }
+    >
       {error && <p className="error">{error}</p>}
 
-      <div className="workspace-body">
-        {!search && (
-          <aside className="folder-rail">
-            <div className="rail-head">
-              <span>文件夹</span>
-              <button data-testid="new-folder-btn" onClick={() => openPrompt({ kind: 'folder-create', parentId: folderId })}>
-                新建文件夹
-              </button>
-            </div>
-            <div className="folder-tree" data-testid="folder-tree">
-              <div className={'folder-row root' + (folderId === null ? ' active' : '')} onClick={() => openFolder(null)}>
-                <span className="folder-name">全部文件</span>
-              </div>
-              {folders.map((f) => (
-                <div
-                  key={f.id}
-                  className={'folder-row' + (folderId === f.id ? ' active' : '')}
-                  style={{ paddingLeft: 8 + (f.depth - 1) * 16 }}
-                  onClick={() => openFolder(f.id)}
-                >
-                  <span className="folder-name">{f.name}</span>
-                  <span className="folder-ops" onClick={stop}>
-                    <button data-testid="folder-rename-btn" title="重命名文件夹" onClick={() => openPrompt({ kind: 'folder-rename', folderId: f.id, name: f.name })}>
-                      重命名
-                    </button>
-                    <button data-testid="folder-delete-btn" title="删除文件夹" onClick={() => void deleteFolder(f)}>
-                      删除
-                    </button>
-                  </span>
-                </div>
-              ))}
-            </div>
-          </aside>
-        )}
-
-        <section className="main-pane">
-          {search ? (
+      <main className="ws-content">
+        {search ? (
+          <>
             <div className="search-bar" data-testid="search-results">
-              <h3>「{search.q}」的搜索结果（{search.results.length}）</h3>
+              <h3>
+                「{search.q}」的搜索结果（{search.results.length}）
+              </h3>
               <button data-testid="search-clear" onClick={() => void clearSearch()}>
                 清除搜索
               </button>
             </div>
-          ) : (
-            <div className="view-tabs" data-testid="view-tabs">
-              {VIEW_TABS.map((t) => (
-                <button key={t.key} className={view === t.key ? 'active' : ''} onClick={() => void switchView(t.key)}>
-                  {t.label}
+            <CardGrid list={shownItems} empty="没有匹配的文件" renderCard={renderCard} />
+          </>
+        ) : view === 'mine' ? (
+          <>
+            <section className="ws-hello">
+              <h1 data-testid="ws-greeting">
+                {greeting()}，{me?.nickname ?? ''}
+              </h1>
+              <p>今天也来整理一下思绪吧</p>
+            </section>
+            <section className="ws-quick">
+              <button className="quick-card" data-testid="quick-create-blank" onClick={() => void createFile()}>
+                <span className="quick-icon" style={{ background: '#eef3ff' }}>
+                  🧠
+                </span>
+                <span className="quick-text">
+                  <strong>空白脑图</strong>
+                  <em>从空白开始，自由发散想法</em>
+                </span>
+              </button>
+              <button className="quick-card" data-testid="quick-create-template" onClick={() => switchView('templates')}>
+                <span className="quick-icon" style={{ background: '#e6f7f5' }}>
+                  📚
+                </span>
+                <span className="quick-text">
+                  <strong>从模板创建</strong>
+                  <em>精选结构模板，一键套用快速上手</em>
+                </span>
+              </button>
+            </section>
+            <section>
+              <div className="ws-section-head">
+                <h2>最近文件</h2>
+                <button className="link" data-testid="recent-view-all" onClick={() => switchView('recent')}>
+                  查看全部
+                </button>
+              </div>
+              <CardGrid list={recentItems.slice(0, 8)} empty="暂无最近文件" testid="home-recent-grid" renderCard={renderCard} />
+            </section>
+            <section>
+              <div className="ws-section-head">
+                <h2>我的文件</h2>
+              </div>
+              <CardGrid list={items} empty='暂无文件，点击「新建脑图」开始' testid="mine-grid" renderCard={renderCard} />
+            </section>
+          </>
+        ) : view === 'recent' ? (
+          <>
+            <div className="ws-section-head">
+              <h2>最近使用</h2>
+              <div className="recent-filter" data-testid="recent-filter">
+                {(
+                  [
+                    ['all', '全部'],
+                    ['mine', '个人'],
+                    ['collab', '协作'],
+                  ] as const
+                ).map(([k, label]) => (
+                  <button
+                    key={k}
+                    className={recentFilter === k ? 'active' : ''}
+                    data-testid={`recent-filter-${k}`}
+                    onClick={() => setRecentFilter(k)}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <CardGrid list={recentShown} empty="暂无最近文件" renderCard={renderCard} />
+          </>
+        ) : view === 'starred' ? (
+          <>
+            <div className="ws-section-head">
+              <h2>星标收藏</h2>
+            </div>
+            <CardGrid list={items} empty="暂无星标文件" renderCard={renderCard} />
+          </>
+        ) : view === 'collab' ? (
+          <>
+            <div className="ws-section-head">
+              <h2>协作空间</h2>
+              <span className="ws-section-sub">与外部协作的所有文件</span>
+            </div>
+            <CardGrid list={items} empty="暂无协作文件——打开文档，成员面板一键拉取站内用户" renderCard={renderCard} />
+          </>
+        ) : (
+          <>
+            <div className="ws-section-head">
+              <h2>模板库</h2>
+              <span className="ws-section-sub">内置精选模板，一键套用</span>
+            </div>
+            <div className="file-grid" data-testid="template-grid">
+              {TEMPLATE_CATALOG.map((t) => (
+                <button
+                  key={t.id}
+                  className="file-card template-card"
+                  data-testid={`template-card-${t.id}`}
+                  onClick={() => setPreviewTpl(t)}
+                >
+                  <div className="file-thumb">
+                    <Thumb seed={t.id} accent={t.accent} />
+                  </div>
+                  <div className="file-card-body">
+                    <div className="card-title">{t.name}</div>
+                    <div className="card-meta">{t.blurb}</div>
+                  </div>
                 </button>
               ))}
             </div>
-          )}
+          </>
+        )}
+      </main>
 
-          <div className="file-list-header">
-            <span>文件名</span>
-            <span>所有者</span>
-            <span>修改时间</span>
-            <span>修改人</span>
-            <span>位置</span>
-            <span>操作</span>
+      {/* 模板预览（大缩略图 + 简介 + 使用模板） */}
+      {previewTpl && (
+        <div className="modal-mask" data-testid="template-preview" onClick={() => setPreviewTpl(null)}>
+          <div className="modal template-modal" onClick={stop}>
+            <div className="template-preview-thumb">
+              <Thumb seed={previewTpl.id} accent={previewTpl.accent} />
+            </div>
+            <h3>{previewTpl.name}</h3>
+            <p className="template-blurb">{previewTpl.blurb}</p>
+            <div className="modal-actions">
+              <button onClick={() => setPreviewTpl(null)}>取消</button>
+              <button className="primary" data-testid="template-use" onClick={() => void createFromTemplate(previewTpl)}>
+                使用模板
+              </button>
+            </div>
           </div>
-          <ul className="file-list">
-            {shownItems.map((f) => (
-              <li key={f.id} className="file-row" onClick={() => navigate(`/edit/${f.id}`)}>
-                <span className="cell title">{search ? highlightTitle(f.title, search.q) : f.title}</span>
-                <span className="cell">{f.ownerName ?? '—'}</span>
-                <span className="cell">{fmtTime(f.updatedAt)}</span>
-                <span className="cell">{f.lastModifierName ?? '—'}</span>
-                <span className="cell">{f.folderName ?? '根目录'}</span>
-                <span className="cell ops" onClick={stop}>
-                  <button
-                    className="star-btn"
-                    data-testid="star-btn"
-                    title={f.starred ? '取消星标' : '加星标'}
-                    onClick={withReload(() => (f.starred ? apiDel(`/files/${f.id}/star`) : apiPut(`/files/${f.id}/star`)))}
-                  >
-                    {f.starred ? '★' : '☆'}
-                  </button>
-                  <button data-testid="row-menu" title="更多操作" onClick={() => setMenuFor(menuFor === f.id ? null : f.id)}>
-                    ⋯
-                  </button>
-                  {menuFor === f.id && (
-                    <div className="row-menu" data-testid="row-menu-popup">
-                      <button onClick={() => openPrompt({ kind: 'file-rename', fileId: f.id, title: f.title })}>重命名</button>
-                      {/* 删除/移动仅 owner（M3b 清偿包，PRD 2.2.1）：按归属判定、视图无关
-                          ——shared 视图（及 recent/starred 中他人文件）不出现这两项，
-                          避免点了必 404 的入口；重命名/复制/星标对所有可访问文件保留。 */}
-                      {f.ownerUserId === me?.id && (
-                        <button
-                          onClick={() => {
-                            setMoveTarget(f);
-                            setMoveTo(f.folderId ?? '');
-                            setMenuFor(null);
-                          }}
-                        >
-                          移动到文件夹
-                        </button>
-                      )}
-                      {/* 复制分享链接（M3b Task 4，FR-SHR-001）：owner only（FR-SHR-001
-                          「文档所有者可创建」，与删除/移动同一归属判定） */}
-                      {f.ownerUserId === me?.id && (
-                        <button data-testid="share-action" onClick={() => void copyShareLink(f.id)}>
-                          复制分享链接
-                        </button>
-                      )}
-                      <button onClick={withReload(() => apiPost(`/files/${f.id}/copy`))}>复制</button>
-                      {f.ownerUserId === me?.id && (
-                        <button className="danger" onClick={withReload(() => apiDel(`/files/${f.id}`))}>
-                          删除
-                        </button>
-                      )}
-                    </div>
-                  )}
-                </span>
-              </li>
-            ))}
-            {shownItems.length === 0 && (
-              <li className="empty">{search ? '没有匹配的文件' : '暂无文件，点击「新建脑图」开始'}</li>
-            )}
-          </ul>
-        </section>
-      </div>
+        </div>
+      )}
 
       {toast && (
         <div className="workspace-toast" data-testid="toast" role="alert">
@@ -635,61 +635,7 @@ export function WorkspacePage() {
         </div>
       )}
 
-      {/* 三步新手引导（M5 Task 3）：模态浮层，完成/跳过由组件内写标记+埋点后回调卸载 */}
       {guideOpen && <GuideOverlay steps={GUIDE_STEPS} onClose={() => setGuideOpen(false)} />}
-
-      {prompt && (
-        <div className="modal-mask" data-testid="rename-modal">
-          <div className="modal">
-            <h3>
-              {prompt.kind === 'file-rename'
-                ? '重命名文件'
-                : prompt.kind === 'folder-create'
-                  ? '新建文件夹'
-                  : '重命名文件夹'}
-            </h3>
-            <input
-              autoFocus
-              data-testid="rename-input"
-              value={promptValue}
-              onChange={(e) => setPromptValue(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') void confirmPrompt();
-              }}
-            />
-            {promptError && <p className="error">{promptError}</p>}
-            <div className="modal-actions">
-              <button onClick={() => setPrompt(null)}>取消</button>
-              <button className="primary" data-testid="rename-confirm" onClick={() => void confirmPrompt()}>
-                确定
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {moveTarget && (
-        <div className="modal-mask" data-testid="move-modal">
-          <div className="modal">
-            <h3>移动「{moveTarget.title}」到</h3>
-            <select data-testid="move-select" value={moveTo} onChange={(e) => setMoveTo(e.target.value)}>
-              <option value="">根目录</option>
-              {folders.map((f) => (
-                <option key={f.id} value={f.id}>
-                  {'　'.repeat(f.depth - 1)}
-                  {f.name}
-                </option>
-              ))}
-            </select>
-            <div className="modal-actions">
-              <button onClick={() => setMoveTarget(null)}>取消</button>
-              <button className="primary" data-testid="move-confirm" onClick={() => void confirmMove()}>
-                移动
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
+    </WorkspaceShell>
   );
 }

@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, HttpCode, Inject, Param, Patch, Post, Put, Query, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Header, HttpCode, Inject, Param, Patch, Post, Put, Query, Req, UseGuards } from '@nestjs/common';
 import { z } from 'zod';
 import { createFileSchema } from '@gmind/shared';
 import { UserGuard } from '../auth/user.guard';
@@ -84,6 +84,23 @@ export class FilesController {
   @Get(':id')
   getContent(@Req() req: { user: { id: string } }, @Param('id') id: string) {
     return this.files.getOwnedFileWithState(req.user.id, id);
+  }
+
+  /** 真实缩略图（2026-10-21）：GET 读（image/svg+xml，404=无快照回退装饰图）/
+   *  POST 写（编辑器 persisted ack 后上传；canAccess 口径，不翻 updated_at）。 */
+  @Get(':id/thumbnail')
+  @Header('Content-Type', 'image/svg+xml; charset=utf-8')
+  @Header('Cache-Control', 'private, max-age=30')
+  getThumbnail(@Req() req: { user: { id: string } }, @Param('id') id: string): Promise<string> {
+    return this.files.getThumbSvg(req.user.id, id);
+  }
+
+  @Post(':id/thumbnail')
+  @HttpCode(200) // 幂等覆盖写（非资源创建），不取 Nest POST 默认 201
+  async saveThumbnail(@Req() req: { user: { id: string } }, @Param('id') id: string, @Body() body: unknown): Promise<{ ok: true }> {
+    const svg = (body as { svg?: unknown } | null)?.svg;
+    await this.files.saveThumbSvg(req.user.id, id, typeof svg === 'string' ? svg : '');
+    return { ok: true };
   }
 
   /** 协作者/owner 候选列表（M3b Task 8，FR-CMT-005）：评论 @mention 的可选人

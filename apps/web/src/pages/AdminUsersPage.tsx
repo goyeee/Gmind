@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
 import type { AdminUserListItem, SystemRole } from '@gmind/shared';
 import { createAdminUser, fetchAdminUsers, updateAdminUser } from '../api/admin';
 import { api } from '../api/client';
+import { WorkspaceShell } from './WorkspaceShell';
 
 /**
  * 账号管理页（/admin/users，移植 mindgrid 账号体系）：成员列表 + 添加账号 + 角色/状态/昵称管理。
@@ -38,6 +38,13 @@ export function AdminUsersPage() {
   const [me, setMe] = useState<MeShape | null>(null);
   const [users, setUsers] = useState<AdminUserListItem[] | null>(null);
   const [error, setError] = useState('');
+  // 分页 + 搜索（2026-10-21 需求方反馈「加载慢/无分页」：开发库 2 万+ 账号全量
+  // 拉取不可行）。q 输入 300ms 防抖落 qDebounced，搜索变化回第 1 页。
+  const [page, setPage] = useState(1);
+  const PAGE_SIZE = 20;
+  const [total, setTotal] = useState(0);
+  const [qText, setQText] = useState('');
+  const [q, setQ] = useState('');
 
   // 添加账号对话框（手机号+昵称）；失败（409 已注册/400 格式）保持弹窗开、文案走 toast
   const [addOpen, setAddOpen] = useState(false);
@@ -61,13 +68,26 @@ export function AdminUsersPage() {
 
   const reload = useCallback(async () => {
     // 列表失败（member 403 / 网络）进错误条不进空态：空态语义=「库里没有人」，两者必须区分
-    setUsers(await fetchAdminUsers());
-  }, []);
+    const res = await fetchAdminUsers(page, PAGE_SIZE, q);
+    setUsers(res.items);
+    setTotal(res.total);
+  }, [page, q]);
 
   useEffect(() => {
     void api<MeShape>('/users/me').then(setMe).catch(() => undefined);
+  }, []);
+  useEffect(() => {
     void reload().catch((e) => setError(msgOf(e)));
   }, [reload]);
+
+  // 搜索防抖：输入停 300ms 才发请求，且回第 1 页
+  useEffect(() => {
+    const t = setTimeout(() => {
+      setQ(qText.trim());
+      setPage(1);
+    }, 300);
+    return () => clearTimeout(t);
+  }, [qText]);
 
   /** 动作统一通道：成功即回刷（即时刷新口径），失败 toast 服务端两段式文案。 */
   async function act(fn: () => Promise<unknown>, successMessage?: string): Promise<void> {
@@ -96,7 +116,17 @@ export function AdminUsersPage() {
     try {
       await createAdminUser({ phone: addPhone, nickname });
       setAddOpen(false);
-      await reload();
+      // 升序列表新增在末页——跳过去让新行立刻可见（无搜索词时；有搜索词则命中即现）
+      if (q === '') {
+        const lastPage = Math.max(1, Math.ceil((total + 1) / PAGE_SIZE));
+        if (lastPage !== page) {
+          setPage(lastPage); // effect 驱动 reload
+        } else {
+          await reload();
+        }
+      } else {
+        await reload();
+      }
       showToast('已添加，该成员可用手机号+验证码登录');
     } catch (e) {
       showToast(msgOf(e));
@@ -138,17 +168,24 @@ export function AdminUsersPage() {
   const loading = users === null && !error;
 
   return (
-    <div className="admin-users-page" data-testid="admin-users-page">
-      <header className="workspace-header">
-        <h2>账号管理</h2>
-        <div className="header-actions">
-          <Link to="/workspace">返回工作台</Link>
-          <button className="primary" data-testid="add-user-btn" onClick={openAdd}>
-            添加账号
-          </button>
+    <WorkspaceShell activeNav={null}>
+      <main className="ws-content admin-users-page" data-testid="admin-users-page">
+        <div className="ws-section-head">
+          <h2>账号管理</h2>
+          <div className="admin-head-actions">
+            <input
+              className="search-input admin-user-search"
+              data-testid="admin-user-search"
+              placeholder="搜索昵称 / 手机号 / 邮箱"
+              value={qText}
+              onChange={(e) => setQText(e.target.value)}
+            />
+            <button className="primary ws-head-action" data-testid="add-user-btn" onClick={openAdd}>
+              添加账号
+            </button>
+          </div>
         </div>
-      </header>
-      {error && <p className="error" data-testid="admin-users-error">{error}</p>}
+        {error && <p className="error" data-testid="admin-users-error">{error}</p>}
 
       {loading && <p className="admin-users-hint" data-testid="admin-users-loading">加载中…</p>}
       {users !== null && users.length === 0 && (
@@ -156,7 +193,8 @@ export function AdminUsersPage() {
       )}
 
       {users !== null && users.length > 0 && (
-        <div className="admin-user-table" data-testid="admin-user-table">
+        <>
+          <div className="admin-user-table" data-testid="admin-user-table">
           <div className="admin-table-head">
             <span>昵称</span>
             <span>手机号</span>
@@ -217,7 +255,31 @@ export function AdminUsersPage() {
               </div>
             );
           })}
-        </div>
+          </div>
+          {/* 分页器（2026-10-21）：页码钳制在 [1, 总页数]；搜索中同样分页 */}
+          <div className="admin-pager" data-testid="admin-pager">
+            <span className="admin-pager-total" data-testid="admin-pager-total">
+              共 {total} 人
+            </span>
+            <button
+              data-testid="admin-pager-prev"
+              disabled={page <= 1}
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+            >
+              上一页
+            </button>
+            <span data-testid="admin-pager-info">
+              {page} / {Math.max(1, Math.ceil(total / PAGE_SIZE))} 页
+            </span>
+            <button
+              data-testid="admin-pager-next"
+              disabled={page >= Math.ceil(total / PAGE_SIZE)}
+              onClick={() => setPage((p) => p + 1)}
+            >
+              下一页
+            </button>
+          </div>
+        </>
       )}
 
       {toast && (
@@ -280,6 +342,7 @@ export function AdminUsersPage() {
           </div>
         </div>
       )}
-    </div>
+      </main>
+    </WorkspaceShell>
   );
 }

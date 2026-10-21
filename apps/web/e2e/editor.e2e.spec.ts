@@ -17,13 +17,13 @@ async function registerAndLogin(page: Page): Promise<void> {
   await page.getByPlaceholder('验证码（开发环境固定 123456）').fill('123456');
   await page.getByRole('button', { name: '登录', exact: true }).click();
   await expect(page).toHaveURL(/\/workspace/);
-  await expect(page.locator('.file-list li')).toHaveCount(3);
+  await expect(page.getByTestId('mine-grid').getByTestId('file-card')).toHaveCount(3);
 }
 
 /** 打开种子文件进入编辑器，等待 root 文本渲染。 */
 async function openSeedDoc(page: Page, title: string): Promise<void> {
   await registerAndLogin(page);
-  await page.locator('.file-list li', { hasText: title }).click();
+  await page.getByTestId('file-card').filter({ hasText: title }).first().click();
   await expect(page).toHaveURL(/\/edit\//);
   await expect(page.locator('.editor-canvas svg .gm-text', { hasText: title })).toBeVisible();
 }
@@ -338,7 +338,7 @@ test('编辑器：编辑后立即返回工作台，卸载冲刷保存持久化',
   await page.getByTestId('back-btn').click(); // 2s 防抖窗口内离开 → 触发卸载冲刷
   await expect(page).toHaveURL(/\/workspace/);
   await page.waitForTimeout(800); // 冲刷 PUT 落库
-  await page.locator('.file-list li', { hasText: '本周计划' }).click();
+  await page.getByTestId('file-card').filter({ hasText: '本周计划' }).first().click();
   await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '周一改' })).toBeVisible();
 });
 
@@ -505,7 +505,7 @@ test('编辑器：Enter 方向矩阵——左列二级主题 Enter 向上建同�
   // 空白新文档造「3 右 1 左」：root 默认选中，Tab×4——前 3 个经 addChild 自动定侧
   // 落右（右列计数<配额 3），第 4 个落左（逆时针配额），四个节点均带持久 side。
   await page.getByRole('button', { name: '新建脑图' }).click();
-  await page.locator('.file-list li', { hasText: '未命名脑图' }).click();
+  // 新建即开（2026-10-20 重设计）：点新建直接进编辑器，无需回列表点卡片
   await expect(page).toHaveURL(/\/edit\//);
   await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '中心主题' })).toBeVisible();
   for (const text of ['右一', '右二', '右三', '左一']) {
@@ -565,7 +565,7 @@ test('编辑器：右满 3 左空时右分支 Enter——非末位紧挨下方�
   await registerAndLogin(page);
   // 场景 1：3 右 0 左，最右上（非末位）Enter → 紧挨右一下方、右侧
   await page.getByRole('button', { name: '新建脑图' }).click();
-  await page.locator('.file-list li', { hasText: '未命名脑图' }).click();
+  // 新建即开（2026-10-20 重设计）：点新建直接进编辑器，无需回列表点卡片
   await expect(page).toHaveURL(/\/edit\//);
   const rootText = page.locator('.editor-canvas svg .gm-text', { hasText: '中心主题' });
   await expect(rootText).toBeVisible();
@@ -596,7 +596,7 @@ test('编辑器：右满 3 左空时右分支 Enter——非末位紧挨下方�
   await page.getByRole('button', { name: '返回工作台' }).click();
   await expect(page).toHaveURL(/\/workspace/);
   await page.getByRole('button', { name: '新建脑图' }).click();
-  await page.locator('.file-list li', { hasText: '未命名脑图' }).click();
+  // 新建即开（2026-10-20 重设计）：点新建直接进编辑器，无需回列表点卡片
   await expect(page).toHaveURL(/\/edit\//);
   const root2 = page.locator('.editor-canvas svg .gm-text', { hasText: '中心主题' }).first();
   await expect(root2).toBeVisible();
@@ -630,7 +630,7 @@ test('编辑器：右满 3 左空时右分支 Enter——非末位紧挨下方�
 test('编辑器：中心主题连敲 Tab 顺时针落位——前 3 右列往下、第 4 个起左列往左上角长', async ({ page }) => {
   await registerAndLogin(page);
   await page.getByRole('button', { name: '新建脑图' }).click();
-  await page.locator('.file-list li', { hasText: '未命名脑图' }).click();
+  // 新建即开（2026-10-20 重设计）：点新建直接进编辑器，无需回列表点卡片
   await expect(page).toHaveURL(/\/edit\//);
   const rootText = page.locator('.editor-canvas svg .gm-text', { hasText: '中心主题' });
   await expect(rootText).toBeVisible();
@@ -674,7 +674,7 @@ test('编辑器：中心主题连敲 Tab 顺时针落位——前 3 右列往下
 test('编辑器：中心主题 Shift+Enter 逆时针镜像——前 3 落左列自上往下、第 4 个去右列', async ({ page }) => {
   await registerAndLogin(page);
   await page.getByRole('button', { name: '新建脑图' }).click();
-  await page.locator('.file-list li', { hasText: '未命名脑图' }).click();
+  // 新建即开（2026-10-20 重设计）：点新建直接进编辑器，无需回列表点卡片
   await expect(page).toHaveURL(/\/edit\//);
   const rootText = page.locator('.editor-canvas svg .gm-text', { hasText: '中心主题' });
   await expect(rootText).toBeVisible();
@@ -749,18 +749,18 @@ test('编辑器：工具栏加星切换与工作台星标视图同步', async ({
   // 工作台星标视图包含该文件
   await page.getByTestId('back-btn').click();
   await expect(page).toHaveURL(/\/workspace/);
-  await page.getByTestId('view-tabs').getByRole('button', { name: '星标' }).click();
-  await expect(page.locator('.file-list li', { hasText: '本周计划' })).toBeVisible();
+  await page.getByTestId('nav-starred').click();
+  await expect(page.getByTestId('file-card').filter({ hasText: '本周计划' }).first()).toBeVisible();
 
   // 编辑器内取消：刷新进编辑器显示 ★（持久化），取消后工作台星标视图移出
-  await page.locator('.file-list li', { hasText: '本周计划' }).click();
+  await page.getByTestId('file-card').filter({ hasText: '本周计划' }).first().click();
   await expect(page).toHaveURL(/\/edit\//);
   await expect(page.getByTestId('star-toggle')).toHaveText('★');
   await page.getByTestId('star-toggle').click();
   await expect(page.getByTestId('star-toggle')).toHaveText('☆');
   await page.getByTestId('back-btn').click();
-  await page.getByTestId('view-tabs').getByRole('button', { name: '星标' }).click();
-  await expect(page.locator('.file-list li', { hasText: '本周计划' })).toHaveCount(0);
+  await page.getByTestId('nav-starred').click();
+  await expect(page.getByTestId('file-card').filter({ hasText: '本周计划' }).first()).toHaveCount(0);
 });
 
 // ─────────────── 中/右键拖拽平移（需求方 2026-10-09 裁定） ───────────────

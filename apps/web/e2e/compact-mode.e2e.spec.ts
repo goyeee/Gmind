@@ -20,13 +20,13 @@ async function registerAndLogin(page: Page): Promise<void> {
   await page.getByPlaceholder('验证码（开发环境固定 123456）').fill('123456');
   await page.getByRole('button', { name: '登录', exact: true }).click();
   await expect(page).toHaveURL(/\/workspace/);
-  await expect(page.locator('.file-list li')).toHaveCount(3);
+  await expect(page.getByTestId('mine-grid').getByTestId('file-card')).toHaveCount(3);
 }
 
 /** 打开种子文件进入编辑器，等待 root 文本渲染。 */
 async function openSeedDoc(page: Page, title: string): Promise<void> {
   await registerAndLogin(page);
-  await page.locator('.file-list li', { hasText: title }).click();
+  await page.getByTestId('file-card').filter({ hasText: title }).first().click();
   await expect(page).toHaveURL(/\/edit\//);
   await expect(page.locator('.editor-canvas svg .gm-text', { hasText: title })).toBeVisible();
 }

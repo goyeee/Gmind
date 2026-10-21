@@ -12,7 +12,8 @@ import { expect, test, type Page } from '@playwright/test';
  * 各用例自行为其铺「存在且启用」前置（API ensureMember），互不依赖执行顺序。
  */
 
-// 开发库常年累积 e2e 注册号（1.6 万+），列表渲染/断言天然偏慢：本文件放宽断言超时
+// 2026-10-21 起列表分页化（页 20 行 + q 搜索），用例一律搜索定位目标行；
+// 断言超时仍放宽（防抖 300ms + 开发库往返余量）
 expect.configure({ timeout: 15_000 });
 
 /** 超管候选（按序探测）：[0] 为任务假定号；[1] 为当前开发库迁移实际升的超管。 */
@@ -58,11 +59,12 @@ async function superAdmin(page: Page): Promise<{ phone: string; token: string }>
   throw new Error('unreachable after skip');
 }
 
-/** 幂等前置：13900000002 存在且启用（缺则建、停则启），供停用/登录/member 用例铺底。 */
+/** 幂等前置：13900000002 存在且启用（缺则建、停则启），供停用/登录/member 用例铺底。
+ *  2026-10-21 分页契约：列表响应 { items, total, ... }，按 q 精确搜手机号定位。 */
 async function ensureMember(page: Page): Promise<void> {
   const admin = await superAdmin(page);
-  const list = (await (await page.request.get('/api/admin/users', { headers: auth(admin.token) })).json()) as AdminItem[];
-  const found = list.find((u) => u.phone === MEMBER_PHONE);
+  const res0 = await page.request.get(`/api/admin/users?q=${MEMBER_PHONE}`, { headers: auth(admin.token) });
+  const found = ((await res0.json()) as { items: AdminItem[] }).items.find((u) => u.phone === MEMBER_PHONE);
   if (!found) {
     const res = await page.request.post('/api/admin/users', {
       headers: auth(admin.token),
@@ -98,20 +100,28 @@ test('超管：工作台「账号管理」入口 → 列表渲染，自己那行
   await uiLogin(page, admin.phone);
   await expect(page).toHaveURL(/\/workspace/);
 
+  await page.getByTestId('user-card').click();
   await expect(page.getByTestId('admin-users-entry')).toBeVisible();
   await page.getByTestId('admin-users-entry').click();
   await expect(page).toHaveURL(/\/admin\/users/);
   await expect(page.getByTestId('admin-users-page')).toBeVisible();
   await expect(page.getByTestId('admin-user-table')).toBeVisible();
 
-  // 列表含自己：角色徽标=超级管理员（蓝），停用/角色切换禁用（title 防呆，后端 409 兜底）
+  // 分页器渲染（2026-10-21 分页化）
+  await expect(page.getByTestId('admin-pager')).toBeVisible();
+
+  // 列表含自己：角色徽标=超级管理员（蓝），停用/角色切换禁用（title 防呆，后端 409 兜底）。
+  // 分页后目标行不在首页——搜索手机号定位（防抖 300ms，断言自动重试覆盖）
+  await page.getByTestId('admin-user-search').fill(admin.phone);
   const selfRow = rowOf(page, admin.phone);
   await expect(selfRow).toBeVisible();
   await expect(selfRow.getByTestId('user-role')).toHaveText('超级管理员');
   await expect(selfRow.getByTestId('toggle-status-btn')).toBeDisabled();
   await expect(selfRow.getByTestId('role-select')).toBeDisabled();
   // 反例：非自己的成员行操作可点
+  await page.getByTestId('admin-user-search').fill(MEMBER_PHONE);
   const otherRow = rowOf(page, MEMBER_PHONE);
+  await expect(otherRow).toBeVisible();
   await expect(otherRow.getByTestId('toggle-status-btn')).toBeEnabled();
   await expect(otherRow.getByTestId('role-select')).toBeEnabled();
 });
@@ -119,13 +129,14 @@ test('超管：工作台「账号管理」入口 → 列表渲染，自己那行
 test('添加账号 13900000002 → 列表出现（重跑幂等：已存在则 409 文案、行仍启用）', async ({ page }) => {
   const admin = await superAdmin(page);
   // 前置：若历史跑过已存在，先铺回启用态，保证「列表出现且状态=启用」断言稳定
-  const list = (await (await page.request.get('/api/admin/users', { headers: auth(admin.token) })).json()) as AdminItem[];
-  const existed = list.find((u) => u.phone === MEMBER_PHONE);
+  const res0 = await page.request.get(`/api/admin/users?q=${MEMBER_PHONE}`, { headers: auth(admin.token) });
+  const existed = ((await res0.json()) as { items: AdminItem[] }).items.find((u) => u.phone === MEMBER_PHONE);
   if (existed && existed.status !== 'active') {
     await page.request.patch(`/api/admin/users/${existed.id}`, { headers: auth(admin.token), data: { status: 'active' } });
   }
 
   await uiLogin(page, admin.phone);
+  await page.getByTestId('user-card').click();
   await page.getByTestId('admin-users-entry').click();
   await expect(page.getByTestId('admin-users-page')).toBeVisible();
 
@@ -137,6 +148,7 @@ test('添加账号 13900000002 → 列表出现（重跑幂等：已存在则 40
 
   // 首跑 201 →「已添加」；重跑 409 →「已注册」（服务端两段式文案），两者都算通过
   await expect(page.getByTestId('toast')).toContainText(/已添加|已注册/);
+  await page.getByTestId('admin-user-search').fill(MEMBER_PHONE); // 分页后搜索定位
   const row = rowOf(page, MEMBER_PHONE);
   await expect(row).toBeVisible();
   await expect(row.getByTestId('user-phone')).toHaveText(MEMBER_PHONE);
@@ -150,9 +162,11 @@ test('停用 13900000002（confirm）→ 状态即时变停用，该号登录被
 
   await uiLogin(page, admin.phone);
   // 经入口按钮走 SPA 导航（整页 reload 在 1.6 万行的开发库下更慢，且入口本身已另有用例覆盖）
+  await page.getByTestId('user-card').click();
   await page.getByTestId('admin-users-entry').click();
   await expect(page.getByTestId('admin-user-table')).toBeVisible();
 
+  await page.getByTestId('admin-user-search').fill(MEMBER_PHONE); // 分页后搜索定位
   const row = rowOf(page, MEMBER_PHONE);
   await expect(row.getByTestId('user-status')).toContainText('启用');
   page.once('dialog', (d) => d.accept()); // 只吃停用 confirm，不吞其他对话框
@@ -171,7 +185,8 @@ test('member（13900000002 启用后）：工作台无「账号管理」入口',
   await uiLogin(page, MEMBER_PHONE);
   await expect(page).toHaveURL(/\/workspace/);
 
-  // 对照组：头部已渲染（账号设置在），仅账号管理入口不渲染
+  // 对照组：用户卡菜单已渲染（账号设置在），仅账号管理入口不渲染
+  await page.getByTestId('user-card').click();
   await expect(page.getByTestId('settings-entry')).toBeVisible();
   await expect(page.getByTestId('admin-users-entry')).toHaveCount(0);
 });

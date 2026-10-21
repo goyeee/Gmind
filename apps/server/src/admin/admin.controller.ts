@@ -1,5 +1,5 @@
-import { Body, Controller, Get, Inject, Param, Patch, Post, Req, UseGuards } from '@nestjs/common';
-import type { AdminUserListItem } from '@gmind/shared';
+import { Body, Controller, Get, Inject, Param, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
+import type { AdminUserListItem, AdminUserListPage } from '@gmind/shared';
 import { AdminGuard } from '../auth/admin.guard';
 import { UserGuard } from '../auth/user.guard';
 import { AdminService } from './admin.service';
@@ -16,9 +16,17 @@ export class AdminController {
   // tsx 不发射装饰器元数据，类 token 注入必须显式 @Inject（约定见任务说明）
   constructor(@Inject(AdminService) private readonly admin: AdminService) {}
 
+  /** 成员列表分页（2026-10-21）：page≥1、size 1~100（缺省 20）、q 模糊搜索昵称/
+   *  手机号/邮箱。query 为 raw string，此处钳制（schema 化收益低——两个数字一个串）。 */
   @Get()
-  list(): Promise<AdminUserListItem[]> {
-    return this.admin.list();
+  list(
+    @Query('page') page?: string,
+    @Query('size') size?: string,
+    @Query('q') q?: string,
+  ): Promise<AdminUserListPage> {
+    const p = Math.max(1, Math.floor(Number(page)) || 1);
+    const s = Math.min(100, Math.max(1, Math.floor(Number(size)) || 20));
+    return this.admin.list({ page: p, size: s, q: (q ?? '').trim().slice(0, 64) });
   }
 
   /** 添加账号：手机号去重（409）；建号即 active member、无密码（开发态验证码登录）。 */

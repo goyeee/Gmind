@@ -24,12 +24,12 @@ async function registerAndLogin(page: Page): Promise<void> {
   await page.getByPlaceholder('验证码（开发环境固定 123456）').fill('123456');
   await page.getByRole('button', { name: '登录', exact: true }).click();
   await expect(page).toHaveURL(/\/workspace/);
-  await expect(page.locator('.file-list li')).toHaveCount(3);
+  await expect(page.getByTestId('mine-grid').getByTestId('file-card')).toHaveCount(3);
 }
 
 async function openSeedDocTable(page: Page, title: string): Promise<void> {
   await registerAndLogin(page);
-  await page.locator('.file-list li', { hasText: title }).click();
+  await page.getByTestId('file-card').filter({ hasText: title }).first().click();
   await expect(page).toHaveURL(/\/edit\//);
   await expect(page.locator('.editor-canvas svg .gm-text', { hasText: title })).toBeVisible();
   // 切到表格视图（表格常驻挂载，切换仅显隐）
@@ -91,7 +91,7 @@ test('标题格标记单源渲染：SVG 徽章 14×14 不扁，自定义 kind �
   test.setTimeout(90_000);
   // 画布视图种标记（任务面板内嵌行写入；单组替换/多组叠加语义不变）
   await registerAndLogin(page);
-  await page.locator('.file-list li', { hasText: '本周计划' }).click();
+  await page.getByTestId('file-card').filter({ hasText: '本周计划' }).first().click();
   await expect(page).toHaveURL(/\/edit\//);
   await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '周一' })).toBeVisible();
   await selectNodeByText(page, '周会对齐');

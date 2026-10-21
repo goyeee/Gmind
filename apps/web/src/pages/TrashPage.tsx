@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
 import type { TrashItem } from '@gmind/shared';
 import { api, apiDel, apiPost } from '../api/client';
+import { WorkspaceShell } from './WorkspaceShell';
 
 function msgOf(e: unknown): string {
   return e instanceof Error ? e.message : '操作失败';
 }
 
-/** 回收站（M3a Task 9 接线，FR-FIL-005~007）：还原 / 彻底删除（二次确认）/ 30 天保留提示。 */
+/** 回收站（M3a Task 9 接线，FR-FIL-005~007）：还原 / 彻底删除（二次确认）/ 30 天保留提示。
+ *  2026-10-21 收进 WorkspaceShell 外壳（侧栏 nav-trash 高亮），样式对齐工作台重设计。 */
 export function TrashPage() {
   const [items, setItems] = useState<TrashItem[]>([]);
   const [error, setError] = useState('');
@@ -42,34 +43,33 @@ export function TrashPage() {
   }
 
   return (
-    <div className="trash-page" data-testid="trash-page">
-      <header className="workspace-header">
-        <h2>回收站</h2>
-        <div className="header-actions">
-          <Link to="/workspace">返回工作台</Link>
+    <WorkspaceShell activeNav="trash">
+      <main className="ws-content trash-page" data-testid="trash-page">
+        <div className="ws-section-head">
+          <h2>回收站</h2>
+          <span className="ws-section-sub">回收站内容保留 30 天，到期自动彻底删除</span>
         </div>
-      </header>
-      {error && <p className="error">{error}</p>}
-      <p className="trash-hint">回收站内容保留 30 天，到期自动彻底删除</p>
-      <ul className="trash-list">
-        {items.map((t) => (
-          <li key={t.id}>
-            <span className="title">{t.title}</span>
-            <span className="meta">删除时间 {new Date(t.deletedAt).toLocaleString()}</span>
-            <span className="meta">删除人 {t.deletedByName ?? '—'}</span>
-            <span className="meta">{t.folderName ? `原位置 ${t.folderName}` : '原位置 根目录'}</span>
-            <span className="ops">
-              <button data-testid="restore-btn" onClick={() => void restore(t)}>
-                还原
-              </button>
-              <button className="danger" data-testid="purge-btn" onClick={() => setPurgeTarget(t)}>
-                彻底删除
-              </button>
-            </span>
-          </li>
-        ))}
-        {items.length === 0 && <li className="empty">回收站为空</li>}
-      </ul>
+        {error && <p className="error">{error}</p>}
+        <ul className="trash-list">
+          {items.map((t) => (
+            <li key={t.id}>
+              <span className="title">{t.title}</span>
+              <span className="meta">删除时间 {new Date(t.deletedAt).toLocaleString()}</span>
+              <span className="meta">删除人 {t.deletedByName ?? '—'}</span>
+              <span className="meta">{t.folderName ? `原位置 ${t.folderName}` : '原位置 根目录'}</span>
+              <span className="ops">
+                <button data-testid="restore-btn" onClick={() => void restore(t)}>
+                  还原
+                </button>
+                <button className="danger" data-testid="purge-btn" onClick={() => setPurgeTarget(t)}>
+                  彻底删除
+                </button>
+              </span>
+            </li>
+          ))}
+          {items.length === 0 && <li className="empty">回收站为空</li>}
+        </ul>
+      </main>
 
       {purgeTarget && (
         <div className="modal-mask" data-testid="purge-confirm">
@@ -85,6 +85,6 @@ export function TrashPage() {
           </div>
         </div>
       )}
-    </div>
+    </WorkspaceShell>
   );
 }

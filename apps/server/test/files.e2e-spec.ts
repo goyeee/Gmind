@@ -270,4 +270,72 @@ describe('files 域', () => {
       expect(bad.status).toBe(400);
     });
   });
+
+  // ── 真实缩略图（2026-10-21 需求方裁定真实内容快照）：POST 写 / GET 读 ──
+  describe('真实缩略图（/api/files/:id/thumbnail）', () => {
+    it('写读闭环：无快照 404 → POST 存 → GET 读回同 SVG（image/svg+xml）；写不翻 updatedAt；越权/非法体拦', async () => {
+      const users = app.get((await import('../src/users/users.service')).UsersService);
+      const owner = await users.create({ method: 'phone', phone: '13833330001' });
+      const outsider = await users.create({ method: 'phone', phone: '13833330002' });
+      const token = await tokenFor(owner.id);
+      const outsiderToken = await tokenFor(outsider.id);
+      const created = await request(app.getHttpServer())
+        .post('/api/files')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ title: '缩略图测试' });
+      const fileId = created.body.id as string;
+
+      // 无快照 → 404（卡片回退装饰图）
+      const none = await request(app.getHttpServer())
+        .get(`/api/files/${fileId}/thumbnail`)
+        .set('Authorization', `Bearer ${token}`);
+      expect(none.status).toBe(404);
+
+      // 非法体：非 <svg 开头 → 400
+      const badSvg = await request(app.getHttpServer())
+        .post(`/api/files/${fileId}/thumbnail`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ svg: 'not-an-svg' });
+      expect(badSvg.status).toBe(400);
+
+      // 越权：outsider 写/读 → 404（不泄露存在性）
+      const deniedWrite = await request(app.getHttpServer())
+        .post(`/api/files/${fileId}/thumbnail`)
+        .set('Authorization', `Bearer ${outsiderToken}`)
+        .send({ svg: '<svg xmlns="http://www.w3.org/2000/svg"/>' });
+      expect(deniedWrite.status).toBe(404);
+      const deniedRead = await request(app.getHttpServer())
+        .get(`/api/files/${fileId}/thumbnail`)
+        .set('Authorization', `Bearer ${outsiderToken}`);
+      expect(deniedRead.status).toBe(404);
+
+      // 写入 → 读回
+      const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 50"><rect width="100" height="50" fill="#fff"/><text x="50" y="25">根节点</text></svg>';
+      const before = await request(app.getHttpServer())
+        .get('/api/files')
+        .set('Authorization', `Bearer ${token}`);
+      const updatedAtBefore = (before.body as Array<{ id: string; updatedAt: string }>).find((f) => f.id === fileId)?.updatedAt;
+      const posted = await request(app.getHttpServer())
+        .post(`/api/files/${fileId}/thumbnail`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ svg });
+      expect(posted.status).toBe(200);
+      expect(posted.body).toEqual({ ok: true });
+
+      const got = await request(app.getHttpServer())
+        .get(`/api/files/${fileId}/thumbnail`)
+        .set('Authorization', `Bearer ${token}`);
+      expect(got.status).toBe(200);
+      expect(got.headers['content-type']).toContain('image/svg+xml');
+      // superagent 对 image/* 不填 res.text，body 为 Buffer
+      expect(Buffer.isBuffer(got.body) ? got.body.toString() : got.text).toBe(svg);
+
+      // 写缩略图不翻 updated_at（saveLoop baseUpdatedAt 写序守卫不被派生物挤掉）
+      const after = await request(app.getHttpServer())
+        .get('/api/files')
+        .set('Authorization', `Bearer ${token}`);
+      const updatedAtAfter = (after.body as Array<{ id: string; updatedAt: string }>).find((f) => f.id === fileId)?.updatedAt;
+      expect(updatedAtAfter).toBe(updatedAtBefore);
+    });
+  });
 });

@@ -1,3 +1,7 @@
+// 平台修正（2026-10-21）：macOS 原生 paste 走 Cmd+V，Windows/Linux 走 Ctrl+V——
+// 图片粘贴必须真实原生 paste 事件（应用内键盘通道只读文本/内部 payload），按平台选键。
+const PASTE_KEY = process.platform === 'darwin' ? 'Meta+V' : 'Control+V';
+
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -30,12 +34,12 @@ async function registerAndLogin(page: Page): Promise<void> {
   await page.getByPlaceholder('验证码（开发环境固定 123456）').fill('123456');
   await page.getByRole('button', { name: '登录', exact: true }).click();
   await expect(page).toHaveURL(/\/workspace/);
-  await expect(page.locator('.file-list li')).toHaveCount(3);
+  await expect(page.getByTestId('mine-grid').getByTestId('file-card')).toHaveCount(3);
 }
 
 async function openSeedDoc(page: Page, title: string): Promise<void> {
   await registerAndLogin(page);
-  await page.locator('.file-list li', { hasText: title }).click();
+  await page.getByTestId('file-card').filter({ hasText: title }).first().click();
   await expect(page).toHaveURL(/\/edit\//);
   await expect(page.locator('.editor-canvas svg .gm-text', { hasText: title })).toBeVisible();
 }
@@ -168,7 +172,7 @@ test('图片右键：复制/剪切菜单；粘回画布沿用原 key（不重复
 
   // 选中另一节点 Ctrl+V：沿用原 key（若走了原生上传链路，href 会变成新 key）
   await selectNode(page, '周三');
-  await page.keyboard.press('Control+V');
+  await page.keyboard.press(PASTE_KEY);
   const pasted = nodeGroup(page, '周三').locator('image.gm-image');
   await expect(pasted).toHaveAttribute('href', href ?? '');
 
@@ -177,7 +181,7 @@ test('图片右键：复制/剪切菜单；粘回画布沿用原 key（不重复
   await page.getByTestId('menu-image-cut').click();
   await expect(nodeGroup(page, '周一').locator('image.gm-image')).toHaveCount(0);
   await selectNode(page, '周五');
-  await page.keyboard.press('Control+V');
+  await page.keyboard.press(PASTE_KEY);
   await expect(nodeGroup(page, '周五').locator('image.gm-image')).toHaveAttribute(
     'href',
     href ?? '',

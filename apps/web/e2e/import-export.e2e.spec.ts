@@ -29,13 +29,13 @@ async function registerAndLogin(page: Page): Promise<void> {
   await page.getByPlaceholder('验证码（开发环境固定 123456）').fill('123456');
   await page.getByRole('button', { name: '登录', exact: true }).click();
   await expect(page).toHaveURL(/\/workspace/);
-  await expect(page.locator('.file-list li')).toHaveCount(3);
+  await expect(page.getByTestId('mine-grid').getByTestId('file-card')).toHaveCount(3);
 }
 
 /** 打开种子文件进入编辑器，等待 root 文本渲染（同 editor.e2e.spec.ts 的既定模式）。 */
 async function openSeedDoc(page: Page, title: string): Promise<void> {
   await registerAndLogin(page);
-  await page.locator('.file-list li', { hasText: title }).click();
+  await page.getByTestId('file-card').filter({ hasText: title }).first().click();
   await expect(page).toHaveURL(/\/edit\//);
   await expect(page.locator('.editor-canvas svg .gm-text', { hasText: title })).toBeVisible();
 }
@@ -50,8 +50,8 @@ test('工作台导入 .xmind：新文件出现且层级/备注正确渲染', asy
     buffer: Buffer.from(buildXmind(FIXTURE_TREE)),
   });
   // 新文件出现在列表（标题 = 根主题「项目根主题」，命中「项目」）
-  await expect(page.locator('.file-list li', { hasText: '项目' })).toBeVisible();
-  await page.locator('.file-list li', { hasText: '项目' }).click();
+  await expect(page.getByTestId('file-card').filter({ hasText: '项目' }).first()).toBeVisible();
+  await page.getByTestId('file-card').filter({ hasText: '项目' }).first().click();
   await expect(page).toHaveURL(/\/edit\//);
   // 层级渲染：root 与两级子节点；备注以角标呈现（分支A 持有唯一的 note 角标）
   await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '根主题' })).toBeVisible();
@@ -79,7 +79,7 @@ test('导入 25MB 超限：提示大小上限+压缩重试；损坏文件：提�
     buffer: Buffer.alloc(1024, 0x07),
   });
   await expect(page.getByTestId('toast')).toHaveText('文件已损坏，无法解析，请检查文件后重试');
-  await expect(page.locator('.file-list li')).toHaveCount(3);
+  await expect(page.getByTestId('mine-grid').getByTestId('file-card')).toHaveCount(3);
 });
 
 /** 先序查找 title 命中的节点（导出往返断言辅助）。 */
@@ -100,7 +100,7 @@ function findTitle(node: XmindNode, title: string): XmindNode | null {
  *  网络落库。 */
 async function openSeedDocWithNote(page: Page): Promise<void> {
   await registerAndLogin(page);
-  await page.locator('.file-list li', { hasText: '本周计划' }).click();
+  await page.getByTestId('file-card').filter({ hasText: '本周计划' }).first().click();
   await expect(page).toHaveURL(/\/edit\//);
   await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '本周计划' })).toBeVisible();
   await page.evaluate(async () => {
@@ -160,8 +160,8 @@ test('导出 XMind 并往返导入：层级/文本/备注一致', async ({ page 
     mimeType: 'application/octet-stream',
     buffer: Buffer.from(bytes),
   });
-  await expect(page.locator('.file-list li')).toHaveCount(4);
-  await page.locator('.file-list li').first().click();
+  await expect(page.getByTestId('mine-grid').getByTestId('file-card')).toHaveCount(4);
+  await page.getByTestId('mine-grid').getByTestId('file-card').first().click();
   await expect(page).toHaveURL(/\/edit\//);
   // 导入件渲染一致：层级（root/周一/周会对齐）与备注角标（恰 1 个）
   await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '本周计划' })).toBeVisible();

@@ -94,6 +94,7 @@ import { attachKeyboardMap, isEditableTarget, resolveDirectEditKey } from '../ed
 import { rootKidEffectiveSides, rootSiblingForceSide } from '../editor/rootSiblingSide';
 import { nextChildText } from '../editor/defaultNodeText';
 import { avatarSrcOf, assigneeRowsOf } from '../editor/TaskFields';
+import { buildThumbSvg, invalidateThumb } from '../editor/thumbnail';
 import { ActivityPanel } from '../editor/ActivityPanel';
 import { ThemePanel } from '../editor/ThemePanel';
 import {
@@ -2915,11 +2916,17 @@ export function EditorPage() {
 
   // —— React 渲染所需的文档派生值（tick 由 rerender 推进） ——
   const meta = doc ? getMeta(doc) : null;
+  // 标题草稿（2026-10-20 IME 修复）：受控值=草稿 ?? meta.title；组合输入期
+  // （拼音上屏前）不写回文档——否则拼音字母被当真值写回、meta 重渲染打断组合
+  // （「删不完/中文回车变英文且不全/多空格」根因）。失焦/回车收敛。
+  const [titleDraft, setTitleDraft] = useState<string | null>(null);
+  const titleComposingRef = useRef(false);
   const themeId = meta ? resolveThemeId(meta.themeId) : 'gmind-blue';
   // 脚标口径与服务端配额统一（FR-ACC-003）：自 root 可达的存活节点数（不含 root；
   // 墓碑/孤儿不计——与 countAlive 的差异见 @gmind/core countAliveReachable）
   const nodeCount = doc ? countAliveReachable(doc) : 0;
   const selectionNow = selectionRef.current;
+  const selectedIds = selectionNow ? [...selectionNow.selected] : [];
   const selectedNodeId =
     selectionNow && selectionNow.selected.size === 1
       ? ([...selectionNow.selected][0] ?? null)
@@ -3419,6 +3426,34 @@ export function EditorPage() {
     });
     // 协同接入（FR-EDT-034）：provider 挂到 useEditorDoc 装配的同一 doc 上，
     // GET 装配路径不变；状态事件 → 四值保存指示 + 真值表状态推进。
+    // 真实缩略图（2026-10-21 需求方裁定真实快照）：persisted ack = 内容已落库 →
+    // 节流重建 SVG 快照上传（首次立即，其后 ≥15s 间隔 + 尾沿定时器；失败静默——
+    // 缩略图是派生增强，绝不阻塞/报错打断主流程）。上传成功失效卡片缓存。
+    let thumbTimer: ReturnType<typeof setTimeout> | null = null;
+    let thumbLastAt = 0;
+    const uploadThumb = (): void => {
+      thumbLastAt = Date.now();
+      try {
+        const svg = buildThumbSvg(d, measure);
+        if (svg === null) return; // 超限/空文档：放弃本次（卡片回退装饰图）
+        void apiPost(`/files/${fileId}/thumbnail`, { svg })
+          .then(() => invalidateThumb(fileId))
+          .catch(() => undefined);
+      } catch {
+        /* 快照构建失败静默 */
+      }
+    };
+    const scheduleThumb = (): void => {
+      const wait = 15_000 - (Date.now() - thumbLastAt);
+      if (wait <= 0) {
+        uploadThumb();
+      } else if (thumbTimer === null) {
+        thumbTimer = setTimeout(() => {
+          thumbTimer = null;
+          uploadThumb();
+        }, wait);
+      }
+    };
     const collab = startCollab(fileId, d, {
       onStatus: (collabStatus, detail) => {
         if (collabStatus === 'synced') {
@@ -3480,6 +3515,7 @@ export function EditorPage() {
       // 走 PUT 兜底时，携带的是最后一次服务端持久化确认的行值
       onPersisted: (updatedAt) => {
         baseUpdatedAtRef.current = updatedAt;
+        if (!readOnly) scheduleThumb(); // 真实缩略图：只读态（移动端）不写
       },
       // 评论更新广播（FR-CMT-003，Task 7）：无状态消息 → 再拉取评论
       onCommentUpdated: () => {
@@ -3562,6 +3598,7 @@ export function EditorPage() {
       document.removeEventListener('paste', onDocPaste);
       d.off('update', onDocUpdate);
       stopSave.stop();
+      if (thumbTimer !== null) clearTimeout(thumbTimer); // 缩略图尾沿定时器随装配拆卸
       collabHandleRef.current = null;
       quotaBlockedRef.current = false; // 文件切换不继承上一文件的配额拦截
       collab.destroy(); // provider + IndexedDB 本地副本一并收尾（顺序：先冲刷 saveLoop 决策再断链）
@@ -3669,16 +3706,41 @@ export function EditorPage() {
           <input
             data-testid="title-input"
             className="title-input"
-            value={meta?.title ?? ''}
+            // 2026-10-20 IME 修复（需求方反馈「删不完/中文回车变英文且不全/多空格」）：
+            // 受控值改本地草稿优先——组合输入期（拼音上屏前）不写回文档、不被 meta
+            // 重渲染打断；失焦/回车收敛（空标题回灌旧值，不落库——旧语义保留）。
+            value={titleDraft ?? meta?.title ?? ''}
             onChange={(e) => {
               const value = e.target.value;
-              if (value.trim() === '') {
-                // 空标题（fix round 1 minor b）：不落库不 PATCH，重渲染让受控值回灌恢复
-                setTick((t) => t + 1);
-                return;
-              }
+              setTitleDraft(value);
+              if (titleComposingRef.current) return; // 组合期只更新草稿
+              if (value.trim() === '') return; // 空标题不写（失焦时回灌恢复）
               setTitle(value);
               afterUserWrite(); // fix round 1 minor a：标题写也走统一 capUndoStack 通道
+            }}
+            onCompositionStart={() => {
+              titleComposingRef.current = true;
+            }}
+            onCompositionEnd={(e) => {
+              titleComposingRef.current = false;
+              const value = (e.target as HTMLInputElement).value;
+              setTitleDraft(value);
+              if (value.trim() === '') return;
+              setTitle(value);
+              afterUserWrite();
+            }}
+            onBlur={() => {
+              // 收敛：空标题回灌 meta（不落库）；非空草稿如与 meta 一致则天然幂等
+              if (titleDraft !== null && titleDraft.trim() !== '') {
+                if (titleDraft !== (meta?.title ?? '')) {
+                  setTitle(titleDraft);
+                  afterUserWrite();
+                }
+              }
+              setTitleDraft(null);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); // 回车 = 提交收敛
             }}
             placeholder="文档标题"
           />
@@ -4250,6 +4312,7 @@ export function EditorPage() {
                 doc={doc}
                 fileId={fileId}
                 nodeId={selectedNodeId ?? ''}
+                selectedIds={selectedIds}
                 selected={selectedSnapshot}
                 afterUserWrite={afterUserWrite}
                 showToast={showToast}

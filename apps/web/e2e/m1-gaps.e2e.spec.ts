@@ -26,13 +26,13 @@ async function registerAndLogin(page: Page): Promise<void> {
   await page.getByPlaceholder('验证码（开发环境固定 123456）').fill('123456');
   await page.getByRole('button', { name: '登录', exact: true }).click();
   await expect(page).toHaveURL(/\/workspace/);
-  await expect(page.locator('.file-list li')).toHaveCount(3);
+  await expect(page.getByTestId('mine-grid').getByTestId('file-card')).toHaveCount(3);
 }
 
 /** 打开种子文件进入编辑器，等待 root 文本渲染。 */
 async function openSeedDoc(page: Page, title: string): Promise<void> {
   await registerAndLogin(page);
-  await page.locator('.file-list li', { hasText: title }).click();
+  await page.getByTestId('file-card').filter({ hasText: title }).first().click();
   await expect(page).toHaveURL(/\/edit\//);
   await expect(page.locator('.editor-canvas svg .gm-text', { hasText: title })).toBeVisible();
 }
@@ -182,6 +182,35 @@ test('样式：作用域切「仅当前节点」设字号 24 → 子节点字号
     .not.toBe('24');
 });
 
+// 2026-10-21 需求方裁定：多选也应支持格式设置颜色（RichPanel 多选态启用样式区，
+// 作用于整个选区；applyStyle 多 root 天然支持，子树重叠经 Set 去重）
+test('多选配色：Cmd/Ctrl 加选两节点 → 样式区启用 + 已选提示，填充红整组生效且一次撤销整组恢复', async ({ page }) => {
+  await openSeedDoc(page, '本周计划');
+  const mod = process.platform === 'darwin' ? 'Meta' : 'Control';
+  await page.locator('.editor-canvas svg .gm-text', { hasText: '周一' }).click();
+  await page.locator('.editor-canvas svg .gm-text', { hasText: '周五' }).click({ modifiers: [mod] });
+  await page.getByTestId('format-toggle').click();
+  const panel = page.getByTestId('rich-panel');
+  await expect(panel.getByTestId('style-section')).toBeVisible();
+  await expect(panel.getByTestId('style-section')).toBeEnabled();
+  await expect(panel.getByTestId('style-multi-hint')).toHaveText('已选 2 个节点，样式应用到整个选区');
+  // 多选态不渲染单节点区（描述/链接与图片）——样式区独占
+  await expect(panel.locator('h3', { hasText: '描述' })).toHaveCount(0);
+  // 填充红 → 周一/周五（互不为子树）整组同变
+  await panel.getByTitle('填充-红').click();
+  await expect(nodeGroup(page, '周一').locator('rect').first()).toHaveAttribute('fill', RED);
+  await expect(nodeGroup(page, '周五').locator('rect').first()).toHaveAttribute('fill', RED);
+  await expect(page.getByTestId('save-status')).toHaveText(/已保存/);
+  // 一次 Ctrl+Z 整组恢复（单事务单撤销步）
+  await page.keyboard.press('Control+Z');
+  await expect
+    .poll(() => nodeGroup(page, '周一').locator('rect').first().getAttribute('fill'), { timeout: 5000 })
+    .not.toBe(RED);
+  await expect
+    .poll(() => nodeGroup(page, '周五').locator('rect').first().getAttribute('fill'), { timeout: 5000 })
+    .not.toBe(RED);
+});
+
 // ─────────────── ③ 缩放档位 + 全屏（FR-EDT-027/028） ───────────────
 
 test('缩放档位：选 150% → 百分比精确显示且档位选中态；离档回退占位', async ({ page }) => {
@@ -229,7 +258,7 @@ test('跨文件粘贴：图片随迁到目标文件新 key；同文件粘贴沿�
   await page.getByTestId('back-btn').click();
   await expect(page).toHaveURL(/\/workspace/);
   await page.waitForTimeout(800); // 卸载冲刷保存落库
-  await page.locator('.file-list li', { hasText: '产品需求评审纪要' }).click();
+  await page.getByTestId('file-card').filter({ hasText: '产品需求评审纪要' }).first().click();
   await expect(page).toHaveURL(/\/edit\//);
   await expect(page.locator('.editor-canvas svg .gm-text').first()).toBeVisible();
   await page.keyboard.press('Control+V');

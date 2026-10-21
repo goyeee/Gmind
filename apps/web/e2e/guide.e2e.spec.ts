@@ -27,7 +27,7 @@ async function registerAndLogin(page: Page): Promise<string> {
   await page.getByPlaceholder('验证码（开发环境固定 123456）').fill('123456');
   await page.getByRole('button', { name: '登录', exact: true }).click();
   await expect(page).toHaveURL(/\/workspace/);
-  await expect(page.locator('.file-list li')).toHaveCount(3);
+  await expect(page.getByTestId('mine-grid').getByTestId('file-card')).toHaveCount(3);
   return phone;
 }
 
@@ -67,7 +67,7 @@ test('新用户进入工作台出现引导，走完三步写 localStorage 并上
 
   // 刷新不再出现
   await page.reload();
-  await expect(page.locator('.file-list li')).toHaveCount(3);
+  await expect(page.getByTestId('mine-grid').getByTestId('file-card')).toHaveCount(3);
   await expect(page.getByTestId('guide-overlay')).toHaveCount(0);
 });
 

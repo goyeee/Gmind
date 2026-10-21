@@ -327,6 +327,28 @@ export class FilesService {
     return (await this.collabRepo.countBy({ fileId: file.id, userId })) > 0;
   }
 
+  /** 真实缩略图写入（2026-10-21）：编辑器 persisted ack 后上传引擎直出 SVG。
+   *  canAccess 口径（owner/协作者皆可——协同双方任一端保存都可能触发）。
+   *  **原生 SQL 直写**：TypeORM 的 save()/UpdateQueryBuilder 都会自动刷
+   *  @UpdateDateColumn（updated_at），会挤掉 saveLoop 的 baseUpdatedAt 写序守卫
+   *  （缩略图是派生物，不是内容写序；e2e「写不翻 updatedAt」钉死此行为）。
+   *  校验先于写：非 <svg 开头 / 超 256KB → 400（客户端超限会直接跳过上传）。 */
+  async saveThumbSvg(userId: string, fileId: string, svg: string): Promise<void> {
+    if (!(await this.canAccess(userId, fileId))) throw new NotFoundException('文件不存在');
+    if (typeof svg !== 'string' || !svg.startsWith('<svg') || svg.length > 256_000) {
+      throw new BadRequestException('缩略图格式不正确，请重新保存文档后重试');
+    }
+    await this.repo.query('UPDATE files SET thumb_svg = ? WHERE id = ?', [svg, fileId]);
+  }
+
+  /** 真实缩略图读取（canAccess 口径；无快照 → 404，卡片回退装饰性缩略图）。 */
+  async getThumbSvg(userId: string, fileId: string): Promise<string> {
+    if (!(await this.canAccess(userId, fileId))) throw new NotFoundException('文件不存在');
+    const row = await this.repo.findOne({ where: { id: fileId }, select: ['id', 'thumbSvg'] });
+    if (!row || row.thumbSvg === null || row.thumbSvg === '') throw new NotFoundException('文件不存在');
+    return row.thumbSvg;
+  }
+
   /** 协作者候选列表（M3b Task 8，FR-CMT-005）：GET /api/files/:id/collaborators →
    *  [{userId, nickname, role, isOwner}]——owner 首位（isOwner/role 'owner'）+ 协作者行；
    *  mention 候选即本列表的 userId 集（CommentsService.filterMentions 的 allowed 同源）。

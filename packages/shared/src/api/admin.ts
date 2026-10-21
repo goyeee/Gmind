@@ -22,3 +22,13 @@ export interface AdminUserListItem {
   createdAt: string | null;
   fileCount: number;
 }
+
+/** GET /api/admin/users 分页响应（2026-10-21，需求方反馈「加载慢/无分页」——开发库
+ *  累积 2 万+ 测试账号，全量列表不可行）：page 从 1 起，size 1~100（缺省 20），
+ *  q 模糊匹配昵称/手机号/邮箱（LIKE %q%）。排序维持注册时间升序（mindgrid 口径）。 */
+export interface AdminUserListPage {
+  items: AdminUserListItem[];
+  total: number;
+  page: number;
+  size: number;
+}

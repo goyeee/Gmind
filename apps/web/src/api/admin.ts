@@ -1,18 +1,20 @@
-import type { AccountStatus, AdminUserListItem, SystemRole } from '@gmind/shared';
+import type { AccountStatus, AdminUserListItem, AdminUserListPage, SystemRole } from '@gmind/shared';
 import { api, apiPatch, apiPost } from './client';
 
 /**
  * 账号管理 API 薄封装（契约类型全部来自 @gmind/shared，服务端 AdminGuard 鉴权）：
- * - 列表 GET /admin/users（注册时间升序）；
+ * - 列表 GET /admin/users?page&size&q（注册时间升序；2026-10-21 分页化）；
  * - 添加 POST /admin/users（409 手机号已注册 / 400 格式，文案两段式直接 toast）；
  * - 更新 PATCH /admin/users/:id（角色/状态/昵称；409 防呆文案、404 目标不存在）。
  */
 
-export type { AccountStatus, AdminUserListItem, SystemRole } from '@gmind/shared';
+export type { AccountStatus, AdminUserListItem, AdminUserListPage, SystemRole } from '@gmind/shared';
 
-/** 成员列表（仅超级管理员；member 403「仅超级管理员可执行该操作…」）。 */
-export function fetchAdminUsers(): Promise<AdminUserListItem[]> {
-  return api<AdminUserListItem[]>('/admin/users');
+/** 成员列表分页（仅超级管理员；member 403「仅超级管理员可执行该操作…」）。 */
+export function fetchAdminUsers(page: number, size: number, q: string): Promise<AdminUserListPage> {
+  const params = new URLSearchParams({ page: String(page), size: String(size) });
+  if (q !== '') params.set('q', q);
+  return api<AdminUserListPage>(`/admin/users?${params.toString()}`);
 }
 
 /** 添加账号：建号即启用成员、无密码（开发态凭手机号+验证码 123456 登录）。 */

@@ -1,3 +1,7 @@
+// 平台修正（2026-10-21）：macOS 原生 paste 走 Cmd+V，Windows/Linux 走 Ctrl+V——
+// 图片粘贴必须真实原生 paste 事件（应用内键盘通道只读文本/内部 payload），按平台选键。
+const PASTE_KEY = process.platform === 'darwin' ? 'Meta+V' : 'Control+V';
+
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -10,7 +14,7 @@ import { fileURLToPath } from 'node:url';
  * `new ClipboardEvent('paste', …)` 直接 document.dispatchEvent —— 绕过了
  * keydown 层，因此「keydown 对 Ctrl+V 调 preventDefault 会把原生 paste 事件
  * 掐掉」这个真实缺陷在它那里永远看不见。本文件一律走**真实键盘 + 真实系统剪贴板**
- * （navigator.clipboard.write 写真图 + page.keyboard.press('Control+V')）。
+ * （navigator.clipboard.write 写真图 + page.keyboard.press(PASTE_KEY)）。
  */
 
 const FIXTURE_PNG = join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'pixel.png');
@@ -22,12 +26,12 @@ async function registerAndLogin(page: Page): Promise<void> {
   await page.getByPlaceholder('验证码（开发环境固定 123456）').fill('123456');
   await page.getByRole('button', { name: '登录', exact: true }).click();
   await expect(page).toHaveURL(/\/workspace/);
-  await expect(page.locator('.file-list li')).toHaveCount(3);
+  await expect(page.getByTestId('mine-grid').getByTestId('file-card')).toHaveCount(3);
 }
 
 async function openSeedDoc(page: Page, title: string): Promise<void> {
   await registerAndLogin(page);
-  await page.locator('.file-list li', { hasText: title }).click();
+  await page.getByTestId('file-card').filter({ hasText: title }).first().click();
   await expect(page).toHaveURL(/\/edit\//);
   await expect(page.locator('.editor-canvas svg .gm-text', { hasText: title })).toBeVisible();
 }
@@ -78,7 +82,7 @@ test('图片：真实键盘 Ctrl+V 粘贴截图直插选中节点', async ({ pag
   await selectNodeByText(page, '周五');
   await copyFixtureImage(page);
 
-  await page.keyboard.press('Control+V');
+  await page.keyboard.press(PASTE_KEY);
 
   const image = nodeGroup(page, '周五').locator('image.gm-image');
   await expect(image).toBeVisible(); // 上传 + setImage + 重渲染（断言自动重试）

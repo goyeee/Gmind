@@ -1,13 +1,14 @@
-import { expect, test, type APIRequestContext, type Dialog, type Page } from '@playwright/test';
+import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 
 /**
- * 工作台 UI E2E — M3a Task 9（FR-FIL-001~007/008）。
+ * 工作台 UI E2E —— 2026-10-20 整体重设计（spec 2026-10-20-workspace-redesign-design）
+ * 随新信息架构全量重写：左侧栏导航（nav-*）+ 顶栏（搜索/导入/新建/通知铃/头像）+
+ * 卡片流（file-card）。旧 .file-list/view-tabs/row-menu/文件夹树契约全部退役。
  *
- * 复用 M0 登录模式（新手机号注册即赠 3 个种子文件，每用例独立用户、互不共享状态）。
- * 覆盖：新建/重命名（rename-modal）、文件夹树过滤与增删改、移动到文件夹、复制、
- * 星标视图切换、删除→回收站→还原、彻底删除二次确认、搜索命中与清除、四视图切换
- * （shared 视图经 dev-e2e grant-collaborator 编排）。M0 验收选择器
- * （.file-list li / 新建脑图 按钮）保持兼容。
+ * 复用 M0 登录模式（新手机号注册即赠 3 个种子文件，每用例独立用户）。覆盖：
+ * 新建即开 + 行内重命名、星标切换、删除→回收站→还原、彻底删除二次确认、搜索命中
+ * 与清除、Ctrl+Shift+F 聚焦、协作空间（grant-collaborator 编排）+ 最近使用筛选、
+ * 模板库画廊/预览/一键套用、用户菜单（账号设置/退出登录）。
  */
 
 /** 注册并登录（UI 全流程），返回所用手机号。 */
@@ -18,34 +19,44 @@ async function registerAndLogin(page: Page): Promise<string> {
   await page.getByPlaceholder('验证码（开发环境固定 123456）').fill('123456');
   await page.getByRole('button', { name: '登录', exact: true }).click();
   await expect(page).toHaveURL(/\/workspace/);
-  await expect(page.locator('.file-list li')).toHaveCount(3);
+  await expect(page.getByTestId('mine-grid').getByTestId('file-card')).toHaveCount(3); // 3 个种子
   return phone;
 }
 
-/** 新建一个脑图并重命名为指定标题，返回所在行定位器。 */
+/** 新建一个脑图（即建即开编辑器）后返回工作台。 */
 async function createFileNamed(page: Page, title: string): Promise<void> {
-  await page.getByRole('button', { name: '新建脑图' }).click();
-  await expect(page.locator('.file-list li', { hasText: '未命名脑图' })).toBeVisible();
-  await renameRow(page, '未命名脑图', title);
+  await page.getByTestId('new-file-btn').click();
+  await expect(page).toHaveURL(/\/edit\//);
+  await expect(page.locator('.editor-canvas svg .gm-text').first()).toBeVisible();
+  // 编辑器标题改名（即建即开后的命名路径）再返回
+  await page.getByTestId('title-input').fill(title);
+  await page.getByTestId('back-btn').click();
+  await expect(page).toHaveURL(/\/workspace/);
+  await expect(mineCardOf(page, title)).toBeVisible();
 }
 
-/** 行操作菜单 → 重命名（rename-modal 内输入，Enter 或确定提交）。 */
-async function renameRow(page: Page, from: string, to: string): Promise<void> {
-  await page.locator('.file-list li', { hasText: from }).getByTestId('row-menu').click();
-  await page.getByTestId('row-menu-popup').getByRole('button', { name: '重命名' }).click();
-  await expect(page.getByTestId('rename-modal')).toBeVisible();
-  await page.getByTestId('rename-input').fill(to);
-  await page.getByTestId('rename-confirm').click();
-  await expect(page.locator('.file-list li', { hasText: to })).toBeVisible();
+/** 文件卡片定位器（默认全域；操作类交互用 mineCardOf 定界我的文件网格——首页
+ *  最近/我的双网格同文件双卡并存，不定界会命中双卡）。 */
+function cardOf(page: Page, title: string) {
+  return page.getByTestId('file-card').filter({ hasText: title });
+}
+function mineCardOf(page: Page, title: string) {
+  return page.getByTestId('mine-grid').getByTestId('file-card').filter({ hasText: title });
 }
 
-/** 新建文件夹（默认建在当前选中层级=根）。 */
-async function createFolder(page: Page, name: string): Promise<void> {
-  await page.getByTestId('new-folder-btn').click();
-  await expect(page.getByTestId('rename-modal')).toBeVisible();
-  await page.getByTestId('rename-input').fill(name);
-  await page.getByTestId('rename-confirm').click();
-  await expect(page.getByTestId('folder-tree')).toContainText(name);
+/** 卡片 ⋯ 菜单 → 重命名（行内就地编辑，Enter 提交）。 */
+async function renameCard(page: Page, from: string, to: string): Promise<void> {
+  const card = mineCardOf(page, from);
+  await card.hover();
+  await card.getByTestId('card-menu-btn').click();
+  await page.getByTestId('card-menu').getByRole('button', { name: '重命名' }).click();
+  // 注意：重命名开始后卡内标题文本被输入框替换，原 hasText 过滤器会失配——
+  // 输入框改按 testid 全局定位（同一时刻至多一个重命名输入框）
+  const input = page.getByTestId('rename-input');
+  await expect(input).toBeVisible();
+  await input.fill(to);
+  await input.press('Enter');
+  await expect(cardOf(page, to)).toBeVisible();
 }
 
 /** 经 API 注册/登录第二个用户（手机验证码首登即注册）并返回 token。 */
@@ -55,68 +66,43 @@ async function apiLogin(request: APIRequestContext, phone: string): Promise<stri
   return ((await res.json()) as { token: string }).token;
 }
 
-test('新建脑图并重命名（rename-modal 输入）', async ({ page }) => {
-  await registerAndLogin(page);
-  await page.getByRole('button', { name: '新建脑图' }).click();
-  await expect(page.locator('.file-list li', { hasText: '未命名脑图' })).toBeVisible();
-  await renameRow(page, '未命名脑图', '会议记录');
-  await expect(page.getByTestId('rename-modal')).toHaveCount(0);
-});
+const randomPhone = () => '138' + String(Math.floor(10000000 + Math.random() * 89999999));
 
-test('新建文件夹出现在树中，点击可过滤列表', async ({ page }) => {
+test('新建脑图即建即开，行内重命名落库', async ({ page }) => {
   await registerAndLogin(page);
-  await createFolder(page, '工作资料');
-  // 无文件在文件夹内：过滤后为空；点回「全部文件」恢复 3 个种子
-  await page.locator('.folder-row', { hasText: '工作资料' }).click();
-  await expect(page.locator('.file-list li', { hasText: '本周计划' })).toHaveCount(0);
-  await page.locator('.folder-row', { hasText: '全部文件' }).click();
-  await expect(page.locator('.file-list li')).toHaveCount(3);
+  await page.getByTestId('new-file-btn').click();
+  // 新建即开编辑器（参考图「空白脑图」卡语义）
+  await expect(page).toHaveURL(/\/edit\//);
+  await page.getByTestId('back-btn').click();
+  await expect(page).toHaveURL(/\/workspace/);
+  await renameCard(page, '未命名脑图', '会议记录');
 });
-
-test('移动到新建文件夹后位置列更新', async ({ page }) => {
+test('星标切换：加入星标收藏视图，取消后移出', async ({ page }) => {
   await registerAndLogin(page);
-  await createFolder(page, '项目夹');
-  await createFileNamed(page, '待移动文档');
-  await page.locator('.file-list li', { hasText: '待移动文档' }).getByTestId('row-menu').click();
-  await page.getByTestId('row-menu-popup').getByRole('button', { name: '移动到文件夹' }).click();
-  await expect(page.getByTestId('move-modal')).toBeVisible();
-  await page.getByTestId('move-select').selectOption({ label: '项目夹' });
-  await page.getByTestId('move-confirm').click();
-  const row = page.locator('.file-list li', { hasText: '待移动文档' });
-  await expect(row).toBeVisible();
-  await expect(row).toContainText('项目夹');
-});
-
-test('复制出现「-副本」，源文件保留', async ({ page }) => {
-  await registerAndLogin(page);
-  await createFileNamed(page, '原始文档');
-  await page.locator('.file-list li', { hasText: '原始文档' }).getByTestId('row-menu').click();
-  await page.getByTestId('row-menu-popup').getByRole('button', { name: '复制', exact: true }).click();
-  await expect(page.locator('.file-list li', { hasText: '原始文档-副本' })).toBeVisible();
-  await expect(page.locator('.file-list li', { hasText: '原始文档' })).toHaveCount(2);
-});
-
-test('星标切换：加入星标视图，取消后移出', async ({ page }) => {
-  await registerAndLogin(page);
-  const starBtn = page.locator('.file-list li', { hasText: '本周计划' }).getByTestId('star-btn');
-  await starBtn.click();
-  await expect(starBtn).toHaveText('★');
-  await page.getByTestId('view-tabs').getByRole('button', { name: '星标' }).click();
-  await expect(page.locator('.file-list li', { hasText: '本周计划' })).toBeVisible();
-  // 取消星标（mine 视图）→ starred 视图为空
-  await page.getByTestId('view-tabs').getByRole('button', { name: '我的文件' }).click();
-  await page.locator('.file-list li', { hasText: '本周计划' }).getByTestId('star-btn').click();
-  await page.getByTestId('view-tabs').getByRole('button', { name: '星标' }).click();
-  await expect(page.locator('.file-list li', { hasText: '本周计划' })).toHaveCount(0);
-  await expect(page.locator('.file-list li.empty')).toBeVisible();
+  const card = cardOf(page, '本周计划');
+  await card.hover();
+  await card.getByTestId('star-btn').click();
+  await expect(card.getByTestId('star-btn')).toHaveText('★');
+  await page.getByTestId('nav-starred').click();
+  await expect(cardOf(page, '本周计划')).toBeVisible();
+  // 取消星标 → 星标视图为空
+  await page.getByTestId('nav-mine').click();
+  const card2 = cardOf(page, '本周计划');
+  await card2.hover();
+  await card2.getByTestId('star-btn').click();
+  await page.getByTestId('nav-starred').click();
+  await expect(cardOf(page, '本周计划')).toHaveCount(0);
+  await expect(page.locator('.grid-empty')).toBeVisible();
 });
 
 test('删除文件进入回收站，还原后回到列表', async ({ page }) => {
   await registerAndLogin(page);
   await createFileNamed(page, '待删除文档');
-  await page.locator('.file-list li', { hasText: '待删除文档' }).getByTestId('row-menu').click();
-  await page.getByTestId('row-menu-popup').getByRole('button', { name: '删除', exact: true }).click();
-  await expect(page.locator('.file-list li', { hasText: '待删除文档' })).toHaveCount(0);
+  const card = cardOf(page, '待删除文档');
+  await card.hover();
+  await card.getByTestId('card-menu-btn').click();
+  await page.getByTestId('card-menu').getByRole('button', { name: '删除', exact: true }).click();
+  await expect(cardOf(page, '待删除文档')).toHaveCount(0);
 
   await page.goto('/trash');
   await expect(page.getByTestId('trash-page')).toBeVisible();
@@ -128,14 +114,16 @@ test('删除文件进入回收站，还原后回到列表', async ({ page }) => 
   await expect(page.locator('.trash-list li', { hasText: '待删除文档' })).toHaveCount(0);
 
   await page.goto('/workspace');
-  await expect(page.locator('.file-list li', { hasText: '待删除文档' })).toBeVisible();
+  await expect(cardOf(page, '待删除文档')).toBeVisible();
 });
 
 test('彻底删除需二次确认（不可恢复），确认后条目消失', async ({ page }) => {
   await registerAndLogin(page);
   await createFileNamed(page, '彻底删除目标');
-  await page.locator('.file-list li', { hasText: '彻底删除目标' }).getByTestId('row-menu').click();
-  await page.getByTestId('row-menu-popup').getByRole('button', { name: '删除', exact: true }).click();
+  const card = cardOf(page, '彻底删除目标');
+  await card.hover();
+  await card.getByTestId('card-menu-btn').click();
+  await page.getByTestId('card-menu').getByRole('button', { name: '删除', exact: true }).click();
   await page.goto('/trash');
   const entry = page.locator('.trash-list li', { hasText: '彻底删除目标' });
   await entry.getByTestId('purge-btn').click();
@@ -147,37 +135,53 @@ test('彻底删除需二次确认（不可恢复），确认后条目消失', as
   await expect(page.locator('.trash-list li.empty')).toBeVisible();
 });
 
-test('搜索命中标题并展示结果，清除后回到视图页签', async ({ page }) => {
+test('卡片 ⋯ 菜单溢出卡片下缘不被裁剪（2026-10-21 修遮挡回归）：最末项可点', async ({ page }) => {
   await registerAndLogin(page);
-  await page.getByTestId('search-input').fill('本周');
-  await page.getByTestId('search-input').press('Enter');
-  await expect(page.getByTestId('search-results')).toBeVisible();
-  await expect(page.locator('.file-list li', { hasText: '本周计划' })).toBeVisible();
-  await expect(page.locator('.file-list li', { hasText: '产品需求评审纪要' })).toHaveCount(0);
-  await page.getByTestId('search-clear').click();
-  await expect(page.getByTestId('view-tabs')).toBeVisible();
-  await expect(page.locator('.file-list li')).toHaveCount(3);
+  await createFileNamed(page, '菜单遮挡回归');
+  const card = mineCardOf(page, '菜单遮挡回归');
+  await card.hover();
+  await card.getByTestId('card-menu-btn').click();
+  const menu = page.getByTestId('card-menu');
+  await expect(menu).toBeVisible();
+  // 几何断言：菜单下缘超出卡片下缘（overflow 裁剪修复后菜单不再被卡片截断）
+  const cardBox = await card.boundingBox();
+  const menuBox = await menu.boundingBox();
+  expect(menuBox!.y + menuBox!.height).toBeGreaterThan(cardBox!.y + cardBox!.height);
+  // 点击最末项（删除）成功——若被 overflow:hidden 裁掉则点击不可达
+  await menu.getByRole('button', { name: '删除', exact: true }).click();
+  await expect(cardOf(page, '菜单遮挡回归')).toHaveCount(0);
 });
 
-// —— M3b 清偿包（FR-FIL-008 收口两项 + 视图菜单收敛） ——
+test('真实内容缩略图：编辑保存后卡片出真实快照 img；未编辑卡回退装饰图（2026-10-21 裁定）', async ({ page }) => {
+  await registerAndLogin(page);
+  // 打开种子文档写一笔（格式填充）→ persisted ack 触发快照上传（首次无节流）
+  await mineCardOf(page, '本周计划').click();
+  await expect(page).toHaveURL(/\/edit\//);
+  await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '周三' })).toBeVisible();
+  await page.locator('.editor-canvas svg .gm-text', { hasText: '周三' }).click();
+  await page.getByTestId('format-toggle').click();
+  await page.getByTestId('rich-panel').getByTitle('填充-红').click();
+  await expect(page.getByTestId('save-status')).toHaveText(/已保存/);
+  // 回工作台：本周计划卡片出真实快照（懒加载 + 服务端往返，重试窗口放宽）
+  await page.goto('/workspace');
+  const edited = mineCardOf(page, '本周计划');
+  await expect(edited.getByTestId('file-thumb-img')).toBeVisible({ timeout: 10_000 });
+  // 未编辑过的种子卡仍回退装饰性示意图
+  const untouched = mineCardOf(page, '欢迎使用 Gmind');
+  await expect(untouched.locator('.file-thumb-svg')).toBeVisible();
+  await expect(untouched.getByTestId('file-thumb-img')).toHaveCount(0);
+});
 
-test('搜索结果标题命中片段以 <mark> 高亮（含大小写不敏感）', async ({ page }) => {
+test('搜索命中标题并展示结果卡片，清除后回到当前视图', async ({ page }) => {
   await registerAndLogin(page);
   await page.getByTestId('search-input').fill('本周');
   await page.getByTestId('search-input').press('Enter');
   await expect(page.getByTestId('search-results')).toBeVisible();
-  const row = page.locator('.file-list li', { hasText: '本周计划' });
-  await expect(row).toBeVisible();
-  // 命中片段（首个出现处）被 mark 包裹，前后文保留在标记外
-  const title = row.locator('.cell.title');
-  await expect(title.getByTestId('search-hit')).toHaveText('本周');
-  await expect(title).toHaveText(/本周计划/);
-
-  // 大小写不敏感：q 的大小写形态不影响命中高亮
-  await page.getByTestId('search-input').fill('GMIND');
-  await page.getByTestId('search-input').press('Enter');
-  const gRow = page.locator('.file-list li', { hasText: '欢迎使用 Gmind' });
-  await expect(gRow.locator('.cell.title').getByTestId('search-hit')).toHaveText('Gmind');
+  await expect(cardOf(page, '本周计划')).toBeVisible();
+  await expect(cardOf(page, '产品需求评审纪要')).toHaveCount(0);
+  await page.getByTestId('search-clear').click();
+  await expect(page.getByTestId('ws-greeting')).toBeVisible(); // 回首页
+  await expect(page.getByTestId('file-card')).toHaveCount(3);
 });
 
 test('Ctrl/Cmd+Shift+F 聚焦搜索框（FR-FIL-008 收口）', async ({ page }) => {
@@ -187,63 +191,10 @@ test('Ctrl/Cmd+Shift+F 聚焦搜索框（FR-FIL-008 收口）', async ({ page })
   await expect(page.getByTestId('search-input')).toBeFocused();
 });
 
-test('shared 视图行菜单收敛：无删除/移动（owner-only），mine 视图保留', async ({ page, request }) => {
+test('协作空间与最近使用筛选：协作文件带图标、筛选器按归属过滤（2026-10-20 裁定 3）', async ({ page, request }) => {
   const phoneA = await registerAndLogin(page);
   // B 经 API 注册并新建文件，把 A 加为协作者（dev-e2e 编排端点）
-  const phoneB = '138' + String(Math.floor(10000000 + Math.random() * 89999999));
-  const tokenB = await apiLogin(request, phoneB);
-  const created = await request.post('/api/files', {
-    headers: { Authorization: `Bearer ${tokenB}` },
-    data: { title: '乙的共享件' },
-  });
-  expect(created.ok()).toBeTruthy();
-  const granted = await request.post('/api/dev-e2e/grant-collaborator', { data: { fileId: ((await created.json()) as { id: string }).id, phone: phoneA } });
-  expect(granted.ok()).toBeTruthy();
-
-  // shared（非 owner）行菜单：重命名/复制保留，删除/移动不出现
-  await page.getByTestId('view-tabs').getByRole('button', { name: '与我协作' }).click();
-  const sharedRow = page.locator('.file-list li', { hasText: '乙的共享件' });
-  await expect(sharedRow).toBeVisible();
-  await sharedRow.getByTestId('row-menu').click();
-  const sharedPopup = page.getByTestId('row-menu-popup');
-  await expect(sharedPopup.getByRole('button', { name: '重命名' })).toBeVisible();
-  await expect(sharedPopup.getByRole('button', { name: '复制', exact: true })).toBeVisible();
-  await expect(sharedPopup.getByRole('button', { name: '移动到文件夹' })).toHaveCount(0);
-  await expect(sharedPopup.getByRole('button', { name: '删除', exact: true })).toHaveCount(0);
-
-  // mine（owner）行菜单：删除/移动保留
-  await page.getByTestId('view-tabs').getByRole('button', { name: '我的文件' }).click();
-  const mineRow = page.locator('.file-list li', { hasText: '本周计划' });
-  await expect(mineRow).toBeVisible();
-  await mineRow.getByTestId('row-menu').click();
-  const minePopup = page.getByTestId('row-menu-popup');
-  await expect(minePopup.getByRole('button', { name: '移动到文件夹' })).toBeVisible();
-  await expect(minePopup.getByRole('button', { name: '删除', exact: true })).toBeVisible();
-});
-
-test('搜索结果内变更后清除搜索，底层列表为最新数据（fix round 1）', async ({ page }) => {
-  await registerAndLogin(page);
-  await page.getByTestId('search-input').fill('本周');
-  await page.getByTestId('search-input').press('Enter');
-  await expect(page.getByTestId('search-results')).toBeVisible();
-  // 搜索态内重命名命中行
-  await page.locator('.file-list li', { hasText: '本周计划' }).getByTestId('row-menu').click();
-  await page.getByTestId('row-menu-popup').getByRole('button', { name: '重命名' }).click();
-  await page.getByTestId('rename-input').fill('本周新名');
-  await page.getByTestId('rename-confirm').click();
-  await expect(page.locator('.file-list li', { hasText: '本周新名' })).toBeVisible();
-  // 清除搜索 → 底层列表回刷为最新标题（旧标题不得复现）
-  await page.getByTestId('search-clear').click();
-  await expect(page.getByTestId('view-tabs')).toBeVisible();
-  await expect(page.locator('.file-list li', { hasText: '本周新名' })).toBeVisible();
-  await expect(page.locator('.file-list li', { hasText: '本周计划' })).toHaveCount(0);
-  await expect(page.locator('.file-list li')).toHaveCount(3);
-});
-
-test('四视图切换：shared 经 grant-collaborator，recent 随打开出现', async ({ page, request }) => {
-  const phoneA = await registerAndLogin(page);
-  // B 经 API 注册并新建文件，把 A 加为协作者（dev-e2e 编排端点）
-  const phoneB = '138' + String(Math.floor(10000000 + Math.random() * 89999999));
+  const phoneB = randomPhone();
   const tokenB = await apiLogin(request, phoneB);
   const created = await request.post('/api/files', {
     headers: { Authorization: `Bearer ${tokenB}` },
@@ -254,56 +205,85 @@ test('四视图切换：shared 经 grant-collaborator，recent 随打开出现',
   const granted = await request.post('/api/dev-e2e/grant-collaborator', { data: { fileId, phone: phoneA } });
   expect(granted.ok()).toBeTruthy();
 
-  // mine 不含协作文件；shared 恰为它
-  await page.getByTestId('view-tabs').getByRole('button', { name: '与我协作' }).click();
-  await expect(page.locator('.file-list li', { hasText: '乙的协作文件' })).toBeVisible();
-  await page.getByTestId('view-tabs').getByRole('button', { name: '我的文件' }).click();
-  await expect(page.locator('.file-list li', { hasText: '乙的协作文件' })).toHaveCount(0);
-  // 打开种子文件 → recent 视图出现；未打开的协作文件不出现
-  await page.locator('.file-list li', { hasText: '欢迎使用 Gmind' }).click();
+  // 协作空间（侧栏一级入口）= 协作文件集合
+  await page.getByTestId('nav-collab').click();
+  await expect(cardOf(page, '乙的协作文件')).toBeVisible();
+  await expect(cardOf(page, '本周计划')).toHaveCount(0);
+  // 我的文件不含协作件
+  await page.getByTestId('nav-mine').click();
+  await expect(cardOf(page, '乙的协作文件')).toHaveCount(0);
+  // 打开协作文件 → 最近使用出现且带协作图标；筛选器切「协作」只剩它、切「个人」不见
+  await page.getByTestId('nav-collab').click();
+  await cardOf(page, '乙的协作文件').click();
   await expect(page).toHaveURL(/\/edit\//);
+  // 等编辑器装载完成（last_opened_at 由装载期 POST /open 打点）再离开，防打点竞态
+  await expect(page.locator('.editor-canvas svg .gm-text').first()).toBeVisible();
   await page.goto('/workspace');
-  await expect(page.locator('.file-list li')).toHaveCount(3);
-  await page.getByTestId('view-tabs').getByRole('button', { name: '最近打开' }).click();
-  await expect(page.locator('.file-list li', { hasText: '欢迎使用 Gmind' })).toBeVisible();
-  await expect(page.locator('.file-list li', { hasText: '乙的协作文件' })).toHaveCount(0);
+  await page.getByTestId('nav-recent').click();
+  const collabCard = cardOf(page, '乙的协作文件');
+  await expect(collabCard).toBeVisible();
+  await expect(collabCard.getByLabel('协作文件')).toBeVisible();
+  await page.getByTestId('recent-filter-collab').click();
+  await expect(cardOf(page, '本周计划')).toHaveCount(0);
+  await page.getByTestId('recent-filter-mine').click();
+  await expect(cardOf(page, '乙的协作文件')).toHaveCount(0);
 });
 
-test('文件夹重命名与删除（context ops，删除入回收站）', async ({ page }) => {
-  await registerAndLogin(page);
-  await createFolder(page, '旧名文件夹');
-  const row = page.locator('.folder-row', { hasText: '旧名文件夹' });
-  await row.getByTestId('folder-rename-btn').click();
-  await page.getByTestId('rename-input').fill('新名文件夹');
-  await page.getByTestId('rename-confirm').click();
-  await expect(page.getByTestId('folder-tree')).toContainText('新名文件夹');
-  await expect(page.getByTestId('folder-tree')).not.toContainText('旧名文件夹');
+test('协作文件的卡片菜单收敛：无删除（owner-only），重命名/复制保留', async ({ page, request }) => {
+  const phoneA = await registerAndLogin(page);
+  const phoneB = randomPhone();
+  const tokenB = await apiLogin(request, phoneB);
+  const created = await request.post('/api/files', {
+    headers: { Authorization: `Bearer ${tokenB}` },
+    data: { title: '乙的共享件' },
+  });
+  const fileId = ((await created.json()) as { id: string }).id;
+  await request.post('/api/dev-e2e/grant-collaborator', { data: { fileId, phone: phoneA } });
 
-  // 文件移入后删除文件夹：文件随文件夹整体入回收站
-  await createFileNamed(page, '夹内文档');
-  await page.locator('.file-list li', { hasText: '夹内文档' }).getByTestId('row-menu').click();
-  await page.getByTestId('row-menu-popup').getByRole('button', { name: '移动到文件夹' }).click();
-  await page.getByTestId('move-select').selectOption({ label: '新名文件夹' });
-  await page.getByTestId('move-confirm').click();
-  await expect(page.locator('.file-list li', { hasText: '夹内文档' })).toContainText('新名文件夹');
-
-  page.on('dialog', (d: Dialog) => void d.accept());
-  await page.locator('.folder-row', { hasText: '新名文件夹' }).getByTestId('folder-delete-btn').click();
-  await expect(page.getByTestId('folder-tree')).not.toContainText('新名文件夹');
-  await expect(page.locator('.file-list li', { hasText: '夹内文档' })).toHaveCount(0);
-  await page.goto('/trash');
-  await expect(page.locator('.trash-list li', { hasText: '夹内文档' })).toBeVisible();
+  await page.getByTestId('nav-collab').click();
+  const card = cardOf(page, '乙的共享件');
+  await card.hover();
+  await card.getByTestId('card-menu-btn').click();
+  const menu = page.getByTestId('card-menu');
+  await expect(menu.getByRole('button', { name: '重命名' })).toBeVisible();
+  await expect(menu.getByRole('button', { name: '复制', exact: true })).toBeVisible();
+  await expect(menu.getByRole('button', { name: '删除', exact: true })).toHaveCount(0);
 });
 
-// 退出登录（2026-10-04 需求方）：工作台头部按钮——服务端会话作废+本地 token 清除回登录页
-test('工作台：退出登录清 token 回登录页', async ({ page }) => {
+test('模板库：画廊 → 预览 → 使用模板一键建文档并打开', async ({ page }) => {
   await registerAndLogin(page);
-  await page.goto('/workspace');
-  await expect(page.getByTestId('logout-button')).toBeVisible();
-  await page.getByTestId('logout-button').click();
+  // 侧栏进模板库：内置精选模板画廊
+  await page.getByTestId('nav-templates').click();
+  await expect(page.getByTestId('template-grid')).toBeVisible();
+  await expect(page.getByTestId('template-card-okr')).toBeVisible();
+  // 预览 → 使用模板 → 即建即开编辑器，内容为模板结构
+  await page.getByTestId('template-card-okr').click();
+  await expect(page.getByTestId('template-preview')).toBeVisible();
+  await page.getByTestId('template-use').click();
+  await expect(page).toHaveURL(/\/edit\//);
+  await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '目标 O1' })).toBeVisible();
+  // 回工作台：新文档出现在我的文件
+  await page.getByTestId('back-btn').click();
+  await expect(cardOf(page, 'OKR 目标管理')).toBeVisible();
+});
+
+test('首页快速创建卡：从模板创建卡直达模板库', async ({ page }) => {
+  await registerAndLogin(page);
+  await expect(page.getByTestId('ws-greeting')).toContainText('，用户'); // 时段问候+昵称
+  await page.getByTestId('quick-create-template').click();
+  await expect(page.getByTestId('template-grid')).toBeVisible();
+});
+
+test('用户菜单：账号设置入口 + 退出登录清 token 回登录页', async ({ page }) => {
+  await registerAndLogin(page);
+  // 左下用户卡 → 菜单（账号设置/退出登录；账号管理仅超管——本用例普通 member 不见）
+  await page.getByTestId('user-card').click();
+  const menu = page.getByTestId('user-menu');
+  await expect(menu).toBeVisible();
+  await expect(menu.getByTestId('settings-entry')).toBeVisible();
+  await expect(menu.getByTestId('admin-users-entry')).toHaveCount(0);
+  await menu.getByTestId('logout-button').click();
   await expect(page).toHaveURL(/\/login/);
   const token = await page.evaluate(() => localStorage.getItem('gmind.token'));
   expect(token === null || token === '').toBeTruthy();
-  // 会话已在服务端作废：携旧 token 的请求 401（经 API 直验）
-  // （token 已清，无法复用——以登录页可达为验收即足够）
 });

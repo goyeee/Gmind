@@ -42,13 +42,13 @@ async function registerAndLogin(page: Page): Promise<void> {
   await page.getByPlaceholder('验证码（开发环境固定 123456）').fill('123456');
   await page.getByRole('button', { name: '登录', exact: true }).click();
   await expect(page).toHaveURL(/\/workspace/);
-  await expect(page.locator('.file-list li')).toHaveCount(3);
+  await expect(page.getByTestId('mine-grid').getByTestId('file-card')).toHaveCount(3);
 }
 
 /** 打开种子文件进入编辑器，等待 root 文本渲染（editor spec 既定模式）。 */
 async function openSeedDoc(page: Page, title: string): Promise<void> {
   await registerAndLogin(page);
-  await page.locator('.file-list li', { hasText: title }).click();
+  await page.getByTestId('file-card').filter({ hasText: title }).first().click();
   await expect(page).toHaveURL(/\/edit\//);
   await expect(page.locator('.editor-canvas svg .gm-text', { hasText: title })).toBeVisible();
 }
@@ -211,6 +211,7 @@ test('⑩ 改绑被占 409：错误文案含「已绑定其他账号」+ 换用�
   const occupiedPhone = randomPhone();
   await apiLogin(request, occupiedPhone); // B：占用该手机号
   await registerAndLogin(page); // A：另一新账号
+  await page.getByTestId('user-card').click();
   await page.getByTestId('settings-entry').click();
   await expect(page.getByTestId('settings-page')).toBeVisible();
   // dev StrictMode 下 reload 会跑两遍；等网络静默，避免第二次 me 响应把渠道重置回 email

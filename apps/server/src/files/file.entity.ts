@@ -31,6 +31,13 @@ export class FileEntity {
   @Column({ type: 'longblob', nullable: true, name: 'doc_state' })
   docState: Buffer | null = null;
 
+  /** 真实内容缩略图（2026-10-21 需求方裁定改真实快照，推翻 10-20「装饰性静态图」）：
+   *  编辑器在 persisted ack 后由引擎 layout 直出 SVG 字符串上传；列表卡片懒加载
+   *  GET /files/:id/thumbnail。写路径用 queryBuilder 直写，不触发 updated_at 翻页
+   *  （避免挤掉 saveLoop 的 baseUpdatedAt 写序守卫）。 */
+  @Column({ type: 'mediumtext', nullable: true, name: 'thumb_svg' })
+  thumbSvg: string | null = null;
+
   @Column({ type: 'datetime', precision: 3, nullable: true, name: 'last_opened_at' })
   lastOpenedAt: Date | null = null;
 

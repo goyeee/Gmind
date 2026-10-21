@@ -1,10 +1,15 @@
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { IsNull, Repository } from 'typeorm';
-import type { AccountStatus, AdminUserListItem, SystemRole } from '@gmind/shared';
+import { IsNull, Like, Repository } from 'typeorm';
+import type { AccountStatus, AdminUserListItem, AdminUserListPage, SystemRole } from '@gmind/shared';
 import { FileEntity } from '../files/file.entity';
 import { UserEntity } from '../users/user.entity';
 import { isDuplicateKeyError } from '../utils/duplicate-key';
+
+/** LIKE 通配符转义（q 搜索用户输入可能含 %/_）。 */
+function escapeLike(q: string): string {
+  return q.replace(/[%_\\]/g, (c) => `\\${c}`);
+}
 
 /** PATCH 入参（已过 updateAdminAccountSchema 校验：至少其一）。 */
 export interface AdminUpdateInput {
@@ -29,18 +34,37 @@ export class AdminService {
   ) {}
 
   /** 成员列表：注册时间升序（同毫秒以 id 决出，口径同 mindgrid listAllUsers）；
-   *  fileCount=名下存活文件数（deleted_at IS NULL，与配额 countBy 口径一致，回收站不计）。 */
-  async list(): Promise<AdminUserListItem[]> {
-    const users = await this.users.find({ order: { createdAt: 'ASC', id: 'ASC' } });
-    const rows = (await this.files
-      .createQueryBuilder('f')
-      .select('f.owner_user_id', 'owner_user_id')
-      .addSelect('COUNT(*)', 'n')
-      .where('f.deleted_at IS NULL')
-      .groupBy('f.owner_user_id')
-      .getRawMany()) as Array<{ owner_user_id: string; n: string | number }>;
-    const counts = new Map(rows.map((r) => [r.owner_user_id, Number(r.n)]));
-    return users.map((u) => this.toItem(u, counts.get(u.id) ?? 0));
+   *  fileCount=名下存活文件数（deleted_at IS NULL，与配额 countBy 口径一致，回收站不计）。
+   *  2026-10-21 分页化（需求方反馈「加载慢/无分页」）：findAndCount + skip/take，
+   *  q 模糊匹配昵称/手机号/邮箱（LIKE 通配符先转义）；fileCount 只聚合本页 id
+   *  （2 万账号全表 GROUP BY → 20 行 IN 聚合，列表从秒级回到毫秒级）。 */
+  async list(opts: { page: number; size: number; q: string }): Promise<AdminUserListPage> {
+    const { page, size, q } = opts;
+    const where =
+      q === ''
+        ? undefined
+        : (['nickname', 'phone', 'email'] as const).map((col) => ({
+            [col]: Like(`%${escapeLike(q)}%`),
+          }));
+    const [users, total] = await this.users.findAndCount({
+      where,
+      order: { createdAt: 'ASC', id: 'ASC' },
+      skip: (page - 1) * size,
+      take: size,
+    });
+    let counts = new Map<string, number>();
+    if (users.length > 0) {
+      const rows = (await this.files
+        .createQueryBuilder('f')
+        .select('f.owner_user_id', 'owner_user_id')
+        .addSelect('COUNT(*)', 'n')
+        .where('f.deleted_at IS NULL')
+        .andWhere('f.owner_user_id IN (:...ids)', { ids: users.map((u) => u.id) })
+        .groupBy('f.owner_user_id')
+        .getRawMany()) as Array<{ owner_user_id: string; n: string | number }>;
+      counts = new Map(rows.map((r) => [r.owner_user_id, Number(r.n)]));
+    }
+    return { items: users.map((u) => this.toItem(u, counts.get(u.id) ?? 0)), total, page, size };
   }
 
   /** 添加账号：建号即 active member、无密码（开发态凭验证码登录，与手机号注册同通道）。

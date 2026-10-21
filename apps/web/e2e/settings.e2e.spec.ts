@@ -20,11 +20,12 @@ async function registerAndLogin(page: Page): Promise<void> {
   await page.getByPlaceholder('验证码（开发环境固定 123456）').fill('123456');
   await page.getByRole('button', { name: '登录', exact: true }).click();
   await expect(page).toHaveURL(/\/workspace/);
-  await expect(page.locator('.file-list li')).toHaveCount(3);
+  await expect(page.getByTestId('mine-grid').getByTestId('file-card')).toHaveCount(3);
 }
 
 test('工作台「账号设置」入口 → /settings 三区渲染（无密码=验证码形态）', async ({ page }) => {
   await registerAndLogin(page);
+  await page.getByTestId('user-card').click();
   await page.getByTestId('settings-entry').click();
   await expect(page).toHaveURL(/\/settings/);
   await expect(page.getByTestId('settings-page')).toBeVisible();
@@ -44,6 +45,7 @@ test('工作台「账号设置」入口 → /settings 三区渲染（无密码=�
 // 头像区（2026-10-11 需求方裁定）：当前头像展示 + 5 预置 SVG 可选 + 本地上传。
 test('头像区：当前头像与预置库渲染，选预置后当前头像与 me 同步', async ({ page }) => {
   await registerAndLogin(page);
+  await page.getByTestId('user-card').click();
   await page.getByTestId('settings-entry').click();
   await expect(page).toHaveURL(/\/settings/);
   const section = page.getByTestId('avatar-section');
@@ -83,6 +85,7 @@ test('有密码（邮箱注册）用户：密码区渲染旧密码形态', async
 
 test('换绑表单提交成功 toast（含「已完成」）', async ({ page }) => {
   await registerAndLogin(page);
+  await page.getByTestId('user-card').click();
   await page.getByTestId('settings-entry').click();
   await expect(page.getByTestId('settings-page')).toBeVisible();
 
@@ -95,6 +98,7 @@ test('换绑表单提交成功 toast（含「已完成」）', async ({ page }) 
 
 test('偏好开关切换 → 刷新仍保持', async ({ page }) => {
   await registerAndLogin(page);
+  await page.getByTestId('user-card').click();
   await page.getByTestId('settings-entry').click();
   await expect(page.getByTestId('settings-page')).toBeVisible();
 

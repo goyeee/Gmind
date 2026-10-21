@@ -808,8 +808,8 @@ body.painter-active .editor-canvas svg {
   z-index: 1200;
   background: #fff;
   border: 1px solid #e5e6eb;
-  border-radius: 8px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(31, 35, 41, 0.16);
   display: flex;
   flex-direction: column;
   min-width: 128px;
@@ -839,8 +839,8 @@ body.painter-active .editor-canvas svg {
   z-index: 1200;
   background: #fff;
   border: 1px solid #e5e6eb;
-  border-radius: 8px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(31, 35, 41, 0.16);
   display: flex;
   flex-direction: column;
   min-width: 128px;

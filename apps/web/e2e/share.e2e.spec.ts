@@ -20,7 +20,7 @@ async function registerAndLogin(page: Page): Promise<string> {
   await page.getByPlaceholder('验证码（开发环境固定 123456）').fill('123456');
   await page.getByRole('button', { name: '登录', exact: true }).click();
   await expect(page).toHaveURL(/\/workspace/);
-  await expect(page.locator('.file-list li')).toHaveCount(3);
+  await expect(page.getByTestId('mine-grid').getByTestId('file-card')).toHaveCount(3);
   return phone;
 }
 
@@ -60,10 +60,11 @@ test('全链路：A 复制分享链接 → B 登录回跳自动加入 → 编辑
   const aToken = await apiLogin(request, aPhone);
   const { fileId, shareToken } = await apiCreateSharedFile(request, aToken, '分享目标文档');
   await pageA.reload();
-  const row = pageA.locator('.file-list li', { hasText: '分享目标文档' });
+  const row = pageA.getByTestId('file-card').filter({ hasText: '分享目标文档' }).first();
   await expect(row).toBeVisible();
-  await row.getByTestId('row-menu').click();
-  await pageA.getByTestId('row-menu-popup').getByTestId('share-action').click();
+  await row.hover();
+  await row.getByTestId('card-menu-btn').click();
+  await pageA.getByTestId('card-menu').getByTestId('share-action').click();
   await expect(pageA.getByTestId('toast')).toHaveText('链接已复制');
   const shareUrl = await pageA.evaluate(() => navigator.clipboard.readText());
   expect(shareUrl).toMatch(/\/s\/[0-9a-f]{32}$/);

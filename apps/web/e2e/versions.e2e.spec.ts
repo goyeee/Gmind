@@ -25,7 +25,7 @@ async function registerAndLogin(page: Page): Promise<void> {
   await page.getByPlaceholder('验证码（开发环境固定 123456）').fill('123456');
   await page.getByRole('button', { name: '登录', exact: true }).click();
   await expect(page).toHaveURL(/\/workspace/);
-  await expect(page.locator('.file-list li')).toHaveCount(3);
+  await expect(page.getByTestId('mine-grid').getByTestId('file-card')).toHaveCount(3);
 }
 
 /** 双击节点进编辑态 → 覆盖键入 → 双框 Enter×2 提交，等待「已保存」（WS persisted ack）。 */
@@ -50,7 +50,7 @@ async function postSnapshot(page: Page, fileId: string, token: string): Promise<
 
 test('版本面板：时间轴/只读预览/一键恢复', async ({ page }) => {
   await registerAndLogin(page);
-  await page.locator('.file-list li', { hasText: '本周计划' }).click();
+  await page.getByTestId('file-card').filter({ hasText: '本周计划' }).first().click();
   await expect(page).toHaveURL(/\/edit\//);
   await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '本周计划' })).toBeVisible();
   const fileId = page.url().split('/').pop() ?? '';
@@ -117,7 +117,7 @@ test('版本面板：时间轴/只读预览/一键恢复', async ({ page }) => {
 // ——而新挂载的空 <svg> 不触发渲染 effect（deps [preview] 未变）→ 空白遮罩挡住面板。
 test('版本面板：关闭面板重置预览态——重开不残留旧预览，同条目可再次预览', async ({ page }) => {
   await registerAndLogin(page);
-  await page.locator('.file-list li', { hasText: '本周计划' }).click();
+  await page.getByTestId('file-card').filter({ hasText: '本周计划' }).first().click();
   await expect(page).toHaveURL(/\/edit\//);
   await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '本周计划' })).toBeVisible();
   const fileId = page.url().split('/').pop() ?? '';
@@ -163,7 +163,7 @@ test('版本面板：关闭面板重置预览态——重开不残留旧预览�
 // 绕行手段，本例回归「指针可达」本身；遮罩仍盖画布防误触）。
 test('版本面板：预览打开时面板关闭钮指针可点（头部层级高于遮罩）', async ({ page }) => {
   await registerAndLogin(page);
-  await page.locator('.file-list li', { hasText: '本周计划' }).click();
+  await page.getByTestId('file-card').filter({ hasText: '本周计划' }).first().click();
   await expect(page).toHaveURL(/\/edit\//);
   await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '本周计划' })).toBeVisible();
   const fileId = page.url().split('/').pop() ?? '';

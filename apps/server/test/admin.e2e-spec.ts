@@ -44,7 +44,8 @@ describe('账号管理（/api/admin/users）：角色/状态/防呆/停用踢号
   const list = async (): Promise<AdminItem[]> => {
     const res = await authed(app, adminToken, 'get', '/api/admin/users');
     expect(res.status).toBe(200);
-    return res.body as AdminItem[];
+    // 2026-10-21 分页契约：响应为 { items, total, page, size }
+    return (res.body as { items: AdminItem[] }).items;
   };
   const findItem = async (id: string): Promise<AdminItem | undefined> =>
     (await list()).find((u) => u.id === id);
@@ -79,6 +80,33 @@ describe('账号管理（/api/admin/users）：角色/状态/防呆/停用踢号
       systemRole: 'super_admin',
     });
     expect(patchByMember.status).toBe(403);
+  });
+
+  it('分页与搜索（2026-10-21 契约）：size=1 分页 total 守恒；q 命中手机号；page 越界空页', async () => {
+    const p1 = await authed(app, adminToken, 'get', '/api/admin/users?page=1&size=1');
+    expect(p1.status).toBe(200);
+    const body1 = p1.body as { items: AdminItem[]; total: number; page: number; size: number };
+    expect(body1.items).toHaveLength(1);
+    expect(body1.total).toBe(2);
+    expect(body1.page).toBe(1);
+    expect(body1.size).toBe(1);
+    const p2 = await authed(app, adminToken, 'get', '/api/admin/users?page=2&size=1');
+    const body2 = p2.body as { items: AdminItem[]; total: number };
+    expect(body2.items).toHaveLength(1);
+    expect(body2.items[0]?.id).not.toBe(body1.items[0]?.id); // 两页不重叠
+    // q 命中手机号（模糊）
+    const q = await authed(app, adminToken, 'get', `/api/admin/users?q=${memberPhone.slice(0, 7)}`);
+    const qb = q.body as { items: AdminItem[]; total: number };
+    expect(qb.total).toBe(1);
+    expect(qb.items[0]?.phone).toBe(memberPhone);
+    // q 无命中 → 空页
+    const miss = await authed(app, adminToken, 'get', '/api/admin/users?q=zzz-no-such-user');
+    expect((miss.body as { total: number }).total).toBe(0);
+    // page 越界 → 空 items 但 total 不变
+    const beyond = await authed(app, adminToken, 'get', '/api/admin/users?page=99&size=20');
+    const bb = beyond.body as { items: AdminItem[]; total: number };
+    expect(bb.items).toHaveLength(0);
+    expect(bb.total).toBe(2);
   });
 
   it('GET 列表：首号 super_admin、次号 member；fileCount=3（登录建号种 3 个示例文件）；createdAt 为 ISO', async () => {

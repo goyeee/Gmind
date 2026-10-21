@@ -32,11 +32,13 @@ button { cursor: pointer; }
 .user-nickname { color: #86909c; font-size: 13px; }
 /* —— 通知铃铛与下拉（M3b Task 8，FR-CMT-005）—— */
 .notify-wrap { position: relative; }
-.notify-bell { position: relative; display: inline-flex; align-items: center; justify-content: center; padding: 8px 10px !important; color: #4e5969; }
+.notify-bell { position: relative; display: inline-flex; align-items: center; justify-content: center; padding: 8px 10px !important; color: #4e5969; border: none; background: none; border-radius: 8px; cursor: pointer; }
+.notify-bell:hover { background: #f2f3f5; color: #1f2329; }
 .notify-badge { position: absolute; top: -6px; right: -6px; min-width: 18px; height: 18px; padding: 0 4px; border-radius: 9px; background: #f53f3f; color: #fff; font-size: 11px; line-height: 18px; text-align: center; font-weight: 600; }
-.notify-dropdown { position: absolute; right: 0; top: 44px; z-index: 1200; width: 340px; max-height: 420px; overflow-y: auto; background: #fff; border: 1px solid #e5e6eb; border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,.12); padding: 4px; }
+.notify-dropdown { position: absolute; right: 0; top: 44px; z-index: 1200; width: 340px; max-height: 420px; overflow-y: auto; background: #fff; border: 1px solid #e5e6eb; border-radius: 10px; box-shadow: 0 8px 24px rgba(31,35,41,.16); padding: 4px; }
+.notify-head { padding: 10px 12px 6px; font-size: 13px; font-weight: 600; color: #1f2329; }
 .notify-empty { padding: 16px 12px; color: #86909c; font-size: 13px; text-align: center; }
-.notify-item { display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border-radius: 6px; cursor: pointer; font-size: 13px; }
+.notify-item { display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border-radius: 8px; cursor: pointer; font-size: 13px; }
 .notify-item:hover { background: #f2f3f5; }
 .notify-item.unread { background: #f0f5ff; }
 .notify-item.unread:hover { background: #e8f0ff; }
@@ -92,10 +94,11 @@ button { cursor: pointer; }
 .modal-actions button.danger { border: none; background: #f53f3f; color: #fff; }
 
 /* —— 回收站（M3a Task 9 接线）—— */
-.trash-page { max-width: 900px; margin: 24px auto; padding: 0 16px; }
+.trash-page { max-width: 900px; }
 .trash-hint { color: #86909c; font-size: 13px; }
 .trash-list { list-style: none; padding: 0; display: flex; flex-direction: column; gap: 8px; }
-.trash-list li { background: #fff; padding: 12px 16px; border-radius: 8px; display: flex; align-items: center; gap: 16px; }
+.trash-list li { background: #fff; border: 1px solid #e5e6eb; padding: 12px 16px; border-radius: 10px; display: flex; align-items: center; gap: 16px; transition: box-shadow .15s; }
+.trash-list li:hover { box-shadow: 0 4px 12px rgba(31,35,41,.08); }
 .trash-list .title { font-weight: 500; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .trash-list .meta { color: #86909c; font-size: 12px; }
 .trash-list .ops { display: flex; gap: 8px; }
@@ -112,9 +115,8 @@ button { cursor: pointer; }
 .share-landing button:hover { background: #f2f3f5; }
 
 /* —— 账号设置（M5 Task 1，FR-ACC-002 收口 + FR-CMT-006 通知偏好）—— */
-.settings-page { max-width: 720px; margin: 0 auto; padding: 24px 16px; display: flex; flex-direction: column; gap: 16px; }
-.settings-page .workspace-header a { color: #3370ff; text-decoration: none; font-size: 14px; }
-.settings-card { background: #fff; border: 1px solid #e5e6eb; border-radius: 8px; padding: 16px; display: flex; flex-direction: column; gap: 10px; }
+.settings-page { width: 100%; max-width: 760px; margin: 0 auto; }
+.settings-card { background: #fff; border: 1px solid #e5e6eb; border-radius: 10px; padding: 18px 20px; display: flex; flex-direction: column; gap: 10px; }
 .settings-card h3 { margin: 0; font-size: 15px; }
 .settings-card input, .settings-card select { padding: 8px 10px; border: 1px solid #e5e6eb; border-radius: 6px; font-size: 14px; max-width: 320px; }
 .settings-card button.primary { align-self: flex-start; padding: 8px 16px; border: none; background: #3370ff; color: #fff; border-radius: 6px; cursor: pointer; }
@@ -147,10 +149,9 @@ img.tt-avatar-img { border-radius: 50%; object-fit: cover; display: inline-block
 .guide-card-actions button.primary { border: none; background: #3370ff; color: #fff; }
 
 /* —— 账号管理（移植 mindgrid 账号体系，仅 super_admin）—— */
-.admin-users-page { max-width: 1080px; margin: 24px auto; padding: 0 16px; display: flex; flex-direction: column; gap: 12px; }
-.admin-users-page .workspace-header a { color: #3370ff; text-decoration: none; font-size: 14px; }
+.admin-users-page { width: 100%; }
 .admin-users-hint { color: #86909c; font-size: 13px; }
-.admin-user-table { background: #fff; border: 1px solid #e5e6eb; border-radius: 8px; overflow: hidden; }
+.admin-user-table { background: #fff; border: 1px solid #e5e6eb; border-radius: 10px; overflow: hidden; }
 .admin-table-head, .admin-table-row { display: grid; grid-template-columns: 1.3fr 1.1fr 0.95fr 0.75fr 1.5fr 0.55fr 1.9fr; gap: 8px; align-items: center; padding: 12px 16px; }
 .admin-table-head { color: #86909c; font-size: 12px; border-bottom: 1px solid #e5e6eb; }
 .admin-table-row { border-bottom: 1px solid #f2f3f5; }

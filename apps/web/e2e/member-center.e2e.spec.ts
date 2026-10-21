@@ -27,7 +27,7 @@ async function registerAndLogin(page: Page): Promise<string> {
   await page.getByPlaceholder('验证码（开发环境固定 123456）').fill('123456');
   await page.getByRole('button', { name: '登录', exact: true }).click();
   await expect(page).toHaveURL(/\/workspace/);
-  await expect(page.locator('.file-list li')).toHaveCount(3);
+  await expect(page.getByTestId('mine-grid').getByTestId('file-card')).toHaveCount(3);
   return phone;
 }
 
@@ -44,7 +44,7 @@ const randomPhone = () => '138' + String(Math.floor(10000000 + Math.random() * 8
 /** 打开种子文件进入编辑器，等待 root 文本渲染，返回 fileId。 */
 async function openSeedDoc(page: Page, title: string): Promise<string> {
   await registerAndLogin(page);
-  await page.locator('.file-list li', { hasText: title }).click();
+  await page.getByTestId('file-card').filter({ hasText: title }).first().click();
   await expect(page).toHaveURL(/\/edit\//);
   await expect(page.locator('.editor-canvas svg .gm-text', { hasText: title })).toBeVisible();
   const m = /\/edit\/([0-9A-Za-z]+)/.exec(page.url());
@@ -67,7 +67,7 @@ async function userIdOf(page: Page): Promise<string> {
 test('顶栏右缘：成员钮角标与可访问名，点成员钮开成员面板；本人头像开个人中心', async ({ page }) => {
   test.setTimeout(90_000);
   const phone = await registerAndLogin(page);
-  await page.locator('.file-list li', { hasText: '本周计划' }).click();
+  await page.getByTestId('file-card').filter({ hasText: '本周计划' }).first().click();
   await expect(page).toHaveURL(/\/edit\//);
   await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '本周计划' })).toBeVisible();
   // 成员钮（顶栏最右，成员面板唯一入口）：在线数角标=1 + 可访问名
@@ -109,7 +109,7 @@ test('个人中心：返回工作台跳转 /workspace；退出登录清 token �
   await menu.getByTestId('personal-workspace').click();
   await expect(page).toHaveURL(/\/workspace/);
   // 回编辑器再退出登录（会话作废 + token 清除 + 回登录页）
-  await page.locator('.file-list li', { hasText: '本周计划' }).click();
+  await page.getByTestId('file-card').filter({ hasText: '本周计划' }).first().click();
   await expect(page).toHaveURL(/\/edit\//);
   await page.getByTestId('avatar-me').click();
   await page.getByTestId('personal-logout').click();

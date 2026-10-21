@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
 import { api, apiPatch, apiPost, ApiError } from '../api/client';
 import { Avatar, PRESET_AVATAR_COUNT } from '../editor/TaskFields';
+import { WorkspaceShell } from './WorkspaceShell';
 
 /**
  * 账号设置页（M5 Task 1，FR-ACC-002 收口 + FR-CMT-006 通知偏好收口）：三区卡片。
+ * 2026-10-21 收进 WorkspaceShell 外壳（用户菜单页，侧栏无高亮项），样式对齐工作台重设计。
  *
  * - 登录密码：按身份形态渲染（FR-ACC-002）——有密码（邮箱注册设置过）= 旧密码验证；
  *   无密码（手机号注册）= 验证码核身（开发环境固定 123456，与登录通道同语义）；
@@ -163,14 +164,12 @@ export function SettingsPage() {
     : '加载中…';
 
   return (
-    <div className="settings-page" data-testid="settings-page">
-      <header className="workspace-header">
-        <h2>账号设置</h2>
-        <div className="header-actions">
-          <Link to="/workspace">返回工作台</Link>
+    <WorkspaceShell activeNav={null}>
+      <main className="ws-content settings-page" data-testid="settings-page">
+        <div className="ws-section-head">
+          <h2>账号设置</h2>
         </div>
-      </header>
-      {error && <p className="error">{error}</p>}
+        {error && <p className="error">{error}</p>}
 
       {/* 头像（2026-10-11 需求方裁定）：当前头像展示 + 5 预置 SVG 选择 + 本地上传。
           未自定义（avatarUrl null）时 Avatar 组件按 userId 稳定分配预置。 */}
@@ -324,6 +323,7 @@ export function SettingsPage() {
           {toast}
         </div>
       )}
-    </div>
+      </main>
+    </WorkspaceShell>
   );
 }
