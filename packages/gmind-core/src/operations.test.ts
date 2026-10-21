@@ -3,7 +3,8 @@ import * as Y from 'yjs';
 import type { Transaction } from 'yjs';
 import { ROOT_NODE_ID, createTemplateDoc, docToState } from './doc';
 import { GmindCoreError } from './errors';
-import { childrenIds, countAlive, getMeta, getNode } from './read';
+import { canvasNodesMap, canvasOrderArr, canvasesMap, rootIdOf } from './canvas';
+import { childrenIds, countAlive, getMeta, getNode, subtreeIds } from './read';
 import {
   addChild,
   applyStyle,
@@ -49,7 +50,7 @@ import {
 
 /** 按文本查节点 id（测试辅助；模板生成的 ULID 不可预知）。 */
 function findIdByText(doc: Y.Doc, text: string): string {
-  for (const [id, node] of doc.getMap('nodes').entries()) {
+  for (const [id, node] of canvasNodesMap(doc).entries()) {
     if ((node as Y.Map<unknown>).get('text') === text) return id;
   }
   throw new Error(`test helper: node with text "${text}" not found`);
@@ -69,7 +70,7 @@ function buildTestTree(): Y.Doc {
 /** 全文档节点快照（用于断言「树无变化」）。 */
 function fullSnapshot(doc: Y.Doc): string {
   const out: Record<string, unknown> = {};
-  for (const id of doc.getMap('nodes').keys()) out[id] = getNode(doc, id);
+  for (const id of canvasNodesMap(doc).keys()) out[id] = getNode(doc, id);
   return JSON.stringify(out);
 }
 
@@ -121,7 +122,7 @@ describe('addChild', () => {
       expect((e as GmindCoreError).message).toBe('节点文本长度已达上限');
     }
     expect(childrenIds(doc, ROOT_NODE_ID)).toEqual([]);
-    expect(doc.getMap('nodes').size).toBe(1);
+    expect(canvasNodesMap(doc).size).toBe(1);
   });
 
   it('对 root addChild 合法；对不存在 parent 抛 NODE_NOT_FOUND；对墓碑 parent 抛 NODE_DELETED', () => {
@@ -137,7 +138,7 @@ describe('addChild', () => {
     }
 
     const aId = childrenIds(doc, ROOT_NODE_ID)[0]!;
-    const aNode = doc.getMap('nodes').get(aId) as { set: (k: string, v: unknown) => void };
+    const aNode = canvasNodesMap(doc).get(aId) as { set: (k: string, v: unknown) => void };
     doc.transact(() => aNode.set('deleted', true));
     try {
       addChild(doc, aId);
@@ -219,7 +220,7 @@ describe('withTransaction 嵌套：normalize 由最外层统一执行（内层�
     const um = createUndoManager(doc);
     // 裸写预置违例（ghost 条目；origin null 不进撤销栈）
     doc.transact(() => {
-      const rootChildren = (doc.getMap('nodes').get(ROOT_NODE_ID) as Y.Map<unknown>).get(
+      const rootChildren = (canvasNodesMap(doc).get(ROOT_NODE_ID) as Y.Map<unknown>).get(
         'children',
       ) as Y.Array<string>;
       rootChildren.push(['ghost-id']);
@@ -243,7 +244,7 @@ describe('withTransaction 嵌套：normalize 由最外层统一执行（内层�
     const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
     const aId = findIdByText(doc, 'A');
     doc.transact(() => {
-      const rootChildren = (doc.getMap('nodes').get(ROOT_NODE_ID) as Y.Map<unknown>).get(
+      const rootChildren = (canvasNodesMap(doc).get(ROOT_NODE_ID) as Y.Map<unknown>).get(
         'children',
       ) as Y.Array<string>;
       rootChildren.push(['ghost-id']);
@@ -304,11 +305,11 @@ describe('deleteNodes', () => {
       expect(getNode(doc, id)!.deleted).toBe(true);
     }
     // 后代节点的 children 数组保留不动（快照可还原）
-    const a1Raw = doc.getMap('nodes').get(a1Id) as Y.Map<unknown>;
+    const a1Raw = canvasNodesMap(doc).get(a1Id) as Y.Map<unknown>;
     const a1Children = a1Raw.get('children') as Y.Array<string>;
     expect(a1Children).toBeInstanceOf(Y.Array);
     expect(a1Children.toArray()).toEqual([a1aId]);
-    const aRaw = doc.getMap('nodes').get(aId) as Y.Map<unknown>;
+    const aRaw = canvasNodesMap(doc).get(aId) as Y.Map<unknown>;
     expect((aRaw.get('children') as Y.Array<string>).toArray()).toEqual([a1Id, a2Id]);
     // 从父 children 移除，其余树不动
     expect(childrenIds(doc, ROOT_NODE_ID)).toEqual([bId]);
@@ -317,7 +318,7 @@ describe('deleteNodes', () => {
 
   it("deleteNodes(['root'])：root 存活，原全部子孙墓碑（FR-EDT-002 降级）", () => {
     const doc = buildTestTree();
-    const allNonRoot = [...doc.getMap('nodes').keys()].filter((id) => id !== ROOT_NODE_ID);
+    const allNonRoot = [...canvasNodesMap(doc).keys()].filter((id) => id !== ROOT_NODE_ID);
 
     deleteNodes(doc, ['root']);
 
@@ -353,7 +354,7 @@ describe('deleteNodes', () => {
     deleteNodes(doc, [aId, a1Id]);
 
     // 后代处理不得改动祖先保留的 children 数组（快照还原约束）
-    const aRaw = doc.getMap('nodes').get(aId) as Y.Map<unknown>;
+    const aRaw = canvasNodesMap(doc).get(aId) as Y.Map<unknown>;
     expect((aRaw.get('children') as Y.Array<string>).toArray()).toEqual(childIdsBefore);
     expect((aRaw.get('children') as Y.Array<string>).toArray()).toEqual([a1Id, a2Id]);
     expect(getNode(doc, aId)!.childIds).toEqual(childIdsBefore);
@@ -430,7 +431,7 @@ describe('moveNode', () => {
     const a2Id = findIdByText(doc, 'A2');
     const bId = findIdByText(doc, 'B');
 
-    const bRaw = doc.getMap('nodes').get(bId) as { set: (k: string, v: unknown) => void };
+    const bRaw = canvasNodesMap(doc).get(bId) as { set: (k: string, v: unknown) => void };
     doc.transact(() => bRaw.set('deleted', true));
     try {
       moveNode(doc, a2Id, bId);
@@ -725,7 +726,7 @@ describe('setIcon（M7b-W1 八组制多值）', () => {
     const id = childrenIds(doc, ROOT_NODE_ID)[0]!;
     // 造目录外旧值（裸写 icons Y.Map，模拟 repair 未收敛窗口）
     withTransaction(doc, ORIGIN_USER, () => {
-      const node = doc.getMap('nodes').get(id) as Y.Map<unknown>;
+      const node = canvasNodesMap(doc).get(id) as Y.Map<unknown>;
       const icons = new Y.Map<unknown>();
       node.set('icons', icons);
       icons.set('other', Y.Array.from(['junk']));
@@ -1784,6 +1785,114 @@ describe('setNodeTask done 门禁（人员进度列，需求方 2026-10-11 裁�
     setCustomField(doc, nodeId, 'w1', { uB: 30 });
     setNodeTask(doc, nodeId, { status: 'doing' }, ORIGIN_USER);
     expect(getNode(doc, nodeId)!.task.status).toBe('doing');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 多画布写路径（多画布 Task 4）：全部写 op 末位可选 canvasId；ROOT 特判按各画布
+// rootIdOf(doc, canvasId) 推广（任一画布根都不可移/不可删身/不可换父）。
+// ---------------------------------------------------------------------------
+describe('多画布写路径（Task 4：写层画布化）', () => {
+  /** 手工双画布文档：c1 根 'root'（子级 a）、c2 根 'root2'（子级 b）——c2 用异质根 id
+   *  钉死「ROOT 特判按 rootIdOf 推广」而非写死 'root' 常量。 */
+  const multiCanvasDoc = (): { doc: Y.Doc; c1: string; c2: string } => {
+    const doc = new Y.Doc();
+    const mk = (canvasId: string, rootId: string, rootText: string, childText: string): void => {
+      const canvas = new Y.Map<unknown>();
+      canvas.set('name', `画布-${canvasId}`);
+      canvas.set('rootId', rootId);
+      canvas.set('structureType', 'mindmap');
+      canvas.set('themeId', 'gmind-light');
+      const nodes = new Y.Map<Y.Map<unknown>>();
+      const root = new Y.Map<unknown>();
+      root.set('text', rootText);
+      root.set('parentId', '');
+      const rootChildren = new Y.Array<string>();
+      root.set('children', rootChildren);
+      nodes.set(rootId, root);
+      const child = new Y.Map<unknown>();
+      child.set('text', childText);
+      child.set('parentId', rootId);
+      child.set('children', new Y.Array<string>());
+      nodes.set(`${canvasId}-${childText}`, child);
+      rootChildren.push([`${canvasId}-${childText}`]);
+      canvas.set('nodes', nodes);
+      canvas.set('summaries', new Y.Map<unknown>());
+      canvasesMap(doc).set(canvasId, canvas);
+      canvasOrderArr(doc).push([canvasId]);
+    };
+    doc.transact(() => {
+      mk('c1', ROOT_NODE_ID, 'R1', 'a');
+      mk('c2', 'root2', 'R2', 'b');
+    });
+    return { doc, c1: 'c1', c2: 'c2' };
+  };
+
+  it('addChild 带 canvasId 写入对应画布子图：c1 新增不出现在 c2 的 subtreeIds', () => {
+    const { doc, c1, c2 } = multiCanvasDoc();
+    const id = addChild(doc, ROOT_NODE_ID, { text: 'x' }, ORIGIN_USER, c1);
+    expect(getNode(doc, id, c1)!.text).toBe('x');
+    expect(getNode(doc, id, c2)).toBeNull(); // 跨画布不可见
+    expect(subtreeIds(doc, undefined, c2)).not.toContain(id);
+    expect(childrenIds(doc, ROOT_NODE_ID, c1)).toEqual(['c1-a', id]);
+    expect(childrenIds(doc, 'root2', c2)).toEqual(['c2-b']); // c2 原样
+    // rootIdOf 按画布解析（写测试钉死异质根 id 口径）
+    expect(rootIdOf(doc, c2)).toBe('root2');
+  });
+
+  it('moveNode 移任一画布根都抛 ROOT_FORBIDDEN（c2 异质根 id 同样拦截）', () => {
+    const { doc, c1, c2 } = multiCanvasDoc();
+    try {
+      moveNode(doc, 'root2', ROOT_NODE_ID, undefined, ORIGIN_USER, c2);
+      expect.unreachable();
+    } catch (e) {
+      expect((e as GmindCoreError).code).toBe('ROOT_FORBIDDEN');
+    }
+    // 'root' 在 c2 上下文不是根（节点也不存在）：NODE_NOT_FOUND，而非 ROOT_FORBIDDEN
+    try {
+      moveNode(doc, ROOT_NODE_ID, 'root2', undefined, ORIGIN_USER, c2);
+      expect.unreachable();
+    } catch (e) {
+      expect((e as GmindCoreError).code).toBe('NODE_NOT_FOUND');
+    }
+    // c2 内部正常移动不受影响；c1 不动
+    moveNode(doc, 'c2-b', 'root2', 0, ORIGIN_USER, c2);
+    expect(childrenIds(doc, 'root2', c2)).toEqual(['c2-b']);
+    expect(getNode(doc, 'c1-a', c1)!.parentId).toBe(ROOT_NODE_ID);
+  });
+
+  it("deleteNodes 降级语义按画布 rootId：删 c2 根=清空 c2 子级，c1 不动", () => {
+    const { doc, c1, c2 } = multiCanvasDoc();
+    deleteNodes(doc, ['root2'], ORIGIN_USER, c2);
+    expect(getNode(doc, 'root2', c2)!.deleted).toBe(false); // c2 根存活
+    expect(childrenIds(doc, 'root2', c2)).toEqual([]);
+    expect(getNode(doc, 'c2-b', c2)!.deleted).toBe(true); // 级联墓碑
+    expect(getNode(doc, 'c1-a', c1)!.deleted).toBe(false); // c1 不动
+  });
+
+  it('字段 op 带 canvasId 只写对应画布（setText/setNote/setCollapsed 代表面）', () => {
+    const { doc, c1, c2 } = multiCanvasDoc();
+    setText(doc, 'c2-b', 'b2', ORIGIN_USER, c2);
+    setNote(doc, 'c2-b', 'n', ORIGIN_USER, c2);
+    setCollapsed(doc, 'c2-b', true, ORIGIN_SYSTEM, c2);
+    expect(getNode(doc, 'c2-b', c2)).toMatchObject({ text: 'b2', note: 'n', collapsed: true });
+    expect(getNode(doc, 'c1-a', c1)).toMatchObject({ text: 'a', note: '', collapsed: false });
+  });
+
+  it('显式 canvasId 不存在即抛 CANVAS_NOT_FOUND（写层同 Task 1 裁定，不回退）', () => {
+    const { doc } = multiCanvasDoc();
+    try {
+      addChild(doc, ROOT_NODE_ID, { text: 'x' }, ORIGIN_USER, 'nope');
+      expect.unreachable();
+    } catch (e) {
+      expect((e as GmindCoreError).code).toBe('CANVAS_NOT_FOUND');
+    }
+    try {
+      setText(doc, 'c1-a', 'x', ORIGIN_USER, 'nope');
+      expect.unreachable();
+    } catch (e) {
+      expect((e as GmindCoreError).code).toBe('CANVAS_NOT_FOUND');
+    }
   });
 });
 

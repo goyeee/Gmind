@@ -1,4 +1,5 @@
 import * as Y from 'yjs';
+import { canvasMapOf } from './canvas';
 
 /** 写操作来源：'user'（可撤销）/ 'system'（内部/修复，不进撤销栈）。 */
 export type WriteOrigin = string;
@@ -12,9 +13,15 @@ export const UNDO_STACK_MAX = 100;
  * 撤销栈（FR-EDT-004）：仅跟踪 ORIGIN_USER 的事务——本人编辑可撤销；
  * system origin（折叠、normalize 修复等内部写）与无 origin 的裸事务（origin null）
  * 一律不进栈。captureTimeout 500ms 内的连续编辑合并为一条撤销单元（Yjs 默认语义）。
+ *
+ * 多画布（需求方 2026-10-21 裁定 2）：canvasId 给定时 scope=该画布子图（Y.Map）——
+ * 撤销不跨画布（其他画布的编辑不进本栈、本栈 undo 也不触碰其他画布）；缺省保持
+ * 整文档 scope（旧调用方兼容）。单 origin/合并语义不变。
  */
-export function createUndoManager(doc: Y.Doc): Y.UndoManager {
-  return new Y.UndoManager(doc, {
+export function createUndoManager(doc: Y.Doc, canvasId?: string): Y.UndoManager {
+  const scope: Y.Doc | Y.Map<unknown> =
+    canvasId === undefined ? doc : canvasMapOf(doc, canvasId);
+  return new Y.UndoManager(scope as never, {
     trackedOrigins: new Set([ORIGIN_USER]),
     captureTimeout: 500,
   });
