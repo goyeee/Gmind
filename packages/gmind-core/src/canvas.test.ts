@@ -152,6 +152,33 @@ describe('canvas 结构访问器（双画布文档）', () => {
   });
 });
 
+describe('canvas 结构访问器（crafted 值防御）', () => {
+  it('canvases 塞非 Y.Map 值（字符串等）：listCanvases/resolveCanvasId 不抛错，按不存在跳过', () => {
+    const doc = new Y.Doc();
+    doc.transact(() => {
+      const c1 = new Y.Map<unknown>();
+      c1.set('name', '画布一');
+      c1.set('rootId', 'root');
+      canvasesMap(doc).set('c1', c1);
+      // crafted 值：字符串 / 数字 / 普通对象（绕过操作 API 直写）
+      canvasesMap(doc).set('evil-str', 'not-a-map' as unknown as Y.Map<unknown>);
+      canvasesMap(doc).set('evil-num', 42 as unknown as Y.Map<unknown>);
+      canvasesMap(doc).set('evil-obj', { deleted: false } as unknown as Y.Map<unknown>);
+      canvasOrderArr(doc).push(['evil-str', 'c1', 'evil-num', 'evil-obj']);
+      doc.getMap('meta').set('activeCanvasId', 'evil-str'); // meta 指向 crafted 值
+    });
+    // 读侧全部不抛错，crafted 值按墓碑语义确定性跳过
+    expect(listCanvases(doc).map((c) => c.id)).toEqual(['c1']);
+    // meta.activeCanvasId 指向 crafted 值 → 回退到首个存活 c1
+    expect(resolveCanvasId(doc)).toBe('c1');
+    // 显式指向 crafted 值 → CANVAS_NOT_FOUND（视为不存在），且不回退
+    expect(() => canvasMapOf(doc, 'evil-str')).toThrowError(
+      expect.objectContaining({ code: 'CANVAS_NOT_FOUND' }),
+    );
+    expect(canvasMapOf(doc).get('name')).toBe('画布一');
+  });
+});
+
 describe('ensureCanvasShape（防尽补建）', () => {
   it('对缺 nodes/summaries 键的 CanvasMap 补建并写回', () => {
     // 注意：独立 Y.Map 未挂 doc 时读会抛「Add Yjs type to a document」，必须挂文档。

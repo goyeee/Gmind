@@ -28,7 +28,8 @@ function aliveOrder(doc: Y.Doc): string[] {
   const canvases = canvasesMap(doc);
   return canvasOrderArr(doc).toArray().filter((id) => {
     const c = canvases.get(id);
-    return c !== undefined && c.get('deleted') !== true;
+    // crafted 值防御：非 Y.Map 视为不存在（墓碑语义，确定性跳过，对齐 repair 层裁定）
+    return c instanceof Y.Map && c.get('deleted') !== true;
   });
 }
 
@@ -44,7 +45,7 @@ export function resolveCanvasId(doc: Y.Doc, canvasId?: string): string {
   for (const c of candidates) {
     if (c === undefined) continue;
     const m = canvasesMap(doc).get(c);
-    if (m !== undefined && m.get('deleted') !== true) return c;
+    if (m instanceof Y.Map && m.get('deleted') !== true) return c;
   }
   return LEGACY_CANVAS_ID; // 空文档/迁移前：由调用方决定是否需要真实存在
 }
@@ -56,14 +57,14 @@ export function resolveCanvasId(doc: Y.Doc, canvasId?: string): string {
 export function canvasMapOf(doc: Y.Doc, canvasId?: string): Y.Map<unknown> {
   if (canvasId !== undefined) {
     const m = canvasesMap(doc).get(canvasId);
-    if (m === undefined || m.get('deleted') === true) {
+    if (!(m instanceof Y.Map) || m.get('deleted') === true) {
       throw new GmindCoreError('CANVAS_NOT_FOUND', '画布不存在');
     }
     return m;
   }
   const id = resolveCanvasId(doc);
   const m = canvasesMap(doc).get(id);
-  if (m === undefined || m.get('deleted') === true) {
+  if (!(m instanceof Y.Map) || m.get('deleted') === true) {
     throw new GmindCoreError('CANVAS_NOT_FOUND', '画布不存在');
   }
   return m;
