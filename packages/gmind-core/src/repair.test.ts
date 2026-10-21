@@ -6,7 +6,7 @@ import { LEGACY_CANVAS_ID, canvasNodesMap, canvasOrderArr, canvasesMap } from '.
 import { ORIGIN_SYSTEM, ORIGIN_USER, addChild, deleteNodes, moveNode, setCustomColumns, setDescription, setText, withTransaction } from './operations';
 import { childrenIds, getMeta, getNode, subtreeIds } from './read';
 import type { NodeSnapshot } from './read';
-import { normalizeTree } from './repair';
+import { normalizeTree, normalizeTreeFor } from './repair';
 
 /** 按文本查节点 id（测试辅助；模板生成的 ULID 不可预知，同源克隆的 id 一致）。
  *  多画布 Task 5：缺省读第一画布（既有单画布用例零感知）。 */
@@ -1179,6 +1179,46 @@ describe('多画布作用域收敛（规则⑨⑩，Task 5）', () => {
     expect(s.get('label')).toBe('S'); // label 不动
     expect(childrenIds(doc, ROOT_NODE_ID, 'c1')).toEqual(['c1-a']); // c1 不动
     expect(normalizeTree(doc)).toBe(0); // 幂等
+  });
+
+  it('crafted：canvases 塞非 Y.Map 值（字符串 garbage）→ normalizeTree 不抛错，确定性按墓碑收敛', () => {
+    const doc = twoCanvasDoc();
+    doc.transact(() => {
+      // crafted doc_state 注入：非 Y.Map 画布值（类型断言模拟外部状态直入）
+      canvasesMap(doc).set('bad', 'garbage' as unknown as Y.Map<unknown>);
+      canvasOrderArr(doc).push(['bad']);
+    });
+
+    // 畸形画布确定性按墓碑：order 里的 'bad' 项移除（1 处修复）；不进作用域、
+    // 不补键、畸形值本体不动
+    expect(normalizeTree(doc)).toBe(1);
+    expect(canvasOrderArr(doc).toArray()).toEqual(['c1', 'c2']);
+    expect(canvasesMap(doc).get('bad')).toBe('garbage');
+    expect(childrenIds(doc, ROOT_NODE_ID, 'c1')).toEqual(['c1-a']);
+    expect(childrenIds(doc, 'root2', 'c2')).toEqual(['c2-b']);
+    expect(normalizeTree(doc)).toBe(0); // 幂等
+  });
+
+  it('增量定向：脏区 Map 只含 c2 → 直调 normalizeTreeFor 修复 c2、c1 零触碰，结果与全量一致', () => {
+    const doc = twoCanvasDoc();
+    doc.transact(() => {
+      rawChildren(doc, 'root2', 'c2').delete(0, 1); // 只孤儿化 c2（c1 完好）
+    });
+    const c1Snap = fullSnapshot(doc, 'c1');
+    // 全量对照：Yjs 原生克隆（不经 docFromState 的装载收敛/side 回填，纯 CRDT 状态拷贝），
+    // 其上跑 normalizeTree = 全量路径
+    const viaFull = new Y.Doc();
+    Y.applyUpdate(viaFull, Y.encodeStateAsUpdate(doc));
+
+    const dirty = new Map([['c2', new Set(['root2', 'c2-b'])]]);
+    expect(normalizeTreeFor(doc, ORIGIN_SYSTEM, dirty)).toBe(1); // ⑤ 挂回 1 处
+    expect(childrenIds(doc, 'root2', 'c2')).toEqual(['c2-b']);
+    expect(fullSnapshot(doc, 'c1')).toEqual(c1Snap); // c1 零触碰
+    expect(normalizeTree(doc)).toBe(0); // 增量无残留
+
+    expect(normalizeTree(viaFull)).toBe(1); // 全量路径修复数与增量一致（⑤ 挂回 1 处）
+    expect(fullSnapshot(viaFull, 'c1')).toEqual(fullSnapshot(doc, 'c1'));
+    expect(fullSnapshot(viaFull, 'c2')).toEqual(fullSnapshot(doc, 'c2'));
   });
 
   it('R1 守卫语义恢复：side 回填按画布作用域逐存活画布执行（各画布 root 子级按各自索引兜底）', () => {

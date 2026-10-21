@@ -43,7 +43,8 @@ import { applySummaryRepair, planSummaryRepair, type SummaryRepairPlan } from '.
  *  ⑤ 存活非 root 节点若不在其 parentId 的 children 中 → 追加到末尾；
  *  ⑨ 画布根防御（原规则⑥的推广）：canvas.rootId 指向缺失/墓碑节点 → 重建该 root
  *    （text ''、parentId ''、空 children；墓碑 root 整键替换——不逐条改写其 children，
- *    冻结不变量不破），存活孤儿随后按 ⑤ 挂回；
+ *    冻结不变量不破；⑨ 整键替换是冻结不变量的显式例外，spec 裁定），存活孤儿随后
+ *    按 ⑤ 挂回；
  *  ⑦ 概要收敛（M6 Task 6）：该画布 `summaries` Y.Map 各条目的 nodeIds 片段断裂（成员
  *    删除/换父/移出父序）→ 全部消失删条目、部分收敛存活子段（最长连续段，label 不动）；
  *    由 summary.ts 的 planSummaryRepair/applySummaryRepair（canvasId 作用域）提供，
@@ -67,6 +68,9 @@ import { applySummaryRepair, planSummaryRepair, type SummaryRepairPlan } from '.
  *
  * 所有读取容错部分数据（镜像 read.ts 防御风格）：children 缺失/类型不符、parentId 缺失
  * 等一律按默认值处理，绝不抛错；无法归属的畸形节点确定性跳过（同状态 ⇒ 同行为）。
+ * canvases 的值非 Y.Map（crafted doc_state 可注入任意键值）→ 确定性按墓碑处理：不进
+ * 修复作用域（repairScopes）、scopedNodesMap 返回 undefined、canvasOrder 中指向它的
+ * 项按墓碑项移除且不补建任何键——畸形值本体不动（同状态 ⇒ 同行为）。
  *
  * ── 增量路径（多画布口径）──────────────────────────────────────────────
  * 写操作经 withTransaction 提交后，normalize 由全量扫描改为**按事务脏区**的
@@ -144,7 +148,9 @@ function repairScopes(doc: Y.Doc): RepairScope[] {
   const ids = [...canvases.keys()].sort();
   for (const canvasId of ids) {
     const canvas = canvases.get(canvasId);
-    if (canvas === undefined || canvas.get('deleted') === true) continue; // 墓碑画布冻结
+    // 畸形值（非 Y.Map，crafted doc_state 可注入）按墓碑确定性跳过（头注口径）；
+    // undefined 同属此分支（undefined instanceof Y.Map === false）。
+    if (!(canvas instanceof Y.Map) || canvas.get('deleted') === true) continue; // 墓碑画布冻结
     const rawNodes = canvas.get('nodes');
     const rawRoot = canvas.get('rootId');
     out.push({
@@ -168,7 +174,7 @@ function scopeNodesForApply(scope: RepairScope): Y.Map<Y.Map<unknown>> {
 function scopedNodesMap(doc: Y.Doc, canvasId: string): Y.Map<Y.Map<unknown>> | undefined {
   if (canvasId === '') return nodesMap(doc);
   const canvas = canvasesMap(doc).get(canvasId);
-  if (canvas === undefined || canvas.get('deleted') === true) return undefined;
+  if (!(canvas instanceof Y.Map) || canvas.get('deleted') === true) return undefined; // 畸形值按墓碑（头注口径）
   const raw = canvas.get('nodes');
   return raw instanceof Y.Map ? (raw as Y.Map<Y.Map<unknown>>) : undefined;
 }
@@ -420,8 +426,13 @@ function planCanvasOrderRepair(doc: Y.Doc): CanvasOrderRepairPlan | null {
   for (let i = 0; i < entries.length; i += 1) {
     const id = entries[i];
     const canvas = typeof id === 'string' ? canvases.get(id) : undefined;
-    if (typeof id !== 'string' || canvas === undefined || canvas.get('deleted') === true || seen.has(id as string)) {
-      removeIndexes.push(i); // 非字符串 / 不存在 / 墓碑 / 重复（保首个）
+    if (
+      typeof id !== 'string' ||
+      !(canvas instanceof Y.Map) || // 不存在 / 畸形值按墓碑（crafted doc_state 防御）
+      canvas.get('deleted') === true ||
+      seen.has(id as string)
+    ) {
+      removeIndexes.push(i); // 非字符串 / 不存在 / 墓碑（含畸形值）/ 重复（保首个）
       continue;
     }
     seen.add(id as string);
@@ -429,7 +440,7 @@ function planCanvasOrderRepair(doc: Y.Doc): CanvasOrderRepairPlan | null {
   }
   const appends: string[] = [];
   for (const [canvasId, canvas] of canvases.entries()) {
-    if (canvas.get('deleted') === true) continue;
+    if (!(canvas instanceof Y.Map) || canvas.get('deleted') === true) continue; // 畸形值按墓碑（头注口径）
     if (!keep.has(canvasId)) appends.push(canvasId);
   }
   appends.sort(); // canvasId 升序：可观测状态定序，跨副本一致
