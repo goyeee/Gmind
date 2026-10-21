@@ -81,6 +81,27 @@ function createLegacyDoc(): Y.Doc {
       child.set('text', text);
       child.set('parentId', ROOT_NODE_ID);
       child.set('children', new Y.Array<string>());
+      if (id === 'child-1') {
+        // 嵌套 Y 类型字段（icons: Map<组, Array<string>>；task/custom: Map；数组内嵌 Y.Map）
+        const icons = new Y.Map<unknown>();
+        const groupIcons = new Y.Array<string>();
+        groupIcons.push(['⭐', '🔥']);
+        icons.set('组一', groupIcons);
+        child.set('icons', icons);
+        const task = new Y.Map<unknown>();
+        task.set('status', 'done');
+        task.set('assignee', '张三');
+        child.set('task', task);
+        const custom = new Y.Map<unknown>();
+        custom.set('flag', 'red');
+        child.set('custom', custom);
+        const attachments = new Y.Array<unknown>();
+        const link = new Y.Map<unknown>();
+        link.set('type', 'link');
+        link.set('url', 'https://example.com');
+        attachments.push([link]);
+        child.set('attachments', attachments);
+      }
       nodes.set(id, child);
     }
     rootChildren.push(['child-1', 'child-2']);
@@ -121,6 +142,25 @@ describe('docFromState 装载迁移（旧形状 → 多画布）', () => {
     expect(a.getMap('meta').get('activeCanvasId')).toBe(LEGACY_CANVAS_ID);
   });
 
+  it('迁移深拷贝嵌套 Y 类型：icons/task/custom/数组内 Y.Map 内容完整可读，且旧文档不被掏空', () => {
+    const legacy = createLegacyDoc();
+    const a = docFromState(docToState(legacy));
+    const child = canvasNodesMap(a).get('child-1') as Y.Map<unknown>;
+    const icons = child.get('icons') as Y.Map<unknown>;
+    expect((icons.get('组一') as Y.Array<string>).toArray()).toEqual(['⭐', '🔥']);
+    const task = child.get('task') as Y.Map<unknown>;
+    expect(task.get('status')).toBe('done');
+    expect(task.get('assignee')).toBe('张三');
+    const custom = child.get('custom') as Y.Map<unknown>;
+    expect(custom.get('flag')).toBe('red');
+    const attachments = child.get('attachments') as Y.Array<unknown>;
+    expect((attachments.get(0) as Y.Map<unknown>).get('url')).toBe('https://example.com');
+    // 深拷贝而非引用搬运：源文档自身嵌套内容不被掏空（旧壳删键后 GC 会回收被透传的类型）
+    const legacyChild = legacy.getMap('nodes').get('child-1') as Y.Map<unknown>;
+    const legacyIcons = legacyChild.get('icons') as Y.Map<unknown>;
+    expect((legacyIcons.get('组一') as Y.Array<string>).toArray()).toEqual(['⭐', '🔥']);
+  });
+
   it('迁移确定性：两副本（同 clientID）装载同一旧文档产出字节级一致状态', () => {
     // docFromState 内部自建 Y.Doc（clientID 随机），字节级比较需固定 clientID 手工
     // 复刻装载步骤（docFromState 其余步骤对新形状均为零写入：normalize 守卫返回 0、
@@ -134,8 +174,10 @@ describe('docFromState 装载迁移（旧形状 → 多画布）', () => {
       migrateLegacyToCanvases(doc);
       return doc;
     };
-    const a = loadReplica(42);
-    const b = loadReplica(42);
+    // 用大固定值而非小整数（42）：随机 clientID 理论可撞上小整数，固定值远离常见
+    // 取值区间，避免与随机分配/其他夹具偶然同号导致字节级比较假阳性。
+    const a = loadReplica(4000000000);
+    const b = loadReplica(4000000000);
     expect(Y.encodeStateAsUpdate(a)).toEqual(Y.encodeStateAsUpdate(b));
     expect(listCanvases(a)).toHaveLength(1);
     expect(canvasNodesMap(a).size).toBe(3);

@@ -34,28 +34,31 @@ export function isLegacyDocShape(doc: Y.Doc): boolean {
   return canvasesMap(doc).size === 0 && doc.getMap('nodes').size > 0;
 }
 
-/** 深拷贝 Y.Map 子树（Yjs 共享类型不可换父，迁移只能逐键重建；保留全部节点 id 与字段）。
- *  注意：未接入文档的 Y.Map 读取恒返回 undefined（Yjs「Add Yjs type to a document
- *  before reading data」），数组占位必须用本地引用回填，不能 m.get 回读。 */
+/** 递归深拷贝一个已接入文档的 Y 值（Yjs 共享类型不可换父/不可多重引用——迁移必须
+ *  逐键逐元素重建，否则旧壳删键 GC 后新画布引用变空壳，远端副本解码发散）。
+ *  纪律：新 Y 类型未接入前只写不读，故一律自底向上构建（子值先拷好再 set/push 进
+ *  父级），最外层由调用方接入文档。 */
+function deepCopyValue(value: unknown): unknown {
+  if (value instanceof Y.Map) {
+    const m = new Y.Map<unknown>();
+    value.forEach((v, k) => {
+      m.set(k, deepCopyValue(v));
+    });
+    return m;
+  }
+  if (value instanceof Y.Array) {
+    const arr = new Y.Array<unknown>();
+    // value 是源文档已接入类型，读取合法；元素可能是标量或 Y.Map（嵌套 map 同理递归）
+    arr.push(value.toArray().map(deepCopyValue));
+    return arr;
+  }
+  return value; // 标量原样（text/parentId/side/task/icons/custom 的叶子字段…）
+}
+
+/** 深拷贝 nodes/summaries 根 Map（值为节点/概要 Map，逐节点 deepCopyValue 重建）。 */
 function copyNodesDeep(src: Y.Map<unknown>, dst: Y.Map<unknown>): void {
   src.forEach((value, key) => {
-    if (value instanceof Y.Map) {
-      const m = new Y.Map<unknown>();
-      const pendingArrays: Array<{ key: string; copy: Y.Array<unknown> }> = [];
-      value.forEach((v, k) => {
-        if (v instanceof Y.Array) {
-          const copy = new Y.Array<unknown>();
-          m.set(k, copy); // 先占位
-          pendingArrays.push({ key: k, copy });
-        } else {
-          m.set(k, v); // 标量原样（text/parentId/side/task/icons/custom…）
-        }
-      });
-      for (const { key: k, copy } of pendingArrays) {
-        copy.push((value.get(k) as Y.Array<unknown>).toArray());
-      }
-      dst.set(key, m);
-    }
+    if (value instanceof Y.Map) dst.set(key, deepCopyValue(value));
   });
 }
 
