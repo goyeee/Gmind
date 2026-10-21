@@ -838,7 +838,8 @@ function writeTaskPatch(node: Y.Map<unknown>, patch: TaskPatch): void {
 function allNodesMapsForCleanup(doc: Y.Doc): Y.Map<Y.Map<unknown>>[] {
   const maps: Y.Map<Y.Map<unknown>>[] = [];
   for (const canvas of canvasesMap(doc).values()) {
-    if (canvas.get('deleted') === true) continue; // 墓碑画布冻结：孤儿键随内容一并冻结
+    // crafted 值防御：非 Y.Map 确定性跳过（对齐 repair 层裁定，与全项目同类遍历同款）
+    if (!(canvas instanceof Y.Map) || canvas.get('deleted') === true) continue; // 墓碑画布冻结：孤儿键随内容一并冻结
     maps.push(ensureCanvasShape(canvas as Y.Map<unknown>).nodes);
   }
   if (maps.length === 0) maps.push(doc.getMap('nodes') as Y.Map<Y.Map<unknown>>);

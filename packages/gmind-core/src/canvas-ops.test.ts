@@ -1,4 +1,4 @@
-﻿import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import * as Y from 'yjs';
 import {
   MAX_CANVAS_NAME_LENGTH,

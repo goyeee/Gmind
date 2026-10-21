@@ -1443,6 +1443,20 @@ describe('setCustomColumns（自定义列 schema 整表替换）', () => {
     expect(getNode(doc, bId!)!.custom).toBeUndefined(); // 墓碑孤儿键同事务清理
   });
 
+  it('crafted 防御：canvases 值非 Y.Map 时删列清孤儿确定性跳过（不抛错、meta 正常写入、真画布照常清理）', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
+    setCustomColumns(doc, [{ id: 't1', name: '备注列', type: 'text' }]);
+    const aId = childrenIds(doc, ROOT_NODE_ID)[0]!;
+    setCustomField(doc, aId, 't1', '甲的文本');
+
+    // crafted 值：canvases 塞入非 Y.Map 值（repair 层裁定：确定性跳过）
+    canvasesMap(doc).set('crafted', 'not-a-map' as never);
+
+    expect(() => setCustomColumns(doc, [])).not.toThrow(); // 删列路径（removedIds 非空）
+    expect(getMeta(doc).customColumns).toEqual([]); // meta 正常写入
+    expect(getNode(doc, aId)!.custom).toBeUndefined(); // 真画布孤儿键照常清理
+  });
+
   it('可撤销：undo 整体回滚 schema 与被清的节点值（同一事务）；redo 复原', () => {
     const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
     const aId = childrenIds(doc, ROOT_NODE_ID)[0]!;
