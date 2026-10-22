@@ -416,6 +416,14 @@ test('裁定4 光标跨画布隐藏：B 在画布 2 选中，A 画布 1 不出�
     timeout: 10_000,
   });
 
+  // 加固闭环（T5 评审 minor）：awareness 到达已被正向对照证明——此时 A 切回画布 1，
+  // 同一份 awareness 下光标必须再次消失（排除「awareness 没到所以是零」的假绿窗口）。
+  await tabC1.click();
+  await expect(pageA.locator('.canvas-tab-active')).toHaveText(nameC1);
+  await expect(pageA.locator('.editor-canvas svg .gm-remote-cursor')).toHaveCount(0, {
+    timeout: 6_000,
+  });
+
   await ctxA.close();
   await ctxB.close();
 });

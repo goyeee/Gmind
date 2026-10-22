@@ -253,7 +253,8 @@ export function CanvasTabBar({
           ＋
         </button>
       )}
-      {menu && (
+      {/* 只读（移动端）不渲染菜单：桌面弹出菜单后收窄视口的降级瞬态，禁止残留可操作项（裁定 7） */}
+      {!readOnly && menu && (
         <div
           className="canvas-tab-menu"
           data-testid="canvas-tab-menu"
