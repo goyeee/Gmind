@@ -14,9 +14,10 @@ import { ORIGIN_SYSTEM, ORIGIN_USER, type WriteOrigin } from './undo';
  *
  * 撤销语义（默认假设 6，设计依据写明）：内容型操作（add/rename/delete/reorder）
  * 走 user origin 可撤销路径，但 UndoManager scope = 画布子图（Y.Map，需求方
- * 2026-10-21 裁定 2），而画布管理写的全部是 doc 级根类型（canvases / canvasOrder /
- * meta.activeCanvasId），天然不在任何画布撤销栈的 scope 内——故「画布管理不进撤销
- * 栈」无需任何特殊处理即成立，此处不加绕过逻辑。setActiveCanvas 是视图态，显式
+ * 2026-10-21 裁定 2）。画布增/删/排序/activeCanvasId 写的是 doc 级根类型
+ * （canvases / canvasOrder / meta.activeCanvasId），不进任何画布撤销栈；而
+ * renameCanvas 写画布子图的 name 键，进该画布撤销栈（可撤销）——需求方
+ * 2026-10-22 裁定（假设 6 修订）。setActiveCanvas 是视图态，显式
  * ORIGIN_SYSTEM（同折叠语义）。
  *
  * 校验先于事务：name 校验、index 钳制、默认名/存活数计算、active 回退目标计算

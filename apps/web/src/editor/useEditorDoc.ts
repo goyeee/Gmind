@@ -17,7 +17,10 @@ import { loadDocFromIndexedDB } from './collab';
  * GET 不可达（断网/后端失联）→ 从 IndexedDB 本地副本恢复（FR-EDT-035，collab.ts
  * 装配的本地副本在离线编辑期间持续可写）；副本为空才落入错误态——恢复路径拿不到
  * base，baseUpdatedAtRef 保持 null（PUT 不携带该字段 = 服务端兼容放行）。
- * 标题编辑 = setDocMeta({title}, ORIGIN_USER)（可撤销）+ 防抖 PATCH /:id。
+ * 标题编辑 = setDocMeta({title}, ORIGIN_USER)：多画布后 UndoManager 按画布
+ * 切分，meta.title 不在任何画布撤销作用域，标题改名不可撤销（不可 Ctrl+Z）
+ * ——需求方 2026-10-22 裁定接受：标题改名不可撤销（多画布按画布撤销的推论），
+ * 验收文档登记；标题变更仍走 ORIGIN_USER + 防抖 PATCH /:id。
  */
 
 export interface EditorDocState {
