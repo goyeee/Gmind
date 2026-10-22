@@ -255,6 +255,12 @@ export interface SceneRoot {
   readonly nodeEntries: Map<string, NodeEntry>;
   readonly edgeEntries: Map<string, EdgeEntry>;
   readonly summaryEntries: Map<string, SummaryEntry>;
+  /**
+   * defs clipPath 的场景 id 前缀（多画布并存，计划二 Task 2）：createScene 的
+   * opts.idPrefix 原样携带（缺省 '' = 无前缀，现状 id gm-avatar-clip 不动）；
+   * cursors 层从 scene 派生同一前缀，保证同场景引用/定义一致。
+   */
+  readonly idPrefix: string;
 }
 
 /** 节点视觉数据（布局盒子之外的渲染输入；collapsed 计数走 layout.collapsedCounts）。 */
@@ -304,13 +310,17 @@ export interface SceneInput {
  * 创建场景：清空 svg 既有内容，建立 <g class="gm-edges">（下）、
  * <g class="gm-summaries">（中，M6 Task 6）与 <g class="gm-nodes">（上）三层，
  * 返回带空注册表的场景根。
+ * opts.idPrefix：defs clipPath 的场景 id 前缀（多画布并存——同一 HTML 文档多个
+ * svg 场景共享 document 级 id 命名空间，url(#…) 取首个匹配需可区分）；缺省无前缀
+ * = 现状 id（gm-avatar-clip，既有断言/金样锁定不动）。
  */
-export function createScene(svg: SVGSVGElement): SceneRoot {
+export function createScene(svg: SVGSVGElement, opts?: { idPrefix?: string }): SceneRoot {
   while (svg.firstChild) svg.firstChild.remove();
+  const idPrefix = opts?.idPrefix ?? '';
   // 头像圆形裁剪（2026-10-11 头像图片）：共享 clipPath（userSpaceOnUse 圆心原点，
   // 使用者按 translate(cx,cy) 就位）——每场景一次注入，头像 image 统一引用。
   const defs = el('defs');
-  const clip = el('clipPath', { id: 'gm-avatar-clip', clipPathUnits: 'userSpaceOnUse' });
+  const clip = el('clipPath', { id: `${idPrefix}gm-avatar-clip`, clipPathUnits: 'userSpaceOnUse' });
   clip.appendChild(el('circle', { r: fmt(AVATAR_R) }));
   defs.appendChild(clip);
   svg.appendChild(defs);
@@ -328,6 +338,7 @@ export function createScene(svg: SVGSVGElement): SceneRoot {
     nodeEntries: new Map(),
     edgeEntries: new Map(),
     summaryEntries: new Map(),
+    idPrefix,
   };
 }
 
@@ -398,7 +409,8 @@ function avatarGroup(
   name: string,
   progress: number | null,
   data: Record<string, string> | null,
-  avatar?: string | null,
+  avatar: string | null | undefined,
+  idPrefix: string,
 ): SVGGElement {
   const g = el('g', {
     // 角色判定按 data-assignee-user 锚点：owner 头像也可能带 data（data-owner-user
@@ -463,7 +475,7 @@ function avatarGroup(
         width: fmt(AVATAR_R * 2),
         height: fmt(AVATAR_R * 2),
         href: avatar,
-        'clip-path': 'url(#gm-avatar-clip)',
+        'clip-path': `url(#${idPrefix}gm-avatar-clip)`,
         preserveAspectRatio: 'xMidYMid slice',
         transform: `translate(${fmt(cx)} ${fmt(cy)})`, // 圆心就位：clip 圆心(0,0)随 user space 平移
       }),
@@ -865,6 +877,7 @@ function applyNode(
             ownerRing ? (task?.progress ?? 0) : null,
             { 'data-owner-user': ownerIds[i] ?? '' },
             ownerUrls[i] ?? null,
+            scene.idPrefix,
           ),
         );
         cursorX += AVATAR_SLOT;
@@ -876,7 +889,7 @@ function applyNode(
         avatarGroup(cursorX + AVATAR_R, rowY, a.name, a.progress, {
           'data-assignee-user': a.user,
           'data-assignee-col': a.colId,
-        }, a.avatar ?? null),
+        }, a.avatar ?? null, scene.idPrefix),
       );
       cursorX += AVATAR_SLOT;
     }

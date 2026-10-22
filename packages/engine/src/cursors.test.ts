@@ -202,6 +202,20 @@ describe('setCursors：初次渲染', () => {
     expect(label?.querySelector<SVGCircleElement>('circle')?.style.display).toBe('none');
   });
 
+  it('idPrefix 场景前缀（多画布并存 Task 2）：createScene 带前缀时 gm-cursor-clip 与 image 引用同步前缀化', () => {
+    const prefixed = createScene(svg, { idPrefix: 'p2-' });
+    renderScene(prefixed, makeInput(baseLayout()));
+    const api = createCursorLayer(prefixed);
+    api.setCursors(
+      [{ userId: 'u1', name: '阿明', color: '#2563eb', avatar: '/avatars/preset-1.svg', nodeIds: ['b'] }],
+      baseLayout().nodes,
+    );
+    expect(svg.querySelector('#p2-gm-cursor-clip')).not.toBeNull();
+    expect(svg.querySelector('#gm-cursor-clip')).toBeNull();
+    const img = labelOf('u1')?.querySelector('image.gm-remote-cursor-avatar');
+    expect(img?.getAttribute('clip-path')).toBe('url(#p2-gm-cursor-clip)');
+  });
+
   it('单用户多节点选中：多框但单标签（锚定第一个存在节点）', () => {
     createCursorLayer(scene).setCursors(
       [cursor('u1', '阿明', '#2563eb', ['a', 'c'])],

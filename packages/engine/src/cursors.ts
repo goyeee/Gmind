@@ -129,14 +129,16 @@ export function createCursorLayer(scene: SceneRoot): CursorLayer {
   scene.nodesLayer.querySelector('g.gm-cursors')?.remove();
   // 光标头像圆形裁剪（2026-10-11）：共享 clipPath 注入 scene svg defs（与任务行
   // gm-avatar-clip 并存；userSpaceOnUse 圆心原点，image 按标签局部坐标给 x/y）。
+  // id 前缀与场景同源派生（scene.idPrefix，多画布并存 Task 2）：同场景定义/引用一致。
+  const idPrefix = scene.idPrefix;
   let defs = scene.svg.querySelector('defs');
   if (!defs) {
     defs = el('defs');
     scene.svg.prepend(defs);
   }
-  if (!defs.querySelector('#gm-cursor-clip')) {
+  if (!defs.querySelector(`#${idPrefix}gm-cursor-clip`)) {
     // 圆心 = 标签头像位中心（所有光标标签几何同位，共享单一 clip）。
-    const clip = el('clipPath', { id: 'gm-cursor-clip', clipPathUnits: 'userSpaceOnUse' });
+    const clip = el('clipPath', { id: `${idPrefix}gm-cursor-clip`, clipPathUnits: 'userSpaceOnUse' });
     clip.appendChild(
       el('circle', { cx: fmt(LABEL_CHIP_PAD_X + LABEL_DOT_R), cy: fmt(-LABEL_CHIP_H / 2), r: fmt(LABEL_DOT_R) }),
     );
@@ -209,7 +211,7 @@ export function createCursorLayer(scene: SceneRoot): CursorLayer {
             y: fmt(-LABEL_CHIP_H / 2 - LABEL_DOT_R),
             width: fmt(LABEL_DOT_R * 2),
             height: fmt(LABEL_DOT_R * 2),
-            'clip-path': 'url(#gm-cursor-clip)',
+            'clip-path': `url(#${idPrefix}gm-cursor-clip)`,
             preserveAspectRatio: 'xMidYMid slice',
           }),
         );

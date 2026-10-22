@@ -90,6 +90,25 @@ describe('createScene', () => {
     expect(scene.edgesLayer).toBe(layers[0]);
     expect(scene.summariesLayer).toBe(layers[1]);
   });
+
+  it('idPrefix 场景前缀（多画布并存）：defs clipPath 与头像 image 引用同步前缀化', () => {
+    const scene = createScene(svg, { idPrefix: 'p2-' });
+    expect(svg.querySelector('defs #p2-gm-avatar-clip')).not.toBeNull();
+    expect(svg.querySelector('defs #gm-avatar-clip')).toBeNull();
+    const data = baseData();
+    data.set('b', {
+      text: 'x',
+      task: { owners: ['u1'], ownerNames: ['张三'], ownerAvatarUrls: ['/avatars/preset-2.svg'] },
+    });
+    renderScene(scene, makeInput(baseLayout(), data));
+    const ownerImg = nodeG('b')?.querySelector('image.gm-task-avatar-img');
+    expect(ownerImg?.getAttribute('clip-path')).toBe('url(#p2-gm-avatar-clip)');
+  });
+
+  it('idPrefix 缺省无前缀：保持现状 id（既有断言 url(#gm-avatar-clip) 不动，金样锁定）', () => {
+    createScene(svg);
+    expect(svg.querySelector('defs #gm-avatar-clip')).not.toBeNull();
+  });
 });
 
 describe('renderScene：初次渲染', () => {
