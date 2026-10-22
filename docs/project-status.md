@@ -23,7 +23,7 @@
 | M3a/M3b | 文件管理/回收站/分享链接/邀请/评论/通知/摘要 | ✅ 完成（部分 FR 有登记缺口，见下） | docs/m3a/m3b-acceptance.md |
 | M4 | XMind 导入导出、PNG/JPG 导出、版本快照与恢复 | ✅ 完成 | docs/m4-acceptance.md |
 | M5 | 打磨验收（设置页/快捷键面板/引导/埋点/移动端只读/NFR-P0） | ✅ 完成（一期收官） | docs/m5-acceptance.md |
-| M6 | 企微对标包（工具栏图标化/格式联动/查找替换/12 主题/emoji/概要/格式刷/动态/头像栏） | ✅ 完成（3 项待需求方裁定） | docs/m6-acceptance.md |
+| M6 | 企微对标包（工具栏图标化/格式联动/查找替换/12 主题/emoji/概要/格式刷/动态/头像栏） | ✅ 完成（2 项待需求方裁定；概要×版本恢复口径已于 2026-10-21 裁定了结） | docs/m6-acceptance.md |
 | — | 连线两次修复（锚点偏移 c61df7e + 控制点恒 dx/2 a602824）+ 新建节点先落位 | ✅ 完成 | 金样/防回归断言在 packages/engine |
 | — | 节点标记面板企微化（6bc0d4b→2483652 二次改版为右侧抽屉+图标/表情页签）：标记体系迁出 RichPanel → 工具栏「插入」菜单；**形态待需求方确认后补测试**（内容将被 M7a 三组制切换重排） | ✅ 交付 / 测试挂账 | — |
 | M7a | mindgrid 合并轨第一弹（任务常驻/冲突以 mindgrid 为准）：任务字段、派生规则、标记三组制、表格视图（19fad2c）；kimi 流程验收+修复+回归闭环（eb19547/67c717b）。**表格形态需求方 2026-09-29 走查后提出 M7b 反馈包（11 条），面板/工具栏类项转入 M7b** | ✅ 交付（e2e 挂账随 M7b 收口） | docs/superpowers/specs/2026-09-28-mindgrid-merge-m7.md |
@@ -53,7 +53,7 @@
 
 | — | **折叠交互补全 + 父级进度手动/自动开关（需求方 2026-10-20 走查）**：① **折叠切换钮**（「展开后默认不显示折叠样式，鼠标放到连接处后再显示可折叠样式」）——engine render 对「有可见子节点」的展开节点产出 `g.gm-collapse-toggle[data-for-id]`（连接处透明命中圆 r=15 常驻捕获 hover + `.gm-collapse-toggle-fg`「–」圆钮；engine 无 CSS 纪律不变，显隐全由宿主 CSS：fg 默认 opacity 0、悬停显形 0.12s 过渡、只读画布 `display:none`），位置与折叠徽标同口径（right→盒右/left→盒左/down→盒下）；点击走页面既有 `[data-for-id]` 委托 → `toggleCollapse`，与折叠徽标 +N 同一交互通道；切换钮与徽标互斥（折叠 → 徽标 +N=被隐藏存活后代数，展开 → 切换钮），叶子两者皆无；配色每次渲染重设（主题切换场景级重渲染时同拍换色）。② **父级任务进度默认手动**（「父级任务的进度默认不自动计算，可以手动设置为自动计算」，按节点独立开关/放 TaskPanel/开自动覆盖当前值/关自动保留最后值）——task 增 `autoProgress?: boolean`（read 侧归一化、setNodeTask 写入+校验 TASK_INVALID_AUTO_PROGRESS），shared `effectiveProgress` 新口径：父级**缺省=手动**（直接取 task.progress，不汇总子级；**存量父节点会显示为手动**，需求方如需存量保持自动可后续补 docFromState 迁移——如实登记），显式 `autoProgress=true` 才按子级 Σ；engine `NodeTaskVisual` 透传；TaskPanel 进度行头部增「自动计算」checkbox（`task-panel-auto-progress-toggle`，仅父节点显示），开自动=写 `{autoProgress:true, progress:当前Σ}`、关=写 `{autoProgress:false}`（保留当前值）；自动态进度行 Σ 只读且档位禁用，手动态可编辑；isOverdue/表格/画布百分比全部经 effectiveProgress 单一实现同口径收敛。 | ✅ 完成 | engine render.test 3 新用例（钮仅父级渲染含结构/位置、与徽标互斥且引用稳定、失子移除+主题换色跟随）+ 2 用例按新口径更新（父级 Σ 需显式 autoProgress:true）；web e2e 新增 `node-collapse.e2e.spec.ts` 4 用例（默认隐形+叶子无钮 / 悬停显形→点击收起→徽标 +1 子树隐藏 / 徽标点击展开→钮回归 / root 收起 +6=3 子+3 孙）+ task-panel-markers 父级行用例改「默认手动→开自动禁用」；门禁：lint/typecheck 0、engine 420/420、shared 41/41、web 单测 107/107、server e2e 195/195、全量 web e2e 185 passed + 5 skipped（--workers=1 --retries=1，0 失败 0 flaky；admin-users 4 例/perf 1 例因新库未播种跳过） |
 
-| — | **多画布 core 层（计划一，2026-10-21 SDD，分支 multi-canvas）**：core 全面画布化（docFromState 迁移 + 操作/读侧/repair/概要/恢复/撤销全部按画布寻址 + 混沌新维度），engine/web 零行为差异；web/server 三处既有直读顶层 nodes 的点做最小读取路径修复（server comments `aliveNodeIds` 改经 core 新增 `allAliveNodeIds`、web collab.ts IDB 守卫改认 canvases 形状、web TaskTable「更新时间」observeDeep 改挂 canvases 根 map，均语义不变、每处注释登记） | ✅ 完成（计划一 core 层：Task1-8 全绿；三处读取路径最小修复已登记） | .superpowers/sdd/2026-10-21-multi-canvas-core/task-8-report.md |
+| — | **多画布 core 层（计划一，2026-10-21 SDD，分支 multi-canvas）**：core 全面画布化（docFromState 迁移 + 操作/读侧/repair/概要/恢复/撤销全部按画布寻址 + 混沌新维度），engine/web 零行为差异；web/server 三处既有直读顶层 nodes 的点做最小读取路径修复（server comments `aliveNodeIds` 改经 core 新增 `allAliveNodeIds`、web collab.ts IDB 守卫改认 canvases 形状、web TaskTable「更新时间」observeDeep 改挂 canvases 根 map，均语义不变、每处注释登记） | ✅ 完成（计划一 core 层：Task1-8 全绿；三处读取路径最小修复已登记；＋计划二 engine ✅（rootId 参数化/defs 前缀/视口存取，金样零 diff）） | docs/superpowers/specs/2026-10-21-multi-canvas-ruling.md + docs/superpowers/plans/2026-10-21-multi-canvas-core.md |
 
 > **M7 合并轨与并行企微对标轨的关系**：`docs/superpowers/specs/2026-09-28-wecom-interaction-parity-design.md`（待评审）与本轨在标记分组/暗色上已被 2026-09-28 裁定更新，其余项（框选/拖动排序/⊕/格式抽屉/外框）不冲突、待并轨排期，见合并轨 spec §二。
 
@@ -88,7 +88,10 @@ PDF/SVG 导出、FreeMind/Markdown/OPML/TXT 导入（二期）；版本对比/�
 ### 待需求方裁定（不代签，见 m6-acceptance §三）
 1. 跨侧概要 bracket 视觉（限制仅同侧 vs 维持横跨）
 2. 旧主题（经典蓝/暖橙）root 文字对比度债（4.28/2.39，被 M1b 主色钉定测试锁死）
-3. 概要×版本恢复口径（恢复不回滚概要、repair 自愈收敛 vs 纳入恢复 diff；现状语义在 `packages/gmind-core/src/restore.ts` 头注）
+~~3. 概要×版本恢复口径~~（**2026-10-21 已裁定**：维持现状=恢复不回滚概要、repair 自愈收敛（m6-acceptance §三 选项 B）；随多画布裁定一并了结，见 `docs/superpowers/specs/2026-10-21-multi-canvas-ruling.md` §一.6）
+
+### 已裁定待排期（新立项）
+- **多画布（一文件多张脑图，方案=切换制 Sheet 页签）**：2026-10-21 翻案 2026-09-28「本期不做登记备选」；8 条裁定细则（配额按画布/撤销不跨画布/缩略图取第一画布/远端光标跨画布隐藏/结构主题画布级/概要不随恢复/移动端只读页签/XMind 多 Sheet 全出·图片出当前）+ 5 条默认假设 + 技术评估（4~6 人周）——见 `docs/superpowers/specs/2026-10-21-multi-canvas-ruling.md`。**计划一 core 层已完成（见 §二 状态表 2026-10-21 行）**；计划二（engine 参数化）/计划三（web UI 页签条）/计划四（xmind-io 多 Sheet＋验收）待排期
 
 ### 待人工/待环境（非代码项）
 - m1-acceptance 13 项人工签注（§7.5，验收文档原样转需求方）
