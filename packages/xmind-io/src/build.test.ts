@@ -11,7 +11,7 @@ describe('buildXmind', () => {
       note: '根备注',
       children: [{ title: 'A', children: [{ title: 'A1', children: [] }] }],
     };
-    const bytes = buildXmind(tree);
+    const bytes = buildXmind([{ title: 'Sheet 1', root: tree }]);
     const files = unzipSync(bytes);
     expect(Object.keys(files).sort()).toEqual(['content.json', 'metadata.json']);
     const sheets = JSON.parse(new TextDecoder().decode(files['content.json']));
@@ -31,7 +31,7 @@ describe('buildXmind', () => {
   });
 
   it('无备注/无子级时不产生冗余字段', () => {
-    const bytes = buildXmind({ title: '单点', children: [] });
+    const bytes = buildXmind([{ title: 'Sheet 1', root: { title: '单点', children: [] } }]);
     const files = unzipSync(bytes);
     const sheets = JSON.parse(new TextDecoder().decode(files['content.json']));
     expect(sheets[0].rootTopic).toEqual({ class: 'topic', title: '单点' });
@@ -52,7 +52,7 @@ describe('buildXmind', () => {
         { title: 'C', icons: { other: ['done'], emoji: ['😄'] }, children: [] }, // 无原生对应：不导出
       ],
     };
-    const files = unzipSync(buildXmind(tree));
+    const files = unzipSync(buildXmind([{ title: 'Sheet 1', root: tree }]));
     const sheets = JSON.parse(new TextDecoder().decode(files['content.json']));
     const rootTopic = sheets[0].rootTopic;
     expect(rootTopic.markers).toBeUndefined(); // 根无标记不产 markers 键

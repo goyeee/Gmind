@@ -4,7 +4,7 @@
 // 无对应的 marker 计入 style 降级（映射成功的不再计降级）。
 // 描述（M7c-C1）：XML 侧无对应标签（XMind 8 格式无 description 概念），登记不映射——
 // 导入不产出、导出（buildXmind 只走 JSON 侧）不写入（口径见 types.ts XmindNode 头注）。
-import type { DegradedItem, XmindIcons, XmindNode } from './types';
+import type { DegradedItem, XmindIcons, XmindNode, XmindSheet } from './types';
 import { XmindParseError } from './types';
 import { DegradedCollector } from './parse-json';
 import { markersToIcons } from './markers';
@@ -87,10 +87,11 @@ function walkXmlTopic(el: Element, d: DegradedCollector): XmindNode {
 }
 
 /**
- * 解析 content.xml（XMind 8）：根元素非 <map> 或含解析错误 → CORRUPTED；
- * 第一个 sheet 无 topic → EMPTY；额外 sheet 计 structure 降级。
+ * 解析 content.xml（XMind 8）：全部 sheet 逐个产出（多画布计划四，裁定 8）。
+ * 根元素非 <map> 或含解析错误 → CORRUPTED；第一个 sheet 无 topic → EMPTY；
+ * 附加 sheet 无 topic → 计 structure 降级并跳过。
  */
-export function parseContentXml(data: Uint8Array): { root: XmindNode; degraded: DegradedItem[] } {
+export function parseContentXml(data: Uint8Array): { sheets: XmindSheet[]; degraded: DegradedItem[] } {
   const text = new TextDecoder().decode(data);
   const doc = new DOMParser().parseFromString(text, 'application/xml');
   const rootEl = doc.documentElement;
@@ -99,7 +100,7 @@ export function parseContentXml(data: Uint8Array): { root: XmindNode; degraded: 
     throw new XmindParseError('CORRUPTED', 'content.xml 不是合法的 XMind 8 XML');
   }
 
-  const sheetEls = doc.getElementsByTagName('sheet');
+  const sheetEls = Array.from(doc.getElementsByTagName('sheet'));
   const firstSheet = sheetEls[0] as Element | undefined;
   const rootTopicEl = firstSheet ? childElement(firstSheet, 'topic') : null;
   if (!rootTopicEl) {
@@ -107,6 +108,18 @@ export function parseContentXml(data: Uint8Array): { root: XmindNode; degraded: 
   }
 
   const d = new DegradedCollector();
-  if (sheetEls.length > 1) d.add('structure', sheetEls.length - 1);
-  return { root: walkXmlTopic(rootTopicEl, d), degraded: d.items() };
+  const out: XmindSheet[] = [];
+  sheetEls.forEach((sheetEl, i) => {
+    const topicEl = childElement(sheetEl, 'topic');
+    if (!topicEl) {
+      if (i > 0) d.add('structure', 1); // 附加 sheet 缺 topic：计降级跳过
+      return;
+    }
+    const titleEl = childElement(sheetEl, 'title');
+    out.push({
+      title: titleEl?.textContent ?? '',
+      root: walkXmlTopic(topicEl, d),
+    });
+  });
+  return { sheets: out, degraded: d.items() };
 }

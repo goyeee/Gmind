@@ -31,7 +31,13 @@ export interface XmindNode {
   children: XmindNode[];
 }
 
-/** 降级类别：style=标记/标签/主题与样式属性；media=图片/附件/备注内图片；structure=漂浮主题/概要/额外 sheet。 */
+/** 解析出的单个 Sheet（多画布计划四，裁定 8）：title 允许空串（xmind 源文件可缺）。 */
+export interface XmindSheet {
+  title: string;
+  root: XmindNode;
+}
+
+/** 降级类别：style=标记/标签/主题与样式属性；media=图片/附件/备注内图片；structure=漂浮主题/概要/缺根的附加 sheet。 */
 export type DegradedKind = 'style' | 'media' | 'structure';
 
 /** 聚合后的降级条目（按 kind 求和，count=0 的 kind 不输出）。 */

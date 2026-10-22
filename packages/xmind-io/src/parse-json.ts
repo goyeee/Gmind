@@ -1,6 +1,6 @@
 // parse-json.ts：XMind 2020+ content.json 解析——取层级/文本/备注/标记（M7a-T1 三组映射），
 // 其余字段计降级（markers 中无对应者计入 style）。
-import type { DegradedItem, DegradedKind, JsonSheet, JsonTopic, XmindIcons, XmindNode } from './types';
+import type { DegradedItem, DegradedKind, JsonSheet, JsonTopic, XmindIcons, XmindNode, XmindSheet } from './types';
 import { XmindParseError } from './types';
 import { markersToIcons } from './markers';
 
@@ -105,10 +105,11 @@ function detachedTopicsOf(t: JsonTopic): JsonTopic[] {
 }
 
 /**
- * 解析 content.json：sheet 数组取 [0]，其余 sheet 计 structure 降级；第一个 sheet
- * 缺 rootTopic（或数组为空）→ EMPTY；顶层不是数组 → CORRUPTED。
+ * 解析 content.json：全部 sheet 逐个产出（多画布计划四，裁定 8——不再取 [0] 拍平）。
+ * 第一个 sheet 缺 rootTopic（或数组为空）→ EMPTY；附加 sheet 缺 rootTopic → 计
+ * structure 降级并跳过；顶层不是数组 → CORRUPTED。
  */
-export function parseContentJson(data: Uint8Array): { root: XmindNode; degraded: DegradedItem[] } {
+export function parseContentJson(data: Uint8Array): { sheets: XmindSheet[]; degraded: DegradedItem[] } {
   const text = new TextDecoder().decode(data);
   let sheets: JsonSheet[];
   try {
@@ -127,7 +128,18 @@ export function parseContentJson(data: Uint8Array): { root: XmindNode; degraded:
     throw new XmindParseError('EMPTY', 'content.json 第一个 sheet 缺少 rootTopic');
   }
   const d = new DegradedCollector();
-  if (sheets.length > 1) d.add('structure', sheets.length - 1);
+  const out: XmindSheet[] = [];
+  sheets.forEach((s, i) => {
+    if (!isTopicLike(s.rootTopic)) {
+      if (i > 0) d.add('structure', 1); // 附加 sheet 缺根：计降级跳过（首 sheet 缺根已在上方 EMPTY）
+      return;
+    }
+    if (i > 0 && s.theme != null) d.add('style', 1);
+    out.push({
+      title: typeof s.title === 'string' ? s.title : '',
+      root: walkTopic(s.rootTopic as JsonTopic, d),
+    });
+  });
   if (first.theme != null) d.add('style', 1);
-  return { root: walkTopic(first.rootTopic as JsonTopic, d), degraded: d.items() };
+  return { sheets: out, degraded: d.items() };
 }

@@ -6,10 +6,11 @@
 // XML 侧无对应标签，登记不映射——见 types.ts XmindNode 头注）。
 import { strToU8, zipSync } from 'fflate';
 import { iconsToMarkerIds } from './markers';
-import type { JsonTopic, XmindNode } from './types';
+import type { JsonTopic, XmindNode, XmindSheet } from './types';
 
-/** 生成 2020+ 格式 zip：[content.json, metadata.json]。 */
-export function buildXmind(root: XmindNode): Uint8Array {
+/** 生成 2020+ 格式 zip：[content.json, metadata.json]。多画布（计划四，裁定 8）：
+ *  全部画布逐个出 sheet（title=画布名）；单画布调用方传单元素数组（兼容形态不变）。 */
+export function buildXmind(sheets: XmindSheet[]): Uint8Array {
   const topic = (n: XmindNode): JsonTopic => {
     const markerIds = iconsToMarkerIds(n.icons);
     return {
@@ -21,7 +22,13 @@ export function buildXmind(root: XmindNode): Uint8Array {
       ...(n.children.length ? { children: { attached: n.children.map(topic) } } : {}),
     };
   };
-  const content = JSON.stringify([{ class: 'sheet', title: 'Sheet 1', rootTopic: topic(root) }]);
+  const content = JSON.stringify(
+    sheets.map((s, i) => ({
+      class: 'sheet',
+      title: s.title || `Sheet ${i + 1}`,
+      rootTopic: topic(s.root),
+    })),
+  );
   return zipSync({
     'content.json': strToU8(content),
     'metadata.json': strToU8('{"creator":"Gmind"}'),

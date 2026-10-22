@@ -16,8 +16,8 @@ describe('buildXmind → parseXmind 往返', () => {
         { title: '', children: [] },
       ],
     };
-    const parsed = parseXmind(buildXmind(tree));
-    expect(parsed.root).toEqual(tree);
+    const parsed = parseXmind(buildXmind([{ title: '', root: tree }]));
+    expect(parsed.sheets[0].root).toEqual(tree);
     expect(parsed.degraded).toEqual([]);
   });
 
@@ -30,10 +30,10 @@ describe('buildXmind → parseXmind 往返', () => {
         { title: 'C', icons: { priority: ['low'], other: ['important'] }, children: [] },
       ],
     };
-    const parsed = parseXmind(buildXmind(tree));
-    expect(parsed.root.children[0].icons).toEqual({ priority: ['p2'] });
-    expect(parsed.root.children[1].icons).toEqual({ flag: ['flag'] });
-    expect(parsed.root.children[2].icons).toEqual({ priority: ['low'], other: ['important'] });
+    const parsed = parseXmind(buildXmind([{ title: '', root: tree }]));
+    expect(parsed.sheets[0].root.children[0].icons).toEqual({ priority: ['p2'] });
+    expect(parsed.sheets[0].root.children[1].icons).toEqual({ flag: ['flag'] });
+    expect(parsed.sheets[0].root.children[2].icons).toEqual({ priority: ['low'], other: ['important'] });
     expect(parsed.degraded).toEqual([]); // 导出的 marker 均有对应，零降级
   });
 
@@ -46,7 +46,7 @@ describe('buildXmind → parseXmind 往返', () => {
         { title: 'B', children: [] }, // 无 description：导入侧同样不产出键
       ],
     };
-    const bytes = buildXmind(tree);
+    const bytes = buildXmind([{ title: '', root: tree }]);
     const sheets = JSON.parse(new TextDecoder().decode(unzipSync(bytes)['content.json'])) as Array<{
       rootTopic: Record<string, unknown>;
     }>;
@@ -55,12 +55,12 @@ describe('buildXmind → parseXmind 往返', () => {
     expect(attached[0].description).toBe('子任务描述');
     expect('description' in attached[1]).toBe(false);
     const parsed = parseXmind(bytes);
-    expect(parsed.root).toEqual(tree); // 深度相等：读回逐字节还原（含 B 无 description）
+    expect(parsed.sheets[0].root).toEqual(tree); // 深度相等：读回逐字节还原（含 B 无 description）
     expect(parsed.degraded).toEqual([]);
   });
 
   it('构建产物可被 unzipSync 读回 content.json', () => {
-    const bytes = buildXmind({ title: '根', children: [{ title: 'A', children: [] }] });
+    const bytes = buildXmind([{ title: '', root: { title: '根', children: [{ title: 'A', children: [] }] } }]);
     const files = unzipSync(bytes);
     const content = new TextDecoder().decode(files['content.json']);
     const sheets = JSON.parse(content) as unknown[];

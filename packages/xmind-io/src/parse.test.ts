@@ -49,7 +49,8 @@ describe('parseXmind：2020+ content.json', () => {
         },
       }),
     );
-    const { root, degraded } = parseXmind(bytes);
+    const { sheets: __s, degraded } = parseXmind(bytes);
+    const root = __s[0]!.root;
     expect(root.title).toBe('中心');
     expect(root.note).toBe('根备注');
     expect(root.children.map((c) => c.title)).toEqual(['A', 'B']);
@@ -77,7 +78,8 @@ describe('parseXmind：2020+ content.json', () => {
       }),
       'metadata.json': '{}',
     });
-    const { root, degraded } = parseXmind(bytes);
+    const { sheets: __s, degraded } = parseXmind(bytes);
+    const root = __s[0]!.root;
     expect(root.children).toHaveLength(1); // detached 不进树
     expect(root.children[0].note).toBe('富'); // realHTML 剥标签取文本
     const kinds = Object.fromEntries(degraded.map((d) => [d.kind, d.count]));
@@ -98,7 +100,7 @@ describe('parseXmind：2020+ content.json', () => {
         { class: 'sheet', title: 'S', rootTopic: topicOf([{ markerId: 'priority-3' }]) },
       ]),
     );
-    expect(parseXmind(bytes).root.icons).toEqual({ priority: ['p2'] }); // 3 → p2（企微同档位）
+    expect(parseXmind(bytes).sheets[0]!.root.icons).toEqual({ priority: ['p2'] }); // 3 → p2（企微同档位）
 
     const hi = parseXmind(
       jsonZip(
@@ -107,7 +109,7 @@ describe('parseXmind：2020+ content.json', () => {
         ]),
       ),
     );
-    expect(hi.root.icons).toEqual({ priority: ['low'] }); // 9→7→low；同组首个胜（priority-9 先出现）
+    expect(hi.sheets[0]!.root.icons).toEqual({ priority: ['low'] }); // 9→7→low；同组首个胜（priority-9 先出现）
     expect(hi.degraded).toEqual([{ kind: 'style', count: 1 }]); // 被单选吞掉的 priority-2 计入 dropped（R1 2.4）
 
     const fs = parseXmind(
@@ -121,7 +123,7 @@ describe('parseXmind：2020+ content.json', () => {
         ]),
       ),
     );
-    expect(fs.root.icons).toEqual({ flag: ['flag'], other: ['important'] }); // M7b：flag/star 落不同组、可并存
+    expect(fs.sheets[0]!.root.icons).toEqual({ flag: ['flag'], other: ['important'] }); // M7b：flag/star 落不同组、可并存
     expect(fs.degraded).toEqual([]); // 颜色信息无对应位丢弃，但 marker 均已映射不再计降级
 
     const sf = parseXmind(
@@ -135,22 +137,22 @@ describe('parseXmind：2020+ content.json', () => {
         ]),
       ),
     );
-    expect(sf.root.icons).toEqual({ flag: ['flag'], other: ['important'] }); // 与出现顺序无关
+    expect(sf.sheets[0]!.root.icons).toEqual({ flag: ['flag'], other: ['important'] }); // 与出现顺序无关
 
     const st = jsonZip(
       JSON.stringify([{ class: 'sheet', title: 'S', rootTopic: topicOf([{ markerId: 'star-red' }]) }],
       ),
     );
-    expect(parseXmind(st).root.icons).toEqual({ other: ['important'] });
+    expect(parseXmind(st).sheets[0]!.root.icons).toEqual({ other: ['important'] });
 
     const dropped = parseXmind(
       jsonZip(JSON.stringify([{ class: 'sheet', title: 'S', rootTopic: topicOf([{ markerId: 'task-start' }, { markerId: 'smiley-smile' }]) }])),
     );
-    expect(dropped.root.icons).toBeUndefined(); // 无对应 → 不产 icons
+    expect(dropped.sheets[0]!.root.icons).toBeUndefined(); // 无对应 → 不产 icons
     expect(dropped.degraded).toEqual([{ kind: 'style', count: 2 }]); // 丢弃并登记
   });
 
-  it('降级计数：图片/附件/备注内图片 → media，概要/额外 sheet → structure', () => {
+  it('降级计数：图片/附件/备注内图片 → media，概要 → structure；多画布（裁定 8）：全部 sheet 逐个产出', () => {
     const topicOf = (title: string) => ({ class: 'topic', title });
     const bytes = jsonZip(
       JSON.stringify([
@@ -174,12 +176,30 @@ describe('parseXmind：2020+ content.json', () => {
         { class: 'sheet', title: 'Sheet 3', rootTopic: topicOf('y') },
       ]),
     );
-    const { root, degraded } = parseXmind(bytes);
+    const { sheets: __s, degraded } = parseXmind(bytes);
+    const root = __s[0]!.root;
     expect(root.children).toHaveLength(1);
+    expect(__s.map((s) => s.title)).toEqual(['Sheet 1', 'Sheet 2', 'Sheet 3']); // 不再拍平：逐 sheet 产出
+    expect(__s[1]!.root.title).toBe('x');
+    expect(__s[2]!.root.title).toBe('y');
     const kinds = Object.fromEntries(degraded.map((d) => [d.kind, d.count]));
     expect(kinds.media).toBe(4); // topic.image 1 + attachments 2 + 备注内图片 1
-    expect(kinds.structure).toBe(3); // summaries 1 + 额外 sheet 2
+    expect(kinds.structure).toBe(1); // summaries 1（额外 sheet 自此进多画布，不再计降级）
     expect(kinds.style).toBeUndefined(); // 无样式类降级则不输出该 kind
+  });
+
+  it('多画布：附加 sheet 缺 rootTopic → 计 structure 降级并跳过（首 sheet 缺根仍 EMPTY）', () => {
+    const topicOf = (title: string) => ({ class: 'topic', title });
+    const bytes = jsonZip(
+      JSON.stringify([
+        { class: 'sheet', title: 'Sheet 1', rootTopic: topicOf('中心') },
+        { class: 'sheet', title: '坏 Sheet' },
+        { class: 'sheet', title: 'Sheet 3', rootTopic: topicOf('好') },
+      ]),
+    );
+    const { sheets: __s, degraded } = parseXmind(bytes);
+    expect(__s.map((s) => s.title)).toEqual(['Sheet 1', 'Sheet 3']);
+    expect(degraded).toEqual([{ kind: 'structure', count: 1 }]);
   });
 
   it('style 属性与 sheet theme 计入 style 降级', () => {
@@ -205,13 +225,14 @@ describe('parseXmind：2020+ content.json', () => {
         notes: { plain: { content: '纯文本' }, realHTML: { content: '<b>纯文本</b>' } },
       }),
     );
-    const { root } = parseXmind(bytes);
+    const root = parseXmind(bytes).sheets[0]!.root;
     expect(root.note).toBe('纯文本');
   });
 
   it('rootTopic 无 title 时 title 为空串（合法），无 markers 等则零降级', () => {
     const bytes = jsonZip(sheet({ class: 'topic' }));
-    const { root, degraded } = parseXmind(bytes);
+    const { sheets: __s, degraded } = parseXmind(bytes);
+    const root = __s[0]!.root;
     expect(root.title).toBe('');
     expect(root.children).toEqual([]);
     expect(root.note).toBeUndefined();
@@ -239,7 +260,8 @@ const ROOT_TOPIC_XML =
 describe('parseXmind：content.xml 回落（XMind 8）', () => {
   it('解析 content.xml：层级/文本/备注，detached 计入降级', () => {
     const bytes = zipOf({ 'content.xml': xmlMap(`<sheet id="s1">${ROOT_TOPIC_XML}</sheet>`) });
-    const { root, degraded } = parseXmind(bytes);
+    const { sheets: __s, degraded } = parseXmind(bytes);
+    const root = __s[0]!.root;
     expect(root.title).toBe('中心');
     expect(root.note).toBe('旧备注');
     expect(root.children.map((c) => c.title)).toEqual(['A']);
@@ -260,7 +282,8 @@ describe('parseXmind：content.xml 回落（XMind 8）', () => {
       '<topic id="t2"><title>A</title><marker-refs><marker-ref marker-id="flag-blue"/></marker-refs><xhtml:img xlink:href="a.png"/></topic>' +
       '</topics></children></topic>';
     const bytes = zipOf({ 'content.xml': xmlMap(`<sheet id="s1">${topicXml}</sheet>`) });
-    const { root, degraded } = parseXmind(bytes);
+    const { sheets: __s, degraded } = parseXmind(bytes);
+    const root = __s[0]!.root;
     expect(root.icons).toEqual({ priority: ['p0'], other: ['important'] }); // priority-1→p0 + star-red→other important
     expect(root.children[0].icons).toEqual({ flag: ['flag'] }); // flag-blue → flag 组（颜色丢弃）
     const kinds = Object.fromEntries(degraded.map((d) => [d.kind, d.count]));
@@ -269,15 +292,18 @@ describe('parseXmind：content.xml 回落（XMind 8）', () => {
     expect(kinds.structure).toBe(1); // 概要
   });
 
-  it('xml 额外 sheet 计入 structure 降级', () => {
+  it('xml 多画布：附加 sheet 逐个产出（裁定 8），不再计 structure 降级', () => {
     const bytes = zipOf({
       'content.xml': xmlMap(
-        `<sheet id="s1">${ROOT_TOPIC_XML}</sheet><sheet id="s2"><topic id="t9"><title>x</title></topic></sheet>`,
+        `<sheet id="s1">${ROOT_TOPIC_XML}</sheet><sheet id="s2"><title>第二张</title><topic id="t9"><title>x</title></topic></sheet>`,
       ),
     });
-    const { degraded } = parseXmind(bytes);
+    const { sheets: __s, degraded } = parseXmind(bytes);
+    expect(__s).toHaveLength(2);
+    expect(__s[1]!.title).toBe('第二张'); // XMind 8 sheet 级 <title> 提取
+    expect(__s[1]!.root.title).toBe('x');
     const kinds = Object.fromEntries(degraded.map((d) => [d.kind, d.count]));
-    expect(kinds.structure).toBe(2); // 漂浮 1 + 额外 sheet 1
+    expect(kinds.structure).toBe(1); // 仅漂浮主题（额外 sheet 自此进多画布）
   });
 
   it('xml 根元素非 <map> → CORRUPTED', () => {
