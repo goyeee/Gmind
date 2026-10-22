@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import * as Y from 'yjs';
 import { ROOT_NODE_ID, createTemplateDoc, docToState } from './doc';
+import { canvasOrderArr, canvasesMap, canvasNodesMap } from './canvas';
 import { cloneExpanded } from './export';
 import { getMeta, getNode } from './read';
 import { setCollapsed } from './operations';
@@ -42,7 +43,7 @@ describe('cloneExpanded（M4 Task 9，FR-IO-003：仅导出快照不改画布）
     const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A', children: [{ text: 'A1' }] }] });
     const a = getNode(doc, ROOT_NODE_ID)!.childIds[0]!;
     setCollapsed(doc, a, true);
-    const nodes = doc.getMap('nodes') as Y.Map<Y.Map<unknown>>;
+    const nodes = canvasNodesMap(doc);
     nodes.get(a)!.set('deleted', true); // 直接造墓碑（跳过 deleteNodes 的子树级联）
     const before = docToState(doc);
 
@@ -53,5 +54,46 @@ describe('cloneExpanded（M4 Task 9，FR-IO-003：仅导出快照不改画布）
     expect(getNode(clone, ROOT_NODE_ID)!.childIds).not.toContain(a);
     expect(getNode(clone, a)?.deleted).toBe(true);
     expect(getNode(clone, a)?.collapsed).toBe(true);
+  });
+
+  it('cloneExpanded(doc, canvasId) 只展开指定画布：c2 折叠全展开，c1 折叠态在克隆中保留', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A', children: [{ text: 'A1' }] }] });
+    const a = getNode(doc, ROOT_NODE_ID)!.childIds[0]!;
+    // 手工加第二个画布 c2（根 'root2'，子级 b 折叠）
+    doc.transact(() => {
+      const canvas = new Y.Map<unknown>();
+      canvas.set('name', '画布-2');
+      canvas.set('rootId', 'root2');
+      canvas.set('structureType', 'mindmap');
+      canvas.set('themeId', 'gmind-light');
+      const nodes = new Y.Map<Y.Map<unknown>>();
+      const root = new Y.Map<unknown>();
+      root.set('text', 'R2');
+      root.set('parentId', '');
+      const rootChildren = new Y.Array<string>();
+      root.set('children', rootChildren);
+      nodes.set('root2', root);
+      const b = new Y.Map<unknown>();
+      b.set('text', 'b');
+      b.set('parentId', 'root2');
+      b.set('children', new Y.Array<string>());
+      b.set('collapsed', true);
+      nodes.set('c2-b', b);
+      rootChildren.push(['c2-b']);
+      canvas.set('nodes', nodes);
+      canvas.set('summaries', new Y.Map<unknown>());
+      canvasesMap(doc).set('c2', canvas);
+      canvasOrderArr(doc).push(['c2']);
+    });
+    setCollapsed(doc, a, true);
+    const c1 = canvasOrderArr(doc).get(0)!; // 第一画布 id 是 ULID（createTemplateDoc 新建路径）
+    const before = docToState(doc);
+
+    const clone = cloneExpanded(doc, 'c2');
+
+    expect(docToState(doc)).toEqual(before); // 原 doc 不被触碰
+    expect(getNode(clone, 'c2-b', 'c2')?.collapsed).toBe(false); // c2 已展开
+    expect(getNode(clone, a, c1)?.collapsed).toBe(true); // c1 折叠态保留
+    expect(getNode(clone, 'root2', 'c2')!.childIds).toEqual(['c2-b']);
   });
 });

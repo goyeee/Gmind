@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import * as Y from 'yjs';
 import { ROOT_NODE_ID, createTemplateDoc, docFromState, docToState } from './doc';
+import { canvasNodesMap, canvasOrderArr, canvasesMap } from './canvas';
 import { addChild, deleteNodes, moveNode } from './operations';
 import { childrenIds, countAlive, getMeta, getNode, setDocMeta } from './read';
 import type { NodeSnapshot } from './read';
@@ -14,7 +15,7 @@ function blankDoc(): Y.Doc {
 
 /** 按文本查节点 id（测试辅助；模板生成的 ULID 不可预知）。 */
 function findIdByText(doc: Y.Doc, text: string): string {
-  for (const [id, node] of doc.getMap('nodes').entries()) {
+  for (const [id, node] of canvasNodesMap(doc).entries()) {
     if ((node as Y.Map<unknown>).get('text') === text) return id;
   }
   throw new Error(`test helper: node with text "${text}" not found`);
@@ -23,7 +24,7 @@ function findIdByText(doc: Y.Doc, text: string): string {
 /** 全文档节点快照（getNode 全量逐节点 deep-equal 口径）。 */
 function fullSnapshot(doc: Y.Doc): Record<string, NodeSnapshot | null> {
   const out: Record<string, NodeSnapshot | null> = {};
-  for (const id of doc.getMap('nodes').keys()) out[id] = getNode(doc, id);
+  for (const id of canvasNodesMap(doc).keys()) out[id] = getNode(doc, id);
   return out;
 }
 
@@ -53,7 +54,7 @@ describe('undo / redo 基本流程', () => {
 
     expect(undo(um)).toBe(true);
     expect(getNode(doc, id)).toBeNull();
-    expect(doc.getMap('nodes').size).toBe(1);
+    expect(canvasNodesMap(doc).size).toBe(1);
     expect(childrenIds(doc, 'root')).toEqual([]);
 
     expect(redo(um)).toBe(true);
@@ -69,7 +70,7 @@ describe('undo / redo 基本流程', () => {
 
     expect(undo(um)).toBe(true);
     expect(getNode(doc, bId)).toBeNull();
-    expect(doc.getMap('nodes').size).toBe(2);
+    expect(canvasNodesMap(doc).size).toBe(2);
     expect(getNode(doc, 'root')!.childIds).toEqual([aId]);
     expect(getNode(doc, aId)!.deleted).toBe(false);
 
@@ -131,7 +132,7 @@ describe('栈深 100（FR-EDT-004）', () => {
     expect(um.undoStack.length).toBe(0);
 
     expect(childrenIds(doc, 'root')).toEqual(ids.slice(0, 5));
-    expect(doc.getMap('nodes').size).toBe(6);
+    expect(canvasNodesMap(doc).size).toBe(6);
     expect(countAlive(doc)).toBe(5);
   });
 });
@@ -242,7 +243,7 @@ describe('undo(deleteNodes) 往返钉死（T4 冻结 × T5 normalize × T6 undo 
     for (const id of [aId, a1Id, a1aId, a2Id]) expect(getNode(doc, id)!.deleted, id).toBe(true);
     expect(childrenIds(doc, ROOT_NODE_ID)).toEqual([bId]);
     expect(
-      ((doc.getMap('nodes').get(aId) as Y.Map<unknown>).get('children') as Y.Array<string>).toArray(),
+      ((canvasNodesMap(doc).get(aId) as Y.Map<unknown>).get('children') as Y.Array<string>).toArray(),
     ).toEqual([a1Id, a2Id]); // T4：冻结（快照还原依据）
 
     // undo → 全文档逐节点快照与删除前完全一致
@@ -256,5 +257,69 @@ describe('undo(deleteNodes) 往返钉死（T4 冻结 × T5 normalize × T6 undo 
     for (const id of [aId, a1Id, a1aId, a2Id]) expect(getNode(doc, id)!.deleted, id).toBe(true);
     expect(childrenIds(doc, ROOT_NODE_ID)).toEqual([bId]);
     expect(getNode(doc, bId)!.deleted).toBe(false);
+  });
+});
+
+describe('createUndoManager(doc, canvasId) 画布子图撤销（多画布 Task 4，裁定 2）', () => {
+  /** 手工双画布文档：c1 根 'root'、c2 根 'root2'（各画布子图相互隔离）。 */
+  const multiCanvasDoc = (): { doc: Y.Doc; c1: string; c2: string } => {
+    const doc = new Y.Doc();
+    const mk = (canvasId: string, rootId: string, childText: string): void => {
+      const canvas = new Y.Map<unknown>();
+      canvas.set('name', `画布-${canvasId}`);
+      canvas.set('rootId', rootId);
+      canvas.set('structureType', 'mindmap');
+      canvas.set('themeId', 'gmind-light');
+      const nodes = new Y.Map<Y.Map<unknown>>();
+      const root = new Y.Map<unknown>();
+      root.set('text', `R-${canvasId}`);
+      root.set('parentId', '');
+      const rootChildren = new Y.Array<string>();
+      root.set('children', rootChildren);
+      nodes.set(rootId, root);
+      const child = new Y.Map<unknown>();
+      child.set('text', childText);
+      child.set('parentId', rootId);
+      child.set('children', new Y.Array<string>());
+      nodes.set(`${canvasId}-${childText}`, child);
+      rootChildren.push([`${canvasId}-${childText}`]);
+      canvas.set('nodes', nodes);
+      canvas.set('summaries', new Y.Map<unknown>());
+      canvasesMap(doc).set(canvasId, canvas);
+      canvasOrderArr(doc).push([canvasId]);
+    };
+    doc.transact(() => {
+      mk('c1', ROOT_NODE_ID, 'a');
+      mk('c2', 'root2', 'b');
+    });
+    return { doc, c1: 'c1', c2: 'c2' };
+  };
+
+  it('scope=画布子图：c1 编辑进栈可撤销；c2 编辑不进栈，撤销 c1 不影响 c2', () => {
+    const { doc, c1, c2 } = multiCanvasDoc();
+    const um = createUndoManager(doc, c1);
+
+    const x = addChild(doc, ROOT_NODE_ID, { text: 'x' }, ORIGIN_USER, c1);
+    um.stopCapturing(); // 隔离 captureTimeout：两笔编辑各自成栈项
+    const y = addChild(doc, 'root2', { text: 'y' }, ORIGIN_USER, c2); // 跨画布写：不进 c1 栈
+    expect(um.undoStack.length).toBe(1);
+
+    expect(undo(um)).toBe(true); // 只撤销 c1 的 x
+    expect(getNode(doc, x, c1)).toBeNull();
+    expect(childrenIds(doc, ROOT_NODE_ID, c1)).toEqual(['c1-a']);
+    expect(childrenIds(doc, 'root2', c2)).toEqual(['c2-b', y]); // c2 不受撤销影响
+    expect(undo(um)).toBe(false); // c1 栈空：c2 的写不在本栈
+  });
+
+  it('缺省 canvasId 保持整文档 scope（旧调用兼容）：两画布编辑都进同一撤销栈', () => {
+    const { doc, c1, c2 } = multiCanvasDoc();
+    const um = createUndoManager(doc); // 旧签名：整文档
+    const x = addChild(doc, ROOT_NODE_ID, { text: 'x' }, ORIGIN_USER, c1);
+    um.stopCapturing();
+    const y = addChild(doc, 'root2', { text: 'y' }, ORIGIN_USER, c2);
+    expect(um.undoStack.length).toBe(2);
+    expect(undo(um)).toBe(true); // 后进先出：撤销 c2 的 y
+    expect(getNode(doc, y, c2)).toBeNull();
+    expect(getNode(doc, x, c1)).not.toBeNull();
   });
 });

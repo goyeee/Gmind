@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>方向一 · 静 — Gmind 编辑器</title>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-font-smoothing:antialiased; }
+  :root {
+    --ink:#1a1a1a; --ink2:#555; --ink3:#999; --line:#e8e8e6; --bg:#fdfdfc; --panel:#fff;
+    --accent:#1a1a1a;
+  }
+  html,body { height:100%; }
+  body { font-family:'Noto Sans SC',system-ui,sans-serif; background:var(--bg); color:var(--ink); overflow:hidden; font-size:14px; }
+
+  /* ── 顶栏：一条 40px 的安静栏 ── */
+  .topbar { height:40px; display:flex; align-items:center; padding:0 14px; border-bottom:1px solid var(--line); background:var(--bg); position:relative; z-index:20; }
+  .back { width:28px; height:28px; display:flex; align-items:center; justify-content:center; border-radius:4px; cursor:pointer; color:var(--ink2); }
+  .back:hover { background:#f0f0ee; color:var(--ink); }
+  .doc-title { font-size:14px; font-weight:500; margin-left:8px; padding:3px 8px; border-radius:4px; cursor:text; border:1px solid transparent; }
+  .doc-title:hover { border-color:var(--line); }
+  .star { color:#c9c9c5; cursor:pointer; margin-left:2px; padding:4px; border-radius:4px; }
+  .star:hover { background:#f0f0ee; }
+  .star.on { color:#d4a017; }
+  .save-state { font-size:12px; color:var(--ink3); margin-left:10px; display:flex; align-items:center; gap:5px; }
+  .save-state .pulse { width:6px; height:6px; border-radius:50%; background:#3d9d6e; }
+  .top-right { margin-left:auto; display:flex; align-items:center; gap:14px; }
+  .cmdk-hint { display:flex; align-items:center; gap:6px; font-size:12px; color:var(--ink3); border:1px solid var(--line); border-radius:5px; padding:4px 10px; cursor:pointer; background:#fff; }
+  .cmdk-hint:hover { border-color:#d5d5d2; color:var(--ink2); }
+  .cmdk-hint kbd { font-family:'JetBrains Mono',monospace; font-size:11px; background:#f4f4f2; border:1px solid var(--line); border-radius:3px; padding:0 5px; }
+  .presence { display:flex; align-items:center; gap:6px; font-size:12px; color:var(--ink3); cursor:pointer; padding:4px 6px; border-radius:4px; }
+  .presence:hover { background:#f0f0ee; }
+  .avatars { display:flex; }
+  .avatar { width:24px; height:24px; border-radius:50%; border:2px solid #fff; display:flex; align-items:center; justify-content:center; font-size:10px; color:#fff; margin-left:-6px; }
+  .avatar:first-child { margin-left:0; }
+  .me { width:28px; height:28px; border-radius:50%; background:#1a1a1a; color:#fff; font-size:11px; display:flex; align-items:center; justify-content:center; cursor:pointer; }
+
+  /* ── 画布 ── */
+  .canvas-wrap { position:absolute; inset:40px 0 34px 0; overflow:hidden; cursor:grab; }
+  .canvas-wrap:active { cursor:grabbing; }
+  svg text { user-select:none; }
+  .node rect { transition:stroke .12s, filter .12s; }
+  .node { cursor:pointer; }
+  .node:hover rect.body { stroke:#888; }
+  .node.selected rect.body { stroke:#1a1a1a; stroke-width:2; }
+  .node.root rect.body { fill:#1a1a1a; }
+  .edge { fill:none; stroke:#d8d8d4; stroke-width:1.5; }
+  .edge.hot { stroke:#1a1a1a; }
+  .badge { cursor:pointer; }
+  .cursor-flag { font-size:10px; font-family:'Noto Sans SC'; }
+
+  /* ── 底栏 ── */
+  .bottombar { position:absolute; left:0; right:0; bottom:0; height:34px; display:flex; align-items:center; padding:0 14px; border-top:1px solid var(--line); background:var(--bg); font-size:12px; color:var(--ink3); z-index:20; }
+  .view-tabs { display:flex; gap:2px; margin-left:16px; }
+  .view-tab { padding:3px 10px; border-radius:4px; cursor:pointer; color:var(--ink3); font-size:12px; }
+  .view-tab.on { background:#f0f0ee; color:var(--ink); font-weight:500; }
+  .bottom-right { margin-left:auto; display:flex; align-items:center; gap:4px; }
+  .bbtn { min-width:26px; height:26px; padding:0 6px; display:flex; align-items:center; justify-content:center; border-radius:4px; cursor:pointer; color:var(--ink2); font-size:12px; }
+  .bbtn:hover { background:#f0f0ee; color:var(--ink); }
+  .zoom-label { font-family:'JetBrains Mono',monospace; font-size:11px; color:var(--ink2); min-width:42px; text-align:center; }
+
+  /* ── ⌘K 指令面板 ── */
+  .overlay { position:fixed; inset:0; background:rgba(26,26,26,.18); display:none; z-index:50; }
+  .overlay.show { display:block; }
+  .cmdk { position:fixed; left:50%; top:18%; transform:translateX(-50%); width:560px; background:#fff; border:1px solid #e2e2e0; border-radius:10px; box-shadow:0 24px 70px rgba(0,0,0,.18); display:none; z-index:60; overflow:hidden; }
+  .cmdk.show { display:block; animation:pop .14s ease-out; }
+  @keyframes pop { from { opacity:0; transform:translateX(-50%) translateY(6px); } }
+  .cmdk-input { display:flex; align-items:center; gap:10px; padding:14px 16px; border-bottom:1px solid var(--line); }
+  .cmdk-input input { flex:1; border:none; outline:none; font-size:15px; font-family:inherit; color:var(--ink); background:transparent; }
+  .cmdk-input kbd, .row kbd { font-family:'JetBrains Mono',monospace; font-size:11px; color:var(--ink3); background:#f4f4f2; border:1px solid var(--line); border-radius:3px; padding:1px 6px; }
+  .cmdk-list { max-height:340px; overflow:auto; padding:6px; }
+  .cmdk-group { font-size:11px; color:var(--ink3); padding:8px 10px 4px; }
+  .row { display:flex; align-items:center; gap:10px; padding:8px 10px; border-radius:6px; cursor:pointer; font-size:14px; color:var(--ink2); }
+  .row .ic { width:16px; text-align:center; color:var(--ink3); }
+  .row .kb { margin-left:auto; display:flex; gap:4px; }
+  .row.on { background:#f4f4f2; color:var(--ink); }
+
+  /* ── 右侧检查器 ── */
+  .inspector { position:absolute; top:40px; right:0; bottom:34px; width:300px; background:var(--panel); border-left:1px solid var(--line); transform:translateX(100%); transition:transform .22s ease; z-index:15; display:flex; flex-direction:column; }
+  .inspector.show { transform:none; }
+  .insp-head { padding:14px 16px 10px; display:flex; align-items:center; }
+  .insp-head h3 { font-size:13px; font-weight:500; }
+  .insp-head .x { margin-left:auto; color:var(--ink3); cursor:pointer; padding:4px; border-radius:4px; }
+  .insp-head .x:hover { background:#f0f0ee; }
+  .insp-sec { padding:10px 16px 14px; border-top:1px solid #f2f2f0; }
+  .insp-sec h4 { font-size:11px; color:var(--ink3); font-weight:400; margin-bottom:8px; }
+  .swatches { display:flex; gap:6px; }
+  .sw { width:22px; height:22px; border-radius:50%; cursor:pointer; border:2px solid transparent; }
+  .sw.on { border-color:#1a1a1a; }
+  .opt-row { display:flex; align-items:center; justify-content:space-between; font-size:13px; color:var(--ink2); padding:6px 0; }
+  .mini-btn { border:1px solid var(--line); background:#fff; border-radius:4px; font-size:12px; padding:3px 10px; cursor:pointer; color:var(--ink2); }
+  .mini-btn:hover { border-color:#ccc; color:var(--ink); }
+  .progress-track { width:120px; height:4px; background:#f0f0ee; border-radius:2px; overflow:hidden; }
+  .progress-fill { height:100%; background:#1a1a1a; }
+
+  /* ── 右键菜单 ── */
+  .ctx { position:fixed; min-width:220px; background:#fff; border:1px solid #e2e2e0; border-radius:8px; box-shadow:0 12px 40px rgba(0,0,0,.14); padding:5px; display:none; z-index:70; }
+  .ctx.show { display:block; }
+  .ctx .row { font-size:13px; padding:7px 10px; }
+  .ctx .sep { height:1px; background:#f2f2f0; margin:4px 6px; }
+  .ctx .danger { color:#b3331f; }
+
+  /* ── toast ── */
+  .toast { position:fixed; left:50%; bottom:56px; transform:translateX(-50%) translateY(8px); background:#1a1a1a; color:#fff; font-size:13px; padding:8px 16px; border-radius:6px; opacity:0; transition:.2s; z-index:80; pointer-events:none; }
+  .toast.show { opacity:1; transform:translateX(-50%); }
+
+  .hint { position:absolute; left:50%; bottom:48px; transform:translateX(-50%); font-size:12px; color:#b9b9b4; z-index:5; pointer-events:none; }
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <span class="back" title="返回工作台">←</span>
+  <span class="doc-title" id="docTitle">Gmind 产品功能地图</span>
+  <span class="star" id="star" title="星标">★</span>
+  <span class="save-state"><span class="pulse"></span><span id="saveText">已保存 14:32</span></span>
+  <div class="top-right">
+    <span class="cmdk-hint" id="cmdkHint">搜索功能或命令 <kbd>⌘K</kbd></span>
+    <span class="presence" id="presenceBtn">
+      <span class="avatars">
+        <span class="avatar" style="background:#7c8b9e">林</span>
+        <span class="avatar" style="background:#a08b6d">周</span>
+      </span>
+      3 人在线
+    </span>
+    <span class="me">郭</span>
+  </div>
+</header>
+
+<div class="canvas-wrap" id="canvasWrap">
+  <svg id="stage" width="100%" height="100%"></svg>
+</div>
+<div class="hint">右键节点打开菜单 · ⌘K 唤起全部功能</div>
+
+<footer class="bottombar">
+  <span id="nodeCount">42 个节点</span>
+  <div class="view-tabs">
+    <span class="view-tab on" data-v="mind">脑图</span>
+    <span class="view-tab" data-v="table">表格</span>
+  </div>
+  <div class="bottom-right">
+    <span class="bbtn" data-act="center" title="回到中心">⌖</span>
+    <span class="bbtn" data-act="fit" title="适应画布">□</span>
+    <span class="bbtn" data-act="zout">−</span>
+    <span class="zoom-label" id="zoomLabel">100%</span>
+    <span class="bbtn" data-act="zin">＋</span>
+    <span class="bbtn" data-act="full" title="全屏">⛶</span>
+  </div>
+</footer>
+
+<div class="overlay" id="overlay"></div>
+<div class="cmdk" id="cmdk">
+  <div class="cmdk-input">
+    <span style="color:#999">⌕</span>
+    <input id="cmdkInput" placeholder="输入命令、搜索功能…（试试「导出」「主题」「版本」）">
+    <kbd>esc</kbd>
+  </div>
+  <div class="cmdk-list" id="cmdkList"></div>
+</div>
+
+<aside class="inspector" id="inspector">
+  <div class="insp-head"><h3 id="inspTitle">格式</h3><span class="x" id="inspClose">✕</span></div>
+  <div class="insp-sec">
+    <h4>节点填充</h4>
+    <div class="swatches" id="swatches"></div>
+  </div>
+  <div class="insp-sec">
+    <h4>文本</h4>
+    <div class="opt-row"><span>字号</span><span><button class="mini-btn">A−</button> <button class="mini-btn">A＋</button></span></div>
+    <div class="opt-row"><span>加粗</span><button class="mini-btn">B</button></div>
+  </div>
+  <div class="insp-sec" id="taskSec">
+    <h4>任务</h4>
+    <div class="opt-row"><span>负责人</span><span style="font-size:13px">林晚照</span></div>
+    <div class="opt-row"><span>进度</span><span class="progress-track"><span class="progress-fill" style="width:60%"></span></span></div>
+    <div class="opt-row"><span>预期</span><span style="font-size:13px">10-24 周五</span></div>
+  </div>
+</aside>
+
+<div class="ctx" id="ctx"></div>
+<div class="toast" id="toast"></div>
+
+<script>
+/* ================= 数据：Gmind 功能地图 ================= */
+const TREE = {
+  id:'root', text:'Gmind', x:0, y:0, children:[
+    { id:'b1', text:'协同编辑', color:'#7c8b9e', children:[
+      { text:'50 人实时协同', badges:['comment'] },
+      { text:'远端光标与头像' },
+      { text:'离线缓存自动同步' },
+    ]},
+    { id:'b2', text:'编辑内核', color:'#8a8f7a', children:[
+      { text:'同级 · 子级 · 上级插入' },
+      { text:'标记 · 概要 · 格式刷' },
+      { text:'节点图文四槽位', badges:['img'] },
+    ]},
+    { id:'b3', text:'任务管理', color:'#a08b6d', task:{p:60}, children:[
+      { text:'负责人指派' },
+      { text:'9 档进度', task:{p:40} },
+      { text:'预期日期 · 逾期提醒' },
+      { text:'表格视图' },
+    ]},
+    { id:'b4', text:'文件与分享', color:'#7a8b7f', children:[
+      { text:'XMind 导入导出' },
+      { text:'PNG / JPG 多倍导出' },
+      { text:'分享链接 · 回收站' },
+    ]},
+    { id:'b5', text:'团队与历史', color:'#8d8577', children:[
+      { text:'评论线程与定位', badges:['comment'] },
+      { text:'通知中心' },
+      { text:'版本快照一键恢复' },
+      { text:'文档动态' },
+    ]},
+    { id:'b6', text:'个性化', color:'#9b8ea0', children:[
+      { text:'12 套主题' },
+      { text:'结构切换 · 简洁模式' },
+      { text:'快捷键 · 新手引导' },
+    ]},
+  ]
+};
+
+/* ================= 布局 & 渲染（极简：左右两侧树） ================= */
+const svg = document.getElementById('stage');
+const NS = 'http://www.w3.org/2000/svg';
+let zoom = 1, selected = null;
+
+function measure(t, size, weight) {
+  const c = document.createElement('canvas').getContext('2d');
+  c.font = `${weight||400} ${size}px 'Noto Sans SC'`;
+  return c.measureText(t).width;
+}
+function el(tag, attrs) { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); return e; }
+
+function layout() {
+  const W = document.getElementById('canvasWrap').clientWidth, H = document.getElementById('canvasWrap').clientHeight;
+  const nodes = [], edges = [];
+  const root = { ...TREE, x: W/2, y: H/2, w: measure(TREE.text,17,700)+44, h:38, depth:0 };
+  nodes.push(root);
+  const left = TREE.children.filter((_,i)=>i%2===0), right = TREE.children.filter((_,i)=>i%2===1);
+  function side(list, dir) {
+    const total = list.reduce((s,b)=>s + Math.max(b.children.length,1)*46 + 30, -30);
+    let y = H/2 - total/2;
+    list.forEach(b => {
+      const bw = measure(b.text,14,500)+36, bh = 30;
+      const span = Math.max(b.children.length,1)*46 + 30;
+      const bx = W/2 + dir*(root.w/2 + 130) + (dir>0 ? 0 : -bw);
+      const by = y + span/2 - bh/2;
+      nodes.push({ ...b, x:bx, y:by, w:bw, h:bh, depth:1 });
+      edges.push({ x1:root.x+dir*root.w/2, y1:root.y+root.h/2, x2:bx+(dir>0?0:bw), y2:by+bh/2 });
+      const cw = Math.max(...b.children.map(c=>measure(c.text,13,400)+30));
+      const cx = bx + (dir>0 ? bw+90 : -90-cw);
+      b.children.forEach((c,ci) => {
+        const cwid = measure(c.text,13,400)+30, ch = 26;
+        const cxn = cx + (cw-cwid)/2;
+        const cyAbs = y + 30 + ci*46 + 10;
+        nodes.push({ ...c, x:cxn, y:cyAbs, w:cwid, h:ch, depth:2 });
+        edges.push({ x1:bx+(dir>0?bw:0), y1:by+bh/2, x2:cxn+(dir>0?0:cwid), y2:cyAbs+ch/2 });
+      });
+      y += span;
+    });
+  }
+  side(left, -1); side(right, 1);
+  return { nodes, edges };
+}
+
+function render() {
+  const { nodes, edges } = layout();
+  svg.innerHTML = '';
+  const g = el('g', { transform:`scale(${zoom})` });
+  // 远端光标（协作演示）
+  edges.forEach(e => {
+    const mx = (e.x1+e.x2)/2;
+    g.appendChild(el('path', { class:'edge', d:`M${e.x1},${e.y1} C${mx},${e.y1} ${mx},${e.y2} ${e.x2},${e.y2}` }));
+  });
+  nodes.forEach(n => {
+    const grp = el('g', { class:'node'+(n.depth===0?' root':''), 'data-text':n.text });
+    const rect = el('rect', { class:'body', x:n.x, y:n.y, width:n.w, height:n.h, rx:n.depth===0?6:5,
+      fill: n.depth===0 ? '#1a1a1a' : '#fff', stroke: n.depth===0 ? '#1a1a1a' : '#cfcfcb', 'stroke-width':1.2 });
+    grp.appendChild(rect);
+    const t = el('text', { x:n.x+n.w/2, y:n.y+n.h/2+(n.depth===0?6:4.5), 'text-anchor':'middle',
+      'font-size': n.depth===0?17:(n.depth===1?14:13), 'font-weight': n.depth===0?700:(n.depth===1?500:400),
+      fill: n.depth===0 ? '#fff' : '#2a2a2a' });
+    t.textContent = n.text; grp.appendChild(t);
+    if (n.depth===1) { // 分枝色点：内容唯一的颜色
+      grp.appendChild(el('circle', { cx:n.x + (n.x < svg.clientWidth/2 ? n.w+10 : -10), cy:n.y+n.h/2, r:3.5, fill:n.color }));
+    }
+    if (n.badges && n.badges.includes('comment')) {
+      const bx = n.x+n.w-6, by = n.y-8;
+      const b = el('g', { class:'badge' });
+      b.appendChild(el('circle', { cx:bx, cy:by, r:8, fill:'#fff', stroke:'#cfcfcb' }));
+      const bt = el('text', { x:bx, y:by+3.5, 'text-anchor':'middle', 'font-size':9, fill:'#888' });
+      bt.textContent = '💬'; b.appendChild(bt); grp.appendChild(b);
+    }
+    if (n.task) {
+      const ty = n.y+n.h+5;
+      grp.appendChild(el('rect', { x:n.x, y:ty, width:n.w, height:3, rx:1.5, fill:'#efefec' }));
+      grp.appendChild(el('rect', { x:n.x, y:ty, width:n.w*n.task.p/100, height:3, rx:1.5, fill:'#1a1a1a' }));
+    }
+    grp.addEventListener('click', ev => { ev.stopPropagation(); selectNode(grp, n); });
+    grp.addEventListener('contextmenu', ev => { ev.preventDefault(); ev.stopPropagation(); selectNode(grp, n); openCtx(ev.clientX, ev.clientY); });
+    g.appendChild(grp);
+  });
+  // 远端光标演示：周作人在「9 档进度」
+  const cur = el('g', {});
+  cur.appendChild(el('path', { d:'M0,0 L0,14 L4,10.5 L7,15 L8.6,13.8 L5.6,9.2 L11,9 Z', fill:'#a08b6d', transform:'translate(0,0)' }));
+  const flag = el('g', {});
+  cur.appendChild(el('rect', { x:12, y:8, width:52, height:16, rx:3, fill:'#a08b6d' }));
+  const ct = el('text', { x:38, y:20, 'text-anchor':'middle', 'font-size':10, fill:'#fff' });
+  ct.textContent = '周作人'; cur.appendChild(ct);
+  const target = nodes.find(n=>n.text==='9 档进度');
+  if (target) cur.setAttribute('transform', `translate(${target.x+target.w+14},${target.y-2})`);
+  g.appendChild(cur);
+  svg.appendChild(g);
+}
+
+function selectNode(grp, n) {
+  svg.querySelectorAll('.node.selected').forEach(x=>x.classList.remove('selected'));
+  grp.classList.add('selected'); selected = n;
+  document.getElementById('inspTitle').textContent = '格式 · ' + n.text;
+  document.getElementById('taskSec').style.display = n.task || n.text==='任务管理' ? '' : 'none';
+  document.getElementById('inspector').classList.add('show');
+}
+
+/* ================= ⌘K ================= */
+const COMMANDS = [
+  { g:'插入', items:[
+    ['⤵','插入子级主题','Tab'], ['→','插入同级主题','Enter'], ['⤴','插入上级主题','⇧ Tab'], ['∑','添加概要','⌘ ⇧ S'],
+  ]},
+  { g:'编辑', items:[
+    ['↺','撤销','⌘ Z'], ['↻','重做','⌘ ⇧ Z'], ['▦','格式刷（双击粘滞）','⌘ ⇧ C'], ['⌕','查找替换','⌘ F'],
+  ]},
+  { g:'画布', items:[
+    ['◈','切换结构：脑图 / 树 / 组织图',''], ['❖','12 套主题','⌘ T'], ['◐','简洁模式',''],
+  ]},
+  { g:'文档', items:[
+    ['⇪','导出 XMind / PNG / JPG','⌘ E'], ['⏱','版本快照与恢复',''], ['≡','文档动态',''], ['⌨','快捷键面板','⌘ /'],
+  ]},
+];
+const cmdk = document.getElementById('cmdk'), overlay = document.getElementById('overlay'), cmdkList = document.getElementById('cmdkList'), cmdkInput = document.getElementById('cmdkInput');
+function renderCmdk(filter='') {
+  cmdkList.innerHTML = '';
+  COMMANDS.forEach(gr => {
+    const items = gr.items.filter(i => i[1].includes(filter));
+    if (!items.length) return;
+    const gh = document.createElement('div'); gh.className='cmdk-group'; gh.textContent = gr.g; cmdkList.appendChild(gh);
+    items.forEach((i,idx) => {
+      const r = document.createElement('div'); r.className = 'row' + (cmdkList.querySelectorAll('.row').length===0?' on':'');
+      r.innerHTML = `<span class="ic">${i[0]}</span>${i[1]}<span class="kb">${i[2]?`<kbd>${i[2]}</kbd>`:''}</span>`;
+      r.onclick = () => { closeCmdk(); toast(`已执行：${i[1]}`); };
+      cmdkList.appendChild(r);
+    });
+  });
+}
+function openCmdk() { renderCmdk(); cmdk.classList.add('show'); overlay.classList.add('show'); cmdkInput.value=''; cmdkInput.focus(); }
+function closeCmdk() { cmdk.classList.remove('show'); overlay.classList.remove('show'); }
+cmdkInput.addEventListener('input', e => renderCmdk(e.target.value.trim()));
+document.getElementById('cmdkHint').onclick = openCmdk;
+overlay.onclick = closeCmdk;
+document.addEventListener('keydown', e => {
+  if ((e.metaKey||e.ctrlKey) && e.key.toLowerCase()==='k') { e.preventDefault(); cmdk.classList.contains('show') ? closeCmdk() : openCmdk(); }
+  if (e.key==='Escape') { closeCmdk(); closeCtx(); document.getElementById('inspector').classList.remove('show'); }
+});
+
+/* ================= 右键菜单 ================= */
+const ctx = document.getElementById('ctx');
+const CTX_ITEMS = [
+  ['插入子级主题','Tab'], ['插入同级主题','Enter'], ['添加概要',''], null,
+  ['复制','⌘ C'], ['剪切','⌘ X'], ['粘贴','⌘ V'], null, ['删除节点','⌫','danger'],
+];
+function openCtx(x, y) {
+  ctx.innerHTML = '';
+  CTX_ITEMS.forEach(i => {
+    if (!i) { const s=document.createElement('div'); s.className='sep'; ctx.appendChild(s); return; }
+    const r = document.createElement('div'); r.className = 'row' + (i[2]?' danger':'');
+    r.innerHTML = `${i[0]}<span class="kb">${i[1]?`<kbd>${i[1]}</kbd>`:''}</span>`;
+    r.onclick = () => { closeCtx(); toast(`已执行：${i[0]}`); };
+    ctx.appendChild(r);
+  });
+  ctx.style.left = Math.min(x, innerWidth-240)+'px'; ctx.style.top = Math.min(y, innerHeight-320)+'px';
+  ctx.classList.add('show');
+}
+function closeCtx() { ctx.classList.remove('show'); }
+document.addEventListener('click', e => { if (!ctx.contains(e.target)) closeCtx(); });
+document.getElementById('canvasWrap').addEventListener('click', () => {
+  svg.querySelectorAll('.node.selected').forEach(x=>x.classList.remove('selected'));
+  document.getElementById('inspector').classList.remove('show');
+});
+
+/* ================= 杂项交互 ================= */
+const swatches = document.getElementById('swatches');
+['#ffffff','#f3efe4','#dfe6ea','#e6dfd5','#dcd9e2','#1a1a1a'].forEach((c,i) => {
+  const s = document.createElement('span'); s.className='sw'+(i===0?' on':''); s.style.background=c;
+  s.onclick = () => { swatches.querySelectorAll('.sw').forEach(x=>x.classList.remove('on')); s.classList.add('on'); toast('节点填充已更新'); };
+  swatches.appendChild(s);
+});
+document.getElementById('inspClose').onclick = () => document.getElementById('inspector').classList.remove('show');
+document.getElementById('star').onclick = function(){ this.classList.toggle('on'); toast(this.classList.contains('on')?'已加星标':'已取消星标'); };
+document.querySelectorAll('.view-tab').forEach(t => t.onclick = () => {
+  document.querySelectorAll('.view-tab').forEach(x=>x.classList.remove('on')); t.classList.add('on');
+  toast(t.dataset.v==='table' ? '已切换到表格视图' : '已切换到脑图视图');
+});
+document.querySelectorAll('.bbtn').forEach(b => b.onclick = () => {
+  const a = b.dataset.act;
+  if (a==='zin') zoom = Math.min(3, zoom+0.1);
+  if (a==='zout') zoom = Math.max(0.25, zoom-0.1);
+  if (a==='full') document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen();
+  if (a==='center'||a==='fit') { zoom = 1; toast(a==='center'?'已回到中心':'已适应画布'); }
+  document.getElementById('zoomLabel').textContent = Math.round(zoom*100)+'%';
+  render();
+});
+document.getElementById('presenceBtn').onclick = () => toast('成员面板：林晚照、周作人与你在线');
+let toastTimer;
+function toast(msg) {
+  const t = document.getElementById('toast'); t.textContent = msg; t.classList.add('show');
+  clearTimeout(toastTimer); toastTimer = setTimeout(()=>t.classList.remove('show'), 1800);
+}
+/* 保存状态循环演示 */
+setInterval(() => {
+  const el = document.getElementById('saveText');
+  el.textContent = el.textContent.includes('保存中') ? '已保存 14:33' : '保存中…';
+}, 6000);
+
+window.addEventListener('resize', render);
+render();
+</script>
+</body>
+</html>

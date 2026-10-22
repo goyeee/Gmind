@@ -172,6 +172,13 @@ describe('CollabService 快照脏标志 TOCTOU（M4 挂账清偿）', () => {
       { create: (() => ({})) as unknown as Repository<VersionEntity>['create'], save },
     );
 
+  /** 快照用非空模板 doc（多画布：countAliveReachable 缺省画布需真实画布，空 doc 会 CANVAS_NOT_FOUND）。 */
+  const snapDoc = (): Y.Doc => {
+    const d = new Y.Doc();
+    Y.applyUpdate(d, docToState(createTemplateDoc({ title: '协同', children: [] })));
+    return d;
+  };
+
   it('插入在途时到达的 onChange → 完成后 dirty 仍为 true（并发编辑不丢脏标记）', async () => {
     const NOW = Date.now();
     // save 拦截为「在途注入 onChange」：insertVersionSnapshot 的 await 尚未 resolve 时
@@ -184,7 +191,7 @@ describe('CollabService 快照脏标志 TOCTOU（M4 挂账清偿）', () => {
         return row;
       }) as unknown as Repository<VersionEntity>['save'],
     );
-    const meta = armSnapshot(service, new Y.Doc());
+    const meta = armSnapshot(service, snapDoc());
     metaRef.current = meta;
 
     await expect(service.snapshotIfDue(FILE_ID, NOW)).resolves.toBe(true);
@@ -195,7 +202,7 @@ describe('CollabService 快照脏标志 TOCTOU（M4 挂账清偿）', () => {
     const service = makeSnapshotService(vi.fn(async () => {
       throw new Error('snapshot db down');
     }));
-    const meta = armSnapshot(service, new Y.Doc());
+    const meta = armSnapshot(service, snapDoc());
 
     await expect(service.snapshotIfDue(FILE_ID, Date.now())).rejects.toThrow('snapshot db down');
     expect(meta.dirty).toBe(true); // 失败恢复脏标记
@@ -205,7 +212,7 @@ describe('CollabService 快照脏标志 TOCTOU（M4 挂账清偿）', () => {
     const service = makeSnapshotService(vi.fn(async () => {
       throw new Error('snapshot db down');
     }));
-    const meta = armSnapshot(service, new Y.Doc());
+    const meta = armSnapshot(service, snapDoc());
 
     await expect(service.snapshotIfDirty(FILE_ID, Date.now())).rejects.toThrow('snapshot db down');
     expect(meta.dirty).toBe(true);

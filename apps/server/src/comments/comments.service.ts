@@ -2,7 +2,7 @@ import { BadRequestException, Inject, Injectable, NotFoundException } from '@nes
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import * as Y from 'yjs';
-import { createTemplateDoc, docFromState, getNode } from '@gmind/core';
+import { allAliveNodeIds, createTemplateDoc, docFromState, getNode } from '@gmind/core';
 import { CollabService } from '../collab/collab.service';
 import { EventsService } from '../events/events.service';
 import { FileCollaboratorEntity } from '../files/file-collaborator.entity';
@@ -310,14 +310,10 @@ export class CommentsService {
     }
   }
 
-  /** 存活节点 id 集（binding 口径：getNode !== null 且未墓碑；docFromState 已 normalize）。 */
+  /** 存活节点 id 集（binding 口径：getNode !== null 且未墓碑；docFromState 已 normalize）。
+   *  多画布收口：读取路径适配，语义不变——改经 core allAliveNodeIds（全存活画布并集）。 */
   private aliveNodeIds(doc: Y.Doc): Set<string> {
-    const alive = new Set<string>();
-    const nodes = doc.getMap('nodes') as Y.Map<Y.Map<unknown>>;
-    for (const [id, node] of nodes.entries()) {
-      if (node.get('deleted') !== true) alive.add(id);
-    }
-    return alive;
+    return allAliveNodeIds(doc);
   }
 
   /** 评论更新广播（FR-CMT-003）：见 CollabService.broadcastStateless。 */

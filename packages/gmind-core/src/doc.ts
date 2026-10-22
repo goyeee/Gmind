@@ -3,6 +3,7 @@ import { ulid } from 'ulid';
 import type { StructureType } from '@gmind/shared';
 import { applySideBackfill, normalizeTree, planSideBackfill } from './repair';
 import { ORIGIN_SYSTEM } from './undo';
+import { LEGACY_CANVAS_ID, canvasNodesMap, canvasOrderArr, canvasesMap } from './canvas';
 
 // doc.test.ts 与消费方统一从 './doc' 导入全部公开 API；数据本体在 templates.ts（import type 单向依赖，无运行时环）。
 export { SEED_TEMPLATES } from './templates';
@@ -28,7 +29,73 @@ export interface TemplateSpec {
   children: TemplateNodeSpec[];
 }
 
-/** 按 spec §4.1 的 Y.Doc 结构构建文档（M0 仅写入用到的字段，字段名与 §4.1 严格一致）。 */
+/** 旧形状判定：顶层 nodes 非空且 canvases 为空（迁移幂等的基础）。 */
+export function isLegacyDocShape(doc: Y.Doc): boolean {
+  return canvasesMap(doc).size === 0 && doc.getMap('nodes').size > 0;
+}
+
+/** 递归深拷贝一个已接入文档的 Y 值（Yjs 共享类型不可换父/不可多重引用——迁移必须
+ *  逐键逐元素重建，否则旧壳删键 GC 后新画布引用变空壳，远端副本解码发散）。
+ *  纪律：新 Y 类型未接入前只写不读，故一律自底向上构建（子值先拷好再 set/push 进
+ *  父级），最外层由调用方接入文档。
+ *  2026-10-22 评审 minor 收口：导出与 restore.ts 共享（原 restore.ts 有同名本地副本，
+ *  防漂移已删，仅此一份实现）。 */
+export function deepCopyValue(value: unknown): unknown {
+  if (value instanceof Y.Map) {
+    const m = new Y.Map<unknown>();
+    value.forEach((v, k) => {
+      m.set(k, deepCopyValue(v));
+    });
+    return m;
+  }
+  if (value instanceof Y.Array) {
+    const arr = new Y.Array<unknown>();
+    // value 是源文档已接入类型，读取合法；元素可能是标量或 Y.Map（嵌套 map 同理递归）
+    arr.push(value.toArray().map(deepCopyValue));
+    return arr;
+  }
+  return value; // 标量原样（text/parentId/side/task/icons/custom 的叶子字段…）
+}
+
+/** 深拷贝 nodes/summaries 根 Map（值为节点/概要 Map，逐节点 deepCopyValue 重建）。 */
+function copyNodesDeep(src: Y.Map<unknown>, dst: Y.Map<unknown>): void {
+  src.forEach((value, key) => {
+    if (value instanceof Y.Map) dst.set(key, deepCopyValue(value));
+  });
+}
+
+/** 旧文档 → 多画布迁移（装载通道，ORIGIN_SYSTEM；确定性：id/name 常量，structure/theme 取 meta 现值）。 */
+export function migrateLegacyToCanvases(doc: Y.Doc): void {
+  if (!isLegacyDocShape(doc)) return; // 幂等
+  doc.transact(() => {
+    const meta = doc.getMap('meta');
+    const canvas = new Y.Map<unknown>();
+    canvas.set('name', '画布 1');
+    canvas.set('rootId', ROOT_NODE_ID);
+    canvas.set('structureType', meta.get('structureType') ?? 'mindmap');
+    canvas.set('themeId', meta.get('themeId') ?? 'gmind-light');
+    const nodes = new Y.Map<unknown>();
+    copyNodesDeep(doc.getMap('nodes'), nodes);
+    canvas.set('nodes', nodes);
+    const summaries = new Y.Map<unknown>();
+    const legacySummaries = doc.getMap('summaries');
+    // 旧文档可能没有 summaries 根类型内容——判空再拷（空壳不重建）。
+    if (legacySummaries.size > 0) copyNodesDeep(legacySummaries, summaries);
+    canvas.set('summaries', summaries);
+    canvasesMap(doc).set(LEGACY_CANVAS_ID, canvas);
+    canvasOrderArr(doc).push([LEGACY_CANVAS_ID]);
+    meta.set('activeCanvasId', LEGACY_CANVAS_ID);
+    // 旧根类型清空（Yjs 根类型不可删除，空壳残留无害）
+    const legacyNodes = doc.getMap('nodes');
+    legacyNodes.forEach((_, k) => legacyNodes.delete(k));
+    legacySummaries.forEach((_, k) => legacySummaries.delete(k));
+  }, ORIGIN_SYSTEM);
+}
+
+/** 按 spec §4.1 的 Y.Doc 结构构建文档（M0 仅写入用到的字段，字段名与 §4.1 严格一致）。
+ *  多画布化（Task 2）：产物为新形状——单画布承载 nodes/summaries，rootId 恒 'root'
+ *  （第一画布兼容纪律），画布 id 用 ulid（新建路径非迁移路径，允许 ulid）；顶层
+ *  `nodes` 根类型不再写（保持不存在）。 */
 export function createTemplateDoc(spec: TemplateSpec): Y.Doc {
   const doc = new Y.Doc();
   doc.transact(() => {
@@ -37,7 +104,13 @@ export function createTemplateDoc(spec: TemplateSpec): Y.Doc {
     meta.set('structureType', spec.structure ?? 'mindmap');
     meta.set('themeId', spec.theme ?? 'gmind-light');
 
-    const nodes = doc.getMap('nodes');
+    const canvasId = ulid();
+    const canvas = new Y.Map<unknown>();
+    canvas.set('name', '画布 1');
+    canvas.set('rootId', ROOT_NODE_ID);
+    canvas.set('structureType', spec.structure ?? 'mindmap');
+    canvas.set('themeId', spec.theme ?? 'gmind-light');
+    const nodes = new Y.Map<unknown>();
     const root = new Y.Map();
     nodes.set(ROOT_NODE_ID, root);
     root.set('text', spec.rootText ?? spec.title);
@@ -47,6 +120,11 @@ export function createTemplateDoc(spec: TemplateSpec): Y.Doc {
     for (const child of spec.children) {
       buildSubtree(nodes, rootChildren, child, ROOT_NODE_ID);
     }
+    canvas.set('nodes', nodes);
+    canvas.set('summaries', new Y.Map<unknown>());
+    canvasesMap(doc).set(canvasId, canvas);
+    canvasOrderArr(doc).push([canvasId]);
+    meta.set('activeCanvasId', canvasId);
   });
   return doc;
 }
@@ -77,6 +155,10 @@ export function docToState(doc: Y.Doc): Uint8Array {
 export function docFromState(state: Uint8Array): Y.Doc {
   const doc = new Y.Doc();
   Y.applyUpdate(doc, state);
+  // 旧形状 → 多画布迁移（多画布 Task 2）：必须在 normalizeTree 之前执行——迁移后
+  // 形状才进收敛（Task 5 起 normalizeTree 逐存活画布跑规则 ⓪-⑨）。确定性：画布
+  // id/name 常量、structure/theme 取 meta 现值，两副本装载结果一致。
+  migrateLegacyToCanvases(doc);
   // 导入即收敛（Task 9 修复轮 2）：导入/恢复是唯一「外部状态直入」的入口，状态可能
   // 携带残缺写入的规则违例（换父败者侧、孤儿等）——入口处全量 normalize 一次，
   // 保证 docFromState 返回的文档恒满足 §4.2 全部不变量。
@@ -97,6 +179,7 @@ export function docFromState(state: Uint8Array): Y.Doc {
   return doc;
 }
 
-export function countNodes(doc: Y.Doc): number {
-  return doc.getMap('nodes').size;
+export function countNodes(doc: Y.Doc, canvasId?: string): number {
+  // 多画布口径：canvasId 缺省走 resolveCanvasId 兼容层（第一画布）。
+  return canvasNodesMap(doc, canvasId).size;
 }

@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import * as Y from 'yjs';
+import { ulid } from 'ulid';
 import { ICON_GROUPS, iconValuesOf } from './constants';
-import { ROOT_NODE_ID, createTemplateDoc, docFromState, docToState } from './doc';
+import { createTemplateDoc, docFromState, docToState } from './doc';
 import type { TemplateNodeSpec } from './doc';
+import { canvasNodesMap, canvasOrderArr, listCanvases, rootIdOf } from './canvas';
 import {
   ORIGIN_SYSTEM,
   ORIGIN_USER,
@@ -84,18 +86,19 @@ function randText(rnd: () => number): string {
 
 // ── 快照 / 存活集 / 同步辅助 ─────────────────────────────────────────────────
 
-/** 全文档节点快照（getNode 全量逐节点，收敛断言的 deep-equal 口径）。 */
-function fullSnapshot(doc: Y.Doc): Record<string, NodeSnapshot | null> {
+/** 单画布节点快照（getNode 全量逐节点，收敛断言的 deep-equal 口径）。 */
+function fullSnapshot(doc: Y.Doc, canvasId?: string): Record<string, NodeSnapshot | null> {
   const out: Record<string, NodeSnapshot | null> = {};
-  for (const id of doc.getMap('nodes').keys()) out[id] = getNode(doc, id);
+  for (const id of canvasNodesMap(doc, canvasId).keys()) out[id] = getNode(doc, id, canvasId);
   return out;
 }
 
-/** 本副本存活节点 id 集（root 恒存活；includeRoot=false 供结构操作选靶）。 */
-function aliveIds(doc: Y.Doc, includeRoot: boolean): string[] {
+/** 本副本某画布存活节点 id 集（该画布 root 恒存活；includeRoot=false 供结构操作选靶）。 */
+function aliveIds(doc: Y.Doc, includeRoot: boolean, canvasId?: string): string[] {
   const out: string[] = [];
-  for (const [id, node] of doc.getMap('nodes').entries()) {
-    if (id === ROOT_NODE_ID) {
+  const rootId = rootIdOf(doc, canvasId);
+  for (const [id, node] of canvasNodesMap(doc, canvasId).entries()) {
+    if (id === rootId) {
       if (includeRoot) out.push(id);
       continue;
     }
@@ -105,20 +108,20 @@ function aliveIds(doc: Y.Doc, includeRoot: boolean): string[] {
 }
 
 /** 按文本查节点 id（仅用于克隆后、任何写操作前的基线节点定位；模板生成的 id 不可预知）。 */
-function findIdByText(doc: Y.Doc, text: string): string {
-  for (const [id, node] of doc.getMap('nodes').entries()) {
+function findIdByText(doc: Y.Doc, text: string, canvasId?: string): string {
+  for (const [id, node] of canvasNodesMap(doc, canvasId).entries()) {
     if ((node as Y.Map<unknown>).get('text') === text) return id;
   }
   throw new Error(`test helper: node with text "${text}" not found`);
 }
 
 /**
- * 在 doc 本地给 id 挑一个合法换父目标：存活、非自身、不在自身子树（root 恒合法兜底）。
+ * 在 doc 本地给 id 挑一个合法换父目标：存活、非自身、不在自身子树（该画布 root 恒合法兜底）。
  * 偏置场景经 preserve 保底（root + P1 恒在候选），候选为空属测试基建问题，显式报错。
  */
-function legalNewParent(doc: Y.Doc, id: string, rnd: () => number, exclude?: string): string {
-  const banned = new Set([id, ...(exclude ? [exclude] : []), ...subtreeIds(doc, id)]);
-  const candidates = aliveIds(doc, true).filter((p) => !banned.has(p));
+function legalNewParent(doc: Y.Doc, id: string, rnd: () => number, exclude?: string, canvasId?: string): string {
+  const banned = new Set([id, ...(exclude ? [exclude] : []), ...subtreeIds(doc, id, canvasId)]);
+  const candidates = aliveIds(doc, true, canvasId).filter((p) => !banned.has(p));
   if (candidates.length === 0) {
     throw new Error('bias: 换父无合法目标（preserve 保底失效）——测试基建问题，非收敛缺陷');
   }
@@ -140,16 +143,33 @@ function exchangeAll(clients: Y.Doc[]): void {
 
 // ── 收敛三件套断言 ───────────────────────────────────────────────────────────
 
-function assertConvergenceTrio(clients: Y.Doc[], label: string): void {
-  const snapA = fullSnapshot(clients[0]!);
-  expect(snapA, `${label}：三端全量快照 A/B deep-equal`).toEqual(fullSnapshot(clients[1]!));
-  expect(snapA, `${label}：三端全量快照 A/C deep-equal`).toEqual(fullSnapshot(clients[2]!));
-  const counts = clients.map((d) => countAliveReachable(d));
-  expect(counts[0], `${label}：服务端口径 countAliveReachable A=B`).toBe(counts[1]);
-  expect(counts[0], `${label}：服务端口径 countAliveReachable A=C`).toBe(counts[2]);
-  expect(normalizeTree(clients[0]!, ORIGIN_SYSTEM), `${label}：A 全量复扫零残留`).toBe(0);
-  expect(normalizeTree(clients[1]!, ORIGIN_SYSTEM), `${label}：B 全量复扫零残留`).toBe(0);
-  expect(normalizeTree(clients[2]!, ORIGIN_SYSTEM), `${label}：C 全量复扫零残留`).toBe(0);
+/** 收敛三件套（多画布口径，Task 5）：逐存活画布全量快照 deep-equal + 画布序/画布清单
+ *  一致 + normalizeTree 全量复扫零残留 + 逐画布 countAliveReachable 一致。 */
+function assertConvergenceTrio(clients: Y.Doc[], label: string, canvasIds: string[]): void {
+  for (const canvasId of canvasIds) {
+    const snapA = fullSnapshot(clients[0]!, canvasId);
+    expect(snapA, `${label}：三端画布 ${canvasId} 全量快照 A/B deep-equal`).toEqual(
+      fullSnapshot(clients[1]!, canvasId),
+    );
+    if (clients.length > 2) {
+      expect(snapA, `${label}：三端画布 ${canvasId} 全量快照 A/C deep-equal`).toEqual(
+        fullSnapshot(clients[2]!, canvasId),
+      );
+    }
+    const counts = clients.map((d) => countAliveReachable(d, canvasId));
+    for (let i = 1; i < counts.length; i += 1) {
+      expect(counts[0], `${label}：画布 ${canvasId} 服务端口径 countAliveReachable 一致`).toBe(counts[i]);
+    }
+  }
+  // 画布级收敛：canvasOrder 与存活画布清单（name/rootId/structureType/themeId）一致
+  const orderA = canvasOrderArr(clients[0]!).toArray();
+  for (let i = 1; i < clients.length; i += 1) {
+    expect(orderA, `${label}：canvasOrder 一致`).toEqual(canvasOrderArr(clients[i]!).toArray());
+    expect(listCanvases(clients[0]!), `${label}：listCanvases 一致`).toEqual(listCanvases(clients[i]!));
+  }
+  for (let i = 0; i < clients.length; i += 1) {
+    expect(normalizeTree(clients[i]!, ORIGIN_SYSTEM), `${label}：端 ${i} 全量复扫零残留`).toBe(0);
+  }
 }
 
 // ── 随机操作生成器（绝不抛错）────────────────────────────────────────────────
@@ -165,25 +185,28 @@ function clientOp(
   logs: string[],
   label: string,
   preserve: ReadonlySet<string>,
+  canvasIds: string[],
 ): void {
-  const aliveAll = aliveIds(doc, true);
-  const aliveNonRoot = aliveIds(doc, false);
+  // 跨画布维度（Task 5 新增）：每个操作先抽画布，后续全部读写限定该画布子图。
+  const canvasId = pick(rnd, canvasIds);
+  const aliveAll = aliveIds(doc, true, canvasId);
+  const aliveNonRoot = aliveIds(doc, false, canvasId);
   switch (randInt(rnd, 7)) {
     case 0: {
-      // addChild：随机存活父（含 root）+ 随机下标（越界由 clamp 语义兜底）
+      // addChild：随机存活父（含该画布 root）+ 随机下标（越界由 clamp 语义兜底）
       const parent = pick(rnd, aliveAll);
-      const index = randInt(rnd, childrenIds(doc, parent).length + 1);
+      const index = randInt(rnd, childrenIds(doc, parent, canvasId).length + 1);
       const text = randText(rnd);
-      const id = addChild(doc, parent, { index, text }, ORIGIN_USER);
-      logs.push(`${label} addChild(parent=${parent} idx=${index} text="${text}") -> ${id}`);
+      const id = addChild(doc, parent, { index, text }, ORIGIN_USER, canvasId);
+      logs.push(`${label} addChild(canvas=${canvasId} parent=${parent} idx=${index} text="${text}") -> ${id}`);
       break;
     }
     case 1: {
       // setText：小字母表短串（含 root，高频同靶碰撞）
       const id = pick(rnd, aliveAll);
       const text = randText(rnd);
-      setText(doc, id, text, ORIGIN_USER);
-      logs.push(`${label} setText(${id} "${text}")`);
+      setText(doc, id, text, ORIGIN_USER, canvasId);
+      logs.push(`${label} setText(canvas=${canvasId} ${id} "${text}")`);
       break;
     }
     case 2: {
@@ -193,13 +216,13 @@ function clientOp(
         const id = pick(rnd, aliveNonRoot);
         if (preserve.has(id)) continue;
         const newParent = pick(rnd, aliveAll);
-        if (id === newParent || subtreeIds(doc, id).includes(newParent)) continue;
-        const index = randInt(rnd, childrenIds(doc, newParent).length + 1);
-        moveNode(doc, id, newParent, index, ORIGIN_USER);
-        logs.push(`${label} moveNode(${id} -> ${newParent} idx=${index})`);
+        if (id === newParent || subtreeIds(doc, id, canvasId).includes(newParent)) continue;
+        const index = randInt(rnd, childrenIds(doc, newParent, canvasId).length + 1);
+        moveNode(doc, id, newParent, index, ORIGIN_USER, canvasId);
+        logs.push(`${label} moveNode(canvas=${canvasId} ${id} -> ${newParent} idx=${index})`);
         done = true;
       }
-      if (!done) logs.push(`${label} moveNode(跳过：重抽样均命中自身子树/保留靶)`);
+      if (!done) logs.push(`${label} moveNode(canvas=${canvasId} 跳过：重抽样均命中自身子树/保留靶)`);
       break;
     }
     case 3: {
@@ -207,12 +230,12 @@ function clientOp(
       let done = false;
       for (let t = 0; t < 8 && !done && aliveNonRoot.length > 0; t += 1) {
         const id = pick(rnd, aliveNonRoot);
-        if (subtreeIds(doc, id).some((m) => preserve.has(m))) continue;
-        deleteNodes(doc, [id], ORIGIN_USER);
-        logs.push(`${label} deleteNodes([${id}])`);
+        if (subtreeIds(doc, id, canvasId).some((m) => preserve.has(m))) continue;
+        deleteNodes(doc, [id], ORIGIN_USER, canvasId);
+        logs.push(`${label} deleteNodes(canvas=${canvasId} [${id}])`);
         done = true;
       }
-      if (!done) logs.push(`${label} deleteNodes(跳过：重抽样均波及保留靶/无存活节点)`);
+      if (!done) logs.push(`${label} deleteNodes(canvas=${canvasId} 跳过：重抽样均波及保留靶/无存活节点)`);
       break;
     }
     case 4: {
@@ -220,23 +243,23 @@ function clientOp(
       const id = pick(rnd, aliveAll);
       const group = pick(rnd, ICON_GROUPS);
       const value = rnd() % 4 === 0 ? null : pick(rnd, iconValuesOf(group));
-      setIcon(doc, id, group, value, ORIGIN_USER);
-      logs.push(`${label} setIcon(${id} ${group}=${String(value)})`);
+      setIcon(doc, id, group, value, ORIGIN_USER, canvasId);
+      logs.push(`${label} setIcon(canvas=${canvasId} ${id} ${group}=${String(value)})`);
       break;
     }
     case 5: {
       // setStyle：fill 取调色板或 null（删键）
       const id = pick(rnd, aliveAll);
       const fill = pick(rnd, FILL_PALETTE);
-      setStyle(doc, id, { fill }, ORIGIN_USER);
-      logs.push(`${label} setStyle(${id} fill=${String(fill)})`);
+      setStyle(doc, id, { fill }, ORIGIN_USER, canvasId);
+      logs.push(`${label} setStyle(canvas=${canvasId} ${id} fill=${String(fill)})`);
       break;
     }
     default: {
       // toggleCollapse（显式 user origin：本套件不涉及撤销栈，统一操作来源）
       const id = pick(rnd, aliveAll);
-      toggleCollapse(doc, id, ORIGIN_USER);
-      logs.push(`${label} toggleCollapse(${id})`);
+      toggleCollapse(doc, id, ORIGIN_USER, canvasId);
+      logs.push(`${label} toggleCollapse(canvas=${canvasId} ${id})`);
       break;
     }
   }
@@ -279,13 +302,16 @@ function chaosRounds(
   rounds: number,
   phase: string,
   preserve: ReadonlySet<string> = new Set(),
+  canvasIds?: string[],
 ): void {
+  // 缺省 = 第一画布（既有单画布场景零感知）；跨画布场景显式传全部存活画布。
+  const ids = canvasIds ?? [canvasOrderArr(clients[0]!).get(0) as string];
   for (let round = 1; round <= rounds; round += 1) {
     for (let ci = 0; ci < clients.length; ci += 1) {
       const doc = clients[ci]!;
       const nOps = 2 + randInt(rnd, 2);
       for (let k = 0; k < nOps; k += 1) {
-        clientOp(doc, rnd, logs, `${phase} r${round} c${ci + 1}#${k + 1}`, preserve);
+        clientOp(doc, rnd, logs, `${phase} r${round} c${ci + 1}#${k + 1}`, preserve, ids);
       }
       broadcast(doc, clients.filter((_, j) => j !== ci));
     }
@@ -298,12 +324,13 @@ function runChaosScenario(seed: number): void {
   ulidCounter = 0; // 同种子 ⇒ 同 id 序列 ⇒ 全场景可复现
   const base = createTemplateDoc(buildBaseSpec(rnd));
   const clients = makeClients(docToState(base), seed);
+  const canvasIds = [canvasOrderArr(clients[0]!).get(0) as string];
   const detaches = clients.map((d) => attachRemoteNormalization(d));
   const logs: string[] = [];
   try {
     chaosRounds(clients, rnd, logs, 10, `[seed=${seed}]`);
     exchangeAll(clients); // 最终两两交换
-    assertConvergenceTrio(clients, `chaos seed=${seed}`);
+    assertConvergenceTrio(clients, `chaos seed=${seed}`, canvasIds);
   } catch (e) {
     console.error(`[chaos] 收敛失败 seed=${seed}，完整操作日志（按执行序）：\n${logs.join('\n')}`);
     throw e;
@@ -340,6 +367,7 @@ function runBiasScenario(
     ],
   });
   const clients = makeClients(docToState(base), seed);
+  const canvasIds = [canvasOrderArr(clients[0]!).get(0) as string];
   // 冲突靶 X 与兜底父 P1 在克隆后即刻定位（文本尚 pristine）：preserve 保证二者在
   // 随机轮中恒存活且保持 root 直属（不被移动/级联删除），冲突脚本因此恒合法。
   const xId = findIdByText(clients[0]!, 'X');
@@ -353,7 +381,7 @@ function runBiasScenario(
     asserts(clients, captured);
     chaosRounds(clients, rnd, logs, 2, `[bias ${caseName} s${seed} 叠加]`, preserve);
     exchangeAll(clients);
-    assertConvergenceTrio(clients, `bias ${caseName} seed=${seed}`);
+    assertConvergenceTrio(clients, `bias ${caseName} seed=${seed}`, canvasIds);
   } catch (e) {
     console.error(
       `[chaos] 偏置场景失败 ${caseName} seed=${seed}，完整操作日志（按执行序）：\n${logs.join('\n')}`,
@@ -364,13 +392,95 @@ function runBiasScenario(
   }
 }
 
+// ── 跨画布并发维度（多画布 Task 5 新增）──────────────────────────────────────
+
+/**
+ * 在 base 文档上追加一个画布（混沌跨画布维度造数）：root + n 个一级子节点，
+ * id 走（mock 的）ulid 全序计数器——同种子 ⇒ 同 id 序列 ⇒ 全场景可复现。
+ * 返回新画布 id。
+ */
+function appendChaosCanvas(doc: Y.Doc, name: string, childCount: number): string {
+  const canvasId = ulid();
+  const rootId = ulid();
+  doc.transact(() => {
+    const canvas = new Y.Map<unknown>();
+    canvas.set('name', name);
+    canvas.set('rootId', rootId);
+    canvas.set('structureType', 'mindmap');
+    canvas.set('themeId', 'gmind-light');
+    const nodes = new Y.Map<Y.Map<unknown>>();
+    const root = new Y.Map<unknown>();
+    root.set('text', name);
+    root.set('parentId', '');
+    const rootChildren = new Y.Array<string>();
+    root.set('children', rootChildren);
+    nodes.set(rootId, root);
+    for (let i = 0; i < childCount; i += 1) {
+      const childId = ulid();
+      const child = new Y.Map<unknown>();
+      child.set('text', `${name}-${i}`);
+      child.set('parentId', rootId);
+      child.set('children', new Y.Array<string>());
+      nodes.set(childId, child);
+      rootChildren.push([childId]);
+    }
+    canvas.set('nodes', nodes);
+    canvas.set('summaries', new Y.Map<unknown>());
+    (doc.getMap('canvases') as Y.Map<Y.Map<unknown>>).set(canvasId, canvas);
+    canvasOrderArr(doc).push([canvasId]);
+  });
+  return canvasId;
+}
+
+/**
+ * 跨画布并发写场景（Task 5 混沌新维度）：双画布基线（c1 来自模板，c2 追加），
+ * 两副本（brief 口径「双副本收敛一致」）各自挂接线后执行 10 轮随机操作——每个
+ * 操作独立抽画布（addChild/moveNode/deleteNodes 等在两个画布上并发交错），
+ * 每批后立即广播；最终交换 → 逐画布收敛三件套。
+ */
+function runCrossCanvasScenario(seed: number): void {
+  const rnd = makeLcg(seed);
+  ulidCounter = 0;
+  const base = createTemplateDoc(buildBaseSpec(rnd));
+  const c2 = appendChaosCanvas(base, '画布二', 2 + randInt(rnd, 3));
+  const clients = [1, 2].map((i) => {
+    const d = docFromState(docToState(base));
+    d.clientID = 2000 + i * 10 + (seed % 10);
+    return d;
+  });
+  const canvasIds = canvasOrderArr(clients[0]!).toArray();
+  if (canvasIds.length !== 2 || canvasIds[1] !== c2) {
+    throw new Error('跨画布场景基建失败：基线应为恰好两个画布');
+  }
+  const detaches = clients.map((d) => attachRemoteNormalization(d));
+  const logs: string[] = [];
+  try {
+    chaosRounds(clients, rnd, logs, 10, `[xcanvas seed=${seed}]`, new Set(), canvasIds);
+    exchangeAll(clients);
+    assertConvergenceTrio(clients, `xcanvas seed=${seed}`, canvasIds);
+  } catch (e) {
+    console.error(`[chaos] 跨画布收敛失败 seed=${seed}，完整操作日志（按执行序）：\n${logs.join('\n')}`);
+    throw e;
+  } finally {
+    for (const detach of detaches) detach();
+  }
+}
+
 // ── 套件本体 ─────────────────────────────────────────────────────────────────
 
-describe('并发混沌：三客户端随机交错收敛（FR-COL-003/NFR-REL-005）', () => {
-  const SEEDS = Array.from({ length: 20 }, (_, i) => i + 1);
+describe('并发混沌：三客户端随机交错收敛（FR-COL-003/NFR-REL-005）', () => {  const SEEDS = Array.from({ length: 20 }, (_, i) => i + 1);
   for (const seed of SEEDS) {
     it(`seed=${seed}：10 轮 × 3 端 × 2-3 随机操作，两两交换后收敛三件套`, () => {
       runChaosScenario(seed);
+    });
+  }
+});
+
+describe('并发混沌：跨画布并发写（多画布 Task 5 新维度）', () => {
+  const SEEDS = Array.from({ length: 5 }, (_, i) => i + 201);
+  for (const seed of SEEDS) {
+    it(`seed=${seed}：双画布上并发 addChild/moveNode/deleteNodes，双副本 10 轮交错后收敛一致`, () => {
+      runCrossCanvasScenario(seed);
     });
   }
 });

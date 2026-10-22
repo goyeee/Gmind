@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Gmind 编辑器重设计 · 六候选缩略图</title>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700;900&family=Noto+Serif+SC:wght@700;900&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { background:#2a2a2e; font-family:'Noto Sans SC',sans-serif; padding:24px; }
+  h1 { color:#fff; font-size:18px; margin-bottom:16px; font-weight:700; }
+  .grid { display:grid; grid-template-columns:repeat(3, 480px); gap:20px; }
+  .cell { width:480px; }
+  .cell .label { color:#ccc; font-size:12px; margin-bottom:6px; }
+  .cell .label b { color:#fff; }
+  .frame { width:480px; height:300px; border-radius:6px; overflow:hidden; position:relative; box-shadow:0 4px 16px rgba(0,0,0,.4); }
+
+  /* ============ C1 iA 克制 ============ */
+  .c1 { background:#fdfdfc; }
+  .c1 .topbar { height:22px; display:flex; align-items:center; padding:0 12px; border-bottom:1px solid #eee; }
+  .c1 .topbar .doc { font-size:9px; color:#333; font-weight:500; }
+  .c1 .topbar .saved { font-size:8px; color:#999; margin-left:8px; }
+  .c1 .topbar .right { margin-left:auto; display:flex; gap:4px; align-items:center; }
+  .c1 .topbar .dot { width:10px; height:10px; border-radius:50%; font-size:6px; color:#fff; display:flex; align-items:center; justify-content:center; }
+  .c1 .cmdk { position:absolute; left:50%; top:52%; transform:translate(-50%,-50%); width:200px; background:#fff; border:1px solid #e2e2e2; border-radius:6px; box-shadow:0 8px 30px rgba(0,0,0,.12); padding:6px; }
+  .c1 .cmdk .search { font-size:8px; color:#999; padding:4px 6px; border-bottom:1px solid #f0f0f0; }
+  .c1 .cmdk .item { font-size:8px; color:#444; padding:4px 6px; display:flex; justify-content:space-between; }
+  .c1 .cmdk .item kbd { color:#aaa; font-size:7px; }
+  .c1 .cmdk .item.on { background:#f4f4f2; border-radius:3px; color:#111; }
+
+  /* ============ C2 Dumbar 彩色秩序 ============ */
+  .c2 { background:#ffffff; }
+  .c2 .topbar { height:26px; display:flex; align-items:stretch; }
+  .c2 .seg { display:flex; align-items:center; gap:3px; padding:0 8px; font-size:8px; font-weight:700; color:#fff; }
+  .c2 .seg .chip { width:10px; height:10px; background:rgba(255,255,255,.35); border-radius:2px; }
+  .c2 .rail { position:absolute; left:0; top:26px; bottom:16px; width:22px; background:#111; display:flex; flex-direction:column; align-items:center; padding-top:6px; gap:6px; }
+  .c2 .rail i { width:10px; height:10px; border-radius:2px; }
+  .c2 .statusbar { position:absolute; left:0; right:0; bottom:0; height:16px; background:#111; display:flex; align-items:center; gap:8px; padding:0 8px; }
+  .c2 .statusbar span { font-size:7px; color:#888; font-family:'Space Grotesk',monospace; }
+  .c2 .statusbar .sig { width:18px; height:6px; }
+
+  /* ============ C3 Whimsical 细轨 ============ */
+  .c3 { background:#fff; }
+  .c3 .topbar { height:24px; display:flex; align-items:center; padding:0 10px; border-bottom:1px solid #f0f0f2; gap:6px; }
+  .c3 .crumb { font-size:9px; color:#666; display:flex; align-items:center; gap:4px; }
+  .c3 .crumb b { color:#222; font-weight:600; }
+  .c3 .topbar .right { margin-left:auto; display:flex; align-items:center; gap:5px; }
+  .c3 .share { background:#7b5cff; color:#fff; font-size:8px; padding:3px 8px; border-radius:4px; font-weight:600; }
+  .c3 .rail { position:absolute; left:0; top:24px; bottom:0; width:26px; background:#1d2433; display:flex; flex-direction:column; align-items:center; padding-top:8px; gap:7px; }
+  .c3 .rail i { width:12px; height:12px; border-radius:3px; background:rgba(255,255,255,.14); }
+  .c3 .rail i.on { background:#7b5cff; }
+
+  /* ============ C4 MindNode 悬浮胶囊 ============ */
+  .c4 { background:#eef6f4; }
+  .c4 .pill-tools { position:absolute; top:10px; left:50%; transform:translateX(-50%); background:rgba(255,255,255,.85); backdrop-filter:blur(8px); border-radius:20px; padding:5px 10px; display:flex; gap:6px; box-shadow:0 4px 14px rgba(60,120,110,.15); }
+  .c4 .pill-tools i { width:12px; height:12px; border-radius:50%; background:#dfe9e6; }
+  .c4 .pill-tools i.on { background:#4fb3a9; }
+  .c4 .card { position:absolute; background:#fff; border-radius:12px; box-shadow:0 4px 14px rgba(60,120,110,.14); padding:6px 8px; font-size:8px; color:#4a6a64; }
+  .c4 .card.title { top:10px; left:10px; font-weight:700; color:#2f4f48; font-size:9px; }
+  .c4 .card.members { top:10px; right:10px; display:flex; gap:3px; align-items:center; }
+  .c4 .card.zoom { bottom:10px; right:10px; font-weight:700; }
+
+  /* ============ C5 Neo-Brutalism ============ */
+  .c5 { background:#0d0d12; }
+  .c5 .titlecard { position:absolute; top:10px; left:10px; background:#f8e000; border:2px solid #000; box-shadow:3px 3px 0 #000; padding:4px 8px; font-family:'Space Grotesk','Noto Sans SC'; font-weight:700; font-size:11px; color:#000; }
+  .c5 .titlecard small { font-size:7px; font-weight:500; }
+  .c5 .toolz { position:absolute; top:10px; right:10px; display:flex; gap:6px; }
+  .c5 .tz { border:2px solid #000; box-shadow:3px 3px 0 #000; padding:4px 6px; font-size:7px; font-weight:700; color:#000; display:flex; flex-direction:column; gap:3px; }
+  .c5 .tz i { width:12px; height:12px; border:2px solid #000; background:rgba(255,255,255,.5); }
+  .c5 .tag { display:inline-block; border:1.5px solid currentColor; font-size:7px; padding:0 3px; }
+  .c5 .bottombar { position:absolute; left:0; right:0; bottom:0; height:16px; background:#000; border-top:2px solid #333; display:flex; align-items:center; gap:8px; padding:0 8px; }
+  .c5 .bottombar span { font-size:7px; color:#f8e000; font-family:'Space Grotesk'; font-weight:700; }
+  .c5 .saved { position:absolute; left:10px; bottom:22px; background:#e1306c; color:#000; border:2px solid #000; box-shadow:3px 3px 0 #000; font-size:8px; font-weight:700; padding:3px 6px; }
+
+  /* ============ C6 香港街招 ============ */
+  .c6 { background:#14141c; }
+  .c6 .wall { position:absolute; inset:0; background:repeating-linear-gradient(0deg, transparent 0 34px, rgba(255,255,255,.03) 34px 35px), repeating-linear-gradient(90deg, transparent 0 34px, rgba(255,255,255,.03) 34px 35px); }
+  .c6 .sign { position:absolute; border:2px solid #f5edd8; box-shadow:0 0 10px rgba(255,220,120,.35), 3px 3px 0 rgba(0,0,0,.6); padding:4px 8px; font-weight:900; color:#fffdf4; }
+  .c6 .sign.v { writing-mode:vertical-rl; }
+  .c6 .sign.main { top:14px; left:12px; background:#c3271f; font-size:14px; padding:6px 4px; letter-spacing:2px; }
+  .c6 .sign.yellow { top:14px; left:56px; background:#e8b400; color:#111; font-size:8px; }
+  .c6 .sign.blue { top:60px; left:56px; background:#1a4f9c; font-size:9px; }
+  .c6 .sign.led { top:88px; left:56px; background:#0a0a0a; border-color:#ff3b30; color:#ff5a4d; font-size:7px; box-shadow:0 0 8px rgba(255,60,60,.5); }
+  .c6 .board { position:absolute; right:10px; bottom:10px; width:150px; background:#1c1c26; border:1px solid #444; padding:6px 8px; }
+  .c6 .board .row { display:flex; justify-content:space-between; font-size:7px; color:#d8d2c0; padding:2px 0; border-bottom:1px dashed #3a3a48; }
+  .c6 .board .row b { color:#f0c94a; }
+
+  /* 共用迷你脑图 */
+  .mm { position:absolute; }
+  .mm text { font-family:'Noto Sans SC',sans-serif; }
+</style>
+</head>
+<body>
+<h1>Gmind 编辑器重设计 — 六候选缩略图（480×300）</h1>
+<div class="grid">
+
+  <!-- C1 -->
+  <div class="cell">
+    <div class="label"><b>C1</b> 最佳设计师·克制 — iA / Oliver Reichenstein</div>
+    <div class="frame c1">
+      <div class="topbar">
+        <span class="doc">Gmind 产品功能地图</span><span class="saved">已保存 14:32</span>
+        <span class="right">
+          <span class="dot" style="background:#999">郭</span><span class="dot" style="background:#bbb">林</span>
+          <span style="font-size:8px;color:#999">· 3 在线</span>
+        </span>
+      </div>
+      <svg class="mm" width="480" height="280" viewBox="0 0 480 280">
+        <path d="M240,150 C180,150 170,90 110,90" fill="none" stroke="#999" stroke-width="1.2"/>
+        <path d="M240,150 C170,150 165,210 100,210" fill="none" stroke="#bbb" stroke-width="1.2"/>
+        <path d="M240,150 C310,150 315,80 380,80" fill="none" stroke="#888" stroke-width="1.2"/>
+        <path d="M240,150 C315,150 320,215 385,215" fill="none" stroke="#aaa" stroke-width="1.2"/>
+        <g><rect x="205" y="136" width="70" height="26" rx="2" fill="#fff" stroke="#333" stroke-width="1.4"/><text x="240" y="153" text-anchor="middle" font-size="10" font-weight="700" fill="#111">Gmind</text></g>
+        <g><rect x="52" y="78" width="58" height="20" rx="2" fill="#fff" stroke="#888"/><text x="81" y="92" text-anchor="middle" font-size="8" fill="#333">协同编辑</text></g>
+        <g><rect x="44" y="199" width="56" height="20" rx="2" fill="#fff" stroke="#888"/><text x="72" y="213" text-anchor="middle" font-size="8" fill="#333">编辑内核</text></g>
+        <g><rect x="380" y="69" width="58" height="20" rx="2" fill="#fff" stroke="#888"/><text x="409" y="83" text-anchor="middle" font-size="8" fill="#333">任务管理</text></g>
+        <g><rect x="385" y="204" width="58" height="20" rx="2" fill="#fff" stroke="#888"/><text x="414" y="218" text-anchor="middle" font-size="8" fill="#333">版本快照</text></g>
+      </svg>
+      <div class="cmdk">
+        <div class="search">⌘K 输入命令或搜索功能…</div>
+        <div class="item on">插入子级主题 <kbd>Tab</kbd></div>
+        <div class="item">切换 12 套主题 <kbd>⌘T</kbd></div>
+        <div class="item">导出 PNG · 2x <kbd>⌘E</kbd></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- C2 -->
+  <div class="cell">
+    <div class="label"><b>C2</b> 最佳设计师·大胆 — Studio Dumbar 彩色秩序</div>
+    <div class="frame c2">
+      <div class="topbar">
+        <span class="seg" style="background:#111"><b style="font-size:9px">Gmind▾</b></span>
+        <span class="seg" style="background:#3a5cff"><i class="chip"></i>插入</span>
+        <span class="seg" style="background:#00a86b"><i class="chip"></i>格式</span>
+        <span class="seg" style="background:#ff7a1a"><i class="chip"></i>任务</span>
+        <span class="seg" style="background:#8b3dff"><i class="chip"></i>主题</span>
+        <span class="seg" style="background:#e63d68"><i class="chip"></i>导出</span>
+        <span class="seg" style="margin-left:auto;background:#f2f2f2;color:#111">● 3 在线</span>
+      </div>
+      <div class="rail">
+        <i style="background:#3a5cff"></i><i style="background:#00a86b"></i><i style="background:#ff7a1a"></i><i style="background:#8b3dff"></i><i style="background:#e63d68"></i>
+      </div>
+      <svg class="mm" width="480" height="260" viewBox="0 0 480 260" style="top:26px">
+        <path d="M245,135 C190,135 180,80 125,80" fill="none" stroke="#3a5cff" stroke-width="2.5"/>
+        <path d="M245,135 C185,135 175,195 115,195" fill="none" stroke="#00a86b" stroke-width="2.5"/>
+        <path d="M245,135 C305,135 312,72 372,72" fill="none" stroke="#ff7a1a" stroke-width="2.5"/>
+        <path d="M245,135 C310,135 318,198 378,198" fill="none" stroke="#8b3dff" stroke-width="2.5"/>
+        <g><rect x="212" y="120" width="66" height="28" rx="3" fill="#111"/><text x="245" y="138" text-anchor="middle" font-size="10" font-weight="700" fill="#fff">Gmind</text></g>
+        <g><rect x="68" y="68" width="57" height="22" rx="3" fill="#3a5cff"/><text x="96" y="82" text-anchor="middle" font-size="8" font-weight="700" fill="#fff">协同编辑</text></g>
+        <g><rect x="58" y="183" width="57" height="22" rx="3" fill="#00a86b"/><text x="86" y="197" text-anchor="middle" font-size="8" font-weight="700" fill="#fff">编辑内核</text></g>
+        <g><rect x="372" y="60" width="57" height="22" rx="3" fill="#ff7a1a"/><text x="400" y="74" text-anchor="middle" font-size="8" font-weight="700" fill="#fff">任务管理</text></g>
+        <g><rect x="378" y="186" width="57" height="22" rx="3" fill="#8b3dff"/><text x="406" y="200" text-anchor="middle" font-size="8" font-weight="700" fill="#fff">个性化</text></g>
+      </svg>
+      <div class="statusbar">
+        <span class="sig" style="background:linear-gradient(90deg,#00a86b 70%,#333 70%)"></span><span>SAVED 14:32</span>
+        <span style="margin-left:auto">NODES 42 · 100%</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- C3 -->
+  <div class="cell">
+    <div class="label"><b>C3</b> 现实参照 — Whimsical 细轨＋分枝色</div>
+    <div class="frame c3">
+      <div class="topbar">
+        <span class="crumb">☰ / ✦ <b>Gmind 产品功能地图</b> ▾ ☆</span>
+        <span class="right">
+          <span style="font-size:8px;color:#999">⤺5</span>
+          <span class="dot" style="width:12px;height:12px;border-radius:50%;background:#0d9488;display:inline-block"></span>
+          <span class="dot" style="width:12px;height:12px;border-radius:50%;background:#ea580c;display:inline-block;margin-left:-5px"></span>
+          <span style="font-size:8px;color:#666">+4</span>
+          <span style="font-size:9px">💬</span>
+          <span class="share">⌘ Share</span>
+        </span>
+      </div>
+      <div class="rail"><i class="on"></i><i></i><i></i><i></i><i></i><i></i></div>
+      <svg class="mm" width="460" height="280" viewBox="0 0 460 280" style="left:26px;top:24px">
+        <path d="M235,140 L235,140 C185,138 175,75 120,72" fill="none" stroke="#d946ef" stroke-width="2"/>
+        <path d="M120,72 C100,70 95,50 75,48" fill="none" stroke="#d946ef" stroke-width="2"/>
+        <path d="M120,72 C100,74 95,95 72,97" fill="none" stroke="#d946ef" stroke-width="2"/>
+        <path d="M235,140 C180,142 172,205 112,208" fill="none" stroke="#f97316" stroke-width="2"/>
+        <path d="M235,140 C295,138 305,68 368,65" fill="none" stroke="#14b8a6" stroke-width="2"/>
+        <path d="M235,140 C300,142 308,200 370,203" fill="none" stroke="#3b82f6" stroke-width="2"/>
+        <g><rect x="200" y="126" width="70" height="26" rx="4" fill="#fff" stroke="#ddd"/><text x="235" y="143" text-anchor="middle" font-size="10" font-weight="600" fill="#222">Gmind</text></g>
+        <g><rect x="70" y="62" width="52" height="20" rx="3" fill="#fff" stroke="#ddd"/><text x="96" y="76" text-anchor="middle" font-size="8" fill="#333">协同编辑</text></g>
+        <g><rect x="18" y="39" width="56" height="18" rx="3" fill="#fff" stroke="#ddd"/><text x="46" y="52" text-anchor="middle" font-size="7" fill="#555">50人实时协同</text></g>
+        <g><rect x="14" y="89" width="58" height="18" rx="3" fill="#fff" stroke="#ddd"/><text x="43" y="102" text-anchor="middle" font-size="7" fill="#555">远端光标头像</text></g>
+        <g><rect x="56" y="198" width="56" height="20" rx="3" fill="#fff" stroke="#ddd"/><text x="84" y="212" text-anchor="middle" font-size="8" fill="#333">任务管理</text></g>
+        <g><rect x="368" y="55" width="56" height="20" rx="3" fill="#fff" stroke="#ddd"/><text x="396" y="69" text-anchor="middle" font-size="8" fill="#333">文件与分享</text></g>
+        <g><rect x="370" y="193" width="56" height="20" rx="3" fill="#fff" stroke="#ddd"/><text x="398" y="207" text-anchor="middle" font-size="8" fill="#333">版本快照</text></g>
+      </svg>
+    </div>
+  </div>
+
+  <!-- C4 -->
+  <div class="cell">
+    <div class="label"><b>C4</b> 现实参照 — MindNode 悬浮胶囊·有机曲线</div>
+    <div class="frame c4">
+      <div class="card title">✦ Gmind 产品功能地图 <span style="font-weight:400;color:#8aa89f">已保存</span></div>
+      <div class="pill-tools"><i></i><i></i><i class="on"></i><i></i><i></i><i></i><i></i></div>
+      <div class="card members">
+        <span style="width:12px;height:12px;border-radius:50%;background:#f4a988;display:inline-block"></span>
+        <span style="width:12px;height:12px;border-radius:50%;background:#7cc9bf;display:inline-block"></span>
+        3 人在线
+      </div>
+      <svg class="mm" width="480" height="280" viewBox="0 0 480 280" style="top:16px">
+        <path d="M240,160 C190,150 185,105 135,100" fill="none" stroke="#7cc9bf" stroke-width="3" stroke-linecap="round"/>
+        <path d="M240,160 C195,172 185,215 130,222" fill="none" stroke="#f4a988" stroke-width="3" stroke-linecap="round"/>
+        <path d="M240,160 C290,148 298,98 350,92" fill="none" stroke="#a8b8f0" stroke-width="3" stroke-linecap="round"/>
+        <path d="M240,160 C295,170 300,214 355,220" fill="none" stroke="#f0c98f" stroke-width="3" stroke-linecap="round"/>
+        <g><rect x="198" y="144" width="84" height="32" rx="16" fill="#4fb3a9"/><text x="240" y="164" text-anchor="middle" font-size="11" font-weight="700" fill="#fff">Gmind</text></g>
+        <g><rect x="82" y="86" width="58" height="24" rx="12" fill="#fff" stroke="#7cc9bf" stroke-width="2"/><text x="111" y="102" text-anchor="middle" font-size="8" fill="#3d6b64">协同编辑</text></g>
+        <g><rect x="76" y="210" width="58" height="24" rx="12" fill="#fff" stroke="#f4a988" stroke-width="2"/><text x="105" y="226" text-anchor="middle" font-size="8" fill="#8a5a3d">编辑内核</text></g>
+        <g><rect x="350" y="78" width="58" height="24" rx="12" fill="#fff" stroke="#a8b8f0" stroke-width="2"/><text x="379" y="94" text-anchor="middle" font-size="8" fill="#4a5a8a">任务管理</text></g>
+        <g><rect x="355" y="208" width="58" height="24" rx="12" fill="#fff" stroke="#f0c98f" stroke-width="2"/><text x="384" y="224" text-anchor="middle" font-size="8" fill="#8a6a3d">版本快照</text></g>
+      </svg>
+      <div class="card zoom">− 100% ＋</div>
+    </div>
+  </div>
+
+  <!-- C5 -->
+  <div class="cell">
+    <div class="label"><b>C5</b> 轮盘 web#2 — 新粗野主义撞色（The Verge 系）</div>
+    <div class="frame c5">
+      <div class="titlecard">GMIND 产品功能地图<br><small><span class="tag">DOC</span> 42 NODES</small></div>
+      <div class="toolz">
+        <div class="tz" style="background:#5200ff;color:#fff"><span class="tag">编辑</span><i></i></div>
+        <div class="tz" style="background:#f8e000"><span class="tag">主题</span><i></i></div>
+        <div class="tz" style="background:#e1306c;color:#fff"><span class="tag">导出</span><i></i></div>
+        <div class="tz" style="background:#3ddc97"><span class="tag">协作</span><i></i></div>
+      </div>
+      <svg class="mm" width="480" height="250" viewBox="0 0 480 250" style="top:36px">
+        <path d="M235,140 C185,140 175,85 118,85" fill="none" stroke="#fff" stroke-width="2"/>
+        <path d="M235,140 C180,140 172,200 110,200" fill="none" stroke="#fff" stroke-width="2"/>
+        <path d="M235,140 C295,140 302,78 362,78" fill="none" stroke="#f8e000" stroke-width="2"/>
+        <path d="M235,140 C300,140 306,196 366,196" fill="none" stroke="#fff" stroke-width="2"/>
+        <g><rect x="200" y="126" width="70" height="26" fill="#fff" stroke="#000" stroke-width="2"/><text x="235" y="143" text-anchor="middle" font-size="10" font-weight="900" fill="#000">Gmind</text></g>
+        <g><rect x="62" y="74" width="56" height="20" fill="#0d0d12" stroke="#fff" stroke-width="1.5"/><text x="90" y="88" text-anchor="middle" font-size="8" font-weight="700" fill="#fff">协同编辑</text></g>
+        <g><rect x="54" y="190" width="56" height="20" fill="#f8e000" stroke="#000" stroke-width="2"/><text x="82" y="204" text-anchor="middle" font-size="8" font-weight="700" fill="#000">编辑内核</text></g>
+        <g><rect x="362" y="68" width="56" height="20" fill="#0d0d12" stroke="#fff" stroke-width="1.5"/><text x="390" y="82" text-anchor="middle" font-size="8" font-weight="700" fill="#fff">任务管理</text></g>
+        <g><rect x="366" y="186" width="56" height="20" fill="#0d0d12" stroke="#fff" stroke-width="1.5"/><text x="394" y="200" text-anchor="middle" font-size="8" font-weight="700" fill="#fff">版本快照</text></g>
+      </svg>
+      <div class="saved">✓ 已保存 14:32</div>
+      <div class="bottombar"><span>42 NODES</span><span style="margin-left:auto">ZOOM 100% − ＋ ⛶</span></div>
+    </div>
+  </div>
+
+  <!-- C6 -->
+  <div class="cell">
+    <div class="label"><b>C6</b> 轮盘 east#6 — 香港街招·夜色发光</div>
+    <div class="frame c6">
+      <div class="wall"></div>
+      <div class="sign v main">腦圖<br>夜市</div>
+      <div class="sign v yellow">協同·50人</div>
+      <div class="sign blue">版本快照 即恢復</div>
+      <div class="sign led">已保存 14:32 · 3 人在線</div>
+      <svg class="mm" width="300" height="200" viewBox="0 0 300 200" style="left:150px;top:60px">
+        <path d="M140,100 C105,100 100,55 60,52" fill="none" stroke="#f0c94a" stroke-width="2"/>
+        <path d="M140,100 C102,102 98,148 55,152" fill="none" stroke="#7ce0d3" stroke-width="2"/>
+        <path d="M140,100 C178,98 182,50 225,46" fill="none" stroke="#ff8fa3" stroke-width="2"/>
+        <path d="M140,100 C180,102 185,150 228,154" fill="none" stroke="#9db4ff" stroke-width="2"/>
+        <g><rect x="112" y="86" width="56" height="26" rx="2" fill="#c3271f" stroke="#f5edd8" stroke-width="1.5"/><text x="140" y="103" text-anchor="middle" font-size="10" font-weight="900" fill="#fffdf4">Gmind</text></g>
+        <g><rect x="14" y="42" width="48" height="20" rx="2" fill="#14141c" stroke="#f0c94a"/><text x="38" y="56" text-anchor="middle" font-size="8" fill="#f0c94a">协同编辑</text></g>
+        <g><rect x="8" y="142" width="48" height="20" rx="2" fill="#14141c" stroke="#7ce0d3"/><text x="32" y="156" text-anchor="middle" font-size="8" fill="#7ce0d3">编辑内核</text></g>
+        <g><rect x="224" y="36" width="48" height="20" rx="2" fill="#14141c" stroke="#ff8fa3"/><text x="248" y="50" text-anchor="middle" font-size="8" fill="#ff8fa3">任务管理</text></g>
+        <g><rect x="228" y="144" width="48" height="20" rx="2" fill="#14141c" stroke="#9db4ff"/><text x="252" y="158" text-anchor="middle" font-size="8" fill="#9db4ff">版本快照</text></g>
+      </svg>
+      <div class="board">
+        <div class="row"><span>插入主題 Tab</span><b>42 節點</b></div>
+        <div class="row"><span>主題 12 套</span><b>100%</b></div>
+        <div class="row"><span>評論 · 通知</span><b>⛶ 全屏</b></div>
+      </div>
+    </div>
+  </div>
+
+</div>
+</body>
+</html>

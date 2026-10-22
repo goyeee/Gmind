@@ -1,6 +1,7 @@
 import * as Y from 'yjs';
 import type { AbstractType, YEvent } from 'yjs';
 import { ROOT_NODE_ID } from './doc';
+import { canvasOrderArr, canvasesMap, ensureCanvasShape } from './canvas';
 import {
   ICON_GROUPS,
   ICON_LEGACY_MAP,
@@ -17,57 +18,84 @@ import {
   type ProgressValue,
 } from './constants';
 import { ORIGIN_SYSTEM } from './undo';
-import { applySummaryRepair, planSummaryRepair } from './summary';
+import { applySummaryRepair, planSummaryRepair, type SummaryRepairPlan } from './summary';
 
 /**
- * normalizeTree —— 树结构 repair 收敛（spec §4.2，全项目唯一自研共识点）。
+ * normalizeTree —— 树结构 repair 收敛（spec §4.2，全项目唯一自研共识点；多画布
+ * Task 5 口径：规则 ⓪-⑧ 全部改为「画布内作用域」，新增 ⑨⑩ 两条画布级规则）。
+ *
+ * 多画布作用域模型（数据口径见 docs/superpowers/plans/2026-10-21-multi-canvas-core.md）：
+ * 文档内容住 canvases 子图（canvases: Y.Map<canvasId, {name, rootId, structureType,
+ * themeId, deleted?, nodes, summaries}> + canvasOrder: Y.Array<canvasId>）——每个存活
+ * 画布是一棵独立的树（自己的 rootId / nodes / summaries），规则 ⓪-⑧ 逐存活画布独立
+ * 执行。canvases 为空 = 旧形状窗口（装载迁移前/空文档），此时退化为唯一作用域 =
+ * 顶层 nodes/summaries（canvasId '' 哨兵，行为与多画布化前逐字节一致）。
  *
  * `parentId` 是父级归属的唯一真值，`children` 数组只定同级顺序。本函数是**文档状态的
  * 纯函数**：给定相同文档状态，在任何副本上都执行相同修复并得到相同结果（FR-COL-003）：
- *  ⓪ parentId 链成环（**仅全量扫描**）：环中最大 ULID 断回 root——增量路径脏区推导
- *    看不到「自身不在脏区内」的环，normalizeTreeFor 不含此规则；历史环由两道全量
- *    安全网（导入 docFromState 即收敛 / 第 64 写摊销清扫）在有限次写内治愈；
+ *  ⓪ parentId 链成环（**仅全量扫描**）：环中最大 ULID 断回本画布 rootId——增量路径
+ *    脏区推导看不到「自身不在脏区内」的环，normalizeTreeFor 不含此规则；历史环由两道
+ *    全量安全网（导入 docFromState 即收敛 / 第 64 写摊销清扫）在有限次写内治愈；
  *  ① children 数组去重（保留首个）；
  *  ② 移除指向不存在节点的项（含非字符串垃圾项的防御清除）；
  *  ③ 移除指向墓碑节点（deleted===true）的项；
  *  ④ 移除「目标节点 parentId !== 本节点 id」的项（并发换父的败者侧清理）；
  *  ⑤ 存活非 root 节点若不在其 parentId 的 children 中 → 追加到末尾；
- *  ⑥ root 缺失 → 防御重建（text ''、parentId ''、空 children），存活孤儿随后按 ⑤ 挂回。
- *  ⑦ 概要收敛（M6 Task 6）：`summaries` Y.Map 各条目的 nodeIds 片段断裂（成员删除/
- *    换父/移出父序）→ 全部消失删条目、部分收敛存活子段（最长连续段，label 不动）；
- *    由 summary.ts 的 planSummaryRepair/applySummaryRepair 提供，与①-⑥同一事务应用。
- *  ⑧ 自定义列收敛（表格自定义列）：meta.customColumns 非法项剔除（含非数组归 []、
- *    重复 id 保首、超 CUSTOM_COLUMN_LIMIT 截断）；节点 custom 键——非 Y.Map 删键、
- *    schema 外列键删（孤儿清理）、值形状与列类型不符删键（口径见 planCustomRepair）。
+ *  ⑨ 画布根防御（原规则⑥的推广）：canvas.rootId 指向缺失/墓碑节点 → 重建该 root
+ *    （text ''、parentId ''、空 children；墓碑 root 整键替换——不逐条改写其 children，
+ *    冻结不变量不破；⑨ 整键替换是冻结不变量的显式例外，spec 裁定），存活孤儿随后
+ *    按 ⑤ 挂回；
+ *  ⑦ 概要收敛（M6 Task 6）：该画布 `summaries` Y.Map 各条目的 nodeIds 片段断裂（成员
+ *    删除/换父/移出父序）→ 全部消失删条目、部分收敛存活子段（最长连续段，label 不动）；
+ *    由 summary.ts 的 planSummaryRepair/applySummaryRepair（canvasId 作用域）提供，
+ *    与①-⑤⑨同一事务应用；
+ *  ⑧ 自定义列收敛（表格自定义列）：meta.customColumns 非法项剔除（doc 级一次，含非
+ *    数组归 []、重复 id 保首、超 CUSTOM_COLUMN_LIMIT 截断）；各存活画布节点 custom
+ *    键——非 Y.Map 删键、schema 外列键删（孤儿清理）、值形状与列类型不符删键
+ *    （口径见 planCustomRepair）；
+ *  ⑩ 画布序与墓碑收敛：canvasOrder 中非字符串/重复（保首个，对齐规则①去重口径）/
+ *    指向不存在或墓碑画布的项 → 移除；存活画布不在 order 中 → 按 canvasId 升序追加
+ *    （确定性——两个副本并发迁移同一旧文档时 order 可能重复 'canvas-1'，去重后收敛
+ *    一致）。画布墓碑（deleted=true）的 nodes/summaries **不动**（冻结不变量推广：
+ *    墓碑是快照/还原依据）。
  *
  * 冻结不变量：墓碑节点的 children 数组是撤销/快照还原依据（deleteNodes 保留不动），
- * 本函数绝不写墓碑节点的 children，也不向墓碑父级追加子节点。
+ * 本函数绝不写墓碑节点的 children，也不向墓碑父级追加子节点；墓碑画布整体同理
+ * （连 nodes/summaries 键都不补建）。
  *
  * 事务纪律：仅在确有修复时开**一个** origin（默认 ORIGIN_SYSTEM）事务；干净文档返回 0
  * 且不产生任何写入（不开事务）。返回修复次数（每处移除/追加/重建各计 1）。
  *
  * 所有读取容错部分数据（镜像 read.ts 防御风格）：children 缺失/类型不符、parentId 缺失
  * 等一律按默认值处理，绝不抛错；无法归属的畸形节点确定性跳过（同状态 ⇒ 同行为）。
+ * canvases 的值非 Y.Map（crafted doc_state 可注入任意键值）→ 确定性按墓碑处理：不进
+ * 修复作用域（repairScopes）、scopedNodesMap 返回 undefined、canvasOrder 中指向它的
+ * 项按墓碑项移除且不补建任何键——畸形值本体不动（同状态 ⇒ 同行为）。
  *
- * ── 增量路径（Task 9 修复轮）──────────────────────────────────────────────
+ * ── 增量路径（多画布口径）──────────────────────────────────────────────
  * 写操作经 withTransaction 提交后，normalize 由全量扫描改为**按事务脏区**的
  * `normalizeTreeFor`（deriveNormalizeDirty 从 Yjs 事务对象的公开内部字段
  * changed/beforeState/deleteSet 推导脏区；本副本与远端副本对同一 update 推导出
- * 同一脏区，replica 一致）。等价性依据：产品流（含其远端重放）中每处规则违例
- * 都由制造它的同一事务在其 changed/deleteSet 中留下痕迹——
+ * 同一脏区，replica 一致）。脏区数据结构 = 「canvasId → Set<nodeId>」映射
+ * （'' = 旧形状顶层作用域哨兵）。嵌套形状深一层：tr.changed 里出现的内层
+ * nodes map 逐存活画布做 `===` 同一性比对反查所属画布；反查不到/未知形状
+ * （canvases 根变更、canvasOrder 变更、画布级 deleted/rootId/nodes/summaries
+ * 键变更、未知嵌套数组）→ 返回 null 退全量扫描安全阀（先例不变）。
+ * 等价性依据：产品流（含其远端重放）中每处规则违例都由制造它的同一事务在其
+ * changed/deleteSet 中留下痕迹，且该痕迹必落在同一画布子图内（节点 id 全局唯一、
+ * parentId/children 不跨画布——写层校验保证）——
  * ①-④ 违例必在「被改动的 children 数组属主」处（含换父旧父级、墓碑父级）；
  * ⑤ 违例必命中「parentId 变更 / 新建节点 / 脏数组 kept 条目 / 脏数组被删条目」。
- * 无法确定性识别的形状（未知根类型/未知嵌套数组/root 缺失）→ 调用方退回全量扫描
- * 安全阀。`normalizeTree`（全量）仍是导入/恢复路径与测试的真值口径。
+ * `normalizeTree`（全量）仍是导入/恢复路径与测试的真值口径。
  *
  * 墓碑 GC 说明（有意不做，M2 语义需要）：墓碑节点是撤销/快照还原依据，永不清除，
- * nodes Y.Map 随「删除+新建」流量单调增长；增量 normalize 后单次操作成本只与脏区
- * 相关（不再随 map 总量线性上涨），500 节点产品上限下增长缓慢，GC 留待 M2 裁决。
+ * 各画布 nodes Y.Map 随「删除+新建」流量单调增长；增量 normalize 后单次操作成本只与
+ * 脏区相关（不再随 map 总量线性上涨），500 节点产品上限下增长缓慢，GC 留待 M2 裁决。
  *
  * ── 自愈安全网与 M2 准入清单（Task 9 修复轮 2 留档）──────────────────────
  * 增量路径只修复「触发事务自己制造的违例」；历史残留由两道安全网兜底：
- *  ① 导入即收敛：docFromState 在 applyUpdate 后全量 normalize 一次（唯一的外部
- *     状态直入入口，doc.ts）；
+ *  ① 导入即收敛：docFromState 在 applyUpdate + 旧形状迁移后全量 normalize 一次
+ *     （唯一的外部状态直入入口，doc.ts）；
  *  ② 摊销清扫：withTransaction 每第 64 次本地写做一次全量 normalize（operations.ts，
  *     本地写计数 WeakMap，不参与副本收敛）。
  * M2 准入项（Task 7 落地）：远端 applyUpdate 路径已以同一脏区推导接入收敛——
@@ -76,6 +104,7 @@ import { applySummaryRepair, planSummaryRepair } from './summary';
  * 在此之前，远端残留由上两道安全网在有限次本地写内收敛（仍保留为兜底）。
  */
 
+/** 旧形状顶层 nodes（legacy 作用域，canvasId '' 哨兵；迁移前窗口/空文档）。 */
 function nodesMap(doc: Y.Doc): Y.Map<Y.Map<unknown>> {
   return doc.getMap('nodes');
 }
@@ -92,6 +121,62 @@ function isTombstoned(node: Y.Map<unknown>): boolean {
 function childrenOf(node: Y.Map<unknown>): Y.Array<string> | undefined {
   const children = node.get('children');
   return children instanceof Y.Array ? (children as Y.Array<string>) : undefined;
+}
+
+/**
+ * 修复作用域：一个存活画布子图；canvasId '' = 旧形状顶层作用域（canvases 为空时）。
+ * `nodes` 是只读规划视图——画布 nodes 键缺失/形状不符时用未接入的空 Map 顶替
+ * （规划零写入纪律；此时唯一可能的修复是 ⑨ 重建 root，应用阶段经 ensureCanvasShape
+ * 落回真实子图）。墓碑画布不产出作用域（冻结）。
+ */
+interface RepairScope {
+  canvasId: string;
+  /** 画布 Y.Map（legacy 作用域为 null）。 */
+  canvas: Y.Map<unknown> | null;
+  nodes: Y.Map<Y.Map<unknown>>;
+  rootId: string;
+}
+
+/** 全部修复作用域（只读）：canvases 为空 → 唯一 legacy 作用域；否则逐存活画布
+ *  （按 canvasId 升序迭代——Y.Map 迭代序是本地插入序，非 CRDT 收敛状态，不可依赖）。 */
+function repairScopes(doc: Y.Doc): RepairScope[] {
+  const canvases = canvasesMap(doc);
+  if (canvases.size === 0) {
+    return [{ canvasId: '', canvas: null, nodes: nodesMap(doc), rootId: ROOT_NODE_ID }];
+  }
+  const out: RepairScope[] = [];
+  const ids = [...canvases.keys()].sort();
+  for (const canvasId of ids) {
+    const canvas = canvases.get(canvasId);
+    // 畸形值（非 Y.Map，crafted doc_state 可注入）按墓碑确定性跳过（头注口径）；
+    // undefined 同属此分支（undefined instanceof Y.Map === false）。
+    if (!(canvas instanceof Y.Map) || canvas.get('deleted') === true) continue; // 墓碑画布冻结
+    const rawNodes = canvas.get('nodes');
+    const rawRoot = canvas.get('rootId');
+    out.push({
+      canvasId,
+      canvas,
+      nodes: rawNodes instanceof Y.Map ? (rawNodes as Y.Map<Y.Map<unknown>>) : new Y.Map(),
+      rootId: typeof rawRoot === 'string' && rawRoot !== '' ? rawRoot : ROOT_NODE_ID,
+    });
+  }
+  return out;
+}
+
+/** 应用阶段取作用域真实 nodes（事务内；画布 nodes 键缺失时补建——装载容错口径）。 */
+function scopeNodesForApply(scope: RepairScope): Y.Map<Y.Map<unknown>> {
+  if (scope.canvas === null) return scope.nodes;
+  return ensureCanvasShape(scope.canvas).nodes;
+}
+
+/** 按 canvasId 反查存活画布的 nodes（plan/apply 对共用；'' = legacy 顶层）。
+ *  画布不存在/已墓碑/键形状不符 → undefined（防御跳过，绝不写墓碑画布）。 */
+function scopedNodesMap(doc: Y.Doc, canvasId: string): Y.Map<Y.Map<unknown>> | undefined {
+  if (canvasId === '') return nodesMap(doc);
+  const canvas = canvasesMap(doc).get(canvasId);
+  if (!(canvas instanceof Y.Map) || canvas.get('deleted') === true) return undefined; // 畸形值按墓碑（头注口径）
+  const raw = canvas.get('nodes');
+  return raw instanceof Y.Map ? (raw as Y.Map<Y.Map<unknown>>) : undefined;
 }
 
 /** 阶段一产物：某存活节点的 children 数组待移除下标（升序）。 */
@@ -114,19 +199,21 @@ interface ChildAppend {
  * 跨副本一致；遍历起点顺序不影响结果——环成员集合与链尾均以 archived 集合去重）。
  * 返回待断节点（含旧父 id），按 id 升序排序（nodes 迭代序是本地插入序，应用序必须
  * 由可观测状态决定，与规则⑤追加序同理）。
+ * 多画布：rootId 为该画布根（环断回各画布自己的 root）。
  */
 function findParentCycleBreaks(
   nodes: Y.Map<Y.Map<unknown>>,
+  rootId: string,
 ): Array<{ id: string; oldParentId: string }> {
   const breaks: Array<{ id: string; oldParentId: string }> = [];
   const archived = new Set<string>(); // 已判定节点（链尾与环成员）：不重复走链
   for (const [startId, startNode] of nodes.entries()) {
-    if (startId === ROOT_NODE_ID || isTombstoned(startNode) || archived.has(startId)) continue;
+    if (startId === rootId || isTombstoned(startNode) || archived.has(startId)) continue;
     const path: string[] = [];
     const onPath = new Set<string>();
     let cycleStart: string | undefined;
     let cur: string = startId;
-    while (cur !== '' && cur !== ROOT_NODE_ID) {
+    while (cur !== '' && cur !== rootId) {
       if (onPath.has(cur)) {
         cycleStart = cur; // 本链成环：cur 是首次重复的环成员
         break;
@@ -152,24 +239,41 @@ function findParentCycleBreaks(
   return breaks;
 }
 
-export function normalizeTree(doc: Y.Doc, origin: string = ORIGIN_SYSTEM): number {
-  const nodes = nodesMap(doc);
+/** 单作用域树结构全量计划（规则⓪-⑤⑨）。 */
+interface ScopeTreePlan {
+  scope: RepairScope;
+  /** ⑨：rootId 指向缺失/墓碑节点 → 整键重建（text ''、parentId ''、空 children）。 */
+  rootRebuild: boolean;
+  cleanups: ChildrenCleanup[];
+  appends: ChildAppend[];
+  cycleBreaks: Array<{ id: string; oldParentId: string }>;
+  repairs: number;
+}
+
+/** 全量规划（纯函数，不开事务）：规则 ①-⑤ + ⓪（环） + ⑨（根防御）。 */
+function planScopeTreeFull(scope: RepairScope): ScopeTreePlan {
+  const nodes = scope.nodes;
+  const rootId = scope.rootId;
   let repairs = 0;
 
-  // 规则⑥前置探测：root 缺失先计修复（重建后，⑤ 才能把「parentId==='root'」的存活孤儿挂回新 root）。
-  const rootMissing = nodes.get(ROOT_NODE_ID) === undefined;
-  if (rootMissing) repairs += 1;
+  // 规则⑨前置探测：root 缺失/墓碑先计修复（重建后，⑤ 才能把「parentId===rootId」的
+  // 存活孤儿挂回新 root）。
+  const rootExisting = nodes.get(rootId);
+  const rootRebuild = rootExisting === undefined || isTombstoned(rootExisting);
+  if (rootRebuild) repairs += 1;
 
   // ── 阶段一（规划）：清理「存活节点」的 children 数组（root 例外地始终参与；
-  //    墓碑节点的 children 冻结不动）。先全部规划再统一应用，保证 ⑤ 的成员判定
-  //    基于阶段一之后的数组状态（被从错误父级移除的项，同一轮即挂回正确父级）。
+  //    墓碑节点的 children 冻结不动；rootRebuild 时旧 root 整键替换，其 children 不逐条
+  //    改写——墓碑冻结不变量不破）。先全部规划再统一应用，保证 ⑤ 的成员判定基于阶段一
+  //    之后的数组状态（被从错误父级移除的项，同一轮即挂回正确父级）。
   const cleanups: ChildrenCleanup[] = [];
   // 阶段一之后各存活节点的 children 成员（无修复处即原数组），供阶段二成员判定。
   // 用 Set：阶段二逐候选 O(1) 成员判定——数组 includes 在「单父大量 children」文档上
   // 呈 O(alive × children) 二次方（Task 9 基准对照实验实测爆点），Set.has 消除。
   const keptByNode = new Map<Y.Map<unknown>, Set<string>>();
   for (const [id, node] of nodes.entries()) {
-    if (id !== ROOT_NODE_ID && isTombstoned(node)) continue; // 墓碑 children 冻结
+    if (id !== rootId && isTombstoned(node)) continue; // 墓碑 children 冻结
+    if (id === rootId && rootRebuild) continue; // ⑨ 整键替换，旧 children 不逐条改写
     const children = childrenOf(node);
     if (!children) continue;
     const entries = children.toArray();
@@ -198,10 +302,9 @@ export function normalizeTree(doc: Y.Doc, origin: string = ORIGIN_SYSTEM): numbe
   // ── 阶段二（规划）：存活非 root 节点若不在其 parentId 的 children 中 → 追加到末尾。
   //    注意：nodes 迭代序是「本副本插入序」（本地键先于远端键），不属于 CRDT 收敛状态，
   //    不可用作写入顺序；追加序由收集后的 id 升序排序决定（见 appends.sort）。
-  // ── 事务纪律：无修复不开事务、零写入；有修复则在单个 origin 事务内统一应用。
   // 阶段二成员判定（Set 缓存，每父级只建一次；原数组 includes 是二次方爆点，见阶段一注释）。
   const plannedCache = new Map<Y.Map<unknown>, Set<string>>();
-  const VIRTUAL_PLANNED: ReadonlySet<string> = new Set(); // 规则⑥：重建后的空 root
+  const VIRTUAL_PLANNED: ReadonlySet<string> = new Set(); // ⑨：重建后的空 root
   const plannedOf = (parent: Y.Map<unknown> | undefined, virtualNewRoot: boolean): ReadonlySet<string> => {
     if (virtualNewRoot || parent === undefined) return VIRTUAL_PLANNED;
     let planned = plannedCache.get(parent);
@@ -214,14 +317,14 @@ export function normalizeTree(doc: Y.Doc, origin: string = ORIGIN_SYSTEM): numbe
   };
   const appends: ChildAppend[] = [];
   for (const [id, node] of nodes.entries()) {
-    if (id === ROOT_NODE_ID) continue;
+    if (id === rootId) continue;
     if (isTombstoned(node)) continue; // ⑤ 仅存活节点
     const parentId = parentIdOf(node);
     if (parentId === '' || parentId === id) continue; // 防御：无父/自环，确定性跳过
     const parent = nodes.get(parentId);
-    const virtualNewRoot = rootMissing && parentId === ROOT_NODE_ID;
+    const virtualNewRoot = rootRebuild && parentId === rootId;
     if (parent === undefined && !virtualNewRoot) continue; // 防御：父不存在
-    if (parent !== undefined && parentId !== ROOT_NODE_ID && isTombstoned(parent)) {
+    if (parent !== undefined && parentId !== rootId && isTombstoned(parent)) {
       continue; // 冻结：不向墓碑父级追加（其 children 是快照还原依据）
     }
     if (plannedOf(parent, virtualNewRoot).has(id)) continue;
@@ -236,92 +339,184 @@ export function normalizeTree(doc: Y.Doc, origin: string = ORIGIN_SYSTEM): numbe
   // ── 规则⓪（环破坏，全量扫描专属）：parentId 链成环而①-⑤全数通过时由此收敛
   //    （见 findParentCycleBreaks）。每断一处计 1 修复——旧父 children 条目清除与
   //    挂回 root 属断环机制的一部分，不重复计数。
-  const cycleBreaks = findParentCycleBreaks(nodes);
+  const cycleBreaks = findParentCycleBreaks(nodes, rootId);
   repairs += cycleBreaks.length;
 
-  // ── 概要收敛（M6 Task 6，Global Constraints 口径）：片段断裂（成员删除/换父）
-  //    → 全部消失删概要 / 部分消失收敛存活段；label 不动。与树修复同一事务应用。
-  const summaryPlan = planSummaryRepair(doc);
-  if (summaryPlan !== null) {
-    repairs += summaryPlan.removeIds.length + summaryPlan.updates.length;
+  return { scope, rootRebuild, cleanups, appends, cycleBreaks, repairs };
+}
+
+/** 应用树结构修复（必须在调用方已开启的事务内执行）：⑨ 重建 → ①-④ 清理 → ⑤ 追加
+ *  → ⓪ 断环。cleanups/appends 持有的节点/数组引用取自规划时的真实子图（canvas nodes
+ *  键缺失时规划面只有 rootRebuild，此处经 ensureCanvasShape 落回真实子图）。 */
+function applyScopeTree(
+  scope: RepairScope,
+  plan: Pick<ScopeTreePlan, 'rootRebuild' | 'cleanups' | 'appends'> & {
+    cycleBreaks?: Array<{ id: string; oldParentId: string }>;
+  },
+): void {
+  const nodes = scopeNodesForApply(scope);
+  if (plan.rootRebuild) {
+    const root = new Y.Map<unknown>();
+    root.set('text', '');
+    root.set('parentId', '');
+    root.set('children', new Y.Array<string>());
+    nodes.set(scope.rootId, root); // ⑨ 整键替换（覆盖墓碑/填补缺失）
+  }
+  for (const c of plan.cleanups) {
+    // 倒序删除保持下标稳定
+    for (let k = c.removeIndexes.length - 1; k >= 0; k -= 1) {
+      c.children.delete(c.removeIndexes[k] as number, 1);
+    }
+  }
+  for (const a of plan.appends) {
+    const parent = nodes.get(a.parentId);
+    if (!parent) continue; // 防御（单事务内理论上不可达）
+    let arr = childrenOf(parent);
+    if (!arr) {
+      arr = new Y.Array<string>();
+      parent.set('children', arr);
+    }
+    arr.push([a.childId]);
+  }
+  // 规则⓪应用：断点 parentId→本画布 rootId、挂到 root children 末尾、旧父 children
+  // 条目清除（cleanups/appends 已应用，数组现场重读定位，避免下标漂移）。
+  for (const b of plan.cycleBreaks ?? []) {
+    const z = nodes.get(b.id);
+    if (!z) continue; // 防御（规划后理论不可达）
+    z.set('parentId', scope.rootId);
+    const oldParent = nodes.get(b.oldParentId);
+    const oldChildren = oldParent !== undefined ? childrenOf(oldParent) : undefined;
+    if (oldChildren) {
+      const i = oldChildren.toArray().indexOf(b.id);
+      if (i !== -1) oldChildren.delete(i, 1);
+    }
+    const root = nodes.get(scope.rootId); // root 重建在本事务先行，防御兜底缺失场景
+    if (root !== undefined) {
+      let rootChildren = childrenOf(root);
+      if (!rootChildren) {
+        rootChildren = new Y.Array<string>();
+        root.set('children', rootChildren);
+      }
+      rootChildren.push([b.id]);
+    }
+  }
+}
+
+// ── 规则⑩：画布序与墓碑收敛 ──────────────────────────────────────────────
+
+/** 画布序修复计划：order 待移除下标（升序）+ 待补入的存活画布 id（canvasId 升序）。 */
+interface CanvasOrderRepairPlan {
+  removeIndexes: number[];
+  appends: string[];
+}
+
+/**
+ * 规则⑩规划（文档状态纯函数，replica 一致）：canvasOrder 中非字符串/重复（保首个，
+ * 对齐规则①去重口径）/指向不存在或墓碑画布的项 → 移除；存活画布不在 order 中 → 按
+ * canvasId 升序追加（确定性）。墓碑画布的 nodes/summaries 不动（冻结不变量推广）。
+ * 旧形状（canvases 为空）无画布序语义 → null。
+ */
+function planCanvasOrderRepair(doc: Y.Doc): CanvasOrderRepairPlan | null {
+  const canvases = canvasesMap(doc);
+  if (canvases.size === 0) return null;
+  const entries = canvasOrderArr(doc).toArray();
+  const seen = new Set<string>();
+  const keep = new Set<string>();
+  const removeIndexes: number[] = [];
+  for (let i = 0; i < entries.length; i += 1) {
+    const id = entries[i];
+    const canvas = typeof id === 'string' ? canvases.get(id) : undefined;
+    if (
+      typeof id !== 'string' ||
+      !(canvas instanceof Y.Map) || // 不存在 / 畸形值按墓碑（crafted doc_state 防御）
+      canvas.get('deleted') === true ||
+      seen.has(id as string)
+    ) {
+      removeIndexes.push(i); // 非字符串 / 不存在 / 墓碑（含畸形值）/ 重复（保首个）
+      continue;
+    }
+    seen.add(id as string);
+    keep.add(id as string);
+  }
+  const appends: string[] = [];
+  for (const [canvasId, canvas] of canvases.entries()) {
+    if (!(canvas instanceof Y.Map) || canvas.get('deleted') === true) continue; // 畸形值按墓碑（头注口径）
+    if (!keep.has(canvasId)) appends.push(canvasId);
+  }
+  appends.sort(); // canvasId 升序：可观测状态定序，跨副本一致
+  if (removeIndexes.length === 0 && appends.length === 0) return null;
+  return { removeIndexes, appends };
+}
+
+/** 应用规则⑩计划（必须在调用方已开启的事务内执行）。 */
+function applyCanvasOrderRepair(doc: Y.Doc, plan: CanvasOrderRepairPlan): void {
+  const order = canvasOrderArr(doc);
+  for (let k = plan.removeIndexes.length - 1; k >= 0; k -= 1) {
+    order.delete(plan.removeIndexes[k] as number, 1); // 倒序删除保持下标稳定
+  }
+  if (plan.appends.length > 0) order.push(plan.appends);
+}
+
+export function normalizeTree(doc: Y.Doc, origin: string = ORIGIN_SYSTEM): number {
+  const scopes = repairScopes(doc);
+  let repairs = 0;
+
+  // ── 逐存活画布：规则 ⓪-⑤⑨（树结构）+ ⑦（概要收敛，Task 6 函数本体前先把调用点
+  //    切到画布作用域；legacy 作用域传 undefined = 顶层 summaries）。
+  const treePlans: ScopeTreePlan[] = [];
+  const summaryPlans: Array<{ canvasId: string | undefined; plan: SummaryRepairPlan | null }> = [];
+  for (const scope of scopes) {
+    const tree = planScopeTreeFull(scope);
+    treePlans.push(tree);
+    repairs += tree.repairs;
+    const canvasId = scope.canvasId === '' ? undefined : scope.canvasId;
+    const summaryPlan = planSummaryRepair(doc, canvasId);
+    if (summaryPlan !== null) {
+      repairs += summaryPlan.removeIds.length + summaryPlan.updates.length;
+    }
+    summaryPlans.push({ canvasId, plan: summaryPlan });
   }
 
   // ── 图标三组制收敛（M7a-T1）：旧五组值 → 新三组目录（映射口径见 planIconRepair
-  //    头注）。与树修复/概要收敛同一事务应用。
+  //    头注；逐存活画布节点）。与树修复/概要收敛同一事务应用。
   const iconPlan = planIconRepair(doc);
   repairs += iconPlan.length;
 
   // ── 描述字段归一（M7c-C1）：非 string 归 ''、超 200 截断（口径见
-  //    planDescriptionRepair 头注）。与树修复/概要/图标同一事务应用。
+  //    planDescriptionRepair 头注）。
   const descPlan = planDescriptionRepair(doc);
   repairs += descPlan.length;
 
   // ── 侧别字段归一（逆时针定侧）：非 left/right 删键（口径见 planSideRepair 头注）。
-  //    与树修复/概要/图标/描述同一事务应用。
   const sidePlan = planSideRepair(doc);
   repairs += sidePlan.length;
 
-  // ── 自定义列收敛（表格自定义列，规则⑧）：meta 非法项剔除 + 节点孤儿/坏形状键
-  //    清理（口径见 planCustomRepair 头注）。与树修复/概要/图标同一事务应用。
+  // ── 自定义列收敛（表格自定义列，规则⑧）：meta 非法项剔除（doc 级一次）+ 各存活
+  //    画布节点孤儿/坏形状键清理（口径见 planCustomRepair 头注）。
   const customPlan = planCustomRepair(doc);
   repairs +=
     (customPlan.columns !== null ? 1 : 0) +
     customPlan.dropCustom.length +
     customPlan.dropFields.length;
 
+  // ── 规则⑩：画布序与墓碑收敛（仅新形状）。
+  const orderPlan = planCanvasOrderRepair(doc);
+  if (orderPlan !== null) {
+    repairs += orderPlan.removeIndexes.length + orderPlan.appends.length;
+  }
+
   // ── 事务纪律：无修复不开事务、零写入；有修复则在单个 origin 事务内统一应用。
   if (repairs === 0) return 0;
   doc.transact(() => {
-    if (rootMissing) {
-      const root = new Y.Map<unknown>();
-      root.set('text', '');
-      root.set('parentId', '');
-      root.set('children', new Y.Array<string>());
-      nodes.set(ROOT_NODE_ID, root);
+    for (const p of treePlans) applyScopeTree(p.scope, p);
+    for (const s of summaryPlans) {
+      applySummaryRepair(doc, s.plan, s.canvasId); // 概要收敛（M6 T6）：同事务统一应用
     }
-    for (const c of cleanups) {
-      // 倒序删除保持下标稳定
-      for (let k = c.removeIndexes.length - 1; k >= 0; k -= 1) {
-        c.children.delete(c.removeIndexes[k] as number, 1);
-      }
-    }
-    for (const a of appends) {
-      const parent = nodes.get(a.parentId);
-      if (!parent) continue; // 防御（单事务内理论上不可达）
-      let arr = childrenOf(parent);
-      if (!arr) {
-        arr = new Y.Array<string>();
-        parent.set('children', arr);
-      }
-      arr.push([a.childId]);
-    }
-    // 规则⓪应用：断点 parentId→root、挂到 root children 末尾、旧父 children 条目清除
-    // （cleanups/appends 已应用，数组现场重读定位，避免下标漂移）。
-    for (const b of cycleBreaks) {
-      const z = nodes.get(b.id);
-      if (!z) continue; // 防御（规划后理论不可达）
-      z.set('parentId', ROOT_NODE_ID);
-      const oldParent = nodes.get(b.oldParentId);
-      const oldChildren = oldParent !== undefined ? childrenOf(oldParent) : undefined;
-      if (oldChildren) {
-        const i = oldChildren.toArray().indexOf(b.id);
-        if (i !== -1) oldChildren.delete(i, 1);
-      }
-      const root = nodes.get(ROOT_NODE_ID); // root 重建在本事务先行，防御兜底缺失场景
-      if (root !== undefined) {
-        let rootChildren = childrenOf(root);
-        if (!rootChildren) {
-          rootChildren = new Y.Array<string>();
-          root.set('children', rootChildren);
-        }
-        rootChildren.push([b.id]);
-      }
-    }
-    applySummaryRepair(doc, summaryPlan); // 概要收敛（M6 T6）：同事务统一应用
     applyIconRepair(doc, iconPlan); // 图标三组制收敛（M7a-T1）：同事务统一应用
     applyDescriptionRepair(doc, descPlan); // 描述归一（M7c-C1）：同事务统一应用
     applySideRepair(doc, sidePlan); // 侧别归一（逆时针定侧）：同事务统一应用
     applyCustomRepair(doc, customPlan); // 自定义列收敛（表格自定义列）：同事务统一应用
+    if (orderPlan !== null) applyCanvasOrderRepair(doc, orderPlan); // ⑩ 画布序收敛
   }, origin);
   return repairs;
 }
@@ -332,21 +527,31 @@ export function normalizeTree(doc: Y.Doc, origin: string = ORIGIN_SYSTEM): numbe
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type YjsChangeType = AbstractType<YEvent<any>>;
 
-/** children 数组条目删除/覆盖前值的读取口径（Yjs 公开内部字段，13.6.x 稳定）。 */
+/**
+ * 增量脏区（多画布口径）：canvasId → 脏 nodeId 集合（'' = 旧形状顶层作用域哨兵）。
+ * 语义：①-④ 施加于每个脏 id 的 children 数组；⑤ 施加于每个脏 id 自身与其脏数组的
+ * 成员。
+ */
+export type NormalizeDirty = Map<string, Set<string>>;
 
 /**
- * 节点 Y.Map 的 children 数组属主 id；非「节点 children 数组」形状返回 null。
+ * children 数组的属主（节点 id + 所属画布作用域）；非「节点 children 数组」形状
+ * 返回 null。属主判定：数组 ←（parentSub 'children'）节点 Y.Map ←（parentSub nodeId）
+ * 内层 nodes map；nodes map 经同一性比对（=== 逐存活画布）反查所属画布。
  */
-function ownerNodeIdOfArray(nodesRoot: Y.Map<Y.Map<unknown>>, arr: YjsChangeType): string | null {
+function ownerNodeIdOfArray(
+  scopeByNodes: Map<Y.Map<Y.Map<unknown>>, RepairScope>,
+  arr: YjsChangeType,
+): { scope: RepairScope; nodeId: string } | null {
   const item = arr._item;
   if (item === null || item.parentSub !== 'children' || item.parent === null) return null;
   const owner = item.parent;
   if (!('_item' in owner)) return null; // ID（未解析父）→ 非已集成类型
   const ownerItem = owner._item;
-  if (ownerItem === null || ownerItem.parent !== nodesRoot || typeof ownerItem.parentSub !== 'string') {
-    return null;
-  }
-  return ownerItem.parentSub;
+  if (ownerItem === null || typeof ownerItem.parentSub !== 'string') return null;
+  const scope = scopeByNodes.get(ownerItem.parent as Y.Map<Y.Map<unknown>>);
+  if (scope === undefined) return null;
+  return { scope, nodeId: ownerItem.parentSub };
 }
 
 /**
@@ -374,53 +579,94 @@ function previousParentIdOf(
 }
 
 /**
- * 从事务的 changed/beforeState/deleteSet 推导增量 normalize 脏区（节点 id 集合，语义：
- * ①-④ 施加于每个脏 id 的 children 数组；⑤ 施加于每个脏 id 自身与其脏数组的成员）。
+ * 从事务的 changed/beforeState/deleteSet 推导增量 normalize 脏区（多画布口径：
+ * 「canvasId → Set<nodeId>」映射，'' = 旧形状顶层作用域哨兵）。
  * 返回 null 表示形状无法确定性识别 → 调用方退回全量扫描（安全阀，见文件头等价性依据）。
+ *
+ * 多画布形状识别（嵌套深一层）：
+ * - canvases 根变更（画布创建/整图替换）→ null（⑨⑩ 面超出脏区表达力）；
+ * - canvasOrder 根数组变更 → null（⑩ 画布序收敛仅全量）；
+ * - 画布 Y.Map 键变更：deleted（画布墓碑/复活）/rootId（根身份）/nodes/summaries
+ *   （整图替换）→ null；name/structureType/themeId 非结构键，无脏区；
+ * - 内层 nodes map 反查所属画布 = 逐存活画布 `===` 同一性比对（scopeByNodes）；
+ *   反查不到（墓碑画布/未知嵌套）→ null 退全量安全阀（先例不变）。
  */
-export function deriveNormalizeDirty(doc: Y.Doc, tr: Y.Transaction): Set<string> | null {
-  const nodesRoot = nodesMap(doc);
-  const nodesRootType = nodesRoot as unknown as YjsChangeType;
-  const dirty = new Set<string>();
+export function deriveNormalizeDirty(doc: Y.Doc, tr: Y.Transaction): NormalizeDirty | null {
+  const scopes = repairScopes(doc);
+  const scopeByNodes = new Map<Y.Map<Y.Map<unknown>>, RepairScope>();
+  for (const s of scopes) {
+    // 只注册真实接入的 nodes 子图（规划视图里的空壳顶替不参与同一性比对）
+    if (s.canvas === null || s.canvas.get('nodes') === s.nodes) scopeByNodes.set(s.nodes, s);
+  }
+  const canvasesRoot = canvasesMap(doc);
+  const canvasesRootType = canvasesRoot as unknown as YjsChangeType;
+  const orderType = canvasOrderArr(doc) as unknown as YjsChangeType;
+  const dirty: NormalizeDirty = new Map();
+  const addDirty = (canvasId: string, nodeId: string): void => {
+    let set = dirty.get(canvasId);
+    if (set === undefined) {
+      set = new Set();
+      dirty.set(canvasId, set);
+    }
+    set.add(nodeId);
+  };
   for (const [type, keys] of tr.changed) {
-    if (type === nodesRootType) {
-      // nodes 根的新键 = 新建/重建节点 id（⑤ 候选）
+    if (type === canvasesRootType) return null; // 画布创建/整图替换 → 全量安全阀
+    if (type === orderType) return null; // ⑩ 画布序变更 → 全量安全阀
+    const directScope = scopeByNodes.get(type as unknown as Y.Map<Y.Map<unknown>>);
+    if (directScope !== undefined) {
+      // 内层 nodes 根的新键 = 新建/重建节点 id（⑤ 候选）
       for (const key of keys) {
-        if (typeof key === 'string' && key !== '') dirty.add(key);
+        if (typeof key === 'string' && key !== '') addDirty(directScope.canvasId, key);
       }
       continue;
     }
     const item = type._item;
     if (item === null) continue; // 其他根类型（meta 等）：非结构变更，无脏区
-    if (item.parent === nodesRoot && typeof item.parentSub === 'string') {
-      // 节点 Y.Map 的键变更：结构键 = parentId / children / deleted
-      const nodeId = item.parentSub;
-      if (keys.has('parentId')) {
-        dirty.add(nodeId); // ⑤ 自查
-        const node = nodesRoot.get(nodeId);
-        const newParent = node !== undefined ? parentIdOf(node) : '';
-        if (newParent !== '') dirty.add(newParent); // 新父数组 ④/⑤
-        const old = previousParentIdOf(type, tr.beforeState);
-        if (old === undefined) return null;
-        if (old !== null && old !== '') dirty.add(old); // 旧父数组 ④ 败者侧
-      }
-      if (keys.has('children')) dirty.add(nodeId); // 数组被替换 → ①-④ + 成员 ⑤
-      if (keys.has('deleted')) {
-        if (nodeId === ROOT_NODE_ID) return null; // root 墓碑：非产品形状 → 全量
-        const node = nodesRoot.get(nodeId);
-        const parent = node !== undefined ? parentIdOf(node) : '';
-        if (parent === '') return null; // 无主墓碑 → 全量
-        dirty.add(parent); // 父数组 ③ 清理
+    if (item.parent === canvasesRoot && typeof item.parentSub === 'string') {
+      // 画布 Y.Map 级键：deleted（墓碑/复活）/rootId（根身份）/nodes/summaries（整图
+      // 替换）超出脏区表达力 → 全量；name/structureType/themeId 非结构键，无脏区
+      if (
+        keys.has('deleted') ||
+        keys.has('rootId') ||
+        keys.has('nodes') ||
+        keys.has('summaries')
+      ) {
+        return null;
       }
       continue;
     }
-    const arrayOwner = ownerNodeIdOfArray(nodesRoot, type);
+    const ownerScope = scopeByNodes.get(item.parent as Y.Map<Y.Map<unknown>>);
+    if (ownerScope !== undefined && typeof item.parentSub === 'string') {
+      // 节点 Y.Map 的键变更：结构键 = parentId / children / deleted
+      const nodeId = item.parentSub;
+      const nodes = ownerScope.nodes;
+      if (keys.has('parentId')) {
+        addDirty(ownerScope.canvasId, nodeId); // ⑤ 自查
+        const node = nodes.get(nodeId);
+        const newParent = node !== undefined ? parentIdOf(node) : '';
+        if (newParent !== '') addDirty(ownerScope.canvasId, newParent); // 新父数组 ④/⑤
+        const old = previousParentIdOf(type, tr.beforeState);
+        if (old === undefined) return null;
+        if (old !== null && old !== '') addDirty(ownerScope.canvasId, old); // 旧父数组 ④ 败者侧
+      }
+      if (keys.has('children')) addDirty(ownerScope.canvasId, nodeId); // 数组被替换 → ①-④ + 成员 ⑤
+      if (keys.has('deleted')) {
+        if (nodeId === ownerScope.rootId) return null; // ⑨ 画布根墓碑：非产品形状 → 全量
+        const node = nodes.get(nodeId);
+        const parent = node !== undefined ? parentIdOf(node) : '';
+        if (parent === '') return null; // 无主墓碑 → 全量
+        addDirty(ownerScope.canvasId, parent); // 父数组 ③ 清理
+      }
+      continue;
+    }
+    const arrayOwner = ownerNodeIdOfArray(scopeByNodes, type);
     if (arrayOwner !== null) {
-      dirty.add(arrayOwner); // children 数组被直接改动 → ①-④ + kept 成员 ⑤
+      addDirty(arrayOwner.scope.canvasId, arrayOwner.nodeId); // children 数组被直接改动 → ①-④ + kept 成员 ⑤
       continue;
     }
     if (item.parentSub === null) return null; // 未知嵌套数组 → 全量安全阀
-    // 其余嵌套 Y.Map（icons/style/custom 子 Map 等）：非结构键，无脏区
+    // 其余嵌套 Y.Map（icons/style/custom/画布内 summaries 子 Map 等）：非结构键，无脏区
   }
   // 防御纵深：本事务删除的 children 条目对应节点加入 ⑤ 候选——覆盖「仅改数组、
   // 不同步 parentId/墓碑」的裸事务形状（与全量扫描同判：存活且父数组缺位 → 追加）。
@@ -429,13 +675,13 @@ export function deriveNormalizeDirty(doc: Y.Doc, tr: Y.Transaction): Set<string>
     if (malformed || !(struct instanceof Y.Item)) return;
     if (struct.parentSub !== null) return; // map 键删除（被覆盖的 parentId 等）非数组条目
     if (struct.parent === null || !('_item' in struct.parent)) return;
-    const owner = ownerNodeIdOfArray(nodesRoot, struct.parent);
+    const owner = ownerNodeIdOfArray(scopeByNodes, struct.parent);
     if (owner === null) {
       malformed = true; // 未知数组的删除 → 全量安全阀
       return;
     }
     for (const value of struct.content.getContent()) {
-      if (typeof value === 'string' && value !== '') dirty.add(value);
+      if (typeof value === 'string' && value !== '') addDirty(owner.scope.canvasId, value);
     }
   });
   if (malformed) return null;
@@ -443,115 +689,129 @@ export function deriveNormalizeDirty(doc: Y.Doc, tr: Y.Transaction): Set<string>
 }
 
 /**
- * 增量 normalize：与 normalizeTree 同一套规则（①-④ + ⑤），但 ①-④ 只施加于
- * dirtyNodeIds 中各 id 的 children 数组、⑤ 只施加于「脏 id 自身 ∪ 脏数组成员 ∪
+ * 增量 normalize：与 normalizeTree 同一套规则（①-④ + ⑤），逐脏画布定向执行——
+ * ①-④ 只施加于该画布脏 id 的 children 数组、⑤ 只施加于「脏 id 自身 ∪ 脏数组成员 ∪
  * 脏数组被删条目」。规划与事务纪律（单 origin 事务、追加按 id 升序、墓碑冻结）
  * 与全量完全一致；对产品流事务制造的违例，最终状态与全量扫描一致（文件头等价性依据）。
- * 返回修复次数。root 缺失（规则⑥）超出脏区表达力 → 委托全量。
+ * 返回修复次数。画布根缺失/墓碑（规则⑨）与画布序（规则⑩）超出脏区表达力 → 委托全量。
  */
-export function normalizeTreeFor(doc: Y.Doc, origin: string, dirtyNodeIds: Set<string>): number {
-  const nodes = nodesMap(doc);
-  if (nodes.get(ROOT_NODE_ID) === undefined) return normalizeTree(doc, origin); // 规则⑥ 仅全量
+export function normalizeTreeFor(doc: Y.Doc, origin: string, dirty: NormalizeDirty): number {
+  const scopes = repairScopes(doc);
+  const byId = new Map(scopes.map((s) => [s.canvasId, s] as const));
+  const targets: Array<{ scope: RepairScope; ids: Set<string> }> = [];
+  for (const canvasId of [...dirty.keys()].sort()) {
+    const scope = byId.get(canvasId);
+    if (scope === undefined) continue; // 防御：脏区指向墓碑/不存在画布（冻结不写）
+    const root = scope.nodes.get(scope.rootId);
+    if (root === undefined || isTombstoned(root)) {
+      return normalizeTree(doc, origin); // ⑨ 仅全量
+    }
+    targets.push({ scope, ids: dirty.get(canvasId) as Set<string> });
+  }
   let repairs = 0;
 
-  // ── 阶段一：仅脏数组属主（规则①-④）；墓碑属主冻结（与全量一致）。
-  const cleanups: ChildrenCleanup[] = [];
-  const removedIds: string[] = []; // 阶段一移除的条目 id（⑤ 候选，镜像全量对全体节点的覆盖）
-  const keptSets = new Map<string, Set<string>>();
-  for (const ownerId of dirtyNodeIds) {
-    const node = nodes.get(ownerId);
-    if (node === undefined || (ownerId !== ROOT_NODE_ID && isTombstoned(node))) continue;
-    const children = childrenOf(node);
-    const kept = new Set<string>();
-    if (children !== undefined) {
-      const entries = children.toArray();
-      const removeIndexes: number[] = [];
-      for (let i = 0; i < entries.length; i += 1) {
-        const childId = entries[i] as string;
-        const child = typeof childId === 'string' ? nodes.get(childId) : undefined;
-        if (typeof childId !== 'string' || child === undefined || kept.has(childId)) {
-          removeIndexes.push(i);
-          continue;
-        }
-        if (isTombstoned(child) || parentIdOf(child) !== ownerId) {
-          removeIndexes.push(i);
-          continue;
-        }
-        kept.add(childId);
-      }
-      if (removeIndexes.length > 0) {
-        cleanups.push({ node, children, removeIndexes });
-        repairs += removeIndexes.length;
-        for (const idx of removeIndexes) {
-          const removedId = entries[idx];
-          if (typeof removedId === 'string') removedIds.push(removedId);
-        }
-      }
-    }
-    keptSets.set(ownerId, kept);
+  interface ScopeIncrementalPlan {
+    scope: RepairScope;
+    cleanups: ChildrenCleanup[];
+    appends: ChildAppend[];
+    canvasId: string | undefined;
+    summaryPlan: SummaryRepairPlan | null;
   }
+  const plans: ScopeIncrementalPlan[] = [];
 
-  // ── 阶段二（规则⑤）：候选 = 脏 id 自身（换父/新建/数组删除侧）∪ 脏数组 kept 成员
-  //    ∪ 阶段一移除条目；成员判定 Set 缓存（每父级一次），同全量的 O(1) 判定。
-  const candidates = new Set<string>(dirtyNodeIds);
-  for (const ownerId of dirtyNodeIds) {
-    const kept = keptSets.get(ownerId);
-    if (kept !== undefined) {
-      for (const childId of kept) candidates.add(childId);
-    }
-  }
-  for (const removedId of removedIds) candidates.add(removedId);
-  const membershipCache = new Map<string, Set<string>>();
-  const membershipOf = (parentId: string, parent: Y.Map<unknown>): Set<string> => {
-    let membership = membershipCache.get(parentId);
-    if (membership === undefined) {
-      membership = keptSets.get(parentId) ?? new Set(childrenOf(parent)?.toArray() ?? []);
-      membershipCache.set(parentId, membership);
-    }
-    return membership;
-  };
-  const appends: ChildAppend[] = [];
-  for (const id of candidates) {
-    if (id === ROOT_NODE_ID) continue;
-    const node = nodes.get(id);
-    if (node === undefined || isTombstoned(node)) continue;
-    const parentId = parentIdOf(node);
-    if (parentId === '' || parentId === id) continue; // 防御：无父/自环
-    const parent = nodes.get(parentId);
-    if (parent === undefined) continue; // 防御：父不存在（root 缺失已在入口委托全量）
-    if (parentId !== ROOT_NODE_ID && isTombstoned(parent)) continue; // 冻结：不向墓碑父级追加
-    if (membershipOf(parentId, parent).has(id)) continue;
-    appends.push({ parentId, childId: id });
-    repairs += 1;
-  }
-  appends.sort((a, b) => (a.childId < b.childId ? -1 : a.childId > b.childId ? 1 : 0));
+  for (const { scope, ids: dirtyNodeIds } of targets) {
+    const nodes = scope.nodes;
+    const rootId = scope.rootId;
 
-  // ── 概要收敛（M6 T6）：概要条目量级小（用户手建），增量路径直接全表规划——
-  //    与全量同一结果（纯函数），且不依赖脏区推导覆盖「片段成员墓碑」这一形状
-  //    （成员自身的 deleted 键变更在 deriveNormalizeDirty 中只把父级入脏区）。
-  const summaryPlan = planSummaryRepair(doc);
-  if (summaryPlan !== null) {
-    repairs += summaryPlan.removeIds.length + summaryPlan.updates.length;
+    // ── 阶段一：仅脏数组属主（规则①-④）；墓碑属主冻结（与全量一致）。
+    const cleanups: ChildrenCleanup[] = [];
+    const removedIds: string[] = []; // 阶段一移除的条目 id（⑤ 候选，镜像全量对全体节点的覆盖）
+    const keptSets = new Map<string, Set<string>>();
+    for (const ownerId of dirtyNodeIds) {
+      const node = nodes.get(ownerId);
+      if (node === undefined || (ownerId !== rootId && isTombstoned(node))) continue;
+      const children = childrenOf(node);
+      const kept = new Set<string>();
+      if (children !== undefined) {
+        const entries = children.toArray();
+        const removeIndexes: number[] = [];
+        for (let i = 0; i < entries.length; i += 1) {
+          const childId = entries[i] as string;
+          const child = typeof childId === 'string' ? nodes.get(childId) : undefined;
+          if (typeof childId !== 'string' || child === undefined || kept.has(childId)) {
+            removeIndexes.push(i);
+            continue;
+          }
+          if (isTombstoned(child) || parentIdOf(child) !== ownerId) {
+            removeIndexes.push(i);
+            continue;
+          }
+          kept.add(childId);
+        }
+        if (removeIndexes.length > 0) {
+          cleanups.push({ node, children, removeIndexes });
+          repairs += removeIndexes.length;
+          for (const idx of removeIndexes) {
+            const removedId = entries[idx];
+            if (typeof removedId === 'string') removedIds.push(removedId);
+          }
+        }
+      }
+      keptSets.set(ownerId, kept);
+    }
+
+    // ── 阶段二（规则⑤）：候选 = 脏 id 自身（换父/新建/数组删除侧）∪ 脏数组 kept 成员
+    //    ∪ 阶段一移除条目；成员判定 Set 缓存（每父级一次），同全量的 O(1) 判定。
+    const candidates = new Set<string>(dirtyNodeIds);
+    for (const ownerId of dirtyNodeIds) {
+      const kept = keptSets.get(ownerId);
+      if (kept !== undefined) {
+        for (const childId of kept) candidates.add(childId);
+      }
+    }
+    for (const removedId of removedIds) candidates.add(removedId);
+    const membershipCache = new Map<string, Set<string>>();
+    const membershipOf = (parentId: string, parent: Y.Map<unknown>): Set<string> => {
+      let membership = membershipCache.get(parentId);
+      if (membership === undefined) {
+        membership = keptSets.get(parentId) ?? new Set(childrenOf(parent)?.toArray() ?? []);
+        membershipCache.set(parentId, membership);
+      }
+      return membership;
+    };
+    const appends: ChildAppend[] = [];
+    for (const id of candidates) {
+      if (id === rootId) continue;
+      const node = nodes.get(id);
+      if (node === undefined || isTombstoned(node)) continue;
+      const parentId = parentIdOf(node);
+      if (parentId === '' || parentId === id) continue; // 防御：无父/自环
+      const parent = nodes.get(parentId);
+      if (parent === undefined) continue; // 防御：父不存在（root 缺失已在入口委托全量）
+      if (parentId !== rootId && isTombstoned(parent)) continue; // 冻结：不向墓碑父级追加
+      if (membershipOf(parentId, parent).has(id)) continue;
+      appends.push({ parentId, childId: id });
+      repairs += 1;
+    }
+    appends.sort((a, b) => (a.childId < b.childId ? -1 : a.childId > b.childId ? 1 : 0));
+
+    // ── 概要收敛（M6 T6，画布作用域）：概要条目量级小（用户手建），增量路径直接
+    //    按画布全表规划——与全量同一结果（纯函数），且不依赖脏区推导覆盖「片段成员
+    //    墓碑」这一形状（成员自身的 deleted 键变更只把父级入脏区）。
+    const canvasId = scope.canvasId === '' ? undefined : scope.canvasId;
+    const summaryPlan = planSummaryRepair(doc, canvasId);
+    if (summaryPlan !== null) {
+      repairs += summaryPlan.removeIds.length + summaryPlan.updates.length;
+    }
+    plans.push({ scope, cleanups, appends, canvasId, summaryPlan });
   }
 
   if (repairs === 0) return 0;
   doc.transact(() => {
-    for (const c of cleanups) {
-      for (let k = c.removeIndexes.length - 1; k >= 0; k -= 1) {
-        c.children.delete(c.removeIndexes[k] as number, 1);
-      }
+    for (const p of plans) {
+      applyScopeTree(p.scope, { rootRebuild: false, cleanups: p.cleanups, appends: p.appends });
+      applySummaryRepair(doc, p.summaryPlan, p.canvasId); // 概要收敛（M6 T6）：同事务统一应用
     }
-    for (const a of appends) {
-      const parent = nodes.get(a.parentId);
-      if (!parent) continue; // 防御（单事务内理论上不可达）
-      let arr = childrenOf(parent);
-      if (!arr) {
-        arr = new Y.Array<string>();
-        parent.set('children', arr);
-      }
-      arr.push([a.childId]);
-    }
-    applySummaryRepair(doc, summaryPlan); // 概要收敛（M6 T6）：同事务统一应用
   }, origin);
   return repairs;
 }
@@ -563,8 +823,10 @@ export function normalizeTreeFor(doc: Y.Doc, origin: string, dirtyNodeIds: Set<s
  * progressPct = 进度联动收敛（2026-10-10 全量联动装载通道）——随徽章落位同步
  * 创建/对齐的 task.progress（档位百分比单源 PROGRESS_STAGE_PCT；已有任务进度
  * 时不覆写，由 planIconRepair 裁定）。
+ * 多画布：canvasId 标记所属作用域（'' = 旧形状顶层）。
  */
 export interface IconRepairEntry {
+  canvasId: string;
   nodeId: string;
   icons: Partial<Record<IconGroup, string[]>>;
   progressPct?: number;
@@ -603,134 +865,137 @@ function canonicalIconValues(group: IconGroup, values: string[]): string[] {
  *     纯 emoji 旧字符串的节点零修复——M7a「原样保留不计修复」沿用）；
  *   · 其余未知组/非字符串：确定性清除。
  *
- * 覆盖范围：全部节点（含墓碑——撤销/快照还原可复活旧格式值，children 冻结不变量
- * 不涉及 icons；与 summary repair 相同的事务纪律）。
+ * 覆盖范围：全部存活画布的全部节点（含墓碑节点——撤销/快照还原可复活旧格式值，
+ * children 冻结不变量不涉及 icons；与 summary repair 相同的事务纪律）。墓碑画布
+ * 不进作用域（冻结不变量推广）。
  * 仅接入全量 normalizeTree：旧值只经「外部状态直入」出现在文档里（装载通道
  * docFromState / 第 64 写摊销清扫 / 脏区不可识别的安全阀均走全量），增量路径的
  * 脏区推导不含 icons 子 Map（deriveNormalizeDirty：非结构键无脏区），产品流新写
  * 经 setIcon 目录校验不再制造旧值。
  */
 export function planIconRepair(doc: Y.Doc): IconRepairEntry[] {
-  const nodes = nodesMap(doc);
   const plan: IconRepairEntry[] = [];
-  for (const [nodeId, node] of nodes.entries()) {
-    const iconsRaw = node.get('icons');
-    if (!(iconsRaw instanceof Y.Map)) continue;
-    const mapped: Partial<Record<IconGroup, string[]>> = {};
-    let needs = false;
-    for (const [key, raw] of [...iconsRaw.entries()] as Array<[string, unknown]>) {
-      const inGroups = (ICON_GROUPS as readonly string[]).includes(key);
-      if (inGroups && raw instanceof Y.Array) {
-        // M7b 新格式键：规范化后保留；规范化结果 ≠ 原值（目录外/去重/截断/非字符串）
-        // 即需重写。
-        const group = key as IconGroup;
-        const rawValues = raw.toArray().filter((s): s is string => typeof s === 'string');
-        const canonical = canonicalIconValues(group, rawValues);
-        if (canonical.length > 0) mapped[group] = canonical;
-        if (rawValues.length !== raw.length || canonical.length !== rawValues.length || canonical.some((v, i) => v !== rawValues[i])) {
-          needs = true;
-        }
-        continue;
-      }
-      // 旧格式（字符串值或旧组键）→ 新目录；一律需要重写（emoji 例外，见下）。
-      const asStrings = (v: unknown): string[] =>
-        typeof v === 'string' ? [v] : v instanceof Y.Array ? v.toArray().filter((s): s is string => typeof s === 'string') : [];
-      if (inGroups && typeof raw === 'string' && key === 'emoji') {
-        if (raw !== '') mapped.emoji = [raw]; // 原样保留：仅随其他重写转成数组
-        continue; // 不触发 needs（M7a「原样保留不计修复」沿用）
-      }
-      needs = true;
-      if (inGroups && typeof raw === 'string') {
-        const group = key as IconGroup;
-        if (group === 'priority') {
-          const m = /^p?([1-9])$/.exec(raw);
-          if (m) {
-            const legacy = Number(m[1]) >= 8 ? '7' : m[1];
-            const target = PRIORITY_LEGACY_MAP[legacy];
-            if (target) mapped.priority = [target];
+  for (const scope of repairScopes(doc)) {
+    const nodes = scope.nodes;
+    for (const [nodeId, node] of nodes.entries()) {
+      const iconsRaw = node.get('icons');
+      if (!(iconsRaw instanceof Y.Map)) continue;
+      const mapped: Partial<Record<IconGroup, string[]>> = {};
+      let needs = false;
+      for (const [key, raw] of [...iconsRaw.entries()] as Array<[string, unknown]>) {
+        const inGroups = (ICON_GROUPS as readonly string[]).includes(key);
+        if (inGroups && raw instanceof Y.Array) {
+          // M7b 新格式键：规范化后保留；规范化结果 ≠ 原值（目录外/去重/截断/非字符串）
+          // 即需重写。
+          const group = key as IconGroup;
+          const rawValues = raw.toArray().filter((s): s is string => typeof s === 'string');
+          const canonical = canonicalIconValues(group, rawValues);
+          if (canonical.length > 0) mapped[group] = canonical;
+          if (rawValues.length !== raw.length || canonical.length !== rawValues.length || canonical.some((v, i) => v !== rawValues[i])) {
+            needs = true;
           }
-        } else if (group === 'flag') {
-          mapped.flag = ['flag']; // M6 颜色串：形状/颜色信息无对应位，丢弃
-        } else if (group === 'progress') {
-          // M6 百分比环 'N%'/'N'：同名组键的旧字符串值，走最近 1/8 档映射（与
-          // 下方旧组 switch 的 progress 分支同口径——switch 只接组键 ∉ 八组的旧键）
-          const m = /^(\d{1,3})%?$/.exec(raw);
-          const stage = m ? progressStageOf(Number(m[1])) : null;
-          if (stage) mapped.progress = [stage];
+          continue;
+        }
+        // 旧格式（字符串值或旧组键）→ 新目录；一律需要重写（emoji 例外，见下）。
+        const asStrings = (v: unknown): string[] =>
+          typeof v === 'string' ? [v] : v instanceof Y.Array ? v.toArray().filter((s): s is string => typeof s === 'string') : [];
+        if (inGroups && typeof raw === 'string' && key === 'emoji') {
+          if (raw !== '') mapped.emoji = [raw]; // 原样保留：仅随其他重写转成数组
+          continue; // 不触发 needs（M7a「原样保留不计修复」沿用）
+        }
+        needs = true;
+        if (inGroups && typeof raw === 'string') {
+          const group = key as IconGroup;
+          if (group === 'priority') {
+            const m = /^p?([1-9])$/.exec(raw);
+            if (m) {
+              const legacy = Number(m[1]) >= 8 ? '7' : m[1];
+              const target = PRIORITY_LEGACY_MAP[legacy];
+              if (target) mapped.priority = [target];
+            }
+          } else if (group === 'flag') {
+            mapped.flag = ['flag']; // M6 颜色串：形状/颜色信息无对应位，丢弃
+          } else if (group === 'progress') {
+            // M6 百分比环 'N%'/'N'：同名组键的旧字符串值，走最近 1/8 档映射（与
+            // 下方旧组 switch 的 progress 分支同口径——switch 只接组键 ∉ 八组的旧键）
+            const m = /^(\d{1,3})%?$/.exec(raw);
+            const stage = m ? progressStageOf(Number(m[1])) : null;
+            if (stage) mapped.progress = [stage];
+          } else {
+            const canonical = canonicalIconValues(group, [raw]);
+            if (canonical.length > 0) mapped[group] = canonical; // 窗口期字符串单值：可解析则入组
+          }
+          continue;
+        }
+        // 组键 ∉ ICON_GROUPS：M6/M7a 旧组 → 新目录
+        switch (key) {
+          case 'priority': {
+            for (const v of asStrings(raw)) {
+              const m = /^p?([1-9])$/.exec(v);
+              if (!m) continue;
+              const legacy = Number(m[1]) >= 8 ? '7' : (m[1] as string);
+              const target = PRIORITY_LEGACY_MAP[legacy];
+              if (target) mapped.priority = [target];
+              break; // 单选组：首个可解析值胜
+            }
+            break;
+          }
+          case 'icon': {
+            for (const v of asStrings(raw)) {
+              const target = ICON_LEGACY_MAP[v];
+              if (target) {
+                mapped[target.group] = [target.value];
+                break; // 单值旧格式：首个可映射值胜
+              }
+            }
+            break;
+          }
+          case 'progress': {
+            for (const v of asStrings(raw)) {
+              const m = /^(\d{1,3})%?$/.exec(v);
+              if (!m) continue;
+              const stage = progressStageOf(Number(m[1]));
+              if (stage) {
+                mapped.progress = [stage];
+                break;
+              }
+            }
+            break;
+          }
+          case 'flag': {
+            if (asStrings(raw).length > 0) mapped.flag = ['flag'];
+            break;
+          }
+          case 'star': {
+            if (asStrings(raw).length > 0) mapped.other = ['important'];
+            break;
+          }
+          default:
+            break; // 未知组：清除（needs 已置位）
+        }
+      }
+      // 进度联动收敛（2026-10-10 全量联动，仅随本就触发的图标重写）：徽章与任务进度
+      // 一体两面——已有合法 task.progress → 结构化字段权威，徽章改落 stage(任务值)
+      // （不同则仍需重写）；无任务进度 → 随徽章档位创建 task.progress（progressPct
+      // 随计划写，applyIconRepair 同事务落位）。干净文档（needs=false）零触碰不变。
+      const entry: IconRepairEntry = { canvasId: scope.canvasId, nodeId, icons: mapped };
+      if (needs && mapped.progress !== undefined && mapped.progress.length > 0) {
+        const taskRaw = node.get('task');
+        const pct =
+          taskRaw instanceof Y.Map && typeof taskRaw.get('progress') === 'number'
+            ? (taskRaw.get('progress') as number)
+            : undefined;
+        const byTask = pct !== undefined ? progressStageOf(pct) : null;
+        if (byTask !== null) {
+          if (mapped.progress[0] !== byTask) {
+            mapped.progress = [byTask];
+          }
         } else {
-          const canonical = canonicalIconValues(group, [raw]);
-          if (canonical.length > 0) mapped[group] = canonical; // 窗口期字符串单值：可解析则入组
+          entry.progressPct = PROGRESS_STAGE_PCT[mapped.progress[0] as ProgressValue];
         }
-        continue;
       }
-      // 组键 ∉ ICON_GROUPS：M6/M7a 旧组 → 新目录
-      switch (key) {
-        case 'priority': {
-          for (const v of asStrings(raw)) {
-            const m = /^p?([1-9])$/.exec(v);
-            if (!m) continue;
-            const legacy = Number(m[1]) >= 8 ? '7' : (m[1] as string);
-            const target = PRIORITY_LEGACY_MAP[legacy];
-            if (target) mapped.priority = [target];
-            break; // 单选组：首个可解析值胜
-          }
-          break;
-        }
-        case 'icon': {
-          for (const v of asStrings(raw)) {
-            const target = ICON_LEGACY_MAP[v];
-            if (target) {
-              mapped[target.group] = [target.value];
-              break; // 单值旧格式：首个可映射值胜
-            }
-          }
-          break;
-        }
-        case 'progress': {
-          for (const v of asStrings(raw)) {
-            const m = /^(\d{1,3})%?$/.exec(v);
-            if (!m) continue;
-            const stage = progressStageOf(Number(m[1]));
-            if (stage) {
-              mapped.progress = [stage];
-              break;
-            }
-          }
-          break;
-        }
-        case 'flag': {
-          if (asStrings(raw).length > 0) mapped.flag = ['flag'];
-          break;
-        }
-        case 'star': {
-          if (asStrings(raw).length > 0) mapped.other = ['important'];
-          break;
-        }
-        default:
-          break; // 未知组：清除（needs 已置位）
-      }
+      if (needs) plan.push(entry);
     }
-    // 进度联动收敛（2026-10-10 全量联动，仅随本就触发的图标重写）：徽章与任务进度
-    // 一体两面——已有合法 task.progress → 结构化字段权威，徽章改落 stage(任务值)
-    // （不同则仍需重写）；无任务进度 → 随徽章档位创建 task.progress（progressPct
-    // 随计划写，applyIconRepair 同事务落位）。干净文档（needs=false）零触碰不变。
-    const entry: IconRepairEntry = { nodeId, icons: mapped };
-    if (needs && mapped.progress !== undefined && mapped.progress.length > 0) {
-      const taskRaw = node.get('task');
-      const pct =
-        taskRaw instanceof Y.Map && typeof taskRaw.get('progress') === 'number'
-          ? (taskRaw.get('progress') as number)
-          : undefined;
-      const byTask = pct !== undefined ? progressStageOf(pct) : null;
-      if (byTask !== null) {
-        if (mapped.progress[0] !== byTask) {
-          mapped.progress = [byTask];
-        }
-      } else {
-        entry.progressPct = PROGRESS_STAGE_PCT[mapped.progress[0] as ProgressValue];
-      }
-    }
-    if (needs) plan.push(entry);
   }
   return plan;
 }
@@ -739,9 +1004,9 @@ export function planIconRepair(doc: Y.Doc): IconRepairEntry[] {
  *  收敛键值（组值数组；空组不写键）；progressPct（进度联动收敛）落位 task.progress
  *  ——task Y.Map 缺失则创建（仅 progress 单键，其余任务字段读取归缺省）。 */
 export function applyIconRepair(doc: Y.Doc, plan: IconRepairEntry[]): void {
-  const nodes = nodesMap(doc);
   for (const entry of plan) {
-    const node = nodes.get(entry.nodeId);
+    const nodes = scopedNodesMap(doc, entry.canvasId);
+    const node = nodes?.get(entry.nodeId);
     if (!node) continue; // 防御：规划后理论不可达
     const iconsRaw = node.get('icons');
     if (!(iconsRaw instanceof Y.Map)) continue;
@@ -769,30 +1034,31 @@ export function applyIconRepair(doc: Y.Doc, plan: IconRepairEntry[]): void {
  * crafted doc_state / 远端坏数据）。键缺失不补写——干净文档零修复、零写入、字节级不变
  * （「干净文档 normalize 返回 0」的既有契约不破）。
  *
- * 覆盖范围：全部节点（含墓碑——撤销/快照还原可复活，children 冻结不变量不涉及
- * description；与 planIconRepair 相同的覆盖裁定）。
+ * 覆盖范围：全部存活画布的全部节点（含墓碑节点——撤销/快照还原可复活，children
+ * 冻结不变量不涉及 description；与 planIconRepair 相同的覆盖裁定）。墓碑画布不进
+ * 作用域（冻结不变量推广）。
  * 仅接入全量 normalizeTree：产品流新写经 setDescription 长度校验不再制造坏值，
  * 增量路径（normalizeTreeFor）脏区推导不含非结构键（deriveNormalizeDirty），与
  * 图标收敛同一「外部状态直入入口（docFromState / 第 64 写摊销清扫 / 安全阀）」口径。
  */
-export function planDescriptionRepair(doc: Y.Doc): Array<{ nodeId: string; value: string }> {
-  const nodes = nodesMap(doc);
-  const plan: Array<{ nodeId: string; value: string }> = [];
-  for (const [nodeId, node] of nodes.entries()) {
-    const raw = node.get('description');
-    if (raw === undefined) continue; // 键缺失：不补写（零修复契约）
-    if (typeof raw !== 'string') plan.push({ nodeId, value: '' });
-    else if (raw.length > MAX_DESCRIPTION_LENGTH) plan.push({ nodeId, value: raw.slice(0, MAX_DESCRIPTION_LENGTH) });
+export function planDescriptionRepair(doc: Y.Doc): Array<{ canvasId: string; nodeId: string; value: string }> {
+  const plan: Array<{ canvasId: string; nodeId: string; value: string }> = [];
+  for (const scope of repairScopes(doc)) {
+    for (const [nodeId, node] of scope.nodes.entries()) {
+      const raw = node.get('description');
+      if (raw === undefined) continue; // 键缺失：不补写（零修复契约）
+      if (typeof raw !== 'string') plan.push({ canvasId: scope.canvasId, nodeId, value: '' });
+      else if (raw.length > MAX_DESCRIPTION_LENGTH) plan.push({ canvasId: scope.canvasId, nodeId, value: raw.slice(0, MAX_DESCRIPTION_LENGTH) });
+    }
   }
   return plan;
 }
 
 /** 应用描述收敛计划（必须在调用方已开启的事务内执行）：整值覆写（'' 也写回——
  *  计划内的节点本就有该键，覆写只改值不新增键面）。 */
-export function applyDescriptionRepair(doc: Y.Doc, plan: Array<{ nodeId: string; value: string }>): void {
-  const nodes = nodesMap(doc);
+export function applyDescriptionRepair(doc: Y.Doc, plan: Array<{ canvasId: string; nodeId: string; value: string }>): void {
   for (const entry of plan) {
-    nodes.get(entry.nodeId)?.set('description', entry.value);
+    scopedNodesMap(doc, entry.canvasId)?.get(entry.nodeId)?.set('description', entry.value);
   }
 }
 
@@ -805,27 +1071,30 @@ export function applyDescriptionRepair(doc: Y.Doc, plan: Array<{ nodeId: string;
  * side 是普通可选字段：repair 不做「非 root 子级清键」之类的语义清理（产品流的
  * 换父清侧由 moveNode 负责，见 operations.moveNode），只兜非法值。
  *
- * 覆盖范围：全部节点（含墓碑——撤销/快照还原可复活，children 冻结不变量不涉及
- * side；与 planIconRepair/planDescriptionRepair 相同的覆盖裁定）。
+ * 覆盖范围：全部存活画布的全部节点（含墓碑节点——撤销/快照还原可复活，children
+ * 冻结不变量不涉及 side；与 planIconRepair/planDescriptionRepair 相同的覆盖裁定）。
+ * 墓碑画布不进作用域（冻结不变量推广）。
  * 仅接入全量 normalizeTree：产品流新写经 addChild/setNodeSide 校验不再制造坏值，
  * 增量路径（normalizeTreeFor）脏区推导不含非结构键（deriveNormalizeDirty），与
  * 图标/描述收敛同一「外部状态直入入口（docFromState / 第 64 写摊销清扫 / 安全阀）」口径。
  */
-export function planSideRepair(doc: Y.Doc): string[] {
-  const nodes = nodesMap(doc);
-  const plan: string[] = [];
-  for (const [nodeId, node] of nodes.entries()) {
-    const raw = node.get('side');
-    if (raw === undefined) continue; // 键缺失：不补写（零修复契约）
-    if (raw !== 'left' && raw !== 'right') plan.push(nodeId);
+export function planSideRepair(doc: Y.Doc): Array<{ canvasId: string; nodeId: string }> {
+  const plan: Array<{ canvasId: string; nodeId: string }> = [];
+  for (const scope of repairScopes(doc)) {
+    for (const [nodeId, node] of scope.nodes.entries()) {
+      const raw = node.get('side');
+      if (raw === undefined) continue; // 键缺失：不补写（零修复契约）
+      if (raw !== 'left' && raw !== 'right') plan.push({ canvasId: scope.canvasId, nodeId });
+    }
   }
   return plan;
 }
 
 /** 应用侧别收敛计划（必须在调用方已开启的事务内执行）：删除非法 side 键。 */
-export function applySideRepair(doc: Y.Doc, plan: string[]): void {
-  const nodes = nodesMap(doc);
-  for (const nodeId of plan) nodes.get(nodeId)?.delete('side');
+export function applySideRepair(doc: Y.Doc, plan: Array<{ canvasId: string; nodeId: string }>): void {
+  for (const entry of plan) {
+    scopedNodesMap(doc, entry.canvasId)?.get(entry.nodeId)?.delete('side');
+  }
 }
 
 /**
@@ -834,8 +1103,9 @@ export function applySideRepair(doc: Y.Doc, plan: string[]): void {
  */
 const ROOT_SIDE_RIGHT_QUOTA = 3;
 
-/** side 回填计划条目：root 存活子级 id + 兜底侧别。 */
+/** side 回填计划条目：作用域 + root 存活子级 id + 兜底侧别（canvasId '' = 旧形状顶层）。 */
 export interface SideBackfillEntry {
+  canvasId: string;
   id: string;
   side: 'left' | 'right';
 }
@@ -845,6 +1115,8 @@ export interface SideBackfillEntry {
  * 需求方 2026-10-09 二次裁定）：root 存活子级缺有效 side（键缺失，或值非法——
  * 归一删键后同轮收敛，不落「先删后补」中间态）→ 按文档序索引兜底回填
  * （index 0-2 右、≥3 左，与引擎 assignMindmapSides 兜底同式）。
+ * 多画布（Task 5，R1 守卫语义恢复）：逐存活画布、各画布自己的 rootId 独立执行
+ * （各画布 root 子级按各自索引兜底）。
  *
  * 动机：side 特性（2026-09-30）之前的旧文档 root 子级无 side 键，引擎按索引
  * 兜底定侧——索引随插入/重排漂移会让「有效侧」翻转（Enter 左下角 bug 根因）。
@@ -853,25 +1125,27 @@ export interface SideBackfillEntry {
  * 归一先行）——产品流新写经 addChild 恒带 side，normalizeTree 的「干净文档
  * 零修复」契约不受影响；回填写入随下次落库持久化。
  *
- * 覆盖范围：仅 root 直接子级（side 仅此层有语义——更深子级 engine 恒随一级
- * 祖先侧，不回填）；墓碑跳过（children 冻结不变量不受影响，复活后下轮收敛）。
+ * 覆盖范围：仅各画布 root 直接子级（side 仅此层有语义——更深子级 engine 恒随一级
+ * 祖先侧，不回填）；墓碑节点跳过（children 冻结不变量不受影响，复活后下轮收敛）；
+ * 墓碑画布不进作用域（冻结不变量推广）。
  */
 export function planSideBackfill(doc: Y.Doc): SideBackfillEntry[] {
-  const nodes = nodesMap(doc);
-  const root = nodes.get(ROOT_NODE_ID);
-  if (!root) return [];
-  const rootChildren = childrenOf(root);
-  if (!rootChildren) return [];
-  const entries = rootChildren.toArray();
   const plan: SideBackfillEntry[] = [];
-  for (let i = 0; i < entries.length; i += 1) {
-    const id = entries[i];
-    if (typeof id !== 'string') continue; // 非字符串垃圾项由阶段一清理，不参与
-    const node = nodes.get(id);
-    if (node === undefined || isTombstoned(node)) continue;
-    const raw = node.get('side');
-    if (raw === 'left' || raw === 'right') continue; // 有效持久值不覆写
-    plan.push({ id, side: i < ROOT_SIDE_RIGHT_QUOTA ? 'right' : 'left' });
+  for (const scope of repairScopes(doc)) {
+    const root = scope.nodes.get(scope.rootId);
+    if (!root || isTombstoned(root)) continue;
+    const rootChildren = childrenOf(root);
+    if (!rootChildren) continue;
+    const entries = rootChildren.toArray();
+    for (let i = 0; i < entries.length; i += 1) {
+      const id = entries[i];
+      if (typeof id !== 'string') continue; // 非字符串垃圾项由阶段一清理，不参与
+      const node = scope.nodes.get(id);
+      if (node === undefined || isTombstoned(node)) continue;
+      const raw = node.get('side');
+      if (raw === 'left' || raw === 'right') continue; // 有效持久值不覆写
+      plan.push({ canvasId: scope.canvasId, id, side: i < ROOT_SIDE_RIGHT_QUOTA ? 'right' : 'left' });
+    }
   }
   return plan;
 }
@@ -879,21 +1153,22 @@ export function planSideBackfill(doc: Y.Doc): SideBackfillEntry[] {
 /** 应用 side 回填计划（必须在调用方已开启的事务内执行；幂等——同值守卫由
  *  规划侧「有效值不覆写」保证，apply 只写缺失/非法条目）。 */
 export function applySideBackfill(doc: Y.Doc, plan: SideBackfillEntry[]): void {
-  const nodes = nodesMap(doc);
-  for (const entry of plan) nodes.get(entry.id)?.set('side', entry.side);
+  for (const entry of plan) {
+    scopedNodesMap(doc, entry.canvasId)?.get(entry.id)?.set('side', entry.side);
+  }
 }
 
 // ══ 自定义列收敛（表格自定义列，随全量 normalizeTree 执行）════════════════════
 
 /** 自定义列修复计划（planCustomRepair 产物；applyCustomRepair 在调用方已开启的
- *  事务内应用）。 */
+ *  事务内应用）。条目带 canvasId 作用域标记（'' = 旧形状顶层）。 */
 export interface CustomRepairPlan {
-  /** meta.customColumns 的规范化替换值（null = 无需替换）。 */
+  /** meta.customColumns 的规范化替换值（null = 无需替换；doc 级，最多一次）。 */
   columns: CustomColumnDef[] | null;
-  /** custom 键整体删除的节点 id（值非 Y.Map）。 */
-  dropCustom: string[];
+  /** custom 键整体删除的节点（值非 Y.Map）。 */
+  dropCustom: Array<{ canvasId: string; nodeId: string }>;
   /** 节点 custom 内需删除的列键（schema 外孤儿 / 值形状与列类型不符）。 */
-  dropFields: Array<{ nodeId: string; colId: string }>;
+  dropFields: Array<{ canvasId: string; nodeId: string; colId: string }>;
 }
 
 /**
@@ -901,16 +1176,18 @@ export interface CustomRepairPlan {
  * - meta.customColumns：键**存在**且与 canonicalCustomColumns 规范化结果不同
  *   （非数组 / 形状非法项 / 重复 id / 超 CUSTOM_COLUMN_LIMIT）→ 整体替换为规范化
  *   数组；键缺失不补写——干净文档零修复、零写入、字节级不变（「normalize 返回 0」
- *   契约不破，与 planDescriptionRepair 同款缺省裁定）；
- * - 节点 custom：非 Y.Map → 删键；schema（规范化后）外的列键 → 删（孤儿清理，
- *   覆盖 meta 截断/剔除产生的落榜列）；值形状与列类型不符（text 非串 / person 非
- *   串数组 / progress 非法整数 / date 非法串，isValidCustomValueOfType 单源）→ 删键。
- *   **只删不改**：合法值不做去重/长度/上限收敛（写入口已归一，crafted 残留不违背
- *   读取契约，读取侧自行防御——保持修复面最小，与 icons 的 canonicalIconValues
- *   收敛强度不同是有意为之：custom 值是整值替换语义、无组内目录可言）。
+ *   契约不破，与 planDescriptionRepair 同款缺省裁定）。schema 是 doc 级（默认假设 3）；
+ * - 节点 custom（逐存活画布）：非 Y.Map → 删键；schema（规范化后）外的列键 → 删
+ *   （孤儿清理，覆盖 meta 截断/剔除产生的落榜列）；值形状与列类型不符（text 非串 /
+ *   person 非串数组 / progress 非法整数 / date 非法串，isValidCustomValueOfType 单源）
+ *   → 删键。**只删不改**：合法值不做去重/长度/上限收敛（写入口已归一，crafted 残留
+ *   不违背读取契约，读取侧自行防御——保持修复面最小，与 icons 的
+ *   canonicalIconValues 收敛强度不同是有意为之：custom 值是整值替换语义、无组内
+ *   目录可言）。
  *
- * 覆盖范围：全部节点（含墓碑——撤销/快照可复活，children 冻结不变量不涉及 custom；
- * 与 planIconRepair/planDescriptionRepair/planSideRepair 相同的覆盖裁定）。
+ * 覆盖范围：全部存活画布的全部节点（含墓碑节点——撤销/快照可复活，children 冻结
+ * 不变量不涉及 custom；与 planIconRepair/planDescriptionRepair/planSideRepair 相同的
+ * 覆盖裁定）。墓碑画布不进作用域（冻结不变量推广）。
  * 仅接入全量 normalizeTree：产品流新写经 setCustomColumns/setCustomField 校验不再
  * 制造坏值（删列清孤儿已在 op 事务内完成），增量路径（normalizeTreeFor）脏区推导
  * 不含 custom 子 Map（deriveNormalizeDirty：非结构键无脏区），与图标/描述/侧别
@@ -928,18 +1205,19 @@ export function planCustomRepair(doc: Y.Doc): CustomRepairPlan {
     if (JSON.stringify(schema) !== JSON.stringify(rawColumns)) plan.columns = schema;
   }
   const typeById = new Map(schema.map((c) => [c.id, c.type] as const));
-  const nodes = nodesMap(doc);
-  for (const [nodeId, node] of nodes.entries()) {
-    const custom = node.get('custom');
-    if (custom === undefined) continue;
-    if (!(custom instanceof Y.Map)) {
-      plan.dropCustom.push(nodeId);
-      continue;
-    }
-    for (const colId of [...custom.keys()]) {
-      const type = typeById.get(colId);
-      if (type === undefined || !isValidCustomValueOfType(type, custom.get(colId))) {
-        plan.dropFields.push({ nodeId, colId });
+  for (const scope of repairScopes(doc)) {
+    for (const [nodeId, node] of scope.nodes.entries()) {
+      const custom = node.get('custom');
+      if (custom === undefined) continue;
+      if (!(custom instanceof Y.Map)) {
+        plan.dropCustom.push({ canvasId: scope.canvasId, nodeId });
+        continue;
+      }
+      for (const colId of [...custom.keys()]) {
+        const type = typeById.get(colId);
+        if (type === undefined || !isValidCustomValueOfType(type, custom.get(colId))) {
+          plan.dropFields.push({ canvasId: scope.canvasId, nodeId, colId });
+        }
       }
     }
   }
@@ -952,12 +1230,11 @@ export function applyCustomRepair(doc: Y.Doc, plan: CustomRepairPlan): void {
   if (plan.columns !== null) {
     doc.getMap('meta').set('customColumns', plan.columns.map((c) => ({ ...c })));
   }
-  const nodes = nodesMap(doc);
-  for (const nodeId of plan.dropCustom) {
-    nodes.get(nodeId)?.delete('custom');
+  for (const drop of plan.dropCustom) {
+    scopedNodesMap(doc, drop.canvasId)?.get(drop.nodeId)?.delete('custom');
   }
   for (const drop of plan.dropFields) {
-    const custom = nodes.get(drop.nodeId)?.get('custom');
+    const custom = scopedNodesMap(doc, drop.canvasId)?.get(drop.nodeId)?.get('custom');
     if (custom instanceof Y.Map) custom.delete(drop.colId);
   }
 }
@@ -977,12 +1254,12 @@ export function applyCustomRepair(doc: Y.Doc, plan: CustomRepairPlan): void {
  * 「本地已处理」，远端事务可能伪装成本地 origin（origin 是任意透传值），漏治。
  *
  * 终止性：heal 写自身以 ORIGIN_SYSTEM 开事务，同样触发本监听——但 normalize 的
- * 写入不再制造任何规则违例（①-⑤ 全部就地满足），推导出的第二次修复数为 0、
+ * 写入不再制造任何规则违例（①-⑤⑨⑩ 全部就地满足），推导出的第二次修复数=0、
  * 不开事务，递归在第二趟终止。Yjs 13.6 的 afterTransaction 在事务 GC 之前触发
  * （deriveNormalizeDirty 的旧值 item 链读取安全，同 withTransaction 的依据），
  * 且清理期内新开的事务被追加进同一 cleanup 队列顺延处理，嵌套安全。
  *
- * 返回注销函数（UI 销毁时调用；测试用例的 detach 契约钉死于 remote-sync.test.ts）。
+ * 返回注销函数（UI 销毁时调用；测试用例的 detach 契约钉死见 remote-sync.test.ts）。
  */
 export function attachRemoteNormalization(doc: Y.Doc): () => void {
   const heal = (tr: Y.Transaction): void => {

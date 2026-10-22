@@ -3,6 +3,7 @@ import type * as Y from 'yjs';
 import {
   addChild,
   assigneeEntriesOf,
+  canvasesMap,
   countAliveReachable,
   CUSTOM_COLUMN_LIMIT,
   CUSTOM_COLUMN_NAME_MAX,
@@ -251,22 +252,24 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
   // —— 会话内节点最后修改时刻（「更新时间」列；见文件头已知口径） ——
   const updatedRef = useRef<Map<string, number>>(new Map());
   useEffect(() => {
-    const nodesMap = doc.getMap('nodes');
+    // 多画布收口：读取路径适配，语义不变——改监听 canvases 根 map（observeDeep 捕获嵌套
+    // nodes 变化）：节点增删路径为 [canvasId,'nodes']，节点字段变更为 [canvasId,'nodes',nodeId]。
+    const rootMap = canvasesMap(doc);
     const onDeep: Parameters<Y.Map<unknown>['observeDeep']>[0] = (events) => {
       for (const ev of events) {
-        if (ev.path.length === 0) {
+        if (ev.path.length === 2 && ev.path[1] === 'nodes') {
           // nodes map 本体的键变更（节点增删）：keys 即节点 id
           for (const key of (ev as Y.YMapEvent<unknown>).keys.keys()) {
             updatedRef.current.set(key, Date.now());
           }
-        } else if (typeof ev.path[0] === 'string') {
-          // 节点内部字段变更（文本/任务字段/折叠…）：path 首段即节点 id
-          updatedRef.current.set(ev.path[0], Date.now());
+        } else if (ev.path.length >= 3 && ev.path[1] === 'nodes' && typeof ev.path[2] === 'string') {
+          // 节点内部字段变更（文本/任务字段/折叠…，含更深嵌套）：path 末段即节点 id
+          updatedRef.current.set(ev.path[2], Date.now());
         }
       }
     };
-    nodesMap.observeDeep(onDeep);
-    return () => nodesMap.unobserveDeep(onDeep);
+    rootMap.observeDeep(onDeep);
+    return () => rootMap.unobserveDeep(onDeep);
   }, [doc]);
 
   // —— 文档成员候选（owner + 协作者；失败静默回退 presence/文档内既有 ID） ——

@@ -29,7 +29,12 @@ import {
   type TableViewMeta,
 } from './constants';
 import { GmindCoreError, type GmindCoreErrorCode } from './errors';
-import { ROOT_NODE_ID } from './doc';
+import {
+  canvasNodesMap,
+  canvasesMap,
+  ensureCanvasShape,
+  rootIdOf,
+} from './canvas';
 import {
   assigneeEntriesOf,
   getNode,
@@ -75,10 +80,11 @@ const ROOT_SIDE_RIGHT_QUOTA = 3;
  * - 有 side 字段的节点按持久值计（含手动 setNodeSide 换过侧的）；
  * - 无 side 字段的旧节点按文档序折算：index 0-2 视为 right、≥3 视为 left；
  * - 墓碑不入计（normalize 后 root children 恒为存活节点，此处再防御一次）。
+ * 画布口径（Task 4）：按 canvasId 解析该画布子图与该画布根。
  */
-function countRightSideRootChildren(doc: Y.Doc): number {
-  const nodes = doc.getMap('nodes') as Y.Map<Y.Map<unknown>>;
-  const root = nodes.get(ROOT_NODE_ID);
+function countRightSideRootChildren(doc: Y.Doc, canvasId?: string): number {
+  const nodes = canvasNodesMap(doc, canvasId);
+  const root = nodes.get(rootIdOf(doc, canvasId));
   const children = root?.get('children') as Y.Array<string> | undefined;
   if (!children) return 0;
   let right = 0;
@@ -178,16 +184,20 @@ export function addChild(
   parentId: string,
   opts: AddChildOptions = {},
   origin: WriteOrigin = ORIGIN_USER,
+  canvasId?: string,
 ): string {
   if (opts.text !== undefined && opts.text.length > MAX_TEXT_LENGTH) {
     throw new GmindCoreError('TEXT_TOO_LONG', '节点文本长度已达上限');
   }
-  const parent = requireAliveNode(doc, parentId);
+  const parent = requireAliveNode(doc, parentId, canvasId);
+  const nodes = canvasNodesMap(doc, canvasId); // 画布子图解析先于事务（校验先于事务）
   const id = ulid();
-  // 逆时针定侧（仅 root 直接子级）：现有右侧计数 < 配额 → 右，否则左。事务外只读计算。
+  // 逆时针定侧（仅该画布 root 直接子级）：现有右侧计数 < 配额 → 右，否则左。
+  // 事务外只读计算；rootId 按画布解析（任一画布根的同級定侧口径一致）。
+  const canvasRootId = rootIdOf(doc, canvasId);
   const side: NodeSide | undefined =
-    parentId === ROOT_NODE_ID
-      ? countRightSideRootChildren(doc) < ROOT_SIDE_RIGHT_QUOTA
+    parentId === canvasRootId
+      ? countRightSideRootChildren(doc, canvasId) < ROOT_SIDE_RIGHT_QUOTA
         ? 'right'
         : 'left'
       : undefined;
@@ -197,7 +207,7 @@ export function addChild(
     node.set('parentId', parentId);
     node.set('children', new Y.Array<string>());
     if (side !== undefined) node.set('side', side);
-    doc.getMap('nodes').set(id, node);
+    nodes.set(id, node);
 
     let parentChildren = parent.get('children') as Y.Array<string> | undefined;
     if (!parentChildren) {
@@ -221,11 +231,12 @@ export function setText(
   id: string,
   text: string,
   origin: WriteOrigin = ORIGIN_USER,
+  canvasId?: string,
 ): void {
   if (text.length > MAX_TEXT_LENGTH) {
     throw new GmindCoreError('TEXT_TOO_LONG', '节点文本长度已达上限');
   }
-  const node = requireAliveNode(doc, id);
+  const node = requireAliveNode(doc, id, canvasId);
   // 同值守卫（M7c-E4，需求方 #4）：文本未变化不开事务——行内编辑 blur 提交是
   // 无条件 setText，无守卫时「点开又点走」也会生成一次空更新（亮「保存中」+服务端
   // 白存一版历史）。缺键归 ''（与读取侧口径一致），首次写 '' 同为零变更。
@@ -235,23 +246,20 @@ export function setText(
   });
 }
 
-/** 与 read.ts 同款类型化访问（Y.Map 泛型丢失问题）。 */
-function nodesMap(doc: Y.Doc): Y.Map<Y.Map<unknown>> {
-  return doc.getMap('nodes');
-}
-
-/** 内部：将 nodeId 及其全部后代标记为墓碑（deleted=true），children 数组保留不动（快照可还原）。 */
-function tombstoneSubtree(doc: Y.Doc, nodeId: string): void {
-  const nodes = nodesMap(doc);
-  for (const id of subtreeIds(doc, nodeId, true)) {
+/** 内部：将 nodeId 及其全部后代标记为墓碑（deleted=true），children 数组保留不动（快照可还原）。
+ *  读写同一画布子图（canvasNodesMap）——评审定点修复：旧实现从画布子图读 id 集合、
+ *  却向顶层空 nodes 写墓碑，读写错位。 */
+function tombstoneSubtree(doc: Y.Doc, nodeId: string, canvasId?: string): void {
+  const nodes = canvasNodesMap(doc, canvasId);
+  for (const id of subtreeIds(doc, nodeId, canvasId, true)) {
     nodes.get(id)?.set('deleted', true);
   }
 }
 
 /** 内部：从父节点的 children 数组中移除 childId（含容错：父缺失/无 children/重复项）。
  * 父节点已墓碑时不动其 children——那是保留结构（快照还原依据），如批量 [祖先, 后代] 连删。 */
-function removeFromParentChildren(doc: Y.Doc, childId: string): void {
-  const nodes = nodesMap(doc);
+function removeFromParentChildren(doc: Y.Doc, childId: string, canvasId?: string): void {
+  const nodes = canvasNodesMap(doc, canvasId);
   const node = nodes.get(childId);
   if (!node) return;
   const parentId = node.get('parentId');
@@ -276,21 +284,24 @@ export function deleteNodes(
   doc: Y.Doc,
   ids: string[],
   origin: WriteOrigin = ORIGIN_USER,
+  canvasId?: string,
 ): void {
+  // 画布子图与该画布根解析先于事务（校验先于事务；显式 canvasId 缺失抛 CANVAS_NOT_FOUND）。
+  const nodes = canvasNodesMap(doc, canvasId);
+  const canvasRootId = rootIdOf(doc, canvasId);
   withTransaction(doc, origin, () => {
-    const nodes = nodesMap(doc);
     for (const id of ids) {
-      if (id === ROOT_NODE_ID) {
-        const root = nodes.get(ROOT_NODE_ID);
+      if (id === canvasRootId) {
+        const root = nodes.get(canvasRootId);
         const rootChildren = root?.get('children') as Y.Array<string> | undefined;
         if (!rootChildren) continue;
-        for (const childId of rootChildren.toArray()) tombstoneSubtree(doc, childId);
+        for (const childId of rootChildren.toArray()) tombstoneSubtree(doc, childId, canvasId);
         rootChildren.delete(0, rootChildren.length);
         continue;
       }
       if (!nodes.get(id)) continue; // 不存在的 id 静默忽略
-      tombstoneSubtree(doc, id);
-      removeFromParentChildren(doc, id);
+      tombstoneSubtree(doc, id, canvasId);
+      removeFromParentChildren(doc, id, canvasId);
     }
   });
 }
@@ -313,22 +324,24 @@ export function moveNode(
   newParentId: string,
   index?: number,
   origin: WriteOrigin = ORIGIN_USER,
+  canvasId?: string,
 ): void {
-  if (id === ROOT_NODE_ID) {
+  const canvasRootId = rootIdOf(doc, canvasId); // 先于事务：ROOT 特判按各画布根推广
+  if (id === canvasRootId) {
     throw new GmindCoreError('ROOT_FORBIDDEN', '中心主题不可移动');
   }
-  const node = requireAliveNode(doc, id);
-  const newParent = requireAliveNode(doc, newParentId);
-  if (subtreeIds(doc, id).includes(newParentId)) {
+  const node = requireAliveNode(doc, id, canvasId);
+  const newParent = requireAliveNode(doc, newParentId, canvasId);
+  if (subtreeIds(doc, id, canvasId).includes(newParentId)) {
     throw new GmindCoreError('CYCLE_FORBIDDEN', '不能移动到自身或其后代');
   }
   const oldParentId = node.get('parentId');
   withTransaction(doc, origin, () => {
-    removeFromParentChildren(doc, id);
+    removeFromParentChildren(doc, id, canvasId);
 
     node.set('parentId', newParentId);
-    // 换父离开 root 级 → 清持久侧别（键面删除，非 root 子级不残留无语义字段）
-    if (oldParentId === ROOT_NODE_ID && newParentId !== ROOT_NODE_ID) {
+    // 换父离开该画布 root 级 → 清持久侧别（键面删除，非 root 子级不残留无语义字段）
+    if (oldParentId === canvasRootId && newParentId !== canvasRootId) {
       node.delete('side');
     }
 
@@ -357,6 +370,7 @@ export function setNodeSide(
   id: string,
   side: NodeSide,
   origin: WriteOrigin = ORIGIN_USER,
+  canvasId?: string,
 ): void {
   if (!(NODE_SIDES as readonly string[]).includes(side)) {
     throw new GmindCoreError(
@@ -364,8 +378,8 @@ export function setNodeSide(
       `侧别非法（${JSON.stringify(String(side))}），仅支持左侧/右侧`,
     );
   }
-  const node = requireAliveNode(doc, id);
-  if (node.get('parentId') !== ROOT_NODE_ID) {
+  const node = requireAliveNode(doc, id, canvasId);
+  if (node.get('parentId') !== rootIdOf(doc, canvasId)) {
     throw new GmindCoreError('SIDE_ONLY_ROOT_CHILD', '仅中心主题的直接子级可设置左右侧');
   }
   if (node.get('side') === side) return; // 同值守卫（M7c-E4）：零变更不开事务
@@ -383,11 +397,12 @@ export function setNote(
   id: string,
   note: string,
   origin: WriteOrigin = ORIGIN_USER,
+  canvasId?: string,
 ): void {
   if (note.length > MAX_NOTE_LENGTH) {
     throw new GmindCoreError('NOTE_TOO_LONG', '备注长度已达上限');
   }
-  const node = requireAliveNode(doc, id);
+  const node = requireAliveNode(doc, id, canvasId);
   if ((node.get('note') ?? '') === note) return; // 同值守卫（M7c-E4）：零变更不开事务
   withTransaction(doc, origin, () => {
     node.set('note', note);
@@ -406,6 +421,7 @@ export function setDescription(
   id: string,
   text: string,
   origin: WriteOrigin = ORIGIN_USER,
+  canvasId?: string,
 ): void {
   if (text.length > MAX_DESCRIPTION_LENGTH) {
     throw new GmindCoreError(
@@ -413,7 +429,7 @@ export function setDescription(
       `描述长度已达上限（最多 ${MAX_DESCRIPTION_LENGTH} 字），请精简后再保存`,
     );
   }
-  const node = requireAliveNode(doc, id);
+  const node = requireAliveNode(doc, id, canvasId);
   if ((node.get('description') ?? '') === text) return; // 同值守卫（M7c-E4）：零变更不开事务
   withTransaction(doc, origin, () => {
     node.set('description', text);
@@ -429,11 +445,12 @@ export function setHref(
   id: string,
   href: string,
   origin: WriteOrigin = ORIGIN_USER,
+  canvasId?: string,
 ): void {
   if (href !== '' && !/^https?:\/\//i.test(href)) {
     throw new GmindCoreError('INVALID_HREF', '链接仅支持 http/https');
   }
-  const node = requireAliveNode(doc, id);
+  const node = requireAliveNode(doc, id, canvasId);
   withTransaction(doc, origin, () => {
     node.set('href', href);
   });
@@ -458,8 +475,9 @@ export function setImage(
   id: string,
   image: NodeImage | null,
   origin: WriteOrigin = ORIGIN_USER,
+  canvasId?: string,
 ): void {
-  const node = requireAliveNode(doc, id);
+  const node = requireAliveNode(doc, id, canvasId);
   if (image !== null) assertImagePlacement(image);
   withTransaction(doc, origin, () => {
     if (image === null) node.delete('image');
@@ -478,6 +496,7 @@ export function moveImage(
   toId: string,
   image: NodeImage,
   origin: WriteOrigin = ORIGIN_USER,
+  canvasId?: string,
 ): void {
   if (fromId === toId) {
     throw new GmindCoreError(
@@ -486,8 +505,8 @@ export function moveImage(
     );
   }
   assertImagePlacement(image);
-  const from = requireAliveNode(doc, fromId);
-  const to = requireAliveNode(doc, toId);
+  const from = requireAliveNode(doc, fromId, canvasId);
+  const to = requireAliveNode(doc, toId, canvasId);
   withTransaction(doc, origin, () => {
     from.delete('image');
     to.set('image', image);
@@ -519,11 +538,12 @@ export function setIcon(
   group: IconGroup,
   value: string | null,
   origin: WriteOrigin = ORIGIN_USER,
+  canvasId?: string,
 ): void {
   if (!ICON_GROUPS.includes(group)) {
     throw new GmindCoreError('INVALID_ICON_GROUP', '未知的图标分组');
   }
-  const node = requireAliveNode(doc, id);
+  const node = requireAliveNode(doc, id, canvasId);
   if (MARKER_GROUP_MODE[group] === 'single') {
     if (value !== null && !iconValuesOf(group).includes(value)) {
       throw new GmindCoreError('INVALID_ICON_VALUE', '未知的图标取值');
@@ -660,6 +680,7 @@ export function setNodeTask(
   id: string,
   patch: TaskPatch,
   origin: WriteOrigin = ORIGIN_USER,
+  canvasId?: string,
 ): void {
   // —— 校验（先于事务；任一违规即抛，零变更）——
   if (patch.status !== undefined && !(TASK_STATUSES as readonly string[]).includes(patch.status)) {
@@ -715,10 +736,10 @@ export function setNodeTask(
     }
   }
 
-  const node = requireAliveNode(doc, id);
+  const node = requireAliveNode(doc, id, canvasId);
 
   // —— 状态联动（@gmind/shared 唯一实现）：before 取当前归一化任务快照。 ——
-  const current = getNode(doc, id)!.task;
+  const current = getNode(doc, id, canvasId)!.task;
   const before: DeriveNode = { id, parentId: null, title: '', task: current };
   const linked = applyStatusRules(before, owners === undefined ? { ...patch } : { ...patch, owners });
   if (linked.owners === undefined && owners !== undefined) linked.owners = owners; // 去重结果随写
@@ -746,7 +767,7 @@ export function setNodeTask(
   // 当前值——applyStatusRules 会把 done 联动 progress 注入 100，不能拿 linked 当
   // 「负责人已完成」的依据；undo 走 Yjs 层不经过本入口，撤销不受门禁约束。 ——
   if (linked.status === 'done') {
-    const entries = assigneeEntriesOf(doc, id);
+    const entries = assigneeEntriesOf(doc, id, canvasId);
     const unfinished = entries.filter((e) => e.progress !== 100);
     if (unfinished.length > 0) {
       const byCol = new Map<string, { colName: string; count: number }>();
@@ -808,6 +829,22 @@ function writeTaskPatch(node: Y.Map<unknown>, patch: TaskPatch): void {
 }
 
 // ══ 表格自定义列（doc 级 schema + 节点 custom 值）════════════════════════════
+
+/** 内部：自定义列孤儿清理的节点遍历范围——全部存活画布的 nodes 子图（列 schema 是
+ *  doc 级，删列清孤儿须覆盖所有画布）；无画布（装载迁移前旧形状窗口）回退顶层 nodes。
+ *  墓碑画布确定性跳过（Task 6 收口登记，对齐 deleteCanvas 冻结口径）：墓碑内容整体
+ *  冻结、作快照还原依据保留，孤儿键随内容一并冻结——解冻（restore 整画布重建/复活）
+ *  时按快照内容原样恢复，概不追补清理（与概要裁定 6 同精神：冻结态不做收敛性写入）。 */
+function allNodesMapsForCleanup(doc: Y.Doc): Y.Map<Y.Map<unknown>>[] {
+  const maps: Y.Map<Y.Map<unknown>>[] = [];
+  for (const canvas of canvasesMap(doc).values()) {
+    // crafted 值防御：非 Y.Map 确定性跳过（对齐 repair 层裁定，与全项目同类遍历同款）
+    if (!(canvas instanceof Y.Map) || canvas.get('deleted') === true) continue; // 墓碑画布冻结：孤儿键随内容一并冻结
+    maps.push(ensureCanvasShape(canvas as Y.Map<unknown>).nodes);
+  }
+  if (maps.length === 0) maps.push(doc.getMap('nodes') as Y.Map<Y.Map<unknown>>);
+  return maps;
+}
 
 /**
  * 整表替换自定义列 schema（增删改名重排一次写入；便捷面裁定——core 只做整表替换 +
@@ -890,11 +927,13 @@ export function setCustomColumns(
   withTransaction(doc, origin, () => {
     doc.getMap('meta').set('customColumns', columns.map((c) => ({ ...c })));
     if (removedIds.length === 0) return;
-    for (const node of nodesMap(doc).values()) {
-      const custom = node.get('custom');
-      if (!(custom instanceof Y.Map)) continue;
-      for (const colId of removedIds) {
-        if (custom.has(colId)) custom.delete(colId);
+    for (const nodes of allNodesMapsForCleanup(doc)) {
+      for (const node of nodes.values()) {
+        const custom = node.get('custom');
+        if (!(custom instanceof Y.Map)) continue;
+        for (const colId of removedIds) {
+          if (custom.has(colId)) custom.delete(colId);
+        }
       }
     }
   });
@@ -1091,6 +1130,7 @@ export function setCustomField(
   colId: string,
   value: CustomFieldValue | undefined,
   origin: WriteOrigin = ORIGIN_USER,
+  canvasId?: string,
 ): void {
   // schema 校验：colId 必须在当前自定义列 schema 中
   const schema = canonicalCustomColumns(doc.getMap('meta').get('customColumns'));
@@ -1104,7 +1144,7 @@ export function setCustomField(
   const check = checkCustomValue(col.type, value);
   if (!check.ok) throw new GmindCoreError(check.code as GmindCoreErrorCode, check.message as string);
 
-  const node = requireAliveNode(doc, id);
+  const node = requireAliveNode(doc, id, canvasId);
 
   // 同值守卫（deep equal，零事务）：现值含 Y 类型（crafted 状态）时守卫不命中，
   // 走写入路径以整形（ensureCustomMap/整值覆写）。
@@ -1164,16 +1204,22 @@ export function setCollapsed(
   id: string,
   collapsed: boolean,
   origin: WriteOrigin = ORIGIN_SYSTEM,
+  canvasId?: string,
 ): void {
-  const node = requireAliveNode(doc, id);
+  const node = requireAliveNode(doc, id, canvasId);
   withTransaction(doc, origin, () => {
     node.set('collapsed', collapsed);
   });
 }
 
 /** 翻转折叠状态（默认 ORIGIN_SYSTEM，同 setCollapsed 不可撤销）。 */
-export function toggleCollapse(doc: Y.Doc, id: string, origin: WriteOrigin = ORIGIN_SYSTEM): void {
-  const node = requireAliveNode(doc, id);
+export function toggleCollapse(
+  doc: Y.Doc,
+  id: string,
+  origin: WriteOrigin = ORIGIN_SYSTEM,
+  canvasId?: string,
+): void {
+  const node = requireAliveNode(doc, id, canvasId);
   withTransaction(doc, origin, () => {
     node.set('collapsed', node.get('collapsed') !== true);
   });
@@ -1201,8 +1247,9 @@ export function setStyle(
   id: string,
   patch: Record<string, string | number | null>,
   origin: WriteOrigin = ORIGIN_USER,
+  canvasId?: string,
 ): void {
-  const node = requireAliveNode(doc, id);
+  const node = requireAliveNode(doc, id, canvasId);
   withTransaction(doc, origin, () => {
     writeStylePatch(node, patch);
   });
@@ -1222,18 +1269,20 @@ export function applyStyle(
   patch: Record<string, string | number | null>,
   scope: StyleScope,
   origin: WriteOrigin = ORIGIN_USER,
+  canvasId?: string,
 ): void {
   const targets = new Set<string>();
   for (const rootId of rootIds) {
-    requireAliveNode(doc, rootId);
+    requireAliveNode(doc, rootId, canvasId);
     if (scope === 'subtree') {
-      for (const targetId of subtreeIds(doc, rootId)) targets.add(targetId);
+      for (const targetId of subtreeIds(doc, rootId, canvasId)) targets.add(targetId);
     } else {
       targets.add(rootId);
     }
   }
+  // 画布子图解析先于事务（校验先于事务纪律）
+  const nodes = canvasNodesMap(doc, canvasId);
   withTransaction(doc, origin, () => {
-    const nodes = nodesMap(doc);
     for (const targetId of targets) {
       const node = nodes.get(targetId);
       if (!node) continue; // 防御：事务前已校验存活，正常不可达

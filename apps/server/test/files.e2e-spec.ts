@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import request from 'supertest';
 import type { INestApplication } from '@nestjs/common';
 import { DataSource } from 'typeorm';
-import { createTemplateDoc, docFromState, docToState, ROOT_NODE_ID } from '@gmind/core';
+import { createTemplateDoc, docFromState, docToState, getNode, ROOT_NODE_ID } from '@gmind/core';
 import { createTestApp } from './support/app-test';
 import { EventEntity } from '../src/events/event.entity';
 
@@ -91,7 +91,7 @@ describe('files 域', () => {
       .set('Authorization', `Bearer ${token}`);
     expect(detail.status).toBe(200);
     const doc = docFromState(new Uint8Array(Buffer.from(String(detail.body.docState), 'base64')));
-    expect(String(doc.getMap('nodes').get(ROOT_NODE_ID)?.get('text'))).toBe('中心主题');
+    expect(getNode(doc, ROOT_NODE_ID)?.text).toBe('中心主题');
     expect(doc.getMap('meta').get('title')).toBe('我的新图');
   });
   it('title 为空字符串时返回 400（Zod 校验）', async () => {

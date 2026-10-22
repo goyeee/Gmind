@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import * as Y from 'yjs';
 import type { Transaction } from 'yjs';
 import { createTemplateDoc, docFromState, docToState } from './doc';
+import { canvasNodesMap } from './canvas';
 import { ORIGIN_SYSTEM, deleteNodes, moveNode } from './operations';
 import { childrenIds, getNode } from './read';
 import type { NodeSnapshot } from './read';
@@ -24,16 +25,16 @@ import { attachRemoteNormalization, normalizeTree } from './repair';
 
 /** 按文本查节点 id（测试辅助；模板生成的 ULID 不可预知，同源克隆的 id 一致）。 */
 function findIdByText(doc: Y.Doc, text: string): string {
-  for (const [id, node] of doc.getMap('nodes').entries()) {
+  for (const [id, node] of canvasNodesMap(doc).entries()) {
     if ((node as Y.Map<unknown>).get('text') === text) return id;
   }
   throw new Error(`test helper: node with text "${text}" not found`);
 }
 
-/** 全文档节点快照（getNode 全量逐节点 deep-equal 口径）。 */
+/** 全文档节点快照（getNode 全量逐节点 deep-equal 口径；单画布场景读第一画布）。 */
 function fullSnapshot(doc: Y.Doc): Record<string, NodeSnapshot | null> {
   const out: Record<string, NodeSnapshot | null> = {};
-  for (const id of doc.getMap('nodes').keys()) out[id] = getNode(doc, id);
+  for (const id of canvasNodesMap(doc).keys()) out[id] = getNode(doc, id);
   return out;
 }
 

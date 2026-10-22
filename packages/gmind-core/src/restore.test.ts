@@ -3,6 +3,7 @@ import * as Y from 'yjs';
 import { ICON_GROUPS, iconValuesOf } from './constants';
 import { ROOT_NODE_ID, createTemplateDoc, docFromState, docToState } from './doc';
 import type { TemplateNodeSpec } from './doc';
+import { canvasNodesMap, canvasOrderArr, canvasesMap, listCanvases } from './canvas';
 import {
   addChild,
   deleteNodes,
@@ -18,8 +19,9 @@ import {
 } from './operations';
 import { childrenIds, countAliveReachable, getMeta, getNode, setDocMeta } from './read';
 import { normalizeTree } from './repair';
-import { ORIGIN_SYSTEM, createUndoManager, undo } from './undo';
+import { ORIGIN_SYSTEM, ORIGIN_USER, createUndoManager, undo } from './undo';
 import { ORIGIN_RESTORE, restoreFromSnapshot } from './restore';
+import { listSummaries, setSummary } from './summary';
 
 /**
  * restoreFromSnapshot（M4 Task 7，FR-VER-004）：结构 op-diff 单事务恢复。
@@ -39,15 +41,15 @@ function makeDoc(): Y.Doc {
 
 /** 按文本查节点 id（测试辅助；模板生成的 ULID 不可预知）。 */
 function idOf(doc: Y.Doc, text: string): string {
-  for (const [id, node] of doc.getMap('nodes').entries()) {
+  for (const [id, node] of canvasNodesMap(doc).entries()) {
     if ((node as Y.Map<unknown>).get('text') === text) return id;
   }
   throw new Error(`test helper: node with text "${text}" not found`);
 }
 
 /** 按文本查「存活」节点 id（排除 root 与墓碑）——重建节点以新 id 落地后按文本找回。 */
-function aliveIdOf(doc: Y.Doc, text: string): string {
-  for (const [id, node] of doc.getMap('nodes').entries()) {
+function aliveIdOf(doc: Y.Doc, text: string, canvasId?: string): string {
+  for (const [id, node] of canvasNodesMap(doc, canvasId).entries()) {
     const n = node as Y.Map<unknown>;
     if (id !== ROOT_NODE_ID && n.get('deleted') !== true && n.get('text') === text) return id;
   }
@@ -178,7 +180,7 @@ describe('restoreFromSnapshot', () => {
     // （M7b repair 对 emoji 组保留目录外字符）。
     const legacyIcons = new Y.Map<unknown>();
     legacyIcons.set('emoji', '🚀');
-    (base.getMap('nodes').get(aId) as Y.Map<unknown>).set('icons', legacyIcons);
+    (canvasNodesMap(base).get(aId) as Y.Map<unknown>).set('icons', legacyIcons);
     const snap = docFromState(docToState(base));
     expect(getNode(snap, aId)!.icons).toEqual({ emoji: ['🚀'] }); // 前置：值域外值确在快照中
 
@@ -197,9 +199,9 @@ describe('restoreFromSnapshot', () => {
     const a2 = idOf(base2, 'A');
     const legacyIcons2 = new Y.Map<unknown>();
     legacyIcons2.set('emoji', '🚀');
-    (base2.getMap('nodes').get(a2) as Y.Map<unknown>).set('icons', legacyIcons2);
+    (canvasNodesMap(base2).get(a2) as Y.Map<unknown>).set('icons', legacyIcons2);
     const snap2 = docFromState(docToState(base2));
-    (base2.getMap('nodes').get(a2) as Y.Map<unknown>).delete('icons'); // 现状无 emoji
+    (canvasNodesMap(base2).get(a2) as Y.Map<unknown>).delete('icons'); // 现状无 emoji
     setText(base2, a2, '改了');
     const r2 = restoreFromSnapshot(base2, snap2);
     expect(r2.updated).toBe(1);
@@ -327,11 +329,165 @@ describe('restoreFromSnapshot', () => {
   });
 });
 
+// ── 多画布恢复（Task 6：画布集合按 canvasId 对齐，增删随快照回滚）────────────────
+
+/**
+ * 手工追加一个画布（ulid 根，子节点文本唯一便于断言），返回 canvasId。
+ * 形状同 chaos.test.ts 的 appendChaosCanvas——画布管理写操作（addCanvas）是 Task 7，
+ * 本任务测试以手工搭形先行。
+ */
+function appendCanvas(doc: Y.Doc, name: string, childTexts: string[]): string {
+  const canvasId = `cv-${name}`;
+  const rootId = `rt-${name}`;
+  doc.transact(() => {
+    const canvas = new Y.Map<unknown>();
+    canvas.set('name', name);
+    canvas.set('rootId', rootId);
+    canvas.set('structureType', 'mindmap');
+    canvas.set('themeId', 'gmind-light');
+    const nodes = new Y.Map<Y.Map<unknown>>();
+    const root = new Y.Map<unknown>();
+    root.set('text', name);
+    root.set('parentId', '');
+    const rootChildren = new Y.Array<string>();
+    root.set('children', rootChildren);
+    nodes.set(rootId, root);
+    childTexts.forEach((text, i) => {
+      const childId = `${canvasId}-n${i}`;
+      const child = new Y.Map<unknown>();
+      child.set('text', text);
+      child.set('parentId', rootId);
+      child.set('children', new Y.Array<string>());
+      nodes.set(childId, child);
+      rootChildren.push([childId]);
+    });
+    canvas.set('nodes', nodes);
+    canvas.set('summaries', new Y.Map<unknown>());
+    canvasesMap(doc).set(canvasId, canvas);
+    canvasOrderArr(doc).push([canvasId]);
+  });
+  return canvasId;
+}
+
+/** 手工画布墓碑＋移出 order（模拟快照后的画布删除；deleteCanvas 是 Task 7 的公开 op）。 */
+function tombstoneCanvas(doc: Y.Doc, canvasId: string): void {
+  doc.transact(() => {
+    (canvasesMap(doc).get(canvasId) as Y.Map<unknown>).set('deleted', true);
+    const order = canvasOrderArr(doc);
+    const idx = order.toArray().indexOf(canvasId);
+    if (idx !== -1) order.delete(idx, 1);
+  });
+}
+
+describe('restoreFromSnapshot 多画布（Task 6）', () => {
+  it('双画布：c1 内容回滚、c2 随快照同回滚（逐画布 op-diff，计数跨画布累加）', () => {
+    const base = makeDoc(); // c1：root → [A[A1], B]
+    const c2 = appendCanvas(base, '画布二', ['P', 'Q']);
+    const snap = docFromState(docToState(base));
+    setText(base, idOf(base, 'A'), '改了'); // 漂移 c1
+    setText(base, aliveIdOf(base, 'P', c2), 'P 改了', ORIGIN_USER, c2); // 漂移 c2
+    const r = restoreFromSnapshot(base, snap);
+    expect(r).toEqual({ deleted: 0, created: 0, moved: 0, updated: 2 }); // 每画布各 1 处文本
+    expect(getNode(base, idOf(base, 'A'))!.text).toBe('A');
+    expect(getNode(base, aliveIdOf(base, 'P', c2), c2)!.text).toBe('P');
+    // c1 逐字段与快照一致（单画布收敛断言复用）；c2 结构未动
+    expect(childrenIds(base, ROOT_NODE_ID)).toEqual([idOf(base, 'A'), idOf(base, 'B')]);
+    expect(countAliveReachable(base, c2)).toBe(2);
+    expect(normalizeTree(base, ORIGIN_SYSTEM)).toBe(0);
+  });
+
+  it('snapshot 多出的画布整画布重建（target 已墓碑的画布随快照复活，内容按快照）', () => {
+    const base = makeDoc();
+    const c2 = appendCanvas(base, '画布二', ['P', 'Q']);
+    const snap = docFromState(docToState(base)); // 快照含 c2
+    tombstoneCanvas(base, c2); // 快照后删除画布二
+    setText(base, idOf(base, 'A'), '改了');
+    const r = restoreFromSnapshot(base, snap);
+    expect(getNode(base, idOf(base, 'A'))!.text).toBe('A'); // c1 回滚
+    expect(r.updated).toBe(1);
+    // c2 整画布重建：存活、内容=快照、回 order（画布级 op 不计节点计数）
+    const canvases = listCanvases(base);
+    expect(canvases.map((c) => c.id)).toContain(c2);
+    expect(canvases.find((c) => c.id === c2)?.rootId).toBe(`rt-画布二`);
+    expect(getNode(base, aliveIdOf(base, 'P', c2), c2)!.text).toBe('P');
+    expect(canvasOrderArr(base).toArray()).toContain(c2);
+    expect(normalizeTree(base, ORIGIN_SYSTEM)).toBe(0);
+  });
+
+  it('整画布重建分支钉死（控制器裁定）：画布随快照复活且概要 = 快照概要；复活后经 repair 自愈收敛（与裁定 6 不冲突——裁定 6 管配对画布概要 diff 不进恢复范围）', () => {
+    const base = makeDoc();
+    const c2 = appendCanvas(base, '画布二', ['P', 'Q']);
+    const pId = aliveIdOf(base, 'P', c2);
+    const qId = aliveIdOf(base, 'Q', c2);
+    const sid = setSummary(base, [pId, qId], '快照概要', ORIGIN_USER, c2); // 概要随快照存在（同父连续段）
+    const snap = docFromState(docToState(base)); // 快照含 c2 及其概要
+    tombstoneCanvas(base, c2); // 快照后删除画布二（墓碑：内容冻结）
+    setText(base, idOf(base, 'A'), '改了'); // 同时漂移 c1
+    const r = restoreFromSnapshot(base, snap);
+    expect(getNode(base, idOf(base, 'A'))!.text).toBe('A'); // c1 回滚
+    expect(r.updated).toBe(1);
+    // 钉死：画布复活，且其概要 = 快照概要（画布是恢复的最小单位，概要作为画布内容
+    // 的一部分随快照复活——整画布重建分支口径，与裁定 6「配对画布概要 diff 不进
+    // 恢复范围」互不冲突）
+    expect(listCanvases(base).map((c) => c.id)).toContain(c2);
+    expect(listSummaries(base, c2)).toEqual([{ id: sid, nodeIds: [pId, qId], label: '快照概要' }]);
+    expect(normalizeTree(base, ORIGIN_SYSTEM)).toBe(0); // 复活后经 repair 自愈收敛
+  });
+
+  it('target 多出的画布置墓碑＋移出 order（画布删除随快照回滚）；c1 不受影响', () => {
+    const base = makeDoc();
+    const snap = docFromState(docToState(base)); // 快照只有 c1
+    const c2 = appendCanvas(base, '画布二', ['P']); // 快照后新增
+    const r = restoreFromSnapshot(base, snap);
+    expect(r).toEqual({ deleted: 0, created: 0, moved: 0, updated: 0 }); // 画布级 op 不计数
+    expect(listCanvases(base).map((c) => c.id)).toEqual([listCanvases(snap)[0]!.id]);
+    expect(canvasOrderArr(base).toArray()).not.toContain(c2);
+    const tomb = canvasesMap(base).get(c2) as Y.Map<unknown>;
+    expect(tomb.get('deleted')).toBe(true); // 墓碑冻结：内容保留（还原依据），不入 order
+    expect(countAliveReachable(base)).toBe(3); // c1 配额口径不变（A/A1/B）
+    expect(normalizeTree(base, ORIGIN_SYSTEM)).toBe(0);
+  });
+
+  it('裁定 6 钉死：summaries 不进恢复 diff——恢复后概要保持 target 现状', () => {
+    const base = makeDoc();
+    const snap = docFromState(docToState(base)); // 快照无概要
+    const aId = idOf(base, 'A');
+    const bId = idOf(base, 'B');
+    const sid = setSummary(base, [aId, bId], '目标概要'); // 快照后用户建概要
+    setText(base, aId, '改了'); // 同时漂移内容
+    restoreFromSnapshot(base, snap);
+    expect(getNode(base, aId)!.text).toBe('A'); // 内容回滚
+    // 概要保持 target 现状：不回滚、不删除（存活片段完好，repair 不动）
+    expect(listSummaries(base)).toEqual([{ id: sid, nodeIds: [aId, bId], label: '目标概要' }]);
+  });
+
+  it('画布 name/structureType/themeId 纳入 diff（对齐 meta⑤ 先例）；meta.title 恒不动', () => {
+    const base = makeDoc();
+    const snap = docFromState(docToState(base));
+    const c1 = listCanvases(base)[0]!.id;
+    base.transact(() => {
+      const canvas = canvasesMap(base).get(c1) as Y.Map<unknown>;
+      canvas.set('name', '改名画布'); // renameCanvas 是 Task 7 op，测试以裸写漂移
+      canvas.set('structureType', 'org');
+      canvas.set('themeId', 'gmind-warm');
+    });
+    setDocMeta(base, { title: '新标题' }); // title 恒排除先例
+    restoreFromSnapshot(base, snap);
+    const canvas = canvasesMap(base).get(c1) as Y.Map<unknown>;
+    expect(canvas.get('name')).toBe('画布 1');
+    expect(canvas.get('structureType')).toBe('mindmap');
+    expect(canvas.get('themeId')).toBe('gmind-light');
+    const meta = getMeta(base);
+    expect(meta.title).toBe('新标题'); // 文件名不随版本恢复变化
+    expect(meta.structureType).toBe('mindmap'); // getMeta 读解析画布（已回滚）
+  });
+});
+
 // ── 混沌辅助 ─────────────────────────────────────────────────────────────────
 
 function aliveIds(doc: Y.Doc): string[] {
   const out: string[] = [ROOT_NODE_ID];
-  for (const [id, node] of doc.getMap('nodes').entries()) {
+  for (const [id, node] of canvasNodesMap(doc).entries()) {
     if (id !== ROOT_NODE_ID && (node as Y.Map<unknown>).get('deleted') !== true) out.push(id);
   }
   return out;

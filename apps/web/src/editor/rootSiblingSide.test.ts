@@ -3,6 +3,7 @@ import * as Y from 'yjs';
 import {
   ROOT_NODE_ID,
   addChild,
+  canvasNodesMap,
   createTemplateDoc,
   setNodeSide,
   setText,
@@ -14,7 +15,7 @@ import { rootKidEffectiveSides, rootSiblingForceSide } from './rootSiblingSide';
 
 /** 按文本查 root 子级 id。 */
 function kidByText(doc: Y.Doc, text: string): string {
-  const nodes = doc.getMap('nodes') as Y.Map<Y.Map<unknown>>;
+  const nodes = canvasNodesMap(doc); // 多画布读取路径：单画布下与旧顶层 nodes 等价
   const kids = (nodes.get(ROOT_NODE_ID)?.get('children') as Y.Array<string>)?.toArray() ?? [];
   for (const id of kids) {
     if (String(nodes.get(id)?.get('text')) === text) return id;

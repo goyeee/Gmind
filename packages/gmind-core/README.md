@@ -33,15 +33,17 @@ const state = core.docToState(doc); // 序列化；docFromState(state) 还原（
 - `interface DocMeta { title: string; structureType: StructureType; themeId: string }` — `StructureType` 来自 `@gmind/shared`
 - `interface NodeImage { key: string; w: number; h: number }`
 - `interface NodeSnapshot { id; text; parentId; childIds; note; href; image: NodeImage | null; icons: Partial<Record<IconGroup, string>>; style: Record<string, string>; collapsed; deleted }`
-- `getMeta(doc: Y.Doc): DocMeta`
-- `setDocMeta(doc: Y.Doc, patch: Partial<DocMeta>, origin = 'user'): void`
-- `getNode(doc: Y.Doc, id: string): NodeSnapshot | null`
-- `childrenIds(doc: Y.Doc, id: string): string[]`
-- `isAlive(doc: Y.Doc, id: string): boolean`
-- `subtreeIds(doc: Y.Doc, id: string, includeDeleted = false): string[]`
-- `pathToRoot(doc: Y.Doc, id: string): string[]`
-- `countAlive(doc: Y.Doc): number`
-- `requireAliveNode(doc: Y.Doc, id: string): Y.Map<unknown>` — 缺失/墓碑分别抛 NODE_NOT_FOUND / NODE_DELETED
+- `getMeta(doc: Y.Doc, canvasId?: string): DocMeta` — structureType/themeId 读解析画布（缺省=第一画布），title/customColumns/tableView 读 doc meta
+- `setDocMeta(doc: Y.Doc, patch: Partial<DocMeta>, origin = 'user', canvasId?: string): void` — structureType/themeId 写画布级，title 仍写 meta
+- `getNode(doc: Y.Doc, id: string, canvasId?: string): NodeSnapshot | null`
+- `childrenIds(doc: Y.Doc, id: string, canvasId?: string): string[]`
+- `isAlive(doc: Y.Doc, id: string, canvasId?: string): boolean`
+- `subtreeIds(doc: Y.Doc, rootId?: string, canvasId?: string, includeDeleted = false): string[]` — rootId 缺省自解析画布的 rootId 起算
+- `pathToRoot(doc: Y.Doc, id: string, canvasId?: string): string[]`
+- `countAlive(doc: Y.Doc, canvasId?: string): number`
+- `countAliveReachable(doc: Y.Doc, canvasId?: string): number` — 配额口径（FR-ACC-003，按画布自各画布 root 起算）
+- `countCollapsedWithChildren(doc: Y.Doc, canvasId?: string): number`
+- `requireAliveNode(doc: Y.Doc, id: string, canvasId?: string): Y.Map<unknown>` — 缺失/墓碑分别抛 NODE_NOT_FOUND / NODE_DELETED；显式 canvasId 不存在抛 CANVAS_NOT_FOUND
 
 ### operations（写操作与事务；origin 默认 ORIGIN_USER）
 
@@ -63,12 +65,13 @@ const state = core.docToState(doc); // 序列化；docFromState(state) 还原（
 - `type StyleScope = 'subtree' | 'single'`
 - `applyStyle(doc: Y.Doc, rootIds: string[], patch: Record<string, string | number | null>, scope: StyleScope, origin?: WriteOrigin): void`
 
-### repair（自愈/规范化，均以 system origin 写入）
+### repair（自愈/规范化，均以 system origin 写入；多画布口径：规则逐存活画布执行 + 画布级 ⑨⑩）
 
-- 环破坏仅在全量扫描执行（导入/64 写清扫），按最大 ULID 断环回 root。
-- `normalizeTree(doc: Y.Doc, origin?: string): number` — 全量收敛，返回修复写入数
-- `normalizeTreeFor(doc: Y.Doc, origin: string, dirtyNodeIds: Set<string>): number` — 增量收敛指定脏区
-- `deriveNormalizeDirty(doc: Y.Doc, tr: Y.Transaction): Set<string> | null` — 从事务派生脏节点集
+- 环破坏仅在全量扫描执行（导入/64 写清扫），按最大 ULID 断环回本画布 rootId。
+- `normalizeTree(doc: Y.Doc, origin?: string): number` — 全量收敛（逐存活画布 + 画布序），返回修复写入数
+- `normalizeTreeFor(doc: Y.Doc, origin: string, dirty: NormalizeDirty): number` — 增量收敛指定脏区
+- `deriveNormalizeDirty(doc: Y.Doc, tr: Y.Transaction): NormalizeDirty | null` — 从事务派生脏区（canvasId → 脏 nodeId 集映射）
+- `type NormalizeDirty = Map<string, Set<string>>` — 增量脏区（'' = 旧形状顶层作用域哨兵）
 
 ### undo（撤销/重做，仅跟踪 ORIGIN_USER 事务，FR-EDT-004）
 
