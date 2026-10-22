@@ -1,6 +1,6 @@
 import * as Y from 'yjs';
 import type { StructureType } from '@gmind/shared';
-import { canvasMapOf, canvasNodesMap, rootIdOf } from './canvas';
+import { canvasMapOf, canvasNodesMap, listCanvases, rootIdOf } from './canvas';
 import {
   canonicalCustomColumns,
   canonicalTableView,
@@ -421,6 +421,21 @@ export function countAliveReachable(doc: Y.Doc, canvasId?: string): number {
     if (next) stack.push(...next.toArray());
   }
   return n;
+}
+
+/** 逐画布配额计数（多画布计划三 Task 6，裁定 1 的读取面）：全部存活画布各自的
+ *  countAliveReachable（不含各画布 root），按 canvasOrder 顺序，key=canvasId。
+ *  files.node_count 的全文档合计由调用方 Σ values（展示口径，裁定 1 注释登记）；
+ *  单画布 ≤ MAX_DOC_NODES 的上限校验须逐张进行——旧缺省单口径只数
+ *  activeCanvasId 指向的一张，crafted doc_state 藏节点即可绕过（server 消费方
+ *  随本任务关闭该漏洞）。墓碑画布跳过（listCanvases 口径）；空文档（无存活
+ *  画布）返回空 Map。 */
+export function countAliveReachableAll(doc: Y.Doc): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const canvas of listCanvases(doc)) {
+    counts.set(canvas.id, countAliveReachable(doc, canvas.id));
+  }
+  return counts;
 }
 
 /** 折叠处数（M4 Task 9，FR-IO-003 导出折叠提示口径）：自 root 可达的存活节点中

@@ -14,6 +14,7 @@ import * as Y from 'yjs';
 import { ulid } from 'ulid';
 import {
   countAliveReachable,
+  countAliveReachableAll,
   createTemplateDoc,
   docFromState,
   docToState,
@@ -49,10 +50,12 @@ export type VersionSnapshotType = 'auto' | 'manual' | 'pre_restore';
  *   且不建立文档连接；缺失/已删/无权限同口径 reason，不泄露存在性。
  * - onLoadDocument：doc_state 恢复；无状态 → createTemplateDoc({title, children:[]})
  *   仅含 root 的空文档（裁定）。
- * - onChange：countAliveReachable > MAX_DOC_NODES → 边缘触发广播 quota-exceeded（持久化时序
- *   advisory，不拒绝连接/编辑；PUT 路径 403 语义不变）。
+ * - onChange：任一画布 countAliveReachable > MAX_DOC_NODES → 边缘触发广播 quota-exceeded
+ *   （持久化时序 advisory，不拒绝连接/编辑；PUT 路径 403 语义不变；多画布裁定 1
+ *   逐画布口径，Task 6）。
  * - onStoreDocument：Hocuspocus 内置防抖（debounce/maxDebounce 可配）→ 回写
- *   doc_state + node_count（可达活跃口径，与 PUT 一致）→ 广播 persisted ack。
+ *   doc_state + node_count（全文档合计=逐画布可达活跃计数之和，裁定 1 展示口径）
+ *   → 广播 persisted ack。
  * - 卸载：最后一条连接断开后 Hocuspocus 内置 unloadImmediately 立即落库并卸载
  *   （默认配置即所需），卸载时清越线告警标记。
  */
@@ -264,12 +267,18 @@ export class CollabService implements OnApplicationShutdown {
    *  applyUpdate 不触发——到达此处的都是真实编辑。 */
   private async handleChange(data: onChangePayload): Promise<void> {
     this.ensureSnapMeta(data.documentName).dirty = true;
-    const nodeCount = countAliveReachable(data.document);
-    const over = nodeCount > MAX_DOC_NODES;
+    // 配额按画布（多画布裁定 1，Task 6）：逐张画布计数，任一画布越线即告警——旧
+    // 缺省单口径只盯 activeCanvasId 指向的一张，非活动画布越线无人知晓。广播载荷
+    // nodeCount=越线画布的计数（单画布文档与旧口径一致）。
+    let overCount = 0;
+    for (const n of countAliveReachableAll(data.document).values()) {
+      if (n > MAX_DOC_NODES) overCount = Math.max(overCount, n);
+    }
+    const over = overCount > 0;
     if (over && !this.overQuotaDocs.has(data.documentName)) {
       this.overQuotaDocs.add(data.documentName);
       data.document.broadcastStateless(
-        JSON.stringify({ type: 'quota-exceeded', nodeCount, max: MAX_DOC_NODES }),
+        JSON.stringify({ type: 'quota-exceeded', nodeCount: overCount, max: MAX_DOC_NODES }),
       );
     } else if (!over) {
       this.overQuotaDocs.delete(data.documentName);
@@ -286,7 +295,10 @@ export class CollabService implements OnApplicationShutdown {
   private async storeDocument(data: onStoreDocumentPayload): Promise<void> {
     let persistedUpdatedAt: string | null = null;
     try {
-      const nodeCount = countAliveReachable(data.document);
+      // node_count 回写全文档合计（多画布裁定 1：Σ 逐画布可达活跃计数，展示口径）；
+      // 持久化不因配额拒绝（M2 裁定防丢失），逐画布超限由 onChange advisory 广播。
+      let nodeCount = 0;
+      for (const n of countAliveReachableAll(data.document).values()) nodeCount += n;
       const docState = Buffer.from(docToState(data.document));
       const lastEditorUserId = getLastEditor(data.document);
       // updated_at 显式取应用侧时钟（datetime(3) 毫秒精度）：MySQL 无 RETURNING，

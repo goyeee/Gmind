@@ -9,6 +9,7 @@ import type { HocuspocusProviderConfiguration } from '@hocuspocus/provider';
 import type * as Y from 'yjs';
 import {
   ROOT_NODE_ID,
+  addCanvas,
   addChild,
   canvasNodesMap,
   childrenIds,
@@ -19,6 +20,9 @@ import {
   docFromState,
   docToState,
   getNode,
+  listCanvases,
+  rootIdOf,
+  setActiveCanvas,
   setNote,
   setText,
 } from '@gmind/core';
@@ -30,6 +34,23 @@ import { FileEntity } from '../src/files/file.entity';
 /** 构造一个模板文档的 Yjs 状态（base64 传输契约）。 */
 const toBase64State = (spec: Parameters<typeof createTemplateDoc>[0]): string =>
   Buffer.from(docToState(createTemplateDoc(spec))).toString('base64');
+
+/** 多画布配额用例的 crafted doc_state（唯一写入口纪律——全部经 core 操作层）：
+ *  画布 1（createTemplateDoc 首屏）first 个节点；addCanvas 新增「画布 2」塞 second
+ *  个节点后把 activeCanvasId 拨回画布 1——旧单口径校验只数 active 画布，画布 2 的
+ *  超限节点即被藏住（计划一终审 Important-4 的 crafted 形状）。 */
+const buildMultiCanvasState = (opts: { first: number; second: number }): string => {
+  const doc = createTemplateDoc({
+    title: '配额按画布',
+    children: Array.from({ length: opts.first }, (_, i) => ({ text: `c1-${i}` })),
+  });
+  const first = listCanvases(doc)[0]!.id;
+  const second = addCanvas(doc, { name: '画布 2' }); // addCanvas 副作用：activeCanvasId=新画布
+  const secondRoot = rootIdOf(doc, second);
+  for (let i = 0; i < opts.second; i += 1) addChild(doc, secondRoot, { text: `c2-${i}` }, second);
+  setActiveCanvas(doc, first); // crafted：active 指向小画布，大画布藏进画布 2
+  return Buffer.from(docToState(doc)).toString('base64');
+};
 
 describe('文件内容端点（读取/回写/改名/打开）', () => {
   let app: INestApplication;
@@ -146,14 +167,33 @@ describe('文件内容端点（读取/回写/改名/打开）', () => {
     expect(res.body.message).toBe('文档解析失败');
   });
 
-  it('PUT 可达活跃节点 501（+root）→ 403「文档节点数已达上限（500）」', async () => {
+  it('PUT 可达活跃节点 501（+root）→ 403「画布「画布 1」已达 500 节点上限」（两段式文案）', async () => {
     const state = toBase64State({
       title: '超大文档',
       children: Array.from({ length: 501 }, (_, i) => ({ text: `n${i}` })),
     });
     const res = await authed(ownerToken, 'put', `/api/files/${fileId}/doc-state`).send({ docState: state });
     expect(res.status).toBe(403);
-    expect(res.body.message).toBe('文档节点数已达上限（500）');
+    expect(res.body.message).toBe('画布「画布 1」已达 500 节点上限。请清理该画布节点或新建画布后再试');
+  });
+
+  it('PUT 配额按画布：active 画布 10 节点 + 画布 2 藏 600 节点 → 403 两段式文案（计划一终审 Important-4 漏洞关闭）', async () => {
+    // crafted doc_state：countAliveReachable(doc) 缺省只数 activeCanvasId 指向的画布 1
+    // （10 节点），旧校验据此放行；逐画布口径须识破画布 2 的 600 节点
+    // （裁定 1：每张画布各自 ≤500——files.node_count 不受单画布上限约束）。
+    const res = await authed(ownerToken, 'put', `/api/files/${fileId}/doc-state`).send({
+      docState: buildMultiCanvasState({ first: 10, second: 600 }),
+    });
+    expect(res.status).toBe(403);
+    expect(res.body.message).toBe('画布「画布 2」已达 500 节点上限。请清理该画布节点或新建画布后再试');
+  });
+
+  it('PUT 双画布各 ≤500 → 200 且 nodeCount=全文档合计（裁定 1：files.node_count 展示口径=逐画布之和）', async () => {
+    const res = await authed(ownerToken, 'put', `/api/files/${fileId}/doc-state`).send({
+      docState: buildMultiCanvasState({ first: 10, second: 20 }),
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.nodeCount).toBe(30); // 10+20（旧单口径只会回写 active 画布的 10）
   });
 
   it('PUT 600 节点其中 200 墓碑（可达 400）→ 200 且 nodeCount=400（配额只看可达活跃）', async () => {
@@ -462,8 +502,9 @@ describe('PUT 陈旧快照写序守卫（准入 7.1）', () => {
  * - nodeCount 一律服务端按 countAliveReachable 重算（不信任客户端传值——body schema
  *   本就不收 nodeCount，service 侧也去掉入参直通）；
  * - docState 损坏（docFromState 抛错）→ 400「文件已损坏」；
- * - 可达活跃节点 > MAX_DOC_NODES → 400「文档节点数已达上限（500）」（文案与
- *   saveDocState 的既有配额文案同口径，但按导入语义落 400 而非 403）。
+ * - 任一画布可达活跃节点 > MAX_DOC_NODES → 400「画布「画布 N」已达 500 节点上限。
+ *   请清理该画布节点或新建画布后再试」（两段式文案与 saveDocState 同口径，按导入
+ *   语义落 400 而非 403；多画布计划三 Task 6 起逐画布校验）。
  */
 describe('POST /api/files 携带 docState（XMind 导入）', () => {
   let app: INestApplication;
@@ -525,7 +566,7 @@ describe('POST /api/files 携带 docState（XMind 导入）', () => {
     expect(getNode(doc, kids[1] as string)?.text).toBe('B');
   });
 
-  it('导入：可达活跃节点 501（+root）→ 400，文案含「节点数」', async () => {
+  it('导入：可达活跃节点 501（+root）→ 400，两段式文案含画布名与上限', async () => {
     const state = Buffer.from(
       docToState(
         createTemplateDoc({
@@ -536,7 +577,7 @@ describe('POST /api/files 携带 docState（XMind 导入）', () => {
     ).toString('base64');
     const res = await authed(ownerToken, 'post', '/api/files').send({ title: '超限导入', docState: state });
     expect(res.status).toBe(400);
-    expect(res.body.message).toContain('节点数');
+    expect(res.body.message).toBe('画布「画布 1」已达 500 节点上限。请清理该画布节点或新建画布后再试');
   });
 
   it('导入：损坏 docState → 400「文件已损坏」', async () => {

@@ -4,10 +4,12 @@ import { Brackets, In, IsNull, Like, Not, Repository } from 'typeorm';
 import type * as Y from 'yjs';
 import {
   countAliveReachable,
+  countAliveReachableAll,
   createTemplateDoc,
   docFromState,
   docToState,
   getNode,
+  listCanvases,
   ORIGIN_SYSTEM,
   ROOT_NODE_ID,
   setImage,
@@ -77,6 +79,27 @@ export class FilesService {
 
   private readonly logger = new Logger(FilesService.name);
 
+  /** 节点配额逐画布校验（多画布计划三 Task 6，裁定 1）：每张画布各自
+   *  ≤ MAX_DOC_NODES——旧 countAliveReachable(doc) 缺省只数 activeCanvasId 指向的
+   *  一张，crafted doc_state 把超限节点藏进非活动画布即可绕过 PUT/导入校验
+   *  （计划一终审 Important-4，本任务关闭）。nodeCount=全文档合计（逐画布计数之和，
+   *  files.node_count 展示口径，裁定 1 注释登记）；超限文案两段式（NFR-USE-005）：
+   *  原因=哪张画布超限，下一步=清理该画布或新建画布。overMessage 由调用方按路径
+   *  语义落 400（导入）/403（PUT）。 */
+  private nodeQuota(doc: Y.Doc): { nodeCount: number; overMessage: string | null } {
+    const perCanvas = countAliveReachableAll(doc);
+    let nodeCount = 0;
+    let overMessage: string | null = null;
+    for (const canvas of listCanvases(doc)) {
+      const n = perCanvas.get(canvas.id) ?? 0;
+      nodeCount += n;
+      if (overMessage === null && n > MAX_DOC_NODES) {
+        overMessage = `画布「${canvas.name}」已达 ${MAX_DOC_NODES} 节点上限。请清理该画布节点或新建画布后再试`;
+      }
+    }
+    return { nodeCount, overMessage };
+  }
+
   /** 新建文件；无 doc 状态时用空白模板。配额 100 文件（FR-ACC-003）。
    *  folderId/lastModifierUserId（M3a Task 6）：复制路径的显式落点（同文件夹）与
    *  修改人标记；缺省 null，普通新建（POST /api/files）行为不变。
@@ -125,12 +148,11 @@ export class FilesService {
         throw new BadRequestException('文件已损坏');
       }
       file.docState = Buffer.from(input.state);
-      // 口径统一（M2 终审修复轮，FR-ACC-003）：createForUser 与 saveDocState/协同
-      // 持久化同为 countAliveReachable（可达活跃、不含 root）——旧 countNodes 会计入
-      // 墓碑/孤儿，与保存路径 ±N 语义差（M2 准入清单 §1 遗留项收口）。
-      const nodeCount = countAliveReachable(doc);
-      if (nodeCount > MAX_DOC_NODES) {
-        throw new BadRequestException(`文档节点数已达上限（${MAX_DOC_NODES}）`);
+      // 配额按画布（多画布裁定 1，Task 6）：逐张画布 ≤500 校验（craft 藏节点漏洞
+      // 关闭）；nodeCount=全文档合计。旧 countAliveReachable 单口径只数 active 画布。
+      const { nodeCount, overMessage } = this.nodeQuota(doc);
+      if (overMessage !== null) {
+        throw new BadRequestException(overMessage);
       }
       file.nodeCount = nodeCount;
       // 从恢复 doc 的 meta 回填 structure/themeId，保证 files 列与 Y.Doc 元数据一致（如种子模板 org 结构）
@@ -493,9 +515,11 @@ export class FilesService {
     };
   }
 
-  /** 回写文档状态：先解析校验（失败 400），再校验节点配额 ≤ MAX_DOC_NODES（超限 403），
-   *  然后陈旧写序守卫（准入 7.1，快照落后且存在活跃 WS 内存 doc → 409），最后落库。
-   *  配额口径（FR-ACC-003＝活跃文档规模）：countAliveReachable——docFromState 入口已
+  /** 回写文档状态：先解析校验（失败 400），再校验节点配额逐画布 ≤ MAX_DOC_NODES
+   *  （超限 403，多画布裁定 1——详见 nodeQuota 头注），然后陈旧写序守卫（准入 7.1，
+   *  快照落后且存在活跃 WS 内存 doc → 409），最后落库。
+   *  node_count 回写全文档合计（逐画布 countAliveReachable 之和，展示口径）。
+   *  配额口径（FR-ACC-003＝活跃文档规模）：countAliveReachable 逐画布——docFromState 入口已
    *  全量 normalize，取自 root 可达的存活节点数；墓碑随编辑永久累积、孤儿不可达，
    *  均不计入（countNodes 口径会使远低于上限的正常文档被墓碑余额永久卡死保存）。
    *  守卫口径（M2 终审复审 Important #2 的丢失场景）：baseUpdatedAt 严格早于行
@@ -520,9 +544,12 @@ export class FilesService {
     } catch {
       throw new BadRequestException('文档解析失败');
     }
-    const nodeCount = countAliveReachable(doc);
-    if (nodeCount > MAX_DOC_NODES) {
-      throw new QuotaError(`文档节点数已达上限（${MAX_DOC_NODES}）`);
+    // 配额按画布（多画布裁定 1，Task 6）：逐张画布 ≤500 校验——旧 countAliveReachable
+    // 单口径只数 activeCanvasId 指向的一张，crafted doc_state 藏节点即可绕过；
+    // nodeCount=全文档合计（files.node_count 展示口径=逐画布计数之和）。
+    const { nodeCount, overMessage } = this.nodeQuota(doc);
+    if (overMessage !== null) {
+      throw new QuotaError(overMessage);
     }
     if (baseUpdatedAt) {
       const base = Date.parse(baseUpdatedAt);

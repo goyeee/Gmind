@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import * as Y from 'yjs';
 import { ROOT_NODE_ID, countNodes, createTemplateDoc, docFromState, docToState, migrateLegacyToCanvases } from './doc';
 import { GmindCoreError } from './errors';
-import { childrenIds, countAlive, countAliveReachable, countCollapsedWithChildren, getLastEditor, getMeta, getNode, isAlive, markLastEditor, pathToRoot, requireAliveNode, setDocMeta, subtreeIds } from './read';
+import { childrenIds, countAlive, countAliveReachable, countAliveReachableAll, countCollapsedWithChildren, getLastEditor, getMeta, getNode, isAlive, markLastEditor, pathToRoot, requireAliveNode, setDocMeta, subtreeIds } from './read';
 import { setCustomColumns } from './operations';
 import { canvasNodesMap, canvasOrderArr, canvasesMap } from './canvas';
 import { TABLE_BUILTIN_COLUMN_KEYS } from './constants';
@@ -630,6 +630,32 @@ describe('多画布读路径（Task 3：canvasId 签名扫荡）', () => {
     const { doc, c1, c2 } = multiCanvasDoc();
     expect(countAliveReachable(doc, c1)).toBe(3);
     expect(countAliveReachable(doc, c2)).toBe(5);
+  });
+
+  it('countAliveReachableAll：逐画布计数按 canvasOrder 顺序，Σ=全文档合计（裁定 1 读取面）', () => {
+    const { doc, c1, c2 } = multiCanvasDoc();
+    const counts = countAliveReachableAll(doc);
+    expect([...counts.entries()]).toEqual([
+      [c1, 3],
+      [c2, 5],
+    ]);
+    expect([...counts.values()].reduce((a, b) => a + b, 0)).toBe(8); // 合计口径（files.node_count）
+    // 单画布模板文档：一张画布一把 key
+    const single = createTemplateDoc({ title: 'T', children: [{ text: 'A' }, { text: 'B' }] });
+    const singleCounts = countAliveReachableAll(single);
+    expect(singleCounts.size).toBe(1);
+    expect([...singleCounts.values()][0]).toBe(2);
+  });
+
+  it('countAliveReachableAll：墓碑画布跳过（listCanvases 口径），crafted 值确定性忽略', () => {
+    const { doc, c1, c2 } = multiCanvasDoc();
+    canvasesMap(doc)
+      .get(c2)!
+      .set('deleted', true);
+    const order = canvasOrderArr(doc);
+    order.delete(order.toArray().indexOf(c2), 1);
+    const counts = countAliveReachableAll(doc);
+    expect([...counts.entries()]).toEqual([[c1, 3]]); // 墓碑画布不计入
   });
 
   it('缺省 canvasId 解析到第一画布（canvasOrder 首个）；节点读路径随 canvasId 隔离', () => {
