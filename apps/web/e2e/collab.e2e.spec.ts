@@ -350,6 +350,77 @@ test('成员面板：编辑/查看分组、创建者标识与离线即时移除'
 });
 
 // ---------------------------------------------------------------------------
+// 多画布计划三 Task 5 裁定 4：光标跨画布隐藏钉死——engine cursors 层「不存在于
+// 场景的 nodeId 优雅跳过」（cursors.ts setCursors：!entry || !b → continue）的
+// 生产钉死，非新代码。双上下文：A 停留画布 1，B 在画布 2 选中节点：
+//  - 负向：A 视图内不出现 B 的光标标签与选区框；
+//  - 正向对照：A 切到画布 2 → 同一份 awareness 即刻锚定渲染（证明此前的「无」
+//    是跨画布隐藏机制而非 awareness 未到达）。
+// ---------------------------------------------------------------------------
+test('裁定4 光标跨画布隐藏：B 在画布 2 选中，A 画布 1 不出现 B 光标（A 切来即现）', async ({
+  browser,
+  request,
+}) => {
+  test.setTimeout(90_000);
+  const ctxA = await browser.newContext();
+  const pageA = await ctxA.newPage();
+  await registerAndLogin(pageA);
+  await openSeedDoc(pageA, '本周计划');
+  const fileId = fileIdFromUrl(pageA);
+
+  // A 新建画布 2（自动切换）→ 记录画布 1 页签名 → 点回画布 1
+  await pageA.getByTestId('canvas-add').click();
+  const renameInput = pageA.getByTestId('canvas-rename-input');
+  await renameInput.fill('画布B');
+  await pageA.keyboard.press('Enter');
+  await expect(renameInput).toHaveCount(0);
+  // 等「已保存」：B 随后经服务端 docState 装载，须已含画布 2（WS 持久化 2s 防抖）
+  await expect(pageA.getByTestId('save-status')).toHaveText(/已保存/, { timeout: 10_000 });
+  const tabC1 = pageA.locator('[data-testid^="canvas-tab-"]').first();
+  const nameC1 = ((await tabC1.innerText()) ?? '').replace(/\s+/g, ' ').trim();
+  await tabC1.click();
+  await expect(pageA.locator('.canvas-tab-active')).toHaveText(nameC1);
+  await expect(pageA.locator('.editor-canvas svg .gm-text', { hasText: '本周计划' })).toBeVisible();
+
+  // B（协作者）打开文件。activeCanvasId 是本地视图态（裁定：远端/装载 meta 改写不
+  // 强拽本地视图，且 setActiveCanvas 为 ORIGIN_SYSTEM 不触发保存状态翻转）——B 落
+  // 在哪张画布不确定，统一经页签条切到画布 2 再选中其 root「中心主题」。
+  const ctxB = await browser.newContext();
+  const pageB = await ctxB.newPage();
+  const phoneB = await registerAndLogin(pageB);
+  await grantCollaborator(request, fileId, phoneB);
+  await pageB.goto(`/edit/${fileId}`);
+  await expect(pageB.getByTestId('canvas-tabbar')).toBeVisible({ timeout: 15_000 });
+  const nickB = await nicknameOf(pageB);
+  await pageB.locator('[data-testid^="canvas-tab-"]', { hasText: '画布B' }).click();
+  await expect(pageB.locator('.canvas-tab-active')).toHaveText('画布B');
+  const gRootB = pageB.locator('.editor-canvas svg [data-node-id]', { hasText: '中心主题' }).first();
+  await gRootB.locator('.gm-text').click();
+  await expect(gRootB).toHaveClass(/gm-selected/); // B 本地选中成立（写广播前提就绪）
+
+  // 负向：B 的选中节点不存在于 A 的画布 1 场景 → A 侧不得渲染 B 光标/选区框。
+  // 等 awareness 到达窗口（本机 WS 毫秒级，放宽到 1.5s）后再断言零；随后的正向
+  // 对照同时证明 awareness 确实已到 A（排除「没到所以是零」的伪绿）。
+  await pageA.waitForTimeout(1_500);
+  await expect(pageA.locator('.editor-canvas svg .gm-remote-cursor')).toHaveCount(0, {
+    timeout: 6_000,
+  });
+  await expect(pageA.locator('.editor-canvas svg .gm-remote-selection')).toHaveCount(0, {
+    timeout: 6_000,
+  });
+
+  // 正向对照：A 切到画布 2 → B 光标标签即刻出现（同一 awareness 在场景内锚定）
+  await pageA.locator('[data-testid^="canvas-tab-"]', { hasText: '画布B' }).click();
+  await expect(pageA.locator('.canvas-tab-active')).toHaveText('画布B');
+  await expect(pageA.locator('.editor-canvas svg .gm-remote-cursor text')).toHaveText(nickB, {
+    timeout: 10_000,
+  });
+
+  await ctxA.close();
+  await ctxB.close();
+});
+
+// ---------------------------------------------------------------------------
 // M3a Task 3：双页并发结构操作收敛 — attachRemoteNormalization 生产接线守卫（准入 7.3）
 //
 // 生产接线：apps/web/src/editor/collab.ts 的 attachRemoteNormalization(doc) 把 core

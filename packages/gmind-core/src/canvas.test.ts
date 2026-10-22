@@ -4,6 +4,7 @@ import {
   LEGACY_CANVAS_ID,
   MAX_CANVAS_NAME_LENGTH,
   allAliveNodeIds,
+  canvasIdOfNode,
   canvasMapOf,
   canvasNodesMap,
   canvasOrderArr,
@@ -246,5 +247,70 @@ describe('ensureCanvasShape（防尽补建）', () => {
     const again = ensureCanvasShape(canvas);
     expect(again.nodes).toBe(nodes);
     expect(again.summaries).toBe(summaries);
+  });
+});
+
+describe('canvasIdOfNode（评论跨画布定位，多画布计划三 Task 5 默认假设 4）', () => {
+  /** 双画布 doc：c1 含 alive/dead 节点，c2 含独立节点，c-tomb 为墓碑画布。 */
+  function nodeDoc(): Y.Doc {
+    const doc = new Y.Doc();
+    doc.transact(() => {
+      const mk = (canvasId: string, entries: Array<[string, boolean]>): Y.Map<unknown> => {
+        const c = new Y.Map<unknown>();
+        c.set('name', `画布-${canvasId}`);
+        c.set('rootId', `root-${canvasId}`);
+        c.set('structureType', 'mindmap');
+        c.set('themeId', 'gmind-light');
+        const nodes = new Y.Map<Y.Map<unknown>>();
+        for (const [id, dead] of entries) {
+          const n = new Y.Map<unknown>();
+          if (dead) n.set('deleted', true);
+          nodes.set(id, n);
+        }
+        c.set('nodes', nodes);
+        c.set('summaries', new Y.Map());
+        return c;
+      };
+      canvasesMap(doc).set('c1', mk('c1', [['a1', false], ['a2', true]]));
+      canvasesMap(doc).set('c2', mk('c2', [['b1', false]]));
+      const tomb = new Y.Map<unknown>();
+      tomb.set('deleted', true);
+      tomb.set('nodes', new Y.Map([['t1', new Y.Map()]]));
+      canvasesMap(doc).set('c-tomb', tomb);
+      canvasOrderArr(doc).push(['c1', 'c-tomb', 'c2']);
+    });
+    return doc;
+  }
+
+  it('节点在哪个存活画布就返回哪个画布 id', () => {
+    const doc = nodeDoc();
+    expect(canvasIdOfNode(doc, 'a1')).toBe('c1');
+    expect(canvasIdOfNode(doc, 'b1')).toBe('c2');
+  });
+
+  it('节点不存在 / 已删（墓碑节点）→ null', () => {
+    const doc = nodeDoc();
+    expect(canvasIdOfNode(doc, 'nope')).toBeNull();
+    expect(canvasIdOfNode(doc, 'a2')).toBeNull(); // deleted=true 不计
+  });
+
+  it('墓碑画布内的节点 → null（跳过墓碑画布）', () => {
+    const doc = nodeDoc();
+    expect(canvasIdOfNode(doc, 't1')).toBeNull();
+  });
+
+  it('crafted 值（非 Y.Map 画布 / 非 Y.Map nodes）确定性跳过', () => {
+    const doc = nodeDoc();
+    doc.transact(() => {
+      canvasesMap(doc).set('bad', 'crafted' as unknown as Y.Map<unknown>);
+      const badNodes = new Y.Map<unknown>();
+      badNodes.set('nodes', 42 as unknown as Y.Map<Y.Map<unknown>>);
+      canvasesMap(doc).set('bad-nodes', badNodes);
+    });
+    expect(canvasIdOfNode(doc, 'x1')).toBeNull();
+  });
+
+  it('空 doc → null', () => {
+    expect(canvasIdOfNode(new Y.Doc(), 'a1')).toBeNull();
   });
 });

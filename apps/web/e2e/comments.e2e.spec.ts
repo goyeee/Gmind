@@ -216,3 +216,43 @@ test('节点删除后线程保留全文并标记原节点已删除；刷新后�
 
   await ctx.close();
 });
+
+// 跨画布定位（多画布计划三 Task 5，默认假设 4）：评论不绑画布——画布 1 上给
+// 「周三」发评论后新建画布 2（自动切换过去），此时点击画布 1 节点的线程：
+// 节点不在当前画布 → 先 switchCanvas 回画布 1，展开祖先并选中（.gm-selected），
+// 活动页签随之回到画布 1。
+test('跨画布定位：画布 2 活动时点击画布 1 评论线程 → 切回画布 1 并选中节点', async ({
+  browser,
+}) => {
+  test.setTimeout(90_000);
+  const ctx = await browser.newContext();
+  const page = await ctx.newPage();
+  await openSeedDoc(page, '本周计划');
+  const nameC1 = ((await page.locator('[data-testid^="canvas-tab-"]').first().innerText()) ?? '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  // 画布 1 评论「周三」→ 新建画布 2（自动切换：活动页签 = 画布B，场景 = 中心主题）
+  await commentOnNode(page, '周三', '跨画布定位评论');
+  await page.getByTestId('canvas-add').click();
+  const renameInput = page.getByTestId('canvas-rename-input');
+  await renameInput.fill('画布B');
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.canvas-tab-active')).toHaveText('画布B');
+  await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '中心主题' })).toBeVisible();
+
+  // 面板右列可能被页签条等「弹层外点」收起（M7b-R6 语义）——关了就重开
+  if ((await page.getByTestId('comment-pane').count()) === 0) await openComments(page);
+
+  // 点击指向画布 1「周三」的线程 → 跨画布定位：切回画布 1 并选中
+  await page
+    .locator('[data-testid="comment-thread"]', { hasText: '跨画布定位评论' })
+    .getByTestId('comment-content')
+    .click();
+  await expect(page.locator('.canvas-tab-active')).toHaveText(nameC1, { timeout: 10_000 });
+  const gZhou3 = page.locator('.editor-canvas svg [data-node-id]', { hasText: '周三' });
+  await expect(gZhou3).toBeVisible({ timeout: 10_000 });
+  await expect(gZhou3).toHaveClass(/gm-selected/);
+
+  await ctx.close();
+});

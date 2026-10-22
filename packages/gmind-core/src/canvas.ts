@@ -136,3 +136,19 @@ export function listCanvases(doc: Y.Doc): CanvasInfo[] {  const canvases = canva
     };
   });
 }
+
+/**
+ * 节点归属画布解析（多画布计划三 Task 5，默认假设 4：评论不绑画布、定位跨画布）。
+ * 遍历存活画布的 nodes map，命中第一个含该存活节点的画布即返回其 id；未命中
+ * （不存在/已删/仅在墓碑画布）返回 null。craft 值防御与 allAliveNodeIds 同裁定。
+ */
+export function canvasIdOfNode(doc: Y.Doc, nodeId: string): string | null {
+  for (const [canvasId, canvas] of canvasesMap(doc).entries()) {
+    if (!(canvas instanceof Y.Map) || canvas.get('deleted') === true) continue; // 墓碑画布跳过
+    const nodes = canvas.get('nodes');
+    if (!(nodes instanceof Y.Map)) continue; // crafted 防御：非 Y.Map 确定性跳过
+    const node = nodes.get(nodeId);
+    if (node instanceof Y.Map && node.get('deleted') !== true) return canvasId;
+  }
+  return null;
+}

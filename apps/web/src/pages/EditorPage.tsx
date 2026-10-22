@@ -5,6 +5,7 @@ import {
   addChild,
   assigneeEntriesOf,
   capUndoStack,
+  canvasIdOfNode,
   childrenIds,
   countAliveReachable,
   countCollapsedWithChildren,
@@ -22,6 +23,7 @@ import {
   progressStageOf,
   redo as coreRedo,
   removeSummary,
+  resolveCanvasId,
   ROOT_NODE_ID,
   rootIdOf,
   setCustomField,
@@ -3031,11 +3033,23 @@ export function EditorPage() {
    * 起步至 root；祖先 collapsed=true 才 toggleCollapse——system origin 不进撤销栈）。
    * 定位裁决：选区 + 展开即满足「定位」，不做视口居中（过扰）；选中高亮由
    * .gm-selected 样式承担（rerender 每帧回填类，新展开的节点同样命中）。
+   *
+   * 跨画布（多画布计划三 Task 5，默认假设 4：评论不绑画布）：canvasIdOfNode 全画布
+   * 口径解析归属，不在当前画布 → 先 switchCanvas，场景重建（rAF 调度，切换编排自身
+   * 已排入同帧更前的 rerender）后下一帧重入本函数完成展开/选中。全画布不存在/已删
+   * 返回 null——与旧行为一致不定位。
    */
   const locateNode = (nodeId: string): void => {
     if (!doc) return;
     const selection = selectionRef.current;
     if (!selection) return;
+    const ownerId = canvasIdOfNode(doc, nodeId);
+    if (ownerId === null) return; // 全画布口径不存在/已删：无线索可定位（同旧行为）
+    if (ownerId !== (activeCanvasIdRef.current || resolveCanvasId(doc))) {
+      switchCanvas(ownerId);
+      requestAnimationFrame(() => locateNode(nodeId)); // 重建后重入：展开折叠祖先 + 选中
+      return;
+    }
     const snap = getNode(doc, nodeId);
     if (!snap || snap.deleted) return; // 已删节点无线索可定位（面板标记原节点已删除）
     try {
