@@ -47,7 +47,7 @@ test('工作台导入 .xmind：新文件出现且层级/备注正确渲染', asy
     name: '项目.xmind',
     mimeType: 'application/octet-stream',
     // setInputFiles 的 buffer 契约为 Buffer（buildXmind 产物是 Uint8Array，需包一层）
-    buffer: Buffer.from(buildXmind(FIXTURE_TREE)),
+    buffer: Buffer.from(buildXmind([{ title: '', root: FIXTURE_TREE }])),
   });
   // 新文件出现在列表（标题 = 根主题「项目根主题」，命中「项目」）
   await expect(page.getByTestId('file-card').filter({ hasText: '项目' }).first()).toBeVisible();
@@ -144,9 +144,12 @@ test('导出 XMind 并往返导入：层级/文本/备注一致', async ({ page 
   const bytes = new Uint8Array(await fs.promises.readFile(path));
   // 导出产物直接用 @gmind/xmind-io 断言结构（root=本周计划、层级完整、周一持备注）
   const parsed = parseXmind(bytes);
-  expect(parsed.root.title).toBe('本周计划');
-  expect(parsed.root.children.map((c) => c.title)).toEqual(['周一', '周三', '周五']);
-  const monday = findTitle(parsed.root, '周一');
+  expect(parsed.sheets).toHaveLength(1); // 单画布文档导出单 Sheet（裁定 8：多画布才多 Sheet）
+  expect(parsed.sheets[0].title).toBe('画布 1'); // Sheet 标题 = 画布名（裁定 8：导出全画布多 Sheet）
+  const firstRoot = parsed.sheets[0].root;
+  expect(firstRoot.title).toBe('本周计划');
+  expect(firstRoot.children.map((c) => c.title)).toEqual(['周一', '周三', '周五']);
+  const monday = findTitle(firstRoot, '周一');
   expect(monday?.note).toBe('评审要点');
   expect(monday?.children.map((c) => c.title)).toEqual(['周会对齐']);
   expect(parsed.degraded).toEqual([]);

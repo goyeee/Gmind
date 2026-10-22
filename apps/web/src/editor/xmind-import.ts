@@ -10,12 +10,17 @@
 // - 其余解析错误 → 「文件已损坏，无法解析，请检查文件后重试」。
 // 降级提示文案（FR-IO-002）由 degradedSummary 统一构造。
 import { type IconGroup,
+  addCanvas,
   addChild,
   createTemplateDoc,
   docToState,
   getMeta,
   GmindCoreError,
-  ROOT_NODE_ID,
+  listCanvases,
+  renameCanvas,
+  rootIdOf,
+  setActiveCanvas,
+  setText,
   setIcon,
   setNote,
 } from '@gmind/core';
@@ -54,10 +59,11 @@ function bytesToBase64(bytes: Uint8Array): string {
 }
 
 /** .xmind 导入：解析 → core 组装 → base64 文档状态。
- *  root 即 ROOT_NODE_ID，文本 = 根主题标题（缺省回落文件名去 .xmind 后缀）；
- *  树按先序 addChild/setNote 组装，标记（M7a-T1 三组制映射产物）经 setIcon 落盘
- *  （解析层只产 priority/icon 目录内值；emoji 不来自 XMind）。degraded 原样透传给
- *  调用方呈现（FR-IO-002）。 */
+ *  多画布（计划四，裁定 8）：首 Sheet 进首画布（root 文本 = 首 Sheet 根标题，缺省回落
+ *  文件名去 .xmind 后缀），其余 Sheet 逐个 addCanvas（name=Sheet 标题，缺省「画布 N」）
+ *  并按同款先序组装；树按先序 addChild/setNote 组装，标记（M7a-T1 三组制映射产物）经
+ *  setIcon 落盘（解析层只产 priority/icon 目录内值；emoji 不来自 XMind）。degraded
+ *  原样透传给调用方呈现（FR-IO-002）。 */
 export async function importXmindFile(
   file: File,
 ): Promise<{ title: string; state: string; degraded: DegradedItem[] }> {
@@ -73,26 +79,39 @@ export async function importXmindFile(
     throw new Error('文件已损坏，无法解析，请检查文件后重试');
   }
 
-  const title = parsed.root.title || file.name.replace(/\.xmind$/i, '');
+  const title = parsed.sheets[0].root.title || file.name.replace(/\.xmind$/i, '');
   const doc = createTemplateDoc({ title, children: [] });
-  const applyIcons = (id: string, icons: XmindIcons | undefined): void => {
+  // 多画布（计划四，裁定 8）：首画布名 = 首 Sheet 标题（XMind 语义：Sheet 名即画布名；
+  // 空标题保持「画布 1」缺省）。renameCanvas 走唯一写入口；导入期文档未挂协同，撤销栈无观测。
+  const firstCanvasId = listCanvases(doc)[0]?.id;
+  if (parsed.sheets[0].title && firstCanvasId) {
+    renameCanvas(doc, firstCanvasId, parsed.sheets[0].title);
+  }
+  // addCanvas 副作用会把 activeCanvasId 拨到新画布——导入完成回拨首画布（打开文件停在第一张）。
+  if (firstCanvasId) setActiveCanvas(doc, firstCanvasId);
+  const applyIcons = (id: string, icons: XmindIcons | undefined, canvasId?: string): void => {
     if (!icons) return;
     for (const [group, values] of Object.entries(icons)) {
       if (!Array.isArray(values)) continue;
-      for (const value of values) setIcon(doc, id, group as IconGroup, value);
+      for (const value of values) setIcon(doc, id, group as IconGroup, value, canvasId);
     }
   };
-  const walk = (node: XmindNode, parentId: string): void => {
+  const walk = (node: XmindNode, parentId: string, canvasId?: string): void => {
     for (const child of node.children) {
-      const id = addChild(doc, parentId, { text: child.title });
-      if (child.note) setNote(doc, id, child.note);
-      applyIcons(id, child.icons);
-      walk(child, id);
+      const id = addChild(doc, parentId, { text: child.title }, canvasId);
+      if (child.note) setNote(doc, id, child.note, canvasId);
+      applyIcons(id, child.icons, canvasId);
+      walk(child, id, canvasId);
     }
   };
   try {
-    applyIcons(ROOT_NODE_ID, parsed.root.icons); // 根主题标记
-    walk(parsed.root, ROOT_NODE_ID);
+    parsed.sheets.forEach((sheet, i) => {
+      const canvasId = i === 0 ? undefined : addCanvas(doc, { name: sheet.title || `画布 ${i + 1}` });
+      const rootId = rootIdOf(doc, canvasId);
+      if (i > 0 && sheet.root.title) setText(doc, rootId, sheet.root.title, canvasId); // 附加画布根文本 = Sheet 根标题
+      applyIcons(rootId, sheet.root.icons, canvasId); // 根主题标记
+      walk(sheet.root, rootId, canvasId);
+    });
   } catch (e) {
     // core 组装失败归因（M4 挂账清偿）：解析出的树超出文档模型可承载范围——
     // GmindCoreError（如 TEXT_TOO_LONG 超长文本被 addChild 拒绝）与深树递归的

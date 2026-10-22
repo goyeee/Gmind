@@ -4147,7 +4147,7 @@ export function EditorPage() {
                     if (!doc || !meta) return;
                     try {
                       // 当前画布单 Sheet（Task 4 item 12 中间态；全量多 Sheet 属计划四）
-                      exportXmind(doc, meta.title, canvasIdGetter());
+                      exportXmind(doc, meta.title);
                     } catch (e) {
                       showToast(e instanceof Error ? e.message : '导出失败');
                     }

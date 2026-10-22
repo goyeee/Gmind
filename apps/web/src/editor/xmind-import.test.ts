@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { childrenIds, countAliveReachable, docFromState, getNode, ROOT_NODE_ID } from '@gmind/core';
+import { childrenIds, countAliveReachable, docFromState, getNode, listCanvases, ROOT_NODE_ID } from '@gmind/core';
 import { buildXmind, type XmindNode } from '@gmind/xmind-io';
 import { degradedSummary, importXmindFile } from './xmind-import';
 
@@ -21,7 +21,9 @@ describe('importXmindFile（M4 Task 4，FR-IO-001）', () => {
         { title: '分支B', children: [] },
       ],
     };
-    const result = await importXmindFile(xmindFile('项目.xmind', buildXmind(tree)));
+    const result = await importXmindFile(
+      xmindFile('项目.xmind', buildXmind([{ title: '', root: tree }])),
+    );
 
     expect(result.title).toBe('项目根主题');
     expect(result.degraded).toEqual([]);
@@ -37,8 +39,31 @@ describe('importXmindFile（M4 Task 4，FR-IO-001）', () => {
     expect(getNode(doc, kids[1] as string)?.text).toBe('分支B');
   });
 
+  it('多画布（裁定 8）：多 Sheet .xmind 导入 → 每张 Sheet 一张画布（首 Sheet 进首画布，其余 addCanvas）', async () => {
+    const result = await importXmindFile(
+      xmindFile(
+        '多画布.xmind',
+        buildXmind([
+          { title: 'Sheet 1', root: { title: '首画布根', children: [{ title: 'A', children: [] }] } },
+          { title: '规划', root: { title: '规划根', children: [{ title: 'B', children: [] }] } },
+          { title: '', root: { title: '第三', children: [] } },
+        ]),
+      ),
+    );
+    const doc = docFromState(new Uint8Array(Buffer.from(result.state, 'base64')));
+    const canvases = listCanvases(doc);
+    expect(canvases.map((c) => c.name)).toEqual(['Sheet 1', '规划', 'Sheet 3']); // 首 Sheet 名落到首画布；buildXmind 对空标题回落 Sheet N
+    expect(getNode(doc, ROOT_NODE_ID, canvases[0].id)?.text).toBe('首画布根'); // 首 Sheet 进首画布（root 恒 'root'）
+    expect(getNode(doc, childrenIds(doc, ROOT_NODE_ID, canvases[0].id)[0] as string, canvases[0].id)?.text).toBe('A');
+    const secondRoot = canvases[1].rootId;
+    expect(getNode(doc, secondRoot, canvases[1].id)?.text).toBe('规划根');
+    expect(getNode(doc, childrenIds(doc, secondRoot, canvases[1].id)[0] as string, canvases[1].id)?.text).toBe('B');
+    const thirdRoot = canvases[2].rootId;
+    expect(getNode(doc, thirdRoot, canvases[2].id)?.text).toBe('第三');
+  });
+
   it('根主题缺标题：title 回落文件名去 .xmind 后缀', async () => {
-    const result = await importXmindFile(xmindFile('我的脑图.xmind', buildXmind({ title: '', children: [] })));
+    const result = await importXmindFile(xmindFile('我的脑图.xmind', buildXmind([{ title: '', root: { title: '', children: [] } }])));
     expect(result.title).toBe('我的脑图');
   });
 
@@ -49,7 +74,7 @@ describe('importXmindFile（M4 Task 4，FR-IO-001）', () => {
   });
 
   it('合法 zip 但无 content.*：归因含原因+下一步「请更换文件后重试」', async () => {
-    const bytes = zipWithoutContentEntry(buildXmind({ title: 'x', children: [] }));
+    const bytes = zipWithoutContentEntry(buildXmind([{ title: '', root: { title: 'x', children: [] } }]));
     await expect(importXmindFile(xmindFile('空容器.xmind', bytes))).rejects.toThrow(
       '无法识别的文件格式（仅支持 .xmind），请更换文件后重试',
     );
@@ -67,9 +92,9 @@ describe('importXmindFile（M4 Task 4，FR-IO-001）', () => {
     // try/catch，栈溢出 RangeError 同捕获）。
     const overlong = '长'.repeat(501);
     const tree: XmindNode = { title: '根', children: [{ title: overlong, children: [] }] };
-    await expect(importXmindFile(xmindFile('超长.xmind', buildXmind(tree)))).rejects.toThrow(
-      '文件已损坏，无法解析，请检查文件后重试',
-    );
+    await expect(
+      importXmindFile(xmindFile('超长.xmind', buildXmind([{ title: '', root: tree }]))),
+    ).rejects.toThrow('文件已损坏，无法解析，请检查文件后重试');
   });
 });
 

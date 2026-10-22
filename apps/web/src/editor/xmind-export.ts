@@ -9,8 +9,8 @@
 // 标记（M7a-T1）：仅出三组（priority/icon/emoji，值目录内；marker-id 映射口径在
 // @gmind/xmind-io markers.ts）。
 import type * as Y from 'yjs';
-import { ICON_GROUPS, getNode, rootIdOf } from '@gmind/core';
-import { buildXmind, type XmindIcons, type XmindNode } from '@gmind/xmind-io';
+import { ICON_GROUPS, getNode, listCanvases, rootIdOf } from '@gmind/core';
+import { buildXmind, type XmindIcons, type XmindNode, type XmindSheet } from '@gmind/xmind-io';
 
 /** 存活树 → XmindNode：title = node.text；note 非空才产出 note 键（'' 即无备注，
  *  buildXmind 以真值判定备注，与 T3 裁决一致）；children 按原顺序映射 childIds；
@@ -53,11 +53,21 @@ export function docToXmindTree(doc: Y.Doc, canvasId?: string): XmindNode {
   return walk(rootId);
 }
 
+/** 全部画布 → XmindSheet[]（多画布计划四，裁定 8：XMind 导出全画布多 Sheet，
+ *  title=画布名；替换计划三 Task 4 的「当前画布单 Sheet」中间态）。 */
+export function docToXmindSheets(doc: Y.Doc): XmindSheet[] {
+  return listCanvases(doc).map((canvas) => ({
+    title: canvas.name,
+    root: docToXmindTree(doc, canvas.id),
+  }));
+}
+
 /** 生成 .xmind 并触发浏览器下载（文件名 = `${title}.xmind`，title 即编辑器 header
  *  展示的 getMeta(doc).title）。Object URL 在 click 触发下载后于下一宏任务 revoke，
- *  不遗留 URL；无定时器之外的副作用。 */
-export function exportXmind(doc: Y.Doc, title: string, canvasId?: string): void {
-  const bytes = buildXmind(docToXmindTree(doc, canvasId));
+ *  不遗留 URL；无定时器之外的副作用。
+ *  多画布（计划四，裁定 8）：全部画布逐个出 Sheet。 */
+export function exportXmind(doc: Y.Doc, title: string): void {
+  const bytes = buildXmind(docToXmindSheets(doc));
   const blob = new Blob([bytes], { type: 'application/octet-stream' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
