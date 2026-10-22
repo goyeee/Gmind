@@ -373,8 +373,11 @@ export function EditorPage() {
       rebuildForCanvas: (_canvasId, saved) => {
         canvasRebuildRef.current?.(saved);
       },
-      resetEphemeral: () => {
-        if (overlay.isOpen) overlay.close(true); // 提交在途行内编辑（落旧画布）
+      // discardInlineEdit=reconcile 回退路径（旧画布已被删成墓碑）：行内编辑**丢弃**
+      // 不提交——提交写按 activeCanvasIdRef（仍指墓碑画布）解析画布抛
+      // CANVAS_NOT_FOUND，异常在 Y 观察器回调内无捕获会中断回退编排（Important 修复）。
+      resetEphemeral: (discardInlineEdit = false) => {
+        if (overlay.isOpen) overlay.close(!discardInlineEdit); // true=提交落旧画布
         // 未开编辑的 pending 新建：作废弃置不回收（同「Tab 后点了别处」口径）
         pendingEditRef.current = null;
         pendingCancelRef.current = null;
@@ -988,7 +991,11 @@ export function EditorPage() {
         if (me.id !== '') markLastEditor(doc, me.id);
       });
     }
-    if (um) capUndoStack(um);
+    // 经 umRef 取当帧画布 UM：afterUserWrite 被装配 effect 闭包（拖拽 onDrop、
+    // 键盘映射）持有，读 um state 会捕获装配当帧的旧画布 UM——切换后这些路径
+    // 持续裁剪旧画布栈、新画布 UM 逃逸栈深上限（FR-EDT-004 修复）。
+    const m = umRef.current;
+    if (m) capUndoStack(m);
     // 「正在编辑」广播（FR-COL-005）：本地写置 true，60s 无写回落（裁定见 collab.ts）
     collabHandleRef.current?.markEditing();
     // 右列面板开启期间节点文本重排可能变宽（编辑提交/批量标记等写路径），贴右缘

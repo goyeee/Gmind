@@ -11,7 +11,9 @@
  *   meta.activeCanvasId **不**强拽本地视图——远端增/删/改名/排序经观察器只刷新
  *   画布列表；唯一例外 = 当前画布被远端删除，reconcileActive 同步回退（显式
  *   canvasId 读路径遇墓碑画布抛 CANVAS_NOT_FOUND，回退必须先于下一次 rerender，
- *   Y 观察器事务提交时同步触发，时序天然满足）。
+ *   Y 观察器事务提交时同步触发，时序天然满足）。回退编排**丢弃**在途行内编辑
+ *   （discardEphemeral）——提交写会按仍指墓碑的 activeCanvasIdRef 解析画布而抛错，
+ *   异常在观察器回调内无捕获会中断回退（Important 修复）。
  * - 撤销不跨画布（裁定 2）：UndoManager 经 core createUndoManager(doc, canvasId)
  *   scope=画布子图，每画布缓存一个实例（来回切换保住各自撤销栈）。
  * - idPrefix 契约：createScene 前缀只从画布 id 派生（canvasIdPrefix），禁止从
@@ -106,8 +108,11 @@ export interface CanvasSwitchDeps {
   captureViewport(): ViewportState | null;
   /** 重建场景绑定新画布并恢复视口：saved=null = 首访无存档 → 由实现安排 fit。 */
   rebuildForCanvas(canvasId: string, saved: ViewportState | null): void;
-  /** 清空选区 / 提交在途行内编辑 / 作废 pending 新建等临时态。 */
-  resetEphemeral(): void;
+  /** 清空选区 / 处理在途行内编辑 / 作废 pending 新建等临时态。
+   *  discardInlineEdit=true（reconcile 回退路径，旧画布已墓碑化）：行内编辑**丢弃**
+   *  不提交——提交写按 activeCanvasIdRef（仍指墓碑画布）解析画布会抛
+   *  CANVAS_NOT_FOUND，而异常发生在 Y 观察器回调内，会中断回退编排。 */
+  resetEphemeral(discardInlineEdit?: boolean): void;
 }
 
 export interface ActiveCanvasControllerEvents {
@@ -122,8 +127,10 @@ export interface ActiveCanvasController {
   list(): CanvasInfo[];
   /** 当前画布的 UndoManager（懒建 + 每画布缓存一个实例）。 */
   um(): Y.UndoManager;
-  /** 切换编排；同 id 幂等（零步骤）。目标不存在由 core setActiveCanvas 抛错。 */
-  switchCanvas(canvasId: string): void;
+  /** 切换编排；同 id 幂等（零步骤）。目标不存在由 core setActiveCanvas 抛错。
+   *  opts.discardEphemeral = reconcile 回退路径专用：丢弃在途行内编辑（旧画布已
+   *  墓碑化，提交写必抛 CANVAS_NOT_FOUND 且会中断回退编排）。 */
+  switchCanvas(canvasId: string, opts?: { discardEphemeral?: boolean }): void;
   /** 活动画布被删（远端/本端）后的同步回退：存活则 no-op。 */
   reconcileActive(): void;
   /** 销毁全部缓存 UM（doc 切换/卸载）。 */
@@ -148,12 +155,15 @@ export function createActiveCanvasController(
   };
   umFor(activeId); // 初始画布 UM 预建（首装即绑定撤销栈）
 
-  const switchCanvas = (target: string): void => {
+  const switchCanvas = (target: string, opts: { discardEphemeral?: boolean } = {}): void => {
     if (target === activeId) return; // 同画布幂等
     // 临时态清理先于文档写（编排顺序对 brief 的唯一微调）：行内编辑提交
     // （overlay.close(true) → setText）与 pending 回收落在旧画布——置
     // activeCanvasId 之后再 close，写路径会解析到新画布而节点查无。
-    deps.resetEphemeral();
+    // reconcile 路径（discardEphemeral）丢弃在途编辑：旧画布已被删成墓碑，
+    // 提交写按 activeCanvasIdRef（仍指墓碑）解析画布必抛 CANVAS_NOT_FOUND，
+    // 异常在 Y 观察器回调内无捕获，会中断回退编排（Important 修复）。
+    deps.resetEphemeral(opts.discardEphemeral === true);
     const snap = deps.captureViewport();
     if (snap !== null) viewportStates.set(activeId, snap); // null 不覆盖已存档位
     setActiveCanvas(doc, target); // ORIGIN_SYSTEM（core 内置）；校验先于事务，抛错即零写
@@ -168,7 +178,8 @@ export function createActiveCanvasController(
     if (infos.some((info) => info.id === activeId)) return;
     // 全灭（crafted 态，正常路径不可达——core 禁删最后一张）：无回退目标，保持现状
     if (infos.length === 0) return;
-    switchCanvas(resolveCanvasId(doc));
+    // 丢弃在途行内编辑（旧画布已墓碑化，提交写必抛 CANVAS_NOT_FOUND 中断回退）
+    switchCanvas(resolveCanvasId(doc), { discardEphemeral: true });
   };
 
   return {

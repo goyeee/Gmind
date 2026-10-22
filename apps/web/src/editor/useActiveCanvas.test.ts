@@ -58,8 +58,8 @@ function makeHarness(): Harness {
         log.push(`rebuild:${id}`);
         rebuilt.push({ id, saved });
       },
-      resetEphemeral: () => {
-        log.push('reset');
+      resetEphemeral: (discard?: boolean) => {
+        log.push(discard === true ? 'reset:discard' : 'reset');
       },
     },
   };
@@ -237,6 +237,35 @@ describe('reconcileActive（活动画布被删的同步回退）', () => {
     c.reconcileActive();
     expect(c.activeCanvasId).toBe(c1);
     expect(h.rebuilt).toEqual([]);
+    c.destroy();
+  });
+
+  it('reconcile 路径丢弃在途编辑（discard=true）：resetEphemeral 不再按墓碑画布提交，回退完成、后续读不抛', () => {
+    const { doc, c1, c2 } = makeTwoCanvasDoc();
+    const h = makeHarness();
+    // 模拟 EditorPage resetEphemeral：画布存活时提交（close(true)）不抛；画布被删
+    // 成墓碑后提交写抛 CANVAS_NOT_FOUND，仅丢弃（close(false)）不抛。
+    let tombstoned = false;
+    const deps: CanvasSwitchDeps = {
+      ...h.deps,
+      resetEphemeral: (discard?: boolean) => {
+        h.log.push(discard === true ? 'reset:discard' : 'reset');
+        if (discard !== true && tombstoned) throw new Error('CANVAS_NOT_FOUND');
+      },
+    };
+    const c = createActiveCanvasController(doc, deps);
+    c.switchCanvas(c2); // 用户路径：提交在途编辑（画布存活，不抛）
+    expect(h.log).toEqual(['reset', 'capture', `rebuild:${c2}`]);
+    deleteCanvas(doc, c2); // 远端删除活动画布 → 观察器同步触发 reconcile
+    tombstoned = true;
+    expect(() => c.reconcileActive()).not.toThrow(); // 修复前：reset 抛错中断回退
+    expect(h.log.filter((e) => e === 'reset:discard')).toHaveLength(1);
+    expect(c.activeCanvasId).toBe(c1); // 回退完成，不留墓碑
+    expect(h.rebuilt.at(-1)).toEqual({ id: c1, saved: null });
+    // 后续读路径（readerOf 当帧画布口径）不再抛 CANVAS_NOT_FOUND
+    expect(readerOf(doc, () => c.activeCanvasId).getNode(rootIdOf(doc, c1))?.text).toBe(
+      '本周计划',
+    );
     c.destroy();
   });
 });
