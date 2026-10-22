@@ -207,6 +207,22 @@ export class Viewport {
     this.apply();
   }
 
+  /**
+   * 取当前视口状态快照（多画布计划二 Task 3：画布切换时保存各自视口，
+   * 配合 restore 恢复）。返回拷贝，与内部状态解耦。
+   */
+  getState(): ViewportState {
+    return { scale: this.scale, tx: this.tx, ty: this.ty };
+  }
+
+  /**
+   * 恢复视口状态（scale 经 clampScale 钳制；内部走与 zoomAt/fit 相同的
+   * set + apply 路径，transform 属性同步回写）。缺省行为与既有手势一致。
+   */
+  restore(state: ViewportState): void {
+    this.set({ scale: clampScale(state.scale), tx: state.tx, ty: state.ty });
+  }
+
   /** screen（svg 相对）→ 场景坐标。 */
   toScene(clientX: number, clientY: number): Point {
     return { x: (clientX - this.tx) / this.scale, y: (clientY - this.ty) / this.scale };

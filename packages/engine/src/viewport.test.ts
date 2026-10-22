@@ -243,6 +243,44 @@ describe('Viewport 基础状态与 transform 写入', () => {
   });
 });
 
+// 多画布计划二 Task 3：视口状态存取公开 API（画布切换时保存/恢复各自视口）。
+describe('Viewport getState/restore（状态存取公开 API）', () => {
+  it('getState 返回 { scale, tx, ty } 快照，与 panBy/zoomTo 后的内部状态一致', () => {
+    vp.panBy(12.5, -3.25);
+    vp.zoomTo(1.75);
+    const s = vp.getState();
+    expect(s).toEqual({ scale: 1.75, tx: 12.5, ty: -3.25 });
+    // 快照是拷贝：后续改动不影响已取快照。
+    vp.panBy(1, 1);
+    expect(s).toEqual({ scale: 1.75, tx: 12.5, ty: -3.25 });
+  });
+
+  it('restore 恢复快照：内部状态与 transform 属性逐步还原', () => {
+    vp.panBy(30, 40);
+    vp.zoomAt(1.5, 100, 60);
+    const snap = vp.getState();
+    // 改动到另一状态。
+    vp.panBy(-200, 100);
+    vp.zoomTo(0.5);
+    vp.restore(snap);
+    const s = vp.getState();
+    expect(s.scale).toBeCloseTo(snap.scale, 4);
+    expect(s.tx).toBeCloseTo(snap.tx, 4);
+    expect(s.ty).toBeCloseTo(snap.ty, 4);
+    const t = parseTransform();
+    expect(t.scale).toBeCloseTo(snap.scale, 4);
+    expect(t.tx).toBeCloseTo(snap.tx, 4);
+    expect(t.ty).toBeCloseTo(snap.ty, 4);
+  });
+
+  it('restore 越界 scale 经 clampScale 钳制到 [0.1, 4]', () => {
+    vp.restore({ scale: 0.05, tx: 10, ty: 20 });
+    expect(vp.getState().scale).toBe(MIN_SCALE);
+    vp.restore({ scale: 99, tx: 10, ty: 20 });
+    expect(vp.getState().scale).toBe(MAX_SCALE);
+  });
+});
+
 describe('Viewport 滚轮（attach 后）', () => {
   it('ctrl+wheel：以光标为锚缩放并 preventDefault', () => {
     vp.attach();
