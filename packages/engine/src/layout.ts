@@ -4,7 +4,8 @@
  * 绑定裁决（FR-EDT-011/017）：
  * - 纯函数、全序确定：遍历一律按文档序（DocReader.childrenIds），无随机、无时钟，
  *   同一输入恒得同一输出（金样逐字节锁定）。
- * - 从 'root' 收集存活树：getNode/childrenIds 语义；deleted 节点连同其子树整体跳过；
+ * - 从 rootId（多画布：布局起始根 id，缺省 'root'）收集存活树：getNode/childrenIds
+ *   语义；deleted 节点连同其子树整体跳过；
  *   折叠节点按叶子渲染（不下钻），collapsedCounts[id] = 被隐藏的存活后代数。
  * - 盒子经 measureNodeBox：图标按键数预留 iconSlotWidth 槽位；样式由 styleOf 提供
  *   （缺省按深度取主题分级派生：根 / 一级 / 二级及更深，字号/字重/字族全由主题 token 驱动）；
@@ -95,6 +96,11 @@ export interface LayoutOptions {
   /** 缺省时按深度取主题派生样式（根/一级/二级+，字号/字重/字族全由 theme token 驱动）。 */
   styleOf?: (id: string, depth: number) => TextStyle;
   /**
+   * 多画布（2026-10-22，计划二）：布局起始根 id。缺省 'root'——旧调用方与金样
+   * 逐字节不变；异根文档传指定根，只收集该根的存活子树（另一棵树不入场）。
+   */
+  rootId?: string;
+  /**
    * 简洁模式（M7b 补课，mindgrid 账号级显示偏好）：true 时测量以紧凑口径执行
    * （描述行不产出、任务行槽位不计入盒高/宽，见 measureNodeBox compact 选项——
    * 分支收口在测量侧，本模块只透传）；渲染侧内联进度走 SceneInput.compact。
@@ -121,13 +127,14 @@ function countHiddenDescendants(reader: DocReader, id: string): number {
   return count;
 }
 
-/** 从 'root' 收集存活树并测量盒子（先序；visited 防御重复/环）。 */
+/** 从 rootId（缺省 'root'）收集存活树并测量盒子（先序；visited 防御重复/环）。 */
 function collectTree(
   reader: DocReader,
   theme: ThemeTokens,
   measure: MeasureAdapter,
   styleOf: (id: string, depth: number) => TextStyle,
   compact: boolean,
+  rootId: string,
 ): LayoutNode | null {
   // 人员进度列（2026-10-11 第二步）：collectTree 级一次读取（含 weighted 比重开关，
   // 2026-10-12 裁定），节点拉平共用。
@@ -208,7 +215,7 @@ function collectTree(
     if (collapsedCount !== undefined) node.collapsedCount = collapsedCount;
     return node;
   };
-  return build('root', 0);
+  return build(rootId, 0);
 }
 
 /** 自底向上累加子树带高/宽（叶 = 自身盒尺寸）。 */
@@ -600,7 +607,7 @@ export function layout(reader: DocReader, opts: LayoutOptions): LayoutResult {
   // 缺省样式：主题分级派生（Task 5 主题系统；页面层闭合文档传 styleOf 以叠加 nodeStyle）。
   const styleOf = opts.styleOf ?? ((_id: string, depth: number) => themeTextStyleOf(theme, depth));
 
-  const root = collectTree(reader, theme, measure, styleOf, opts.compact ?? false);
+  const root = collectTree(reader, theme, measure, styleOf, opts.compact ?? false, opts.rootId ?? 'root');
   if (!root) return { nodes: [], edges: [], collapsedCounts: new Map(), summaries: [], width: 0, height: 0 };
   computeMetrics(root, theme);
 

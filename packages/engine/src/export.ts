@@ -28,6 +28,11 @@ import { contentBounds } from './viewport';
 export interface ExportSceneOptions {
   structure: StructureType;
   themeId: string;
+  /**
+   * 多画布（2026-10-22，计划二）：导出的起始根 id，缺省 'root'（与画布同参：
+   * PNG 只出当前画布的引擎前提——旧调用方产物逐字节不变）。
+   */
+  rootId?: string;
 }
 
 /** Canvas measureText 测量（与 EditorPage 装配同口径；jsdom 无 2d 上下文时退化为
@@ -54,6 +59,7 @@ export function exportSceneSvg(
     structure: opts.structure,
     theme,
     measure,
+    rootId: opts.rootId,
     // 样式闭合 doc 读取（carry-in 裁决 2：主题分级 + nodeStyle 覆盖）
     styleOf: (id, depth) =>
       resolveNodeStyle(theme, depth, reader.getNode(id)?.style ?? {}).textStyle,

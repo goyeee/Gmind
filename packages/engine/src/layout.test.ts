@@ -945,6 +945,25 @@ describe('layout 确定性与金样', () => {
     expect('descLine' in n).toBe(false); // 无描述：字段不出现
   });
 
+  // 多画布（2026-10-22，计划二 Task 1，只增不改）：rootId 参数化——异根文档从
+  // 指定根布局；缺省仍 'root'（旧调用方与金样逐字节不变）。
+  it('rootId 参数化：异根文档从指定根布局（缺省仍 root，金样不变）', () => {
+    // 异构：两个根 'root' 与 'root2' 各挂一子（reader 形式同构，互不引用）。
+    const reader = makeReader({
+      root: { text: '甲', children: ['ra'] },
+      ra: { text: '甲子' },
+      root2: { text: '乙', children: ['rb'] },
+      rb: { text: '乙子' },
+    });
+    const baseOpts = { structure: 'mindmap' as StructureType, theme, measure: stubAdapter, styleOf };
+    const a = layout(reader, { ...baseOpts, rootId: 'root2' });
+    expect(boxOf(a, 'root2')).toBeDefined();
+    expect(a.nodes.find((n) => n.id === 'root')).toBeUndefined(); // 另一棵树不入场
+    expect(layout(reader, baseOpts).nodes.map((n) => n.id)).toEqual(
+      layout(reader, { ...baseOpts, rootId: 'root' }).nodes.map((n) => n.id),
+    ); // 缺省与显式 'root' 等价
+  });
+
   // 长文本溢出修复（Kimi 复验）：测量贪心断行随盒透传（box.lines），渲染行结构
   // 与定盒口径同源；未断行字段不出现（金样逐字节不变）。
   it('断行行集透传：超 maxTextWidth 节点盒带 lines（与定盒同源）；未断行字段不出现', () => {

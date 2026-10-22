@@ -201,6 +201,15 @@ describe('navigate：null 焦点与防御', () => {
     }
   });
 
+  // 多画布（2026-10-22，计划二 Task 1，只增不改）：rootId 参数化——null 焦点回
+  // 指定根；缺省仍 'root'（旧调用方行为不变）。
+  it('null 焦点回指定根（rootId 第 5 参）；缺省仍 root', () => {
+    for (const d of directions) {
+      expect(navigate(null, d, MINDMAP, 'mindmap', 'root2')).toBe('root2');
+      expect(navigate(null, d, MINDMAP, 'mindmap')).toBe('root');
+    }
+  });
+
   it('焦点不在盒集 → null；无候选 → null（无匹配不动）', () => {
     expect(navigate('ghost', 'left', MINDMAP, 'mindmap')).toBeNull();
     // rr 之下再无节点。

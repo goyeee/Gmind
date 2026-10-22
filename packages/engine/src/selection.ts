@@ -15,7 +15,7 @@
  *   规格中 (lateralPenalty, forward) 若按字面以惩罚为主键，则「root 向右 → 一级子」
  *   在金样几何上即不成立（孙子节点 lateral 更小必胜），故采 primary=forward 的文字
  *   为主键、lateralPenalty 为次键（同距时横向惩罚才参与，org 子向上寻父正是此情形）。
- * - 无候选返回 null（无匹配不动）；null 焦点回 'root'。
+ * - 无候选返回 null（无匹配不动）；null 焦点回 rootId（缺省 'root'，多画布可指定异根）。
  * - siblingEnd 依 NodeBox.parentId（Task 8 起布局回填，根无此字段）取同级首末；
  *   boxes 为先序文档序，同级在其间连续出现，过滤保序即文档序。
  */
@@ -165,15 +165,17 @@ export class SelectionModel {
 /**
  * 方向键几何导航（FR-EDT-006）：从 currentId 出发，返回结构几何方向 d 上
  * 「前向最近、横向偏移最小」的节点 id；无候选（或焦点不在盒集）返回 null，
- * null 焦点回 'root'。boxes 为布局产出的场景坐标盒（先序文档序，用于稳定平局）。
+ * null 焦点回 rootId（缺省 'root'）。boxes 为布局产出的场景坐标盒（先序文档序，
+ * 用于稳定平局）。
  */
 export function navigate(
   currentId: string | null,
   direction: Direction,
   boxes: NodeBox[],
   structure: StructureType,
+  rootId: string = 'root',
 ): string | null {
-  if (currentId === null) return 'root';
+  if (currentId === null) return rootId;
   const myIndex = boxes.findIndex((b) => b.id === currentId);
   if (myIndex < 0) return null;
   const my = boxes[myIndex] as NodeBox;
