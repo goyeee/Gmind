@@ -1,0 +1,109 @@
+/**
+ * 底部画布页签条样式（多画布计划三 Task 2）——令牌对齐工作台外壳与 .context-menu：
+ * 菜单圆角 10px、阴影 0 8px 24px rgba(31,35,41,.16)；主色 #3370ff、边框 #e5e6eb、
+ * 悬停 #f2f3f5 均沿用工作台/底栏既有色板。
+ */
+
+/* 页签条容器（底栏左侧，企微形态）：横向可滚，压缩时不出纵向滚动条 */
+.canvas-tabbar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  max-width: 46%;
+  overflow-x: auto;
+  scrollbar-width: none; /* Firefox */
+}
+.canvas-tabbar::-webkit-scrollbar {
+  display: none; /* Chromium：底栏行高内隐藏滚动条 */
+}
+
+/* 页签：底栏按钮同系小圆角；活动页签主色浅底（工作台卡片风格） */
+.canvas-tabbar .canvas-tab {
+  flex: none;
+  max-width: 140px;
+  padding: 3px 10px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: #4e5969;
+  font-size: 12px;
+  line-height: 18px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+.canvas-tabbar .canvas-tab:hover {
+  background: #f2f3f5;
+}
+.canvas-tabbar .canvas-tab-active,
+.canvas-tabbar .canvas-tab-active:hover {
+  background: #e8f3ff;
+  color: #3370ff;
+  font-weight: 600;
+}
+
+/* 行内重命名/新建输入：主色描边（进入编辑态的可视锚点），占位同底栏字号 */
+.canvas-tabbar .canvas-rename-input {
+  flex: none;
+  width: 120px;
+  padding: 2px 8px;
+  border: 1px solid #3370ff;
+  border-radius: 6px;
+  font: inherit;
+  font-size: 12px;
+  line-height: 18px;
+  outline: none;
+}
+.canvas-tabbar .canvas-rename-input::placeholder {
+  color: #9aa0a8;
+}
+
+/* ➕ 新建钮：图标钮（同 bottombar-icon-btn 口径，边框 hover 浮起） */
+.canvas-tabbar .canvas-add {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid #e5e6eb;
+  border-radius: 6px;
+  background: #fff;
+  color: #4e5969;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+.canvas-tabbar .canvas-add:hover {
+  border-color: #3370ff;
+  color: #3370ff;
+}
+
+/* 右键菜单（重命名/删除）：令牌对齐 .context-menu（圆角 10px、阴影 0 8px 24px） */
+.canvas-tab-menu {
+  position: fixed;
+  z-index: 1200;
+  background: #fff;
+  border: 1px solid #e5e6eb;
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(31, 35, 41, 0.16);
+  display: flex;
+  flex-direction: column;
+  min-width: 128px;
+  padding: 4px;
+}
+.canvas-tab-menu button {
+  border: none;
+  background: none;
+  text-align: left;
+  padding: 8px 12px;
+  font-size: 13px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.canvas-tab-menu button:hover {
+  background: #f2f3f5;
+}
