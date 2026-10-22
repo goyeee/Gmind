@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>登录 · Gmind 在线协作脑图</title>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-font-smoothing:antialiased; }
+  :root {
+    --ink:#1a1a1a; --ink2:#555; --ink3:#999; --line:#e8e8e6; --bg:#fdfdfc;
+    --hover:#f0f0ee; --active:#e7e7e3; --danger:#b3331f;
+  }
+  html,body { min-height:100%; }
+  body { font-family:'Noto Sans SC',system-ui,sans-serif; background:var(--bg); color:var(--ink); font-size:14px; }
+
+  .page { min-height:100vh; display:grid; grid-template-columns: 1fr 1fr; }
+
+  /* ── 左：品牌区（方向一·静：灰阶，唯一母题=脑图分枝） ── */
+  .brand { position:relative; display:flex; flex-direction:column; justify-content:center; padding:64px 72px; overflow:hidden; }
+  .wordmark { display:flex; align-items:center; gap:12px; }
+  .wordmark .glyph { width:34px; height:34px; border-radius:8px; background:var(--ink); color:#fff; display:flex; align-items:center; justify-content:center; font-weight:700; font-size:17px; }
+  .wordmark .name { font-size:22px; font-weight:700; letter-spacing:.5px; }
+  .tagline { margin-top:22px; font-size:15px; color:var(--ink2); line-height:1.9; max-width:340px; }
+  .tagline b { color:var(--ink); font-weight:500; }
+  .brand-tree { position:absolute; right:-40px; bottom:-30px; width:520px; height:420px; opacity:.9; pointer-events:none; }
+  .brand-tree .edge { fill:none; stroke:#e0e0dc; stroke-width:1.5; stroke-dasharray:400; stroke-dashoffset:400; animation:grow 1.6s ease-out forwards; }
+  .brand-tree .edge.e2 { animation-delay:.25s; } .brand-tree .edge.e3 { animation-delay:.45s; }
+  .brand-tree .edge.e4 { animation-delay:.6s; } .brand-tree .edge.e5 { animation-delay:.75s; }
+  @keyframes grow { to { stroke-dashoffset:0; } }
+  .brand-tree .nd { fill:#fff; stroke:#cfcfcb; stroke-width:1.2; opacity:0; animation:fadein .5s ease-out forwards; }
+  .brand-tree .nd.n1 { animation-delay:.5s; } .brand-tree .nd.n2 { animation-delay:.7s; }
+  .brand-tree .nd.n3 { animation-delay:.85s; } .brand-tree .nd.n4 { animation-delay:1s; } .brand-tree .nd.n5 { animation-delay:1.1s; }
+  .brand-tree .nd.root { fill:var(--ink); stroke:var(--ink); }
+  @keyframes fadein { to { opacity:1; } }
+  .brand-meta { position:absolute; left:72px; bottom:40px; font-size:12px; color:var(--ink3); display:flex; gap:18px; }
+  .brand-meta span { display:flex; align-items:center; gap:6px; }
+  .brand-meta i { width:6px; height:6px; border-radius:50%; background:#c9c9c5; }
+
+  /* ── 右：表单区 ── */
+  .panel { display:flex; align-items:center; justify-content:center; padding:40px; background:#fff; border-left:1px solid var(--line); }
+  .form { width:380px; }
+  .form h1 { font-size:20px; font-weight:700; }
+  .form .sub { margin-top:8px; font-size:13px; color:var(--ink3); line-height:1.7; }
+
+  /* 登录方式页签（同既有 LoginPage 的三方式） */
+  .tabs { display:flex; gap:2px; margin-top:22px; background:#f4f4f2; border-radius:8px; padding:3px; }
+  .tab { flex:1; border:none; background:none; font-family:inherit; font-size:13px; color:var(--ink3); padding:7px 0; border-radius:6px; cursor:pointer; transition:.15s; }
+  .tab:hover { color:var(--ink2); }
+  .tab.on { background:#fff; color:var(--ink); font-weight:500; box-shadow:0 1px 2px rgba(0,0,0,.06); }
+
+  .pane { display:none; }
+  .pane.on { display:block; }
+  .field { margin-top:18px; }
+  .field:first-child { margin-top:20px; }
+  .field label { display:block; font-size:13px; color:var(--ink2); margin-bottom:8px; }
+  .box { display:flex; align-items:center; border:1px solid var(--line); border-radius:8px; background:#fff; transition:border-color .15s, box-shadow .15s; }
+  .box:focus-within { border-color:#b9b9b4; box-shadow:0 0 0 3px rgba(26,26,26,.06); }
+  .box input { flex:1; min-width:0; border:none; outline:none; font-size:15px; font-family:inherit; color:var(--ink); padding:12px 14px; background:transparent; }
+  .box input::placeholder { color:#c9c9c5; }
+  .aux { flex:none; margin-right:6px; border:1px solid var(--line); background:#fff; border-radius:6px; font-size:13px; color:var(--ink2); padding:7px 12px; cursor:pointer; font-family:inherit; transition:.15s; white-space:nowrap; }
+  .aux:hover:not(:disabled) { border-color:#b9b9b4; color:var(--ink); }
+  .aux:disabled { color:#c9c9c5; cursor:default; }
+  .aux.counting { border-color:transparent; font-family:'JetBrains Mono',monospace; }
+  .eye { flex:none; margin-right:6px; border:none; background:none; color:var(--ink3); cursor:pointer; font-size:14px; padding:6px; font-family:inherit; }
+  .eye:hover { color:var(--ink2); }
+
+  .err { min-height:20px; margin-top:6px; font-size:12px; color:var(--danger); opacity:0; transition:opacity .15s; }
+  .err.show { opacity:1; }
+
+  /* 邮箱模式切换（验证码登录 / 密码登录） */
+  .mode-switch { display:flex; align-items:center; justify-content:space-between; margin-top:14px; }
+  .mode-switch .modes { display:flex; gap:14px; }
+  .mode-switch button.m { border:none; background:none; font-family:inherit; font-size:13px; color:var(--ink3); cursor:pointer; padding:2px 0; border-bottom:2px solid transparent; }
+  .mode-switch button.m.on { color:var(--ink); font-weight:500; border-bottom-color:var(--ink); }
+  .mode-switch .hint-link { font-size:12px; color:var(--ink3); }
+
+  /* 可折叠：新邮箱注册设初始密码（registerPassword 语义） */
+  .fold { margin-top:12px; border:1px dashed var(--line); border-radius:8px; overflow:hidden; }
+  .fold-head { width:100%; display:flex; align-items:center; gap:8px; border:none; background:#fafaf8; font-family:inherit; font-size:12px; color:var(--ink2); padding:9px 12px; cursor:pointer; }
+  .fold-head:hover { color:var(--ink); }
+  .fold-head .caret { margin-left:auto; font-size:10px; color:var(--ink3); }
+  .fold-body { padding:0 12px 12px; display:none; }
+  .fold.open .fold-body { display:block; }
+  .fold.open .fold-head { border-bottom:1px dashed var(--line); }
+  .fold .cap { font-size:11px; color:var(--ink3); margin:8px 0 0; line-height:1.6; }
+  .fold .box input { font-size:14px; padding:10px 12px; }
+
+  /* rememberMe（auth controller rememberMe 语义） */
+  .remember { display:flex; align-items:center; gap:8px; margin-top:16px; font-size:13px; color:var(--ink2); cursor:pointer; user-select:none; }
+  .remember input { accent-color:var(--ink); width:15px; height:15px; cursor:pointer; }
+
+  .submit { width:100%; margin-top:18px; height:46px; border:none; border-radius:8px; background:var(--ink); color:#fff; font-size:15px; font-weight:500; font-family:inherit; cursor:pointer; transition:.15s; display:flex; align-items:center; justify-content:center; gap:8px; }
+  .submit:hover:not(:disabled) { background:#333; }
+  .submit:disabled { background:#c9c9c5; cursor:default; }
+  .spinner { width:16px; height:16px; border:2px solid rgba(255,255,255,.35); border-top-color:#fff; border-radius:50%; animation:spin .7s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  .fine { margin-top:20px; font-size:12px; color:var(--ink3); line-height:1.8; text-align:center; }
+  .fine .dev { display:inline-block; margin-top:8px; font-family:'JetBrains Mono',monospace; font-size:11px; background:#f4f4f2; border:1px solid var(--line); border-radius:4px; padding:2px 8px; }
+
+  /* 微信扫码（开发环境模拟） */
+  .qr-wrap { display:flex; flex-direction:column; align-items:center; margin-top:20px; }
+  .qr { position:relative; width:180px; height:180px; border:1px solid var(--line); border-radius:10px; overflow:hidden; background:
+    repeating-linear-gradient(0deg, #fff 0 6px, #f2f2ef 6px 12px); }
+  .qr::after { content:'二维码'; position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color:#c9c9c5; font-size:13px; letter-spacing:4px; }
+  .qr .mask { position:absolute; inset:0; background:rgba(255,255,255,.92); display:none; align-items:center; justify-content:center; flex-direction:column; gap:10px; font-size:13px; color:var(--ink2); }
+  .qr.scanned .mask { display:flex; }
+  .qr .mask .ok { width:44px; height:44px; border-radius:50%; background:#3d9d6e; color:#fff; display:flex; align-items:center; justify-content:center; font-size:22px; }
+  .qr-tip { margin-top:12px; font-size:13px; color:var(--ink2); }
+  .wechat-dev { margin-top:14px; font-size:12px; color:var(--ink3); line-height:1.8; text-align:center; }
+  .wechat-dev .dev { display:inline-block; font-family:'JetBrains Mono',monospace; font-size:11px; background:#f4f4f2; border:1px solid var(--line); border-radius:4px; padding:2px 8px; margin-top:6px; }
+  .mock-btn { margin-top:12px; border:1px solid var(--line); background:#fff; border-radius:8px; font-family:inherit; font-size:13px; color:var(--ink2); padding:9px 18px; cursor:pointer; transition:.15s; }
+  .mock-btn:hover { border-color:#b9b9b4; color:var(--ink); }
+
+  .redirect-banner { display:none; margin-bottom:16px; font-size:12px; color:var(--ink2); background:#f4f4f2; border:1px solid var(--line); border-radius:6px; padding:8px 12px; line-height:1.6; }
+  .redirect-banner.show { display:block; }
+
+  .toast { position:fixed; left:50%; bottom:56px; transform:translateX(-50%) translateY(8px); background:#1a1a1a; color:#fff; font-size:13px; padding:9px 18px; border-radius:6px; opacity:0; transition:.2s; pointer-events:none; z-index:90; }
+  .toast.show { opacity:1; transform:translateX(-50%); }
+
+  @media (max-width: 820px) {
+    .page { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
+    .brand { padding:28px 24px 20px; }
+    .brand-tree { display:none; }
+    .tagline { margin-top:12px; font-size:14px; max-width:none; }
+    .brand-meta { display:none; }
+    .panel { border-left:none; border-top:1px solid var(--line); align-items:flex-start; padding:28px 20px; }
+    .form { width:100%; max-width:440px; }
+    .box input { font-size:16px; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+  <section class="brand">
+    <div class="wordmark"><span class="glyph">G</span><span class="name">Gmind</span></div>
+    <p class="tagline">浏览器端、协作为先的在线脑图。<br><b>50 人同屏编辑</b>，思路从中心生长，<br>每一根分枝都有人在场。</p>
+    <svg class="brand-tree" viewBox="0 0 520 420" aria-hidden="true">
+      <path class="edge e1" d="M420,340 C340,335 320,250 240,240"/>
+      <path class="edge e2" d="M420,340 C350,345 330,180 250,160"/>
+      <path class="edge e3" d="M240,240 C180,235 170,180 110,175"/>
+      <path class="edge e4" d="M240,240 C180,245 175,310 115,315"/>
+      <path class="edge e5" d="M250,160 C200,150 195,95 140,88"/>
+      <rect class="nd root" x="406" y="326" width="30" height="30" rx="7"/>
+      <rect class="nd n1" x="224" y="226" width="26" height="26" rx="6"/>
+      <rect class="nd n2" x="236" y="146" width="26" height="26" rx="6"/>
+      <rect class="nd n3" x="96"  y="162" width="22" height="22" rx="6"/>
+      <rect class="nd n4" x="101" y="302" width="22" height="22" rx="6"/>
+      <rect class="nd n5" x="127" y="76"  width="22" height="22" rx="6"/>
+    </svg>
+    <div class="brand-meta">
+      <span><i></i>实时协同</span><span><i></i>XMind 互导</span><span><i></i>版本快照</span>
+    </div>
+  </section>
+
+  <section class="panel">
+    <form class="form" id="loginForm" novalidate>
+      <h1>登录</h1>
+      <p class="sub">登录即注册：新账号自动创建，并附 3 个示例文件</p>
+
+      <div class="redirect-banner" id="redirectBanner">登录后将返回你之前打开的页面。</div>
+
+      <div class="tabs" role="tablist">
+        <button type="button" class="tab on" data-tab="phone" role="tab" aria-selected="true">手机号</button>
+        <button type="button" class="tab" data-tab="email" role="tab" aria-selected="false">邮箱</button>
+        <button type="button" class="tab" data-tab="wechat" role="tab" aria-selected="false">微信扫码</button>
+      </div>
+
+      <!-- 手机号 -->
+      <div class="pane on" data-pane="phone">
+        <div class="field">
+          <label for="phone">手机号</label>
+          <div class="box"><input id="phone" type="tel" inputmode="numeric" maxlength="11" placeholder="11 位手机号" autocomplete="tel"></div>
+          <div class="err" id="phoneErr"></div>
+        </div>
+        <div class="field">
+          <label for="phoneCode">验证码</label>
+          <div class="box">
+            <input id="phoneCode" type="text" inputmode="numeric" maxlength="6" placeholder="6 位验证码" autocomplete="one-time-code">
+            <button type="button" class="aux" id="phoneCodeBtn">获取验证码</button>
+          </div>
+          <div class="err" id="phoneCodeErr"></div>
+        </div>
+      </div>
+
+      <!-- 邮箱 -->
+      <div class="pane" data-pane="email">
+        <div class="field">
+          <label for="email">邮箱</label>
+          <div class="box"><input id="email" type="email" placeholder="name@example.com" autocomplete="email"></div>
+          <div class="err" id="emailErr"></div>
+        </div>
+        <div class="mode-switch">
+          <div class="modes">
+            <button type="button" class="m on" data-mode="code">验证码登录</button>
+            <button type="button" class="m" data-mode="password">密码登录</button>
+          </div>
+          <span class="hint-link" id="emailHint">未注册将自动创建账号</span>
+        </div>
+        <div class="field">
+          <label for="emailSecret" id="emailSecretLabel">验证码</label>
+          <div class="box">
+            <input id="emailSecret" type="text" placeholder="6 位验证码" autocomplete="one-time-code">
+            <button type="button" class="aux" id="emailCodeBtn">获取验证码</button>
+            <button type="button" class="eye" id="emailEye" title="显示/隐藏" style="display:none">👁</button>
+          </div>
+          <div class="err" id="emailSecretErr"></div>
+        </div>
+        <!-- registerPassword 语义：仅邮箱验证码登录时可选设置；新邮箱注册即生效，老账号不受影响 -->
+        <div class="fold" id="pwdFold">
+          <button type="button" class="fold-head" id="pwdFoldHead">
+            🔑 设置初始密码（可选）
+            <span class="caret">▾</span>
+          </button>
+          <div class="fold-body">
+            <div class="box"><input id="registerPassword" type="password" placeholder="6~64 位，注册时生效" autocomplete="new-password"></div>
+            <p class="cap">新邮箱首次验证码登录时可顺手设置密码，之后即可用「密码登录」。已注册的老账号不受影响。</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- 微信扫码 -->
+      <div class="pane" data-pane="wechat">
+        <div class="qr-wrap">
+          <div class="qr" id="qr"><div class="mask"><span class="ok">✓</span><span>扫码成功</span></div></div>
+          <div class="qr-tip" id="qrTip">请使用微信扫一扫登录</div>
+          <button type="button" class="mock-btn" id="mockScanBtn">模拟扫码成功</button>
+          <div class="wechat-dev">开发环境为模拟微信登录，可自定义账号用于多端测试<br><span class="dev">mockOpenid 默认 dev-wechat-openid-default</span></div>
+        </div>
+      </div>
+
+      <label class="remember" title="勾选后会话有效期延长">
+        <input type="checkbox" id="rememberMe">
+        7 天内免登录
+      </label>
+
+      <button type="submit" class="submit" id="submitBtn" disabled>登 录</button>
+
+      <p class="fine">登录即代表同意《服务条款》与《隐私政策》<br>
+        <span class="dev">开发环境 · 验证码固定 123456（手机 / 邮箱通用）</span>
+      </p>
+    </form>
+  </section>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+/* ── 真实逻辑对齐：packages/shared/api/auth.ts（zod 口径）＋ LoginPage.tsx ＋ auth.service ── */
+const $ = (id) => document.getElementById(id);
+const state = { tab: 'phone', emailMode: 'code', wechatDone: false };
+
+const phoneInput = $('phone'), phoneCode = $('phoneCode');
+const emailInput = $('email'), emailSecret = $('emailSecret');
+const submitBtn = $('submitBtn');
+const validPhone = () => /^1\d{10}$/.test(phoneInput.value.trim());
+const validEmail = () => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailInput.value.trim());
+const validCode  = (v) => /^\d{4,6}$/.test(v.trim());
+
+function toast(msg) {
+  const t = $('toast'); t.textContent = msg; t.classList.add('show');
+  clearTimeout(t._t); t._t = setTimeout(() => t.classList.remove('show'), 2200);
+}
+function setErr(id, msg) { const el = $(id); el.textContent = msg || ''; el.classList.toggle('show', !!msg); }
+
+/* redirect 回跳（LoginPage.safeRedirect：仅站内路径） */
+const params = new URLSearchParams(location.search);
+const rawRedirect = params.get('redirect');
+const redirect = rawRedirect && rawRedirect.startsWith('/') && !rawRedirect.startsWith('//') ? rawRedirect : null;
+if (redirect) $('redirectBanner').classList.add('show');
+
+/* 页签 */
+document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => {
+  state.tab = t.dataset.tab;
+  document.querySelectorAll('.tab').forEach(x => { x.classList.toggle('on', x === t); x.setAttribute('aria-selected', x === t); });
+  document.querySelectorAll('.pane').forEach(p => p.classList.toggle('on', p.dataset.pane === state.tab));
+  refresh();
+}));
+
+/* 邮箱模式切换：验证码登录 ⇄ 密码登录 */
+document.querySelectorAll('.mode-switch button.m').forEach(m => m.addEventListener('click', () => {
+  state.emailMode = m.dataset.mode;
+  document.querySelectorAll('.mode-switch button.m').forEach(x => x.classList.toggle('on', x === m));
+  const isCode = state.emailMode === 'code';
+  $('emailSecret').placeholder = isCode ? '6 位验证码' : '密码（6~64 位）';
+  $('emailSecret').type = isCode ? 'text' : 'password';
+  $('emailSecret').setAttribute('autocomplete', isCode ? 'one-time-code' : 'current-password');
+  $('emailCodeBtn').style.display = isCode ? '' : 'none';
+  $('emailEye').style.display = isCode ? 'none' : '';
+  $('emailSecretLabel').textContent = isCode ? '验证码' : '密码';
+  $('pwdFold').style.display = isCode ? '' : 'none'; // registerPassword 仅随验证码注册语义
+  $('emailHint').textContent = isCode ? '未注册将自动创建账号' : '使用已设置的密码登录';
+  emailSecret.value = ''; setErr('emailSecretErr', ''); refresh();
+}));
+
+/* 初始密码折叠 */
+$('pwdFoldHead').addEventListener('click', () => $('pwdFold').classList.toggle('open'));
+
+/* 验证码倒计时（手机/邮箱共用；开发环境固定 123456） */
+const counting = { phone: false, email: false };
+function bindCodeBtn(btn, idErr, identityValid, identityMissingMsg, ch) {
+  btn.addEventListener('click', () => {
+    if (!identityValid()) { setErr(idErr, identityMissingMsg); return; }
+    setErr(idErr, '');
+    state.counting = true; let left = 60;
+    btn.classList.add('counting'); btn.textContent = `${left}s`;
+    const timer = setInterval(() => {
+      left -= 1;
+      if (left <= 0) { clearInterval(timer); counting[ch] = false; btn.classList.remove('counting'); btn.textContent = '重新获取'; }
+      else btn.textContent = `${left}s`;
+      refresh();
+    }, 1000);
+    toast('验证码已发送（开发环境：123456）');
+    refresh();
+  });
+}
+bindCodeBtn($('phoneCodeBtn'), 'phoneErr', validPhone, '手机号格式不正确');
+bindCodeBtn($('emailCodeBtn'), 'emailErr', validEmail, '邮箱格式不正确');
+
+/* 密码可见性（邮箱密码模式） */
+$('emailEye').addEventListener('click', () => {
+  emailSecret.type = emailSecret.type === 'password' ? 'text' : 'password';
+});
+
+/* 微信（开发环境模拟扫码） */
+$('mockScanBtn').addEventListener('click', () => {
+  state.wechatDone = true;
+  $('qr').classList.add('scanned');
+  $('qrTip').textContent = '扫码成功，请点击下方按钮完成登录';
+  toast('微信账号验证通过');
+  refresh();
+});
+
+/* 提交与刷新（对齐 zod：手机 ^1\d{10}$+code 4~6；邮箱格式+code/password 二选一；微信免表单） */
+function refresh() {
+  document.getElementById('phoneCodeBtn').disabled = counting.phone || !validPhone();
+  document.getElementById('emailCodeBtn').disabled = counting.email || !validEmail();
+  if (state.tab === 'wechat') { submitBtn.disabled = !state.wechatDone; submitBtn.textContent = state.wechatDone ? '微信登录' : '请先扫码'; return; }
+  const ready = state.tab === 'phone'
+    ? validPhone() && validCode(phoneCode.value)
+    : validEmail() && (state.emailMode === 'code' ? validCode(emailSecret.value) : emailSecret.value.length >= 6);
+  submitBtn.disabled = !ready || submitBtn.textContent.includes('登录中');
+  submitBtn.textContent = submitBtn.disabled && submitBtn.textContent !== '登 录' && !submitBtn.textContent.includes('…') ? submitBtn.textContent : '登 录';
+}
+phoneInput.addEventListener('input', () => { setErr('phoneErr', phoneInput.value && !validPhone() ? '手机号格式不正确' : ''); refresh(); });
+phoneCode.addEventListener('input', refresh);
+emailInput.addEventListener('input', () => { setErr('emailErr', emailInput.value && !validEmail() ? '邮箱格式不正确' : ''); refresh(); });
+emailSecret.addEventListener('input', () => {
+  if (state.emailMode === 'code') setErr('emailSecretErr', emailSecret.value && !validCode(emailSecret.value) ? '验证码为 4~6 位数字' : '');
+  refresh();
+});
+$('registerPassword').addEventListener('input', refresh);
+
+/* 登录提交：请求体对齐 POST /auth/login（LoginPage.doLogin 同构） */
+$('loginForm').addEventListener('submit', (e) => {
+  e.preventDefault();
+  if (submitBtn.disabled) return;
+  const rememberMe = $('rememberMe').checked;
+  let body;
+  if (state.tab === 'phone') {
+    if (!validPhone()) return setErr('phoneErr', '手机号格式不正确');
+    if (!validCode(phoneCode.value)) return setErr('phoneCodeErr', '验证码错误，请重新输入');
+    body = { method: 'phone', phone: phoneInput.value.trim(), code: phoneCode.value.trim() };
+  } else if (state.tab === 'email') {
+    if (!validEmail()) return setErr('emailErr', '邮箱格式不正确');
+    const secret = emailSecret.value;
+    const registerPassword = $('registerPassword').value;
+    body = {
+      method: 'email', email: emailInput.value.trim(), mode: state.emailMode,
+      code: state.emailMode === 'code' ? secret : undefined,
+      password: state.emailMode === 'password' ? secret : (registerPassword || undefined), // registerPassword：仅邮箱注册时生效
+    };
+    if (state.emailMode === 'code' && !validCode(secret)) return setErr('emailSecretErr', '验证码错误，请重新输入');
+    if (state.emailMode === 'password' && secret.length < 6) return setErr('emailSecretErr', '密码为 6~64 位');
+  } else {
+    body = { method: 'wechat' }; // 开发环境 DevWechatProvider（mockOpenid 缺省）
+  }
+
+  submitBtn.disabled = true;
+  submitBtn.innerHTML = '<span class="spinner"></span>登录中…';
+  // 真实请求体（LoginPage.doLogin）：POST /auth/login { ...body, rememberMe } → setToken → navigate(redirect)
+  setTimeout(() => {
+    const ok = state.tab === 'wechat' || (state.tab === 'phone' ? phoneCode.value.trim() === '123456' : state.emailMode === 'code' ? emailSecret.value.trim() === '123456' : true);
+    if (ok) {
+      submitBtn.innerHTML = '✓ 已登录';
+      toast(redirect ? '登录成功，正在返回原页面…' : `登录成功，正在进入工作台…${rememberMe ? '（7 天免登录）' : ''}`);
+    } else {
+      submitBtn.disabled = false; submitBtn.innerHTML = '登 录';
+      setErr(state.tab === 'phone' ? 'phoneCodeErr' : 'emailSecretErr', '验证码错误，请重新输入');
+    }
+  }, 900);
+});
+
+refresh();
+</script>
+</body>
+</html>
