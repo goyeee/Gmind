@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>方向三 · 脑图黑板 — Gmind 编辑器</title>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700;900&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-font-smoothing:antialiased; }
+  :root {
+    --ink:#000; --paper:#fff; --bg:#0d0d12;
+    --yellow:#f8e000; --purple:#5200ff; --pink:#e1306c; --mint:#3ddc97;
+  }
+  html,body { height:100%; }
+  body { font-family:'Noto Sans SC',system-ui,sans-serif; background:var(--bg); color:var(--paper); overflow:hidden; font-size:14px; }
+
+  .canvas-wrap { position:absolute; inset:0 0 34px 0; overflow:hidden; cursor:grab;
+    background:
+      repeating-linear-gradient(0deg, transparent 0 47px, rgba(255,255,255,.045) 47px 48px),
+      repeating-linear-gradient(90deg, transparent 0 47px, rgba(255,255,255,.045) 47px 48px), var(--bg); }
+  .canvas-wrap:active { cursor:grabbing; }
+  svg text { user-select:none; }
+  .node { cursor:pointer; }
+  .node .shadow { fill:#000; }
+  .node rect.body { stroke:#000; stroke-width:2.5px; transition:transform .1s; }
+  .node:hover rect.body { fill:var(--yellow); }
+  .node:hover text { fill:#000 !important; }
+  .node.selected rect.body { fill:var(--yellow); }
+  .node.selected text { fill:#000 !important; }
+  .edge { fill:none; stroke:#fff; stroke-width:2.5; }
+  .edge.hot { stroke:var(--yellow); }
+
+  /* ── 标题卡 ── */
+  .titlecard { position:absolute; top:18px; left:18px; background:var(--yellow); color:#000; border:3px solid #000; box-shadow:6px 6px 0 #000; padding:10px 16px; z-index:20; max-width:400px; }
+  .titlecard .back { font-family:'Space Grotesk'; font-size:11px; font-weight:700; cursor:pointer; display:inline-block; border:2px solid #000; padding:1px 8px; margin-bottom:6px; background:#fff; }
+  .titlecard .back:hover { background:#000; color:#fff; }
+  .titlecard h1 { font-size:22px; font-weight:900; letter-spacing:-.5px; display:flex; align-items:center; gap:8px; }
+  .titlecard h1 .star { cursor:pointer; font-size:18px; -webkit-text-stroke:1.5px #000; color:transparent; }
+  .titlecard h1 .star.on { color:#000; }
+  .titlecard .tags { margin-top:6px; display:flex; gap:6px; }
+  .tag { border:2px solid #000; font-size:11px; font-weight:700; padding:0 6px; font-family:'Space Grotesk','Noto Sans SC'; }
+
+  /* ── 保存状态卡 ── */
+  .savecard { position:absolute; left:18px; bottom:52px; background:var(--pink); color:#000; border:3px solid #000; box-shadow:5px 5px 0 #000; font-weight:900; font-size:13px; padding:7px 14px; z-index:20; }
+
+  /* ── 工具色块组 ── */
+  .tools { position:absolute; top:18px; right:18px; display:flex; gap:14px; z-index:20; }
+  .toolcard { border:3px solid #000; box-shadow:5px 5px 0 #000; color:#000; min-width:64px; cursor:default; }
+  .toolcard .tc-head { font-size:11px; font-weight:900; padding:4px 8px; border-bottom:2.5px solid #000; display:flex; justify-content:space-between; align-items:center; letter-spacing:1px; }
+  .toolcard .tc-btns { display:flex; padding:5px; gap:5px; }
+  .toolcard button { width:26px; height:26px; border:2.5px solid #000; background:rgba(255,255,255,.55); font-size:13px; cursor:pointer; display:flex; align-items:center; justify-content:center; transition:.1s; font-weight:700; }
+  .toolcard button:hover { background:#000; color:#fff; transform:translate(-1px,-1px); }
+  .tc-edit { background:var(--purple); } .tc-edit * { color:#fff; } .tc-edit .tc-head { border-color:#fff; }
+  .tc-edit button { border-color:#fff; background:rgba(255,255,255,.15); color:#fff; }
+  .tc-edit button:hover { background:#fff; color:var(--purple); }
+  .tc-theme { background:var(--yellow); }
+  .tc-export { background:var(--pink); } .tc-export * { color:#fff; } .tc-export .tc-head { border-color:#fff; }
+  .tc-export button { border-color:#fff; background:rgba(255,255,255,.15); color:#fff; }
+  .tc-export button:hover { background:#fff; color:var(--pink); }
+  .tc-collab { background:var(--mint); }
+
+  /* ── 成员卡 ── */
+  .members { position:absolute; top:118px; right:18px; background:#fff; color:#000; border:3px solid #000; box-shadow:5px 5px 0 #000; padding:8px 12px; z-index:20; display:flex; align-items:center; gap:8px; cursor:pointer; }
+  .members .av { width:26px; height:26px; border:2.5px solid #000; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:900; margin-left:-14px; }
+  .members .av:first-child { margin-left:0; }
+  .members .n { font-family:'Space Grotesk'; font-weight:700; font-size:13px; }
+
+  /* ── 底部通栏 ── */
+  .bottombar { position:absolute; left:0; right:0; bottom:0; height:34px; background:#000; border-top:3px solid #2a2a33; display:flex; align-items:center; padding:0 16px; gap:18px; z-index:25;
+    font-family:'Space Grotesk','Noto Sans SC'; font-weight:700; font-size:12px; color:var(--yellow); }
+  .view-tabs { display:flex; gap:0; border:2px solid var(--yellow); }
+  .view-tab { padding:3px 14px; cursor:pointer; color:var(--yellow); }
+  .view-tab.on { background:var(--yellow); color:#000; }
+  .bottom-right { margin-left:auto; display:flex; gap:6px; align-items:center; }
+  .zbtn { border:2px solid var(--yellow); color:var(--yellow); background:none; font-family:inherit; font-weight:700; font-size:12px; width:26px; height:22px; cursor:pointer; }
+  .zbtn:hover { background:var(--yellow); color:#000; }
+
+  /* ── 弹层 / 右键 ── */
+  .pop, .ctx { position:fixed; background:#fff; color:#000; border:3px solid #000; box-shadow:7px 7px 0 #000; display:none; z-index:70; min-width:230px; }
+  .pop.show, .ctx.show { display:block; animation:pop .12s steps(3); }
+  @keyframes pop { from { transform:translate(3px,3px); box-shadow:3px 3px 0 #000; } }
+  .pop .ph { font-size:12px; font-weight:900; padding:6px 10px; border-bottom:3px solid #000; letter-spacing:2px; }
+  .pop .item, .ctx .item { display:flex; align-items:center; gap:10px; padding:9px 12px; font-size:13px; font-weight:500; cursor:pointer; border-top:2px solid #eee; }
+  .ctx .item:first-child { border-top:none; }
+  .pop .item:hover, .ctx .item:hover { background:var(--yellow); font-weight:700; }
+  .pop .item .kbd, .ctx .item .kbd { margin-left:auto; font-family:'Space Grotesk'; font-size:10px; color:#888; border:1.5px solid #000; padding:0 5px; }
+  .pop .item:hover .kbd, .ctx .item:hover .kbd { color:#000; }
+  .ctx .sep { height:2.5px; background:#000; }
+  .ctx .danger:hover { background:var(--pink); color:#fff; }
+
+  .toast { position:fixed; left:50%; bottom:56px; transform:translateX(-50%); background:var(--mint); color:#000; border:3px solid #000; box-shadow:5px 5px 0 #000; font-weight:900; font-size:13px; padding:8px 18px; opacity:0; transition:.15s; z-index:80; pointer-events:none; }
+  .toast.show { opacity:1; }
+
+  .hint { position:absolute; left:50%; bottom:46px; transform:translateX(-50%); font-family:'Space Grotesk','Noto Sans SC'; font-size:11px; color:#555; letter-spacing:2px; z-index:5; }
+</style>
+</head>
+<body>
+
+<div class="canvas-wrap" id="canvasWrap"><svg id="stage" width="100%" height="100%"></svg></div>
+<div class="hint">CLICK NODES · RIGHT-CLICK FOR MENU</div>
+
+<div class="titlecard">
+  <span class="back" id="backBtn">← 工作台</span>
+  <h1>GMIND 产品功能地图 <span class="star" id="star">★</span></h1>
+  <div class="tags"><span class="tag">DOC</span><span class="tag">42 NODES</span><span class="tag">协作中</span></div>
+</div>
+
+<div class="savecard" id="savecard">✓ 已保存 14:32</div>
+
+<div class="tools">
+  <div class="toolcard tc-edit">
+    <div class="tc-head">编辑 <span>▾</span></div>
+    <div class="tc-btns">
+      <button data-cmd="撤销" title="撤销">↺</button><button data-cmd="重做" title="重做">↻</button>
+      <button data-cmd="插入子级主题" title="插入子级">⤵</button><button data-cmd="插入同级主题" title="插入同级">→</button>
+      <button data-cmd="格式刷" title="格式刷">▦</button><button data-cmd="查找替换" title="查找">⌕</button>
+    </div>
+  </div>
+  <div class="toolcard tc-theme">
+    <div class="tc-head">主题 <span>▾</span></div>
+    <div class="tc-btns">
+      <button data-pop="themePop" title="12 套主题">❖</button><button data-cmd="结构切换" title="结构">◈</button><button data-cmd="简洁模式" title="简洁">◐</button>
+    </div>
+  </div>
+  <div class="toolcard tc-export">
+    <div class="tc-head">导出 <span>▾</span></div>
+    <div class="tc-btns">
+      <button data-pop="exportPop" title="导出">⇪</button><button data-cmd="版本快照" title="版本">⏱</button><button data-cmd="文档动态" title="动态">≡</button>
+    </div>
+  </div>
+  <div class="toolcard tc-collab">
+    <div class="tc-head">协作 <span>▾</span></div>
+    <div class="tc-btns">
+      <button data-cmd="评论线程" title="评论">💬</button><button data-cmd="通知中心" title="通知">🔔</button><button data-cmd="复制分享链接" title="分享">🔗</button>
+    </div>
+  </div>
+</div>
+
+<div class="members" id="membersCard">
+  <span class="av" style="background:var(--purple);color:#fff">林</span>
+  <span class="av" style="background:var(--pink);color:#fff">周</span>
+  <span class="av" style="background:var(--yellow)">郭</span>
+  <span class="n">3 ONLINE</span>
+</div>
+
+<footer class="bottombar">
+  <span>42 NODES</span>
+  <div class="view-tabs"><span class="view-tab on" data-v="mind">脑图</span><span class="view-tab" data-v="table">表格</span></div>
+  <div class="bottom-right">
+    <button class="zbtn" data-act="center">⌖</button><button class="zbtn" data-act="fit">□</button>
+    <button class="zbtn" data-act="zout">−</button><span id="zoomLabel">100%</span><button class="zbtn" data-act="zin">＋</button>
+    <button class="zbtn" data-act="full">⛶</button>
+  </div>
+</footer>
+
+<div class="pop" id="themePop" style="top:96px;right:180px">
+  <div class="ph">12 THEMES</div>
+  <div class="item">❖ 经典蓝（当前）<span class="kbd">ON</span></div>
+  <div class="item">🌲 森林绿</div><div class="item">🍊 橘子橙</div><div class="item">🍇 葡萄紫</div><div class="item">更多 8 套…</div>
+</div>
+<div class="pop" id="exportPop" style="top:96px;right:100px">
+  <div class="ph">EXPORT</div>
+  <div class="item">📦 XMind 文件</div>
+  <div class="item">🖼 PNG · 1x / 2x / 3x<span class="kbd">透明可选</span></div>
+  <div class="item">🖼 JPG · 1x / 2x / 3x</div>
+</div>
+<div class="ctx" id="ctx"></div>
+<div class="toast" id="toast"></div>
+
+<script>
+const TREE = {
+  text:'GMIND', children:[
+    { text:'协同编辑', color:'#fff', children:[{text:'50 人实时协同'},{text:'远端光标与头像'},{text:'离线缓存自动同步'}] },
+    { text:'编辑内核', color:'#f8e000', children:[{text:'同级 · 子级 · 上级插入'},{text:'标记 · 概要 · 格式刷'},{text:'节点图文四槽位'}] },
+    { text:'任务管理', color:'#fff', task:{p:60}, children:[{text:'负责人指派'},{text:'9 档进度',task:{p:40}},{text:'预期日期 · 逾期提醒'},{text:'表格视图'}] },
+    { text:'文件与分享', color:'#fff', children:[{text:'XMind 导入导出'},{text:'PNG / JPG 多倍导出'},{text:'分享链接 · 回收站'}] },
+    { text:'团队与历史', color:'#fff', children:[{text:'评论线程与定位'},{text:'通知中心'},{text:'版本快照一键恢复'},{text:'文档动态'}] },
+    { text:'个性化', color:'#3ddc97', children:[{text:'12 套主题'},{text:'结构切换 · 简洁模式'},{text:'快捷键 · 新手引导'}] },
+  ]
+};
+const svg = document.getElementById('stage');
+const NS = 'http://www.w3.org/2000/svg';
+let zoom = 1;
+function measure(t,s,w){ const c=document.createElement('canvas').getContext('2d'); c.font=`${w||700} ${s}px 'Noto Sans SC'`; return c.measureText(t).width; }
+function el(tag,attrs){ const e=document.createElementNS(NS,tag); for (const k in attrs) e.setAttribute(k,attrs[k]); return e; }
+
+function layout() {
+  const W=document.getElementById('canvasWrap').clientWidth, H=document.getElementById('canvasWrap').clientHeight;
+  const nodes=[], edges=[];
+  const root={ text:TREE.text, x:W/2-52, y:H/2-22, w:104, h:44, depth:0 };
+  nodes.push(root);
+  const left=TREE.children.filter((_,i)=>i%2===0), right=TREE.children.filter((_,i)=>i%2===1);
+  function side(list, dir) {
+    const spans=list.map(b=>Math.max(b.children.length,1)*50+36);
+    let y=H/2-spans.reduce((a,b)=>a+b,0)/2;
+    list.forEach((b,i)=>{
+      const bw=measure(b.text,15,900)+38, bh=34, span=spans[i];
+      const bx=W/2+dir*(52+150)+(dir>0?0:-bw), by=y+span/2-bh/2;
+      nodes.push({ ...b, x:bx, y:by, w:bw, h:bh, depth:1 });
+      edges.push({ x1:root.x+(dir>0?104:0), y1:root.y+22, x2:bx+(dir>0?0:bw), y2:by+bh/2, color:b.color });
+      const cwMax=Math.max(...b.children.map(c=>measure(c.text,13,500)+30));
+      b.children.forEach((c,ci)=>{
+        const cw=measure(c.text,13,500)+30, ch=28;
+        const cx=bx+(dir>0?bw+96:-96-cwMax)+(cwMax-cw)/2;
+        const cy=y+32+ci*50+13;
+        nodes.push({ ...c, x:cx, y:cy, w:cw, h:ch, depth:2, color:b.color });
+        edges.push({ x1:bx+(dir>0?bw:0), y1:by+bh/2, x2:cx+(dir>0?0:cw), y2:cy+ch/2, color:b.color });
+      });
+      y+=span;
+    });
+  }
+  side(left,-1); side(right,1);
+  return { nodes, edges };
+}
+
+function render() {
+  const { nodes, edges } = layout();
+  svg.innerHTML='';
+  const g=el('g',{ transform:`scale(${zoom})` });
+  edges.forEach(e=>{
+    const mx=(e.x1+e.x2)/2;
+    g.appendChild(el('path',{ class:'edge', stroke:e.color, d:`M${e.x1},${e.y1} C${mx},${e.y1} ${mx},${e.y2} ${e.x2},${e.y2}` }));
+  });
+  nodes.forEach(n=>{
+    const grp=el('g',{ class:'node','data-text':n.text });
+    const isRoot=n.depth===0, isB=n.depth===1;
+    // 硬投影
+    grp.appendChild(el('rect',{ class:'shadow', x:n.x+4, y:n.y+4, width:n.w, height:n.h }));
+    grp.appendChild(el('rect',{ class:'body', x:n.x, y:n.y, width:n.w, height:n.h,
+      fill: isRoot ? '#e1306c' : (isB ? '#0d0d12' : '#0d0d12'),
+      stroke: isRoot ? '#000' : '#fff', 'stroke-width': isRoot?3:2 }));
+    const t=el('text',{ x:n.x+n.w/2, y:n.y+n.h/2+(isRoot?6:4.5), 'text-anchor':'middle',
+      'font-size': isRoot?18:(isB?15:13), 'font-weight': isRoot||isB?900:500, fill:'#fff',
+      'font-family': isRoot?"'Space Grotesk','Noto Sans SC'":"'Noto Sans SC'" });
+    t.textContent=n.text; grp.appendChild(t);
+    if (n.task) {
+      grp.appendChild(el('rect',{ x:n.x, y:n.y+n.h+6, width:n.w, height:5, fill:'none', stroke:'#fff','stroke-width':1.5 }));
+      grp.appendChild(el('rect',{ x:n.x+1.5, y:n.y+n.h+7.5, width:(n.w-3)*n.task.p/100, height:2, fill:'#f8e000' }));
+    }
+    grp.addEventListener('click', ev=>{ ev.stopPropagation();
+      svg.querySelectorAll('.node.selected').forEach(x=>x.classList.remove('selected'));
+      grp.classList.add('selected'); toast(`SELECTED · ${n.text}`); });
+    grp.addEventListener('contextmenu', ev=>{ ev.preventDefault(); ev.stopPropagation(); openCtx(ev.clientX, ev.clientY); });
+    g.appendChild(grp);
+  });
+  svg.appendChild(g);
+}
+
+/* 弹层与右键 */
+const ctx=document.getElementById('ctx');
+function closeAll(){ document.querySelectorAll('.pop,.ctx').forEach(p=>p.classList.remove('show')); }
+document.querySelectorAll('[data-pop]').forEach(b=>b.addEventListener('click', e=>{
+  e.stopPropagation(); const p=document.getElementById(b.dataset.pop);
+  const was=p.classList.contains('show'); closeAll(); if(!was) p.classList.add('show');
+}));
+document.querySelectorAll('.pop .item').forEach(i=>i.onclick=()=>{ closeAll(); toast('OK · '+i.textContent.trim().split(/\s+/).slice(0,2).join(' ')); });
+document.addEventListener('click', e=>{ if(!e.target.closest('.pop')&&!e.target.closest('.ctx')) closeAll(); });
+document.addEventListener('keydown', e=>{ if(e.key==='Escape') closeAll(); });
+const CTX=[['插入子级主题','TAB'],['插入同级主题','ENTER'],['添加概要',''],null,['复制','⌘C'],['剪切','⌘X'],['粘贴','⌘V'],null,['删除节点','⌫','danger']];
+function openCtx(x,y){
+  ctx.innerHTML='';
+  CTX.forEach(i=>{
+    if(!i){ const s=document.createElement('div'); s.className='sep'; ctx.appendChild(s); return; }
+    const r=document.createElement('div'); r.className='item '+(i[2]||'');
+    r.innerHTML=`${i[0]}<span class="kbd">${i[1]}</span>`;
+    r.onclick=()=>{ closeAll(); toast('OK · '+i[0]); };
+    ctx.appendChild(r);
+  });
+  ctx.style.left=Math.min(x,innerWidth-250)+'px'; ctx.style.top=Math.min(y,innerHeight-330)+'px';
+  ctx.classList.add('show');
+}
+
+/* 杂项 */
+document.querySelectorAll('[data-cmd]').forEach(b=>b.addEventListener('click',()=>toast('OK · '+b.dataset.cmd)));
+document.getElementById('star').onclick=function(){ this.classList.toggle('on'); toast(this.classList.contains('on')?'★ STARRED':'☆ UNSTARRED'); };
+document.getElementById('backBtn').onclick=()=>toast('← 返回工作台');
+document.getElementById('membersCard').onclick=()=>toast('MEMBERS · 林晚照 / 周作人 / 你');
+document.querySelectorAll('.view-tab').forEach(t=>t.onclick=()=>{
+  document.querySelectorAll('.view-tab').forEach(x=>x.classList.remove('on')); t.classList.add('on');
+  toast(t.dataset.v==='table'?'VIEW · TABLE':'VIEW · MINDMAP');
+});
+document.querySelectorAll('.zbtn').forEach(b=>b.onclick=()=>{
+  const a=b.dataset.act;
+  if(a==='zin') zoom=Math.min(3,zoom+0.1);
+  if(a==='zout') zoom=Math.max(0.25,zoom-0.1);
+  if(a==='full') document.fullscreenElement?document.exitFullscreen():document.documentElement.requestFullscreen();
+  if(a==='center'||a==='fit'){ zoom=1; toast(a==='center'?'CENTERED':'FITTED'); }
+  document.getElementById('zoomLabel').textContent=Math.round(zoom*100)+'%';
+  render();
+});
+document.getElementById('canvasWrap').addEventListener('click',()=>svg.querySelectorAll('.node.selected').forEach(x=>x.classList.remove('selected')));
+let toastTimer;
+function toast(msg){ const t=document.getElementById('toast'); t.textContent=msg; t.classList.add('show'); clearTimeout(toastTimer); toastTimer=setTimeout(()=>t.classList.remove('show'),1600); }
+const states=['✓ 已保存 14:32','● 保存中…','✓ 已保存 14:33']; let si=0;
+setInterval(()=>{ si=(si+1)%states.length; document.getElementById('savecard').textContent=states[si]; },5000);
+window.addEventListener('resize',render);
+render();
+</script>
+</body>
+</html>
