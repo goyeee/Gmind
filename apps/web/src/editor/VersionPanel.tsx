@@ -5,7 +5,7 @@ import {
   docFromState,
   getMeta,
   getNode,
-  ROOT_NODE_ID,
+  rootIdOf,
   subtreeIds,
 } from '@gmind/core';
 import {
@@ -21,6 +21,7 @@ import {
   Viewport,
 } from '@gmind/engine';
 import { api, apiPost } from '../api/client';
+import { resolveSnapshotCanvasId } from './versionSnapshot';
 import './version-panel.css';
 
 /**
@@ -75,6 +76,9 @@ export interface VersionPanelProps {
   onClose(): void;
   /** toast 通道：复用 EditorPage 既有 toast（testid toast，role alert）。 */
   showToast(message: string): void;
+  /** 当前活动画布（EditorPage activeCanvasId）：快照预览取快照 doc 内同 canvasId
+   *  的画布，快照不含（旧快照/已删画布）回退第一画布（多画布 Task 4 item 11）。 */
+  canvasId?: string;
 }
 
 /** 条目时间展示（confirm 文案同用此格式）：当天 HH:mm，跨日 MM-DD HH:mm。 */
@@ -105,8 +109,10 @@ const measure = {
 };
 
 /** 快照 doc → 只读 SVG 静态渲染（EditorPage 引擎装配的极小复刻，零交互）。
- *  createScene 自清空 svg 旧内容，可安全对同一 svg 重复调用。 */
-function renderPreview(svg: SVGSVGElement, doc: Y.Doc): void {
+ *  createScene 自清空 svg 旧内容，可安全对同一 svg 重复调用。
+ *  canvasId = 当前活动画布：快照 doc 内取同 canvasId 画布（resolveSnapshotCanvasId，
+ *  找不到回退第一画布），预览与当前视图同一画布口径。 */
+function renderPreview(svg: SVGSVGElement, doc: Y.Doc, canvasId?: string): void {
   const scene = createScene(svg);
   // 视口包装层（EditorPage 同款）：边/节点两层须同包进单个 g 供 transform
   const wrapper = document.createElementNS('http://www.w3.org/2000/svg', 'g');
@@ -115,12 +121,13 @@ function renderPreview(svg: SVGSVGElement, doc: Y.Doc): void {
   wrapper.appendChild(scene.nodesLayer);
   svg.appendChild(wrapper);
 
+  const cid = resolveSnapshotCanvasId(doc, canvasId);
   const reader: DocReader = {
-    getMeta: () => getMeta(doc),
-    getNode: (id) => getNode(doc, id),
-    childrenIds: (id) => childrenIds(doc, id),
+    getMeta: () => getMeta(doc, cid),
+    getNode: (id) => getNode(doc, id, cid),
+    childrenIds: (id) => childrenIds(doc, id, cid),
   };
-  const m = getMeta(doc);
+  const m = getMeta(doc, cid);
   const theme = THEMES[resolveThemeId(m.themeId)];
   svg.style.background = theme.canvasBackground;
 
@@ -128,15 +135,16 @@ function renderPreview(svg: SVGSVGElement, doc: Y.Doc): void {
     structure: m.structureType,
     theme,
     measure,
+    rootId: rootIdOf(doc, cid),
     styleOf: (id, depth) =>
-      resolveNodeStyle(theme, depth, getNode(doc, id)?.style ?? {}).textStyle,
+      resolveNodeStyle(theme, depth, getNode(doc, id, cid)?.style ?? {}).textStyle,
   });
   const depthById = new Map<string, number>();
   for (const b of result.nodes) depthById.set(b.id, b.depth);
 
   const nodeData = new Map<string, NodeVisual>();
-  for (const id of subtreeIds(doc, ROOT_NODE_ID)) {
-    const snap = getNode(doc, id);
+  for (const id of subtreeIds(doc, rootIdOf(doc, cid), cid)) {
+    const snap = getNode(doc, id, cid);
     if (!snap || snap.deleted) continue;
     nodeData.set(id, {
       text: snap.text,
@@ -150,7 +158,7 @@ function renderPreview(svg: SVGSVGElement, doc: Y.Doc): void {
     layout: result,
     theme,
     styleOf: (id) =>
-      resolveNodeStyle(theme, depthById.get(id) ?? 0, getNode(doc, id)?.style ?? {}),
+      resolveNodeStyle(theme, depthById.get(id) ?? 0, getNode(doc, id, cid)?.style ?? {}),
     nodeData,
   });
 
@@ -160,7 +168,7 @@ function renderPreview(svg: SVGSVGElement, doc: Y.Doc): void {
   vp.fit(result, { w: svg.clientWidth, h: svg.clientHeight });
 }
 
-export function VersionPanel({ fileId, open, onClose, showToast }: VersionPanelProps) {
+export function VersionPanel({ fileId, open, onClose, showToast, canvasId }: VersionPanelProps) {
   // null = 加载中；[] = 无版本。重开面板（open 上升沿）自然重拉，含恢复后的刷新。
   const [items, setItems] = useState<VersionItem[] | null>(null);
   const [preview, setPreview] = useState<{ item: VersionItem; doc: Y.Doc } | null>(null);
@@ -211,13 +219,14 @@ export function VersionPanel({ fileId, open, onClose, showToast }: VersionPanelP
     setPreview(null);
   }, [open]);
 
-  // 预览渲染 effect：preview 就绪后静态渲染一次（无监听，无需清理）
+  // 预览渲染 effect：preview 就绪后静态渲染；预览打开期间切换画布（canvasId 变化）
+  // 按新画布重渲染（renderPreview 的 createScene 自清空旧内容，可安全重复调用）。
   useEffect(() => {
     if (!preview) return;
     const svg = previewSvgRef.current;
     if (!svg) return;
-    renderPreview(svg, preview.doc);
-  }, [preview]);
+    renderPreview(svg, preview.doc, canvasId);
+  }, [preview, canvasId]);
 
   const closePreview = (): void => {
     previewSeqRef.current += 1; // 使在途 openPreview 响应失效

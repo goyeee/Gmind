@@ -1,6 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import type * as Y from 'yjs';
-import { addChild, canvasNodesMap, childrenIds, createTemplateDoc, ROOT_NODE_ID, setDescription } from '@gmind/core';
+import {
+  addCanvas,
+  addChild,
+  canvasNodesMap,
+  childrenIds,
+  createTemplateDoc,
+  listCanvases,
+  ORIGIN_USER,
+  ROOT_NODE_ID,
+  rootIdOf,
+  setActiveCanvas,
+  setDescription,
+} from '@gmind/core';
 import { docToXmindTree } from './xmind-export';
 
 /** docToXmindTree 环防护（M4 挂账清偿）：walk 的 visited 集合——childIds 环
@@ -50,5 +62,30 @@ describe('docToXmindTree（环防护，防御性）', () => {
     expect(tree.description).toBeUndefined(); // root 无描述：不产出键
     expect(tree.children[0]?.description).toBe('子任务一句话描述');
     expect(tree.children[0]?.children[0]?.description).toBeUndefined();
+  });
+});
+
+describe('docToXmindTree（当前画布口径，Task 4 item 12 中间态）', () => {
+  it('canvasId 给定：只出该画布子树（单 Sheet 中间态；画布 1 同文节点不越画布）', () => {
+    const doc = createTemplateDoc({ title: '本周计划', children: [{ text: '甲' }] });
+    const c1 = listCanvases(doc)[0]!.id;
+    const c2 = addCanvas(doc, { name: '画布 2' });
+    setActiveCanvas(doc, c1);
+    addChild(doc, rootIdOf(doc, c2), { text: '乙' }, ORIGIN_USER, c2);
+
+    const tree2 = docToXmindTree(doc, c2);
+    expect(tree2.title).toBe('中心主题'); // 画布 2 新建 root 文本
+    expect(tree2.children.map((c) => c.title)).toEqual(['乙']);
+
+    const tree1 = docToXmindTree(doc, c1);
+    expect(tree1.title).toBe('本周计划');
+    expect(tree1.children.map((c) => c.title)).toEqual(['甲']);
+    doc.destroy();
+  });
+
+  it('缺省 canvasId = core 缺省解析（meta.activeCanvasId 回退链，现状回归护栏）', () => {
+    const doc = createTemplateDoc({ title: '本周计划', children: [{ text: '甲' }] });
+    expect(docToXmindTree(doc).title).toBe('本周计划');
+    doc.destroy();
   });
 });

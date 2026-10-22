@@ -1126,9 +1126,14 @@ export function EditorPage() {
   const runImageExport = (format: 'png' | 'jpg', scale: 1 | 2 | 3): void => {
     if (!doc || !meta) return;
     setExportOpen(false);
-    const folded = countCollapsedWithChildren(doc);
+    const folded = countCollapsedWithChildren(doc, canvasIdGetter()); // 当前画布折叠处数（Task 4 item 8）
     if (folded > 0 && !window.confirm(`检测到 ${folded} 处折叠，将自动展开后导出`)) return;
-    void exportImage(doc, meta.title, { format, scale, transparent: exportTransparent })
+    void exportImage(doc, meta.title, {
+      format,
+      scale,
+      transparent: exportTransparent,
+      canvasId: canvasIdGetter(), // 导出范围/文件名 = 当前画布（Task 4 item 8）
+    })
       .then(() => postExportDone(format, scale))
       .catch((e: unknown) => showToast(e instanceof Error ? e.message : '导出失败'));
   };
@@ -1170,7 +1175,8 @@ export function EditorPage() {
     const vp = viewportRef.current;
     const svgEl = svgRef.current;
     if (!vp || !svgEl) return;
-    const box = boxesRef.current.find((b) => b.id === ROOT_NODE_ID);
+    // 多画布（Task 4 item 2）：定位目标 = 当前画布 root 盒（boxesRef 即当前画布布局）
+    const box = boxesRef.current.find((b) => b.id === (doc ? rootIdOf(doc, canvasIdGetter()) : ROOT_NODE_ID));
     if (!box) return;
     const s = vp.scale;
     vp.panBy(
@@ -1205,14 +1211,15 @@ export function EditorPage() {
     }
   };
 
-  /** 主选中节点：恰好单选返回该节点，否则以 root 为操作锚点。 */
+  /** 主选中节点：恰好单选返回该节点，否则以当前画布 root 为操作锚点
+   *  （多画布 Task 4 item 1：rootIdOf(doc, activeCanvasId)，异根画布不再锚 'root'）。 */
   const primaryId = (): string => {
     const selection = selectionRef.current;
     if (selection && selection.selected.size === 1) {
       const [id] = selection.selected;
       return id;
     }
-    return ROOT_NODE_ID;
+    return doc ? rootIdOf(doc, canvasIdGetter()) : ROOT_NODE_ID;
   };
 
   /**
@@ -1416,13 +1423,13 @@ export function EditorPage() {
     // 不落 side 键）；参照节点无持久侧（旧文档）时 forceSide 缺省，自动定侧接管。
     // 默认名序号计算在事务外（校验先于事务纪律：nextChildText 纯读同级存活兄弟
     // 的最大序号，事务内只执行已验证的写）。
-    const defaultText = nextChildText(doc, parentId);
+    const defaultText = nextChildText(doc, parentId, canvasIdGetter());
     let createdId = '';
     try {
       withTransaction(doc, ORIGIN_USER, () => {
         createdId = addChild(doc, parentId, index === undefined ? {} : { index });
         setText(doc, createdId, defaultText, ORIGIN_USER);
-        if (forceSide && parentId === ROOT_NODE_ID && getMeta(doc).structureType === 'mindmap') {
+        if (forceSide && parentId === rootIdOf(doc, canvasIdGetter()) && getMeta(doc, canvasIdGetter()).structureType === 'mindmap') {
           setNodeSide(doc, createdId, forceSide);
         }
         if (relation === 'parent' && nodeToOutdent) moveNode(doc, nodeToOutdent, createdId);
@@ -1714,10 +1721,11 @@ export function EditorPage() {
     const current = primaryId();
     const snap = getNode(doc, current);
     if (!snap || snap.deleted) return;
-    if (current === ROOT_NODE_ID) {
-      if (reverse && getMeta(doc).structureType === 'mindmap') {
+    const canvasRootId = rootIdOf(doc, canvasIdGetter()); // 当前画布根锚点（Task 4 item 1 消费）
+    if (current === canvasRootId) {
+      if (reverse && getMeta(doc, canvasIdGetter()).structureType === 'mindmap') {
         // 逆时针：左列未满配额落左列、否则右列；插到该列首个同侧子级文档位之前。
-        const kids = getNode(doc, ROOT_NODE_ID)?.childIds ?? [];
+        const kids = getNode(doc, canvasRootId)?.childIds ?? [];
         // 有效侧单源：rootSiblingSide.rootKidEffectiveSides（持久 ?? 索引兜底，与
         // engine assignMindmapSides / core countRightSideRootChildren 的兜底同式）。
         const sides = rootKidEffectiveSides(doc);
@@ -1725,7 +1733,7 @@ export function EditorPage() {
         const side: NodeSide = leftCount < 3 ? 'left' : 'right';
         const firstSameSide = sides.findIndex((s) => s === side);
         openNewNodeEditor(
-          ROOT_NODE_ID,
+          canvasRootId,
           firstSameSide === -1 ? kids.length : firstSameSide,
           'child',
           'keyboard',
@@ -1734,7 +1742,7 @@ export function EditorPage() {
         );
       } else {
         // root 无同级：降级为新建子级（顺时针/单侧结构——addChild 自动定侧）
-        openNewNodeEditor(ROOT_NODE_ID, undefined, 'child');
+        openNewNodeEditor(canvasRootId, undefined, 'child');
       }
       return;
     }
@@ -1762,7 +1770,7 @@ export function EditorPage() {
       openNewNodeEditor(current, undefined, 'child');
       return;
     }
-    if (current === ROOT_NODE_ID) {
+    if (current === rootIdOf(doc, canvasIdGetter())) {
       showToast('中心主题不支持添加父主题');
       return;
     }
@@ -1801,7 +1809,7 @@ export function EditorPage() {
       // 超限，服务端边缘触发器在回落限内前不会重复广播（advisory 残余窗口，登记
       // docs/m2-entry-checklist.md §7.6）。
       quotaBlockedRef.current = nextQuotaBlock(quotaBlockedRef.current, { type: 'deleted' });
-      selection.selectOnly(ROOT_NODE_ID);
+      selection.selectOnly(rootIdOf(doc, canvasIdGetter())); // 当前画布根（Task 4 item 1 口径）
       fitPendingRef.current = true;
     } catch (e) {
       showToast(e instanceof Error ? e.message : '删除失败');
@@ -1810,7 +1818,8 @@ export function EditorPage() {
 
   const handleSelectAll = (): void => {
     if (!doc) return;
-    selectionRef.current?.set(subtreeIds(doc, ROOT_NODE_ID));
+    // 多画布 Task 4 item 3：全选范围 = 当前画布子树（rootIdOf 起算 + 同画布读）
+    selectionRef.current?.set(subtreeIds(doc, rootIdOf(doc, canvasIdGetter()), canvasIdGetter()));
   };
 
   const handleToggleCollapse = (): void => {
@@ -1828,7 +1837,8 @@ export function EditorPage() {
     if (!doc) return;
     const selection = selectionRef.current;
     if (!selection) return;
-    const structure = getMeta(doc).structureType;
+    // structureType 按当前画布读（Task 4 item 2 同口径：navigate 几何作用于当前画布布局）
+    const structure = getMeta(doc, canvasIdGetter()).structureType;
     const next = navigateGeometry(primaryId(), direction, boxesRef.current, structure);
     if (next) selection.selectOnly(next);
   };
@@ -1846,7 +1856,7 @@ export function EditorPage() {
   const summarySegmentFromSelection = (d: Y.Doc): string[] | null => {
     const selection = selectionRef.current;
     if (!selection || selection.selected.size < 2) return null;
-    const ids = [...selection.selected].filter((id) => id !== ROOT_NODE_ID);
+    const ids = [...selection.selected].filter((id) => id !== rootIdOf(d, canvasIdGetter()));
     return validSummarySegment(d, ids);
   };
 
@@ -1975,7 +1985,7 @@ export function EditorPage() {
     if (!doc) return;
     const selection = selectionRef.current;
     if (!selection) return;
-    const ids = [...selection.selected].filter((id) => id !== ROOT_NODE_ID);
+    const ids = [...selection.selected].filter((id) => id !== rootIdOf(doc, canvasIdGetter()));
     if (ids.length === 0) return;
     try {
       await writeToSystemClipboard(copyNodes(readerOf(doc, canvasIdGetter), ids));
@@ -1991,7 +2001,7 @@ export function EditorPage() {
     if (!doc) return;
     const selection = selectionRef.current;
     if (!selection) return;
-    const ids = [...selection.selected].filter((id) => id !== ROOT_NODE_ID);
+    const ids = [...selection.selected].filter((id) => id !== rootIdOf(doc, canvasIdGetter()));
     if (ids.length === 0) return;
     try {
       writeToSystemClipboard(
@@ -2001,8 +2011,8 @@ export function EditorPage() {
           track('node_delete', { via, nodeCount: countAliveReachable(doc) }, fileId);
           afterUserWrite();
         }),
-      );
-      selection.selectOnly(ROOT_NODE_ID);
+          );
+      selection.selectOnly(rootIdOf(doc, canvasIdGetter())); // 当前画布根（Task 4 item 1 口径）
     } catch (e) {
       showToast(clipboardErrorMessage(e));
     }
@@ -2055,8 +2065,10 @@ export function EditorPage() {
     const selection = selectionRef.current;
     if (!selection) return;
     // FR-EDT-009（PRD 原文「粘贴目标为当前选中节点的子级」）：单选 → 粘贴为该节点
-    // 子级（追加其 children 末尾）；无选中/多选 → root 末尾。
-    let parentId = ROOT_NODE_ID;
+    // 子级（追加其 children 末尾）；无选中/多选 → 当前画布 root 末尾（Task 4 item 4：
+    // 兜底父级 = rootIdOf(doc, activeCanvasId)，异根画布不再锚 'root'——引擎
+    // requireValidParent 按画布读，'root' 在非首画布不存在会抛 PARENT_INVALID）。
+    let parentId = rootIdOf(doc, canvasIdGetter());
     const sel = [...selection.selected];
     if (sel.length === 1) {
       const snap = getNode(doc, sel[0]);
@@ -2919,8 +2931,9 @@ export function EditorPage() {
         openNewNodeEditor(nodeId, undefined, 'child', 'context');
         break;
       case 'insert-sibling': {
-        if (nodeId === ROOT_NODE_ID) {
-          openNewNodeEditor(ROOT_NODE_ID, undefined, 'child', 'context');
+        const canvasRootId = rootIdOf(doc, canvasIdGetter());
+        if (nodeId === canvasRootId) {
+          openNewNodeEditor(canvasRootId, undefined, 'child', 'context');
           break;
         }
         const snap = getNode(doc, nodeId);
@@ -2962,16 +2975,19 @@ export function EditorPage() {
   };
 
   // —— React 渲染所需的文档派生值（tick 由 rerender 推进） ——
-  const meta = doc ? getMeta(doc) : null;
+  // meta 按当前画布读（structureType/themeId 画布级——页签条切换后工具栏/面板回显
+  // 随画布变；title/customColumns/tableView 仍 doc 级，canvasId 对它们无语义）。
+  const meta = doc ? getMeta(doc, canvasIdGetter()) : null;
   // 标题草稿（2026-10-20 IME 修复）：受控值=草稿 ?? meta.title；组合输入期
   // （拼音上屏前）不写回文档——否则拼音字母被当真值写回、meta 重渲染打断组合
   // （「删不完/中文回车变英文且不全/多空格」根因）。失焦/回车收敛。
   const [titleDraft, setTitleDraft] = useState<string | null>(null);
   const titleComposingRef = useRef(false);
   const themeId = meta ? resolveThemeId(meta.themeId) : 'gmind-blue';
-  // 脚标口径与服务端配额统一（FR-ACC-003）：自 root 可达的存活节点数（不含 root；
-  // 墓碑/孤儿不计——与 countAlive 的差异见 @gmind/core countAliveReachable）
-  const nodeCount = doc ? countAliveReachable(doc) : 0;
+  // 脚标口径与服务端配额统一（FR-ACC-003）：自当前画布 root 可达的存活节点数
+  // （不含 root；墓碑/孤儿不计——与 countAlive 的差异见 @gmind/core countAliveReachable；
+  // 多画布 Task 4 item 7：计数/配额按画布，裁定 1）
+  const nodeCount = doc ? countAliveReachable(doc, canvasIdGetter()) : 0;
   const selectionNow = selectionRef.current;
   const selectedIds = selectionNow ? [...selectionNow.selected] : [];
   const selectedNodeId =
@@ -3265,8 +3281,9 @@ export function EditorPage() {
             return [grabbedId];
           }
           const boxById = new Map(boxesRef.current.map((b) => [b.id, b]));
+          const canvasRootId = rootIdOf(d, canvasIdGetter()); // 当前画布根（组排除/Task 4 item 4）
           return [...selection.selected]
-            .filter((id) => id !== ROOT_NODE_ID && boxById.has(id))
+            .filter((id) => id !== canvasRootId && boxById.has(id))
             .sort((idA, idB) => {
               const ba = boxById.get(idA)!;
               const bb = boxById.get(idB)!;
@@ -3287,18 +3304,22 @@ export function EditorPage() {
             // 语义，引擎已不产出、保留兜底）；null 仅作兜底（root 盒缺失等窗口期；
             // svg 外兜底释放为取消，不回调至此），逐个挂 root 末尾。
             withTransaction(d, ORIGIN_USER, () => {
+              const canvasRootId = rootIdOf(d, canvasIdGetter()); // 当前画布根锚点
               if (target === null) {
-                for (const id of ids) moveNode(d, id, ROOT_NODE_ID);
+                // 多画布 Task 4 item 4：落空白兜底父级 = 当前画布 rootId（引擎 root 盒
+                // id 即画布根；'root' 字面量只命中迁移首画布，异根画布会抛 NODE_NOT_FOUND）
+                for (const id of ids) moveNode(d, id, canvasRootId, undefined, ORIGIN_USER, canvasIdGetter());
               } else if (target.kind === 'child') {
-                for (const id of ids) moveNode(d, id, target.nodeId);
+                for (const id of ids) moveNode(d, id, target.nodeId, undefined, ORIGIN_USER, canvasIdGetter());
               } else {
-                ids.forEach((id, i) => moveNode(d, id, target.parentId, target.index + i));
+                ids.forEach((id, i) => moveNode(d, id, target.parentId, target.index + i, ORIGIN_USER, canvasIdGetter()));
                 // M7c-H 逆时针定侧：根级落点按引擎解析的目标侧持久化（拖到哪侧就换到
                 // 哪侧；setNodeSide 同值零事务幂等）。target.side 仅 root 级落点携带；
-                // 仅 mindmap 消费（logic/org 布局不读）。
-                if (target.side !== undefined && target.parentId === ROOT_NODE_ID
+                // 仅 mindmap 消费（logic/org 布局不读）。root 判定同画布根（引擎落点
+                // parentId 对 root 级 = root 盒 id = 画布 rootId，Task 4 item 4）。
+                if (target.side !== undefined && target.parentId === canvasRootId
                     && getMeta(d, canvasIdGetter()).structureType === 'mindmap') {
-                  for (const id of ids) setNodeSide(d, id, target.side);
+                  for (const id of ids) setNodeSide(d, id, target.side, ORIGIN_USER, canvasIdGetter());
                 }
               }
             });
@@ -4035,7 +4056,8 @@ export function EditorPage() {
               onApply={(value) => {
                 setStructurePanelOpen(false);
                 if (!doc || value === meta?.structureType) return;
-                setDocMeta(doc, { structureType: value }, ORIGIN_USER);
+                // 画布级写（裁定 5，Task 4 item 10）：structureType 落当前画布
+                setDocMeta(doc, { structureType: value }, ORIGIN_USER, canvasIdGetter());
                 afterUserWrite();
               }}
             />
@@ -4069,7 +4091,8 @@ export function EditorPage() {
               onApply={(id) => {
                 setThemePanelOpen(false);
                 if (!doc || id === themeId) return;
-                setDocMeta(doc, { themeId: id }, ORIGIN_USER);
+                // 画布级写（裁定 5，Task 4 item 10）：themeId 落当前画布
+                setDocMeta(doc, { themeId: id }, ORIGIN_USER, canvasIdGetter());
                 afterUserWrite();
               }}
             />
@@ -4109,7 +4132,8 @@ export function EditorPage() {
                     setExportOpen(false);
                     if (!doc || !meta) return;
                     try {
-                      exportXmind(doc, meta.title);
+                      // 当前画布单 Sheet（Task 4 item 12 中间态；全量多 Sheet 属计划四）
+                      exportXmind(doc, meta.title, canvasIdGetter());
                     } catch (e) {
                       showToast(e instanceof Error ? e.message : '导出失败');
                     }
@@ -4355,6 +4379,7 @@ export function EditorPage() {
               showToast={showToast}
               checkQuota={addBlockedByQuota}
               onSelectNode={(id) => selectionRef.current?.selectOnly(id)}
+              canvasId={activeCanvasId || undefined} // 表格快照/写路径 = 当前画布（Task 4）
             />
           </div>
         )}
@@ -4684,6 +4709,7 @@ export function EditorPage() {
         open={versionsOpen}
         onClose={() => setVersionsOpen(false)}
         showToast={showToast}
+        canvasId={activeCanvasId || undefined} // 快照预览取同 canvasId 画布（Task 4 item 11）
       />
       {/* 文档动态面板（M6 Task 8）：events 只读流抽屉，开面板时拉取（ThemePanel 模式） */}
       <ActivityPanel
@@ -4727,6 +4753,7 @@ export function EditorPage() {
           onLocate={locateNode}
           afterUserWrite={afterUserWrite}
           showToast={showToast}
+          canvasId={canvasIdGetter} // 匹配集/替换 = 当前画布子树（Task 4 item 6）
         />
       )}
       <span hidden>{tick}</span>

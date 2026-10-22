@@ -1,5 +1,18 @@
 import { describe, expect, it } from 'vitest';
-import { addChild, createTemplateDoc, getMeta, getNode, subtreeIds, ROOT_NODE_ID, SEED_TEMPLATES } from '@gmind/core';
+import {
+  addCanvas,
+  addChild,
+  createTemplateDoc,
+  getMeta,
+  getNode,
+  listCanvases,
+  ORIGIN_USER,
+  ROOT_NODE_ID,
+  rootIdOf,
+  SEED_TEMPLATES,
+  setActiveCanvas,
+  subtreeIds,
+} from '@gmind/core';
 import type { MeasureAdapter } from '@gmind/engine';
 import { buildThumbSvg } from './thumbnail';
 
@@ -53,6 +66,20 @@ describe('buildThumbSvg（工作台真实缩略图）', () => {
     const svg = buildThumbSvg(doc, measureStub);
     expect(svg).not.toBeNull();
     expect(svg!).toContain('组织架构');
+    doc.destroy();
+  });
+
+  it('多画布（裁定 3）：缩略图恒取第一画布——活动画布在画布 2 也不出画布 2 内容', () => {
+    const doc = createTemplateDoc({ title: '本周计划', children: [{ text: '甲' }] });
+    const c1 = listCanvases(doc)[0]!.id;
+    const c2 = addCanvas(doc, { name: '画布 2' });
+    setActiveCanvas(doc, c2); // 活动画布 = 画布 2（meta.activeCanvasId 同置）
+    addChild(doc, rootIdOf(doc, c2), { text: '乙' }, ORIGIN_USER, c2);
+    const svg = buildThumbSvg(doc, measureStub)!;
+    expect(svg).toContain('本周计划'); // 第一画布 root 文本在图
+    expect(svg).toContain('甲'); // 第一画布子节点在图
+    expect(svg).not.toContain('乙'); // 画布 2 内容不进缩略图
+    expect(c1).not.toBe(c2);
     doc.destroy();
   });
 

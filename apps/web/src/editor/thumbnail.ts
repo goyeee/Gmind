@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import type * as Y from 'yjs';
-import { getMeta, getNode, childrenIds, listSummaries } from '@gmind/core';
+import { getMeta, getNode, childrenIds, listCanvases, listSummaries } from '@gmind/core';
 import {
   layout,
   resolveNodeStyle,
@@ -35,19 +35,27 @@ function esc(s: string): string {
 }
 
 export function buildThumbSvg(doc: Y.Doc, measure: MeasureAdapter): string | null {
-  const meta = getMeta(doc);
+  // 多画布（裁定 3，计划三 Task 4 item 9）：缩略图恒取**第一画布**（canvasOrder 首个
+  // 存活）——与当前活动画布无关（工作台卡片一张图代表整个文件）；全部读路径与
+  // 布局根按该画布绑定。画布集全灭（crafted 态）：无可画内容，按超限口径返回 null。
+  const first = listCanvases(doc)[0];
+  if (!first) return null;
+  const canvasId = first.id;
+  const meta = getMeta(doc, canvasId);
   const theme = THEMES[resolveThemeId(meta.themeId)];
   const reader: DocReader = {
-    getMeta: () => getMeta(doc),
-    getNode: (id) => getNode(doc, id),
-    childrenIds: (id) => childrenIds(doc, id),
-    summaries: () => listSummaries(doc),
+    getMeta: () => getMeta(doc, canvasId),
+    getNode: (id) => getNode(doc, id, canvasId),
+    childrenIds: (id) => childrenIds(doc, id, canvasId),
+    summaries: () => listSummaries(doc, canvasId),
   };
   const result = layout(reader, {
     structure: meta.structureType,
     theme,
     measure,
-    styleOf: (id, depth) => resolveNodeStyle(theme, depth, getNode(doc, id)?.style ?? {}).textStyle,
+    rootId: first.rootId,
+    styleOf: (id, depth) =>
+      resolveNodeStyle(theme, depth, getNode(doc, id, canvasId)?.style ?? {}).textStyle,
   });
   const nodes = result.nodes;
   if (nodes.length === 0 || nodes.length > MAX_NODES) return null;
@@ -80,7 +88,7 @@ export function buildThumbSvg(doc: Y.Doc, measure: MeasureAdapter): string | nul
   }
 
   for (const b of nodes) {
-    const snap = getNode(doc, b.id);
+    const snap = getNode(doc, b.id, canvasId);
     if (!snap || snap.deleted) continue;
     const rs = resolveNodeStyle(theme, b.depth, snap.style ?? {});
     parts.push(

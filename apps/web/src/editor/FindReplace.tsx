@@ -1,6 +1,12 @@
 import { useEffect, useRef, useState, type ReactElement } from 'react';
 import type * as Y from 'yjs';
-import { getNode, ORIGIN_USER, ROOT_NODE_ID, setText, withTransaction } from '@gmind/core';
+import {
+  getNode,
+  ORIGIN_USER,
+  rootIdOf,
+  setText,
+  withTransaction,
+} from '@gmind/core';
 import './find-replace.css';
 
 /**
@@ -12,7 +18,8 @@ import './find-replace.css';
  * 无匹配均 `0/0`，动作钮随 0 匹配禁用）。
  *
  * 职责边界（组件纯交互/展示，写路径复用页面装配）：
- * - 匹配集 = 全部存活可达节点 text 的大小写不敏感包含（root 计入，先序文档序）——
+ * - 匹配集 = 当前画布全部存活可达节点 text 的大小写不敏感包含（root 计入，先序文档
+ *   序；多画布 Task 4 item 6：遍历限定当前画布子树，不越画布）——
  *   遍历与 xmind-export.ts 同款读路径（getNode/childIds + 环防护），折叠只影响
  *   可见性不影响匹配（数据层全量）；
  * - 定位复用 EditorPage locateNode（M3b 评论面板同款：selectOnly + 展开折叠祖先）；
@@ -33,30 +40,36 @@ export interface FindReplaceProps {
   /** 用户写统一收尾（capUndoStack + markEditing），EditorPage 装配。 */
   afterUserWrite(): void;
   showToast(message: string): void;
+  /** 当前画布惰性解析（EditorPage canvasIdGetter 直传）：匹配集/替换全限定当前
+   *  画布子树（多画布 Task 4 item 6）；缺省=core 缺省解析（单画布零差异）。 */
+  canvasId?(): string | undefined;
 }
 
 /**
  * 存活可达树先序匹配收集：root 计入（本周计划 查「周」命中 root 即此口径）。
  * 环防护与 xmind-export 同款：visited 防回边，墓碑/悬空 id 不入集。
+ * 多画布（计划三 Task 4 item 6）：遍历限定当前画布子树——根取
+ * rootIdOf(doc, canvasId)（缺省=core 缺省解析），getNode 同画布绑定，不越画布。
  */
-function collectMatchIds(doc: Y.Doc, needle: string): string[] {
+export function collectMatchIds(doc: Y.Doc, needle: string, canvasId?: string): string[] {
   if (needle === '') return [];
   const lower = needle.toLowerCase();
   const out: string[] = [];
-  const visited = new Set<string>([ROOT_NODE_ID]);
+  const rootId = rootIdOf(doc, canvasId);
+  const visited = new Set<string>([rootId]);
   const walk = (id: string): void => {
-    const snap = getNode(doc, id);
+    const snap = getNode(doc, id, canvasId);
     if (!snap || snap.deleted) return;
     if (snap.text.toLowerCase().includes(lower)) out.push(id);
     for (const childId of snap.childIds) {
       if (visited.has(childId)) continue; // 环防护：已访问 id 不再下降（含指回 root）
-      const child = getNode(doc, childId);
+      const child = getNode(doc, childId, canvasId);
       if (!child || child.deleted) continue; // 防御：悬空 id / 墓碑不入树
       visited.add(childId);
       walk(childId);
     }
   };
-  walk(ROOT_NODE_ID);
+  walk(rootId);
   return out;
 }
 
@@ -87,6 +100,7 @@ export function FindReplace({
   onLocate,
   afterUserWrite,
   showToast,
+  canvasId,
 }: FindReplaceProps): ReactElement | null {
   const [query, setQuery] = useState('');
   const [replacement, setReplacement] = useState('');
@@ -97,6 +111,10 @@ export function FindReplace({
   // 依赖抖动（matches state 写入 + 依赖数组含不稳定引用会互喂成渲染循环）。
   const onLocateRef = useRef(onLocate);
   onLocateRef.current = onLocate;
+  // canvasId 惰性解析源（EditorPage canvasIdGetter）：切换画布后 doc update 事件
+  // 驱动下方重算 effect，此刻 ref 读到的是新画布——比 prop 快照更贴近当帧真值。
+  const canvasIdRef = useRef(canvasId);
+  canvasIdRef.current = canvasId;
 
   // 开关沿：打开聚焦查询输入（全选便于直接覆盖）；关闭清空定位（匹配集与下标归零，
   // 查询/替换串保留——重开免重输，重算定位由下方 open 依赖的 effect 兜住）。
@@ -113,18 +131,19 @@ export function FindReplace({
   // 查询串变化（含打开沿）→ 全量重算 + 回到第 1 个并定位（键入即定位的查找惯例）。
   useEffect(() => {
     if (!open) return;
-    const next = doc ? collectMatchIds(doc, query) : [];
+    const next = doc ? collectMatchIds(doc, query, canvasIdRef.current?.()) : [];
     setMatches(next);
     setActiveIndex(0);
     if (next.length > 0) onLocateRef.current(next[0]);
   }, [open, query, doc]);
 
-  // 文档更新（本地替换事务 / 远端协同 / 撤销重做）→ 重算匹配并钳制定位下标：
-  // 替换写后「定位状态刷新」与远端文本变化不残留陈旧计数均走这一条通道。
+  // 文档更新（本地替换事务 / 远端协同 / 撤销重做；画布切换写 meta.activeCanvasId
+  // 同触发）→ 重算匹配并钳制定位下标：替换写后「定位状态刷新」与远端文本变化不
+  // 残留陈旧计数均走这一条通道。
   useEffect(() => {
     if (!doc || !open) return;
     const onUpdate = (): void => {
-      const next = collectMatchIds(doc, query);
+      const next = collectMatchIds(doc, query, canvasIdRef.current?.());
       setMatches(next);
       setActiveIndex((i) => Math.min(i, Math.max(next.length - 1, 0)));
     };
@@ -147,21 +166,22 @@ export function FindReplace({
    *  已移出则下一匹配滑入该下标（即「替换后到下一个」）。 */
   const replaceCurrent = (): void => {
     if (!doc || matches.length === 0) return;
+    const cid = canvasIdRef.current?.();
     const id = matches[Math.min(activeIndex, matches.length - 1)];
-    const snap = getNode(doc, id);
+    const snap = getNode(doc, id, cid);
     if (!snap || snap.deleted) return;
     const nextText = replaceFirstCI(snap.text, query, replacement);
     if (nextText === snap.text) return;
     try {
       withTransaction(doc, ORIGIN_USER, () => {
-        setText(doc, id, nextText, ORIGIN_USER);
+        setText(doc, id, nextText, ORIGIN_USER, cid);
       });
     } catch (e) {
       showToast(e instanceof Error ? e.message : '替换失败');
       return;
     }
     afterUserWrite();
-    const nextMatches = collectMatchIds(doc, query);
+    const nextMatches = collectMatchIds(doc, query, cid);
     const idx = Math.min(activeIndex, Math.max(nextMatches.length - 1, 0));
     setMatches(nextMatches);
     setActiveIndex(idx);
@@ -171,9 +191,10 @@ export function FindReplace({
   /** 全部替换：每个匹配节点 text 内全部出现替换，整体包一个用户事务（单次撤销全回）。 */
   const replaceAllMatches = (): void => {
     if (!doc || matches.length === 0) return;
+    const cid = canvasIdRef.current?.();
     const changes: Array<{ id: string; text: string }> = [];
     for (const id of matches) {
-      const snap = getNode(doc, id);
+      const snap = getNode(doc, id, cid);
       if (!snap || snap.deleted) continue;
       const nextText = replaceAllCI(snap.text, query, replacement);
       if (nextText !== snap.text) changes.push({ id, text: nextText });
@@ -181,14 +202,14 @@ export function FindReplace({
     if (changes.length === 0) return;
     try {
       withTransaction(doc, ORIGIN_USER, () => {
-        for (const change of changes) setText(doc, change.id, change.text, ORIGIN_USER);
+        for (const change of changes) setText(doc, change.id, change.text, ORIGIN_USER, cid);
       });
     } catch (e) {
       showToast(e instanceof Error ? e.message : '替换失败');
       return;
     }
     afterUserWrite();
-    const nextMatches = collectMatchIds(doc, query);
+    const nextMatches = collectMatchIds(doc, query, cid);
     setMatches(nextMatches);
     setActiveIndex(0);
     if (nextMatches.length > 0) onLocateRef.current(nextMatches[0]);

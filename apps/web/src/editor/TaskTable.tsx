@@ -15,7 +15,7 @@ import {
   moveNode,
   ORIGIN_SYSTEM,
   ORIGIN_USER,
-  ROOT_NODE_ID,
+  rootIdOf,
   setCollapsed,
   setCustomColumns,
   setCustomField,
@@ -214,10 +214,16 @@ export interface TaskTableProps {
   checkQuota: () => boolean;
   /** 点击标题联动画布选中（双视图同源；切回脑图不丢上下文）。 */
   onSelectNode: (id: string) => void;
+  /** 当前画布（EditorPage activeCanvasId）：表格快照/全部写路径限定当前画布子图
+   *  （多画布 Task 4；缺省=core 缺省解析，单画布零差异）。 */
+  canvasId?: string;
 }
 
 export function TaskTable(props: TaskTableProps): React.ReactElement {
-  const { doc, fileId, docVersion, readOnly, presence, afterUserWrite, showToast, checkQuota, onSelectNode } = props;
+  const { doc, fileId, docVersion, readOnly, presence, afterUserWrite, showToast, checkQuota, onSelectNode, canvasId } = props;
+  // 当前画布透传源：全部 core 读/写末位参（doc 级 meta 读——customColumns/tableView
+  // ——canvasId 无语义，保持缺省）。
+  const cid = canvasId;
   const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS);
   /** 查看者本地排序态（不落盘）：编辑者的排序持久化在 meta.tableView.sort，此处
    *  仅 readOnly 分支的会话内覆盖（初始 null = 按文档既值）。 */
@@ -286,22 +292,23 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
     };
   }, [fileId]);
 
-  // —— 快照 → RowNode[]（root 不进表；order = 父 childIds 下标） ——
+  // —— 快照 → RowNode[]（root 不进表；order = 父 childIds 下标；当前画布口径） ——
   const nodes = useMemo<RowNode[]>(() => {
     const updated = updatedRef.current;
     const snaps = new Map<string, NodeSnapshot>();
-    for (const id of subtreeIds(doc, ROOT_NODE_ID)) {
-      const snap = getNode(doc, id);
+    const rootId = rootIdOf(doc, cid);
+    for (const id of subtreeIds(doc, rootId, cid)) {
+      const snap = getNode(doc, id, cid);
       if (!snap || snap.deleted) continue;
       snaps.set(id, snap);
     }
-    const root = snaps.get(ROOT_NODE_ID);
+    const root = snaps.get(rootId);
     const out: RowNode[] = [];
     for (const [id, snap] of snaps) {
-      if (id === ROOT_NODE_ID) continue;
+      if (id === rootId) continue;
       const parent = snap.parentId === '' ? root : snaps.get(snap.parentId);
       // 人员进度列条目拉平（与 TaskFields.deriveNodesOfDoc 同口径；无条目不出键）
-      const assignees = assigneeEntriesOf(doc, id);
+      const assignees = assigneeEntriesOf(doc, id, cid);
       out.push({
         id,
         parentId: snap.parentId === '' ? null : snap.parentId,
@@ -319,11 +326,11 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
       });
     }
     return out;
-  }, [doc, docVersion]);
+  }, [doc, docVersion, cid]);
 
   const rootCollapsed = useMemo(
-    () => getNode(doc, ROOT_NODE_ID)?.collapsed === true,
-    [doc, docVersion],
+    () => getNode(doc, rootIdOf(doc, cid), cid)?.collapsed === true,
+    [doc, docVersion, cid],
   );
 
   /** 自定义列 schema（meta.customColumns；恒数组，旧文档 []——无列时零 UI 噪音，只剩「+」钮）。 */
@@ -528,7 +535,7 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
         }
         return false;
       };
-      kidsOf(ROOT_NODE_ID).forEach(mark);
+      kidsOf(rootIdOf(doc, cid)).forEach(mark);
     }
     const cmp = (a: RowNode, b: RowNode): number => {
       if (!sort) return (a.order ?? 0) - (b.order ?? 0);
@@ -545,11 +552,11 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
         if (!n.collapsed || filtering) walk(n.id, depth + 1);
       }
     };
-    if (!rootCollapsed) walk(ROOT_NODE_ID, 0);
+    if (!rootCollapsed) walk(rootIdOf(doc, cid), 0);
     return out;
     // memberIndex 入 deps：人员列按昵称排序，成员候选异步到达后需重算；sort 以
     // 标量键入 deps（tableView 每渲染直读、对象身份每渲染变化，不作为依赖）
-  }, [nodes, filters, sortKey, sortDir, filtering, rootCollapsed, memberIndex, customColumns]);
+  }, [nodes, filters, sortKey, sortDir, filtering, rootCollapsed, memberIndex, customColumns, doc, cid]);
 
   /** 三态排序（升→降→取消；显示层不动树结构）：编辑者持久化到 tableView.sort，
    *  查看者仅本地态；取消恢复树序。 */
@@ -587,7 +594,7 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
 
   const commitTask = (id: string, patch: TaskPatch): void => {
     try {
-      setNodeTask(doc, id, patch);
+      setNodeTask(doc, id, patch, ORIGIN_USER, cid);
       afterUserWrite();
     } catch (e) {
       showToast(e instanceof Error ? e.message : '任务字段保存失败，请调整后重试');
@@ -614,7 +621,7 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
     value: string | number | Record<string, { progress: number; weight?: number }> | null,
   ): void => {
     try {
-      setCustomField(doc, id, colId, value);
+      setCustomField(doc, id, colId, value, ORIGIN_USER, cid);
       afterUserWrite();
     } catch (e) {
       showToast(e instanceof Error ? e.message : '自定义列保存失败，请调整后重试');
@@ -700,7 +707,7 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
 
   const toggleRow = (id: string): void => {
     try {
-      toggleCollapse(doc, id);
+      toggleCollapse(doc, id, ORIGIN_SYSTEM, cid);
     } catch (e) {
       showToast(e instanceof Error ? e.message : '操作失败，请刷新后重试');
     }
@@ -710,10 +717,10 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
   const setCollapsedDeep = (id: string, collapsed: boolean): void => {
     try {
       withTransaction(doc, ORIGIN_SYSTEM, () => {
-        for (const nid of subtreeIds(doc, id)) {
-          const snap = getNode(doc, nid);
+        for (const nid of subtreeIds(doc, id, cid)) {
+          const snap = getNode(doc, nid, cid);
           if (!snap || snap.deleted || snap.childIds.length === 0) continue;
-          if (snap.collapsed !== collapsed) setCollapsed(doc, nid, collapsed);
+          if (snap.collapsed !== collapsed) setCollapsed(doc, nid, collapsed, ORIGIN_SYSTEM, cid);
         }
       });
     } catch (e) {
@@ -725,11 +732,12 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
   const setAllCollapsed = (collapsed: boolean): void => {
     try {
       withTransaction(doc, ORIGIN_SYSTEM, () => {
-        for (const nid of subtreeIds(doc, ROOT_NODE_ID)) {
-          if (nid === ROOT_NODE_ID) continue;
-          const snap = getNode(doc, nid);
+        const rootId = rootIdOf(doc, cid);
+        for (const nid of subtreeIds(doc, rootId, cid)) {
+          if (nid === rootId) continue;
+          const snap = getNode(doc, nid, cid);
           if (!snap || snap.deleted || snap.childIds.length === 0) continue;
-          if (snap.collapsed !== collapsed) setCollapsed(doc, nid, collapsed);
+          if (snap.collapsed !== collapsed) setCollapsed(doc, nid, collapsed, ORIGIN_SYSTEM, cid);
         }
       });
     } catch (e) {
@@ -746,7 +754,7 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
     const sorted = [...kids].sort((a, b) => compareByColumn(key, dir, a as RowNode, b as RowNode));
     try {
       withTransaction(doc, ORIGIN_USER, () => {
-        sorted.forEach((k, i) => moveNode(doc, k.id, parentId, i));
+        sorted.forEach((k, i) => moveNode(doc, k.id, parentId, i, ORIGIN_USER, cid));
       });
       afterUserWrite();
     } catch (e) {
@@ -761,16 +769,16 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
     if (readOnly) return;
     if (checkQuota()) return;
     try {
-      if (getNode(doc, parentId)?.collapsed) setCollapsed(doc, parentId, false); // 折叠中新建先展开
+      if (getNode(doc, parentId, cid)?.collapsed) setCollapsed(doc, parentId, false, ORIGIN_SYSTEM, cid); // 折叠中新建先展开
       // 序号计算在事务外（校验先于事务纪律）。
-      const defaultText = nextChildText(doc, parentId);
+      const defaultText = nextChildText(doc, parentId, cid);
       let createdId = '';
       withTransaction(doc, ORIGIN_USER, () => {
-        createdId = addChild(doc, parentId, { text: defaultText });
+        createdId = addChild(doc, parentId, { text: defaultText }, ORIGIN_USER, cid);
       });
       afterUserWrite();
       // node_add 埋点：表格无独立 via 枚举值，并入 context（创建即上报，取消不回滚）
-      track('node_add', { via: 'context', nodeCount: countAliveReachable(doc) }, fileId);
+      track('node_add', { via: 'context', nodeCount: countAliveReachable(doc, cid) }, fileId);
       if (createdId !== '') setCellEdit({ id: createdId, isNew: true });
     } catch (e) {
       showToast(e instanceof Error ? e.message : '新建失败，请重试');
@@ -783,7 +791,7 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
     if (isNew && next === '') {
       try {
         withTransaction(doc, ORIGIN_USER, () => {
-          deleteNodes(doc, [id]);
+          deleteNodes(doc, [id], ORIGIN_USER, cid);
         });
         afterUserWrite();
       } catch {
@@ -792,9 +800,9 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
       return;
     }
     if (next === '') return;
-    if (getNode(doc, id)?.text === next) return; // 未变更零写入
+    if (getNode(doc, id, cid)?.text === next) return; // 未变更零写入
     try {
-      setText(doc, id, next, ORIGIN_USER);
+      setText(doc, id, next, ORIGIN_USER, cid);
       afterUserWrite();
     } catch (e) {
       showToast(e instanceof Error ? e.message : '保存失败，请重试');
@@ -805,9 +813,9 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
    *  兜底走 core DESCRIPTION_TOO_LONG 两段式 toast。 */
   const commitDescription = (id: string, description: string): void => {
     const next = description.trim();
-    if ((getNode(doc, id)?.description ?? '') === next) return; // 未变更零写入
+    if ((getNode(doc, id, cid)?.description ?? '') === next) return; // 未变更零写入
     try {
-      setDescription(doc, id, next, ORIGIN_USER);
+      setDescription(doc, id, next, ORIGIN_USER, cid);
       afterUserWrite();
     } catch (e) {
       showToast(e instanceof Error ? e.message : '描述保存失败，请精简后重试');
@@ -1734,7 +1742,7 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
                           type="button"
                           className="tt-empty-add"
                           data-testid="table-empty-add"
-                          onClick={() => addChildTo(ROOT_NODE_ID)}
+                          onClick={() => addChildTo(rootIdOf(doc, cid))}
                         >
                           + 添加子任务
                         </button>
