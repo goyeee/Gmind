@@ -554,11 +554,11 @@ export function EditorPage() {
   const docOwnerIds = useMemo(() => {
     if (!doc) return [] as string[];
     const ids: string[] = [];
-    for (const n of deriveNodesOfDoc(doc)) {
+    for (const n of deriveNodesOfDoc(doc, canvasIdGetter())) {
       for (const o of n.task?.owners ?? []) if (!ids.includes(o)) ids.push(o);
     }
     return ids;
-  }, [doc, tick]);
+  }, [doc, tick, activeCanvasId]);
   const memberIndex = useTaskMembers(fileId, members, docOwnerIds);
   const memberIndexRef = useRef(memberIndex);
   memberIndexRef.current = memberIndex;
@@ -1439,7 +1439,7 @@ export function EditorPage() {
       return;
     }
     afterUserWrite();
-    track('node_add', { via, nodeCount: countAliveReachable(doc) }, fileId);
+    track('node_add', { via, nodeCount: countAliveReachable(doc, canvasIdGetter()) }, fileId);
     selectionRef.current?.selectOnly(createdId);
     // 新建节点视口跟随（kimi 复验 P2）：惰性创建只 selectOnly 不平移，高缩放下新
     // 节点可整个落在视口外（实测 1440×900、400% 初始缩放连续 Tab 第 2/3 个节点
@@ -1728,7 +1728,7 @@ export function EditorPage() {
         const kids = getNode(doc, canvasRootId)?.childIds ?? [];
         // 有效侧单源：rootSiblingSide.rootKidEffectiveSides（持久 ?? 索引兜底，与
         // engine assignMindmapSides / core countRightSideRootChildren 的兜底同式）。
-        const sides = rootKidEffectiveSides(doc);
+        const sides = rootKidEffectiveSides(doc, canvasIdGetter());
         const leftCount = sides.filter((s) => s === 'left').length;
         const side: NodeSide = leftCount < 3 ? 'left' : 'right';
         const firstSameSide = sides.findIndex((s) => s === side);
@@ -1753,7 +1753,7 @@ export function EditorPage() {
     // 顺时针触发（右满 3+左空+末位分支 Enter）→ 左（开启左列）；其余 → 所按分支
     // 有效侧（持久 side ?? 索引兜底——旧文档不再被 addChild 计数配额强制换侧，
     // 左下角 bug 修复）。非 root 级/非 mindmap → undefined，addChild 自动定侧接管。
-    const forceSide: NodeSide | undefined = rootSiblingForceSide(doc, current, reverse);
+    const forceSide: NodeSide | undefined = rootSiblingForceSide(doc, current, reverse, canvasIdGetter());
     // 索引公式全层级统一：Enter=文档序后插（视觉下方）、Shift+Enter=前插（视觉上方）；
     // root 级左列因布局视觉反序自然涌现「Enter 向上」（顺时针）——旧按侧分支的
     // upward 矩阵随共享单带退役。
@@ -1804,7 +1804,7 @@ export function EditorPage() {
       // 为 pending 节点」校验兜底，此处显式清更干净、不留悬空闭包）
       pendingEditRef.current = null;
       pendingCancelRef.current = null;
-      track('node_delete', { via, nodeCount: countAliveReachable(doc) }, fileId);
+      track('node_delete', { via, nodeCount: countAliveReachable(doc, canvasIdGetter()) }, fileId);
       // 配额拦截的解除通道（M1b 终审裁定）：删除节点即解除新增拦截。若删除后仍
       // 超限，服务端边缘触发器在回落限内前不会重复广播（advisory 残余窗口，登记
       // docs/m2-entry-checklist.md §7.6）。
@@ -2008,10 +2008,10 @@ export function EditorPage() {
         cutNodes(handleOf(doc, canvasIdGetter), ids, (deleteIds) => {
           if (deleteIds.length === 0) return; // 空删集不上报（防御：上游已滤空）
           deleteNodes(doc, deleteIds, ORIGIN_USER);
-          track('node_delete', { via, nodeCount: countAliveReachable(doc) }, fileId);
+          track('node_delete', { via, nodeCount: countAliveReachable(doc, canvasIdGetter()) }, fileId);
           afterUserWrite();
         }),
-          );
+      );
       selection.selectOnly(rootIdOf(doc, canvasIdGetter())); // 当前画布根（Task 4 item 1 口径）
     } catch (e) {
       showToast(clipboardErrorMessage(e));
@@ -2092,7 +2092,7 @@ export function EditorPage() {
       }
       afterUserWrite();
       // node_add 埋点（M5 Task 4）：一次粘贴动作记一行（via=paste；多节点不逐个拆行）
-      track('node_add', { via: 'paste', nodeCount: countAliveReachable(doc) }, fileId);
+      track('node_add', { via: 'paste', nodeCount: countAliveReachable(doc, canvasIdGetter()) }, fileId);
     } catch (e) {
       showToast(clipboardErrorMessage(e));
     }
@@ -2947,7 +2947,7 @@ export function EditorPage() {
           'sibling',
           'context',
           undefined,
-          rootSiblingForceSide(doc, nodeId, false),
+          rootSiblingForceSide(doc, nodeId, false, canvasIdGetter()),
         );
         break;
       }
@@ -3582,7 +3582,7 @@ export function EditorPage() {
           // 借服务端回执收敛）：≤ 上限才解除，仍超限则保持拦截。
           quotaBlockedRef.current = nextQuotaBlock(true, {
             type: 'saved',
-            aliveCount: d ? countAliveReachable(d) : 0,
+            aliveCount: d ? countAliveReachable(d, canvasIdGetter()) : 0,
           });
           if (quotaBlockedRef.current) {
             // 仍超限：ack 不得把配额指示覆盖回「已保存」（裁定：拦截期间指示常驻）
@@ -4431,6 +4431,7 @@ export function EditorPage() {
                 nodeId={selectedNodeId ?? ''}
                 selected={selectedSnapshot}
                 docVersion={tick}
+                canvasId={activeCanvasId || undefined} // 派生平铺 = 当前画布（Task 4 评审修复）
                 presence={members}
                 afterUserWrite={afterUserWrite}
                 showToast={showToast}

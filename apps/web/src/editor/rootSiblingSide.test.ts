@@ -2,9 +2,13 @@ import { describe, expect, it } from 'vitest';
 import * as Y from 'yjs';
 import {
   ROOT_NODE_ID,
+  addCanvas,
   addChild,
   canvasNodesMap,
   createTemplateDoc,
+  listCanvases,
+  rootIdOf,
+  setActiveCanvas,
   setNodeSide,
   setText,
   ORIGIN_USER,
@@ -112,5 +116,40 @@ describe('rootSiblingForceSide：root 级分支同侧落位规则（顺时针修
   it('structureType 断言防御：modernDoc 默认 mindmap', () => {
     const doc = modernDoc(['A']);
     expect(getMeta(doc).structureType).toBe('mindmap');
+  });
+});
+
+describe('rootSiblingForceSide：多画布口径（计划三 Task 4 评审修复——按当前画布 rootId 取子级）', () => {
+  /** 画布 1 仅 1 个分支（右未满 3）；画布 2 满 3 分支。若误用第一画布子级计数，
+   *  画布 2 末位分支会被判「右未满」→ 错返回 right。 */
+  function twoCanvasDoc(): { doc: Y.Doc; c1: string; c2: string; c2Kids: string[] } {
+    const doc = modernDoc(['画布1唯一']);
+    const c1 = listCanvases(doc)[0]!.id;
+    const c2 = addCanvas(doc, { name: '画布 2' });
+    setActiveCanvas(doc, c1); // addCanvas 会把活动置新，固定回首画布
+    const r2 = rootIdOf(doc, c2);
+    const c2Kids = ['右一', '右二', '右三'].map((t) => addChild(doc, r2, { text: t }, ORIGIN_USER, c2));
+    return { doc, c1, c2, c2Kids };
+  }
+
+  it('异根画布：末位分支 Enter 按画布 2 子级计数（右满 3 → 左），不误用第一画布子级', () => {
+    const { doc, c2, c2Kids } = twoCanvasDoc();
+    expect(rootSiblingForceSide(doc, c2Kids[2]!, false, c2)).toBe('left');
+    expect(rootSiblingForceSide(doc, c2Kids[0]!, false, c2)).toBe('right');
+    doc.destroy();
+  });
+
+  it('rootKidEffectiveSides 按 canvasId 取对应画布 root 子级', () => {
+    const { doc, c1, c2 } = twoCanvasDoc();
+    expect(rootKidEffectiveSides(doc, c1)).toEqual(['right']); // 画布 1 仅 1 个
+    expect(rootKidEffectiveSides(doc, c2)).toEqual(['right', 'right', 'right']); // 画布 2 满 3
+    doc.destroy();
+  });
+
+  it('缺省 canvasId = core 缺省解析（activeCanvasId=画布 1 时画布 2 节点查无 → undefined）', () => {
+    const { doc, c2, c2Kids } = twoCanvasDoc(); // activeCanvasId 已固定为画布 1
+    expect(rootSiblingForceSide(doc, c2Kids[2]!, false)).toBeUndefined(); // 非当前画布节点
+    expect(rootSiblingForceSide(doc, c2Kids[2]!, false, c2)).toBe('left');
+    doc.destroy();
   });
 });

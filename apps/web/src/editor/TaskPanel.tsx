@@ -73,6 +73,8 @@ export interface TaskPanelProps {
   selected: NodeSnapshot | null;
   /** 文档版本（EditorPage tick）：派生值（进度 Σ/逾期/子级判定）随写随刷。 */
   docVersion: number;
+  /** 当前画布 id（多画布口径：deriveNodesOfDoc 只拉平当前画布子树；缺省=core 缺省解析）。 */
+  canvasId?: string;
   presence: PresenceMember[];
   afterUserWrite: () => void;
   showToast: (message: string) => void;
@@ -82,7 +84,7 @@ export interface TaskPanelProps {
 }
 
 export function TaskPanel(props: TaskPanelProps): ReactElement {
-  const { doc, fileId, nodeId, selected, docVersion, presence, afterUserWrite, showToast, onDelete, onClose } =
+  const { doc, fileId, nodeId, selected, docVersion, canvasId, presence, afterUserWrite, showToast, onDelete, onClose } =
     props;
   const snap = selected && !selected.deleted ? selected : null;
   // 标题/描述草稿（受控本地态）：仅切换选中节点时从文档回灌（tick 驱动的快照刷新
@@ -101,7 +103,7 @@ export function TaskPanel(props: TaskPanelProps): ReactElement {
     // 仅 nodeId 变化回灌（RichPanel 同款裁决）：tick 刷新不得覆盖编辑中的输入
   }, [nodeId]);
 
-  const deriveNodes = useMemo(() => deriveNodesOfDoc(doc), [doc, docVersion]);
+  const deriveNodes = useMemo(() => deriveNodesOfDoc(doc, canvasId), [doc, docVersion, canvasId]);
   /** 自定义列 schema（meta.customColumns；按类型拆分后分别塞进负责人/日期/其余区）。 */
   const customColumns = getMeta(doc).customColumns;
   const ownerCustomColumns = customColumns.filter((c) => c.type === 'assignee');

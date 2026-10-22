@@ -5,11 +5,15 @@ import { createRoot } from 'react-dom/client';
 import { act } from 'react-dom/test-utils';
 import type * as Y from 'yjs';
 import {
+  addCanvas,
   addChild,
   createTemplateDoc,
   getNode,
+  listCanvases,
   ORIGIN_USER,
   ROOT_NODE_ID,
+  rootIdOf,
+  setActiveCanvas,
   setCustomColumns,
   setCustomField,
   setNodeTask,
@@ -127,6 +131,26 @@ describe('deriveNodesOfDoc（M7c-C3/C4 抽公共）', () => {
   it('无 assignee 条目的节点不出现 customAssignees 键（快照零新增键面）', () => {
     const nodes = deriveNodesOfDoc(buildDoc());
     for (const n of nodes) expect('customAssignees' in n).toBe(false);
+  });
+
+  it('多画布（Task 4 评审修复）：canvasId 限定当前画布子树，异画布节点不入列', () => {
+    const doc = buildDoc(); // 画布 1：任务A/子任务A1/子任务A2
+    const c1 = listCanvases(doc)[0]!.id;
+    const c2 = addCanvas(doc, { name: '画布 2' });
+    setActiveCanvas(doc, c1); // addCanvas 会把活动置新，固定回首画布
+    const r2 = rootIdOf(doc, c2);
+    const b = addChild(doc, r2, { text: '画布2任务' }, ORIGIN_USER, c2);
+    setNodeTask(doc, b, { progress: 10, owners: ['uZ'] }, ORIGIN_USER, c2);
+    // 限定画布 2：只有画布 2 子树（root 不入列、parentId 挂画布 2 root）
+    const inC2 = deriveNodesOfDoc(doc, c2);
+    expect(inC2.map((n) => n.title)).toEqual(['画布2任务']);
+    expect(inC2[0]?.parentId).toBe(r2);
+    expect(inC2[0]?.task?.owners).toEqual(['uZ']);
+    // 缺省解析（activeCanvasId=画布 1）：仍拉平画布 1，不含画布 2 节点
+    const inDefault = deriveNodesOfDoc(doc);
+    expect(inDefault.map((n) => n.title)).not.toContain('画布2任务');
+    expect(inDefault).toHaveLength(3);
+    doc.destroy();
   });
 });
 

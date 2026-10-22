@@ -4,7 +4,7 @@ import {
   assigneeEntriesOf,
   CUSTOM_TEXT_MAX_LENGTH,
   getNode,
-  ROOT_NODE_ID,
+  rootIdOf,
   subtreeIds,
   type CustomColumnDef,
   type NodeSnapshot,
@@ -201,21 +201,24 @@ export function MemberMultiSelect({
 /**
  * doc 快照 → shared DeriveNode 平铺数组（root 不入列；order = 父 childIds 下标）。
  * C3/C4 的进度 Σ / 逾期 / 子级判定全走 @gmind/shared 派生规则（口径唯一实现）。
+ * 多画布（计划三 Task 4 评审修复）：canvasId 限定当前画布子树——异根画布的任务
+ * 面板/人员进度不再拉平第一画布数据；缺省走 core 缺省解析（meta.activeCanvasId）。
  */
-export function deriveNodesOfDoc(doc: Y.Doc): DeriveNode[] {
+export function deriveNodesOfDoc(doc: Y.Doc, canvasId?: string): DeriveNode[] {
   const snaps = new Map<string, NodeSnapshot>();
-  for (const id of subtreeIds(doc, ROOT_NODE_ID)) {
-    const snap = getNode(doc, id);
+  const rootId = rootIdOf(doc, canvasId);
+  for (const id of subtreeIds(doc, rootId, canvasId)) {
+    const snap = getNode(doc, id, canvasId);
     if (!snap || snap.deleted) continue;
     snaps.set(id, snap);
   }
-  const root = snaps.get(ROOT_NODE_ID);
+  const root = snaps.get(rootId);
   const out: DeriveNode[] = [];
   for (const [id, snap] of snaps) {
-    if (id === ROOT_NODE_ID) continue;
+    if (id === rootId) continue;
     const parent = snap.parentId === '' ? root : snaps.get(snap.parentId);
     // 人员进度列条目拉平（assigneeEntriesOf 纯读；无条目不出该键——快照零新增键面）
-    const assignees = assigneeEntriesOf(doc, id);
+    const assignees = assigneeEntriesOf(doc, id, canvasId);
     out.push({
       id,
       parentId: snap.parentId === '' ? null : snap.parentId,
