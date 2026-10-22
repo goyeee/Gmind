@@ -19,6 +19,8 @@ import { expect, test, type Page } from '@playwright/test';
  *   不装配（keyboardMap 未挂载）且节点不丢；
  * - 桌面视口折叠 root → 视口切窄即时降级（matchMedia change 监听）→ 折叠徽标
  *   点击展开恢复（保留交互，FR-EDT-030 移动侧）；
+ * - 移动端画布页签（多画布计划三 Task 3，裁定 7「手机上显示画布页签，只读可切换」）：
+ *   页签可见可切换（场景重建 + 活动类迁移）；＋/重命名/删除/排序等编辑入口不装配；
  * - 移动端评论闭环：面板默认收起 →「评论」开关打开 → 选中节点发表 → 线程出现 →
  *   收起面板画布角标可见 → 角标点击进入单节点过滤视图（「查看全部」返回）；
  * - 桌面回归：默认视口全部编辑控件可见、评论面板常驻右列、Tab 键盘写路径仍装配。
@@ -153,6 +155,48 @@ test('移动端：评论面板开关——选中节点发表评论，角标出�
   await expect(page.getByTestId('comment-thread')).toHaveCount(1);
   await page.getByTestId('comment-back-all').click();
   await expect(page.getByTestId('comment-thread')).toHaveCount(1); // 全部也恰 1 线程
+});
+
+test('移动端：画布页签可见可切换（裁定 7），＋/重命名/删除/排序入口不装配', async ({ page }) => {
+  test.setTimeout(90_000);
+  // 桌面视口先建第二张画布（移动端只读无 ＋ 入口，建不了），再切回首张后收窄视口降级
+  await openSeedDoc(page, '本周计划');
+  await page.getByTestId('canvas-add').click();
+  const input = page.getByTestId('canvas-rename-input');
+  await expect(input).toBeVisible();
+  await input.fill('画布B-移动');
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.canvas-tab-active')).toHaveText('画布B-移动');
+  await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '中心主题' })).toBeVisible();
+  // 切回首张（画布切换从非活动页签出发验证）
+  await page.locator('[data-testid^="canvas-tab-"]').first().click();
+  await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '周一' })).toBeVisible();
+
+  // 收窄视口 → 只读降级：页签仍装配（裁定 7：显示画布页签，只读可切换）
+  await useMobileViewport(page);
+  await expect(page.getByTestId('canvas-tabbar')).toBeVisible();
+  await expect(page.locator('[data-testid^="canvas-tab-"]')).toHaveCount(2);
+  await expect(page.getByTestId('canvas-add')).toHaveCount(0); // ＋ 新建不装配
+  await expect(page.getByTestId('canvas-tab-menu')).toHaveCount(0); // 右键菜单不装配
+
+  // 只读可切换：点「画布B-移动」→ 场景重建为中心主题，活动类迁移
+  await page.locator('[data-testid^="canvas-tab-"]', { hasText: '画布B-移动' }).click();
+  await expect(page.locator('.canvas-tab-active')).toHaveText('画布B-移动');
+  await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '中心主题' })).toBeVisible();
+  await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '周一' })).toHaveCount(0);
+
+  // 编辑类入口不装配：双击页签不进行内重命名（排序/删除无入口可触发）
+  await page.locator('[data-testid^="canvas-tab-"]', { hasText: '画布B-移动' }).dblclick();
+  await expect(page.getByTestId('canvas-rename-input')).toHaveCount(0);
+  // 编辑控件清单保持 toHaveCount(0)（页签新增不影响既有降级口径）
+  for (const tid of EDITING_TESTIDS) {
+    await expect(page.getByTestId(tid)).toHaveCount(0);
+  }
+
+  // 切回首张 → 只读切换不影响内容渲染
+  await page.locator('[data-testid^="canvas-tab-"]').first().click();
+  await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '周一' })).toBeVisible();
+  await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '中心主题' })).toHaveCount(0);
 });
 
 test('桌面回归：默认视口编辑控件齐全，右列默认不渲染，键盘写路径仍装配（惰性）', async ({ page }) => {

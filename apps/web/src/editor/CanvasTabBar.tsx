@@ -23,9 +23,19 @@
  * 映射两段式文案。编辑态用 ref 镜像（editingRef）防 Enter 提交后 blur 二次提交
  * （行内输入卸载前 blur 必达，闭包 editing 已 stale）。
  *
- * 装配口径：仅桌面（EditorPage !readOnly 闸）——移动端页签形态属后续任务。
+ * 装配口径（计划三 Task 3 修订）：桌面编辑态 + 移动端只读（EditorPage 按 readOnly
+ * 传 prop，裁定 7「手机上显示画布页签，只读可切换」）。readOnly 时只渲染页签按钮
+ * （保留单击切换编排），不挂双击重命名/右键菜单/HTML5 拖拽排序处理器，也不渲染
+ * ＋ 新建钮与行内重命名输入——编辑入口整体缺席，而非仅样式隐藏。
  */
-import { useEffect, useRef, useState, type ReactElement } from 'react';
+import {
+  useEffect,
+  useRef,
+  useState,
+  type DragEvent as ReactDragEvent,
+  type MouseEvent as ReactMouseEvent,
+  type ReactElement,
+} from 'react';
 import type * as Y from 'yjs';
 import {
   MAX_CANVAS_NAME_LENGTH,
@@ -49,6 +59,11 @@ export interface CanvasTabBarProps {
   onSwitch(canvasId: string): void;
   /** 画布管理写后的显式刷新（观察器已自动覆盖，本入口为写路径显式兜底）。 */
   onChanged?(): void;
+  /**
+   * 只读态（移动端裁定 7）：页签可见可切换；隐藏 ＋/重命名/删除/排序等全部
+   * 编辑入口（处理器与控件均不装配）。缺省 = 桌面编辑态。
+   */
+  readOnly?: boolean;
 }
 
 /** core 画布错误码 → 两段式文案（原因+下一步，NFR-USE-005）。 */
@@ -84,6 +99,7 @@ export function CanvasTabBar({
   showToast,
   onSwitch,
   onChanged,
+  readOnly = false,
 }: CanvasTabBarProps) {
   // 编辑态 ref 镜像：Enter 提交置 null 后，行内输入卸载前触发的 blur 仍持有
   // stale 闭包 editing——经 editingRef 查当前值，二次提交天然 no-op。
@@ -184,7 +200,8 @@ export function CanvasTabBar({
   return (
     <div className="canvas-tabbar" data-testid="canvas-tabbar" role="tablist" aria-label="画布页签">
       {canvases.map((canvas) =>
-        editing?.canvasId === canvas.id ? (
+        // 行内重命名输入同样受 readOnly 闸（桌面→移动降级瞬态不留编辑入口）
+        !readOnly && editing?.canvasId === canvas.id ? (
           renameInput(canvas.id, editing.initial, '重命名画布')
         ) : (
           <button
@@ -196,39 +213,46 @@ export function CanvasTabBar({
             className={canvas.id === activeCanvasId ? 'canvas-tab canvas-tab-active' : 'canvas-tab'}
             title={canvas.name}
             onClick={() => onSwitch(canvas.id)}
-            onDoubleClick={() => setEditing({ canvasId: canvas.id, initial: canvas.name })}
-            onContextMenu={(e) => {
-              e.preventDefault();
-              setMenu({ x: e.clientX, y: e.clientY, canvasId: canvas.id });
-            }}
-            onDragStart={(e) => {
-              dragIdRef.current = canvas.id;
-              e.dataTransfer.effectAllowed = 'move';
-            }}
-            onDragOver={(e) => {
-              e.preventDefault();
-              e.dataTransfer.dropEffect = 'move';
-            }}
-            onDrop={(e) => {
-              e.preventDefault();
-              dropOn(canvas.id);
-            }}
+            // 只读态（裁定 7）：仅保留单击切换；重命名/右键菜单/拖拽排序处理器不装配
+            {...(readOnly
+              ? {}
+              : {
+                  onDoubleClick: () => setEditing({ canvasId: canvas.id, initial: canvas.name }),
+                  onContextMenu: (e: ReactMouseEvent) => {
+                    e.preventDefault();
+                    setMenu({ x: e.clientX, y: e.clientY, canvasId: canvas.id });
+                  },
+                  onDragStart: (e: ReactDragEvent) => {
+                    dragIdRef.current = canvas.id;
+                    e.dataTransfer.effectAllowed = 'move';
+                  },
+                  onDragOver: (e: ReactDragEvent) => {
+                    e.preventDefault();
+                    e.dataTransfer.dropEffect = 'move';
+                  },
+                  onDrop: (e: ReactDragEvent) => {
+                    e.preventDefault();
+                    dropOn(canvas.id);
+                  },
+                })}
           >
             {canvas.name}
           </button>
         ),
       )}
-      {editing?.canvasId === null && renameInput('__add__', '', '新建画布')}
-      <button
-        type="button"
-        data-testid="canvas-add"
-        className="canvas-add"
-        title="新建画布"
-        aria-label="新建画布"
-        onClick={() => setEditing({ canvasId: null, initial: '' })}
-      >
-        ＋
-      </button>
+      {!readOnly && editing?.canvasId === null && renameInput('__add__', '', '新建画布')}
+      {!readOnly && (
+        <button
+          type="button"
+          data-testid="canvas-add"
+          className="canvas-add"
+          title="新建画布"
+          aria-label="新建画布"
+          onClick={() => setEditing({ canvasId: null, initial: '' })}
+        >
+          ＋
+        </button>
+      )}
       {menu && (
         <div
           className="canvas-tab-menu"

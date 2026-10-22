@@ -4603,14 +4603,15 @@ export function EditorPage() {
 
       {/* 底栏（画布专属，2026-10-09 布局裁定：左计数 / 右定位中心·适应画布·缩放·
           全屏——全屏自工具栏迁入，!readOnly 闸维持移动端不装配口径）：表格视图
-          隐藏（M7a-T4）；多画布（计划三 Task 2）左缘增画布页签条（企微形态，
-          仅桌面装配——!readOnly 同闸），切换编排经 useActiveCanvas 接线 */}
+          隐藏（M7a-T4）；多画布（计划三 Task 2）左缘增画布页签条（企微形态；
+          Task 3 裁定 7 起移动端只读同装配——readOnly 传 prop，页签可见可切换、
+          编辑入口不装配），切换编排经 useActiveCanvas 接线 */}
       {view === 'mind' && (
         <footer className="editor-bottombar">
           <span className="node-count" data-testid="node-count">
             {nodeCount} 节点
           </span>
-          {!readOnly && doc && (
+          {doc && (
             <CanvasTabBar
               doc={doc}
               canvases={canvases}
@@ -4618,6 +4619,7 @@ export function EditorPage() {
               showToast={showToast}
               onSwitch={switchCanvas}
               onChanged={refresh}
+              readOnly={readOnly}
             />
           )}
           <div className="bottombar-right">
