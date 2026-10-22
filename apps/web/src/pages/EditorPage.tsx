@@ -23,17 +23,15 @@ import {
   redo as coreRedo,
   removeSummary,
   ROOT_NODE_ID,
-  sanitizeCustomForDoc,
+  rootIdOf,
   setCustomField,
   setDocMeta,
   setDescription,
-  setHref,
   setImage,
   setIcon,
   moveImage,
   setNodeSide,
   setNodeTask,
-  setNote,
   setStyle,
   setSummary,
   setText,
@@ -56,9 +54,7 @@ import {
   EDITOR_BASE_FONT_SIZE,
   type CursorLayer,
   DragController,
-  type DocReader,
   type Direction,
-  type IDocHandle,
   layout,
   type LayoutResult,
   MARKER_CATALOG,
@@ -88,6 +84,7 @@ import {
   TextEditorOverlay,
   writeToSystemClipboard,
   Viewport,
+  type ViewportState,
 } from '@gmind/engine';
 import { todayStr } from '@gmind/shared';
 import { attachKeyboardMap, isEditableTarget, resolveDirectEditKey } from '../editor/keyboardMap';
@@ -158,6 +155,13 @@ import {
   startSaveLoop,
 } from '../editor/saveLoop';
 import { useEditorDoc } from '../editor/useEditorDoc';
+import {
+  canvasIdPrefix,
+  handleOf,
+  readerOf,
+  useActiveCanvas,
+  type CanvasSwitchDeps,
+} from '../editor/useActiveCanvas';
 import { useIsMobileViewport } from '../editor/useIsMobileViewport';
 import { exportXmind } from '../editor/xmind-export';
 import { exportImage } from '../editor/image-export';
@@ -317,22 +321,8 @@ export function EditorPage() {
   const readOnly = useIsMobileViewport();
   const { state, error, setTitle, baseUpdatedAtRef } = useEditorDoc(fileId);
   const doc = state?.doc ?? null;
-  const um = state?.um ?? null;
   // 创建者标识依据（M2 Task 6，FR-COL-005）：GET /api/files/:id 扩展字段
   const ownerUserId = state?.ownerUserId ?? null;
-
-  // dev-only 性能压测钩子（e2e/perf-editor.spec.ts 专用）：页面上下文经
-  // window.__gmind.getDoc() 取活动 doc 实例（脚本另用 /@id/@gmind/core 动态导入
-  // 复用页面同一模块实例）。import.meta.env.DEV 在生产构建为 false，本副作用被剔除。
-  useEffect(() => {
-    if (!import.meta.env.DEV || !doc) return;
-    (window as unknown as { __gmind?: { getDoc: () => Y.Doc } }).__gmind = {
-      getDoc: () => doc,
-    };
-    return () => {
-      delete (window as unknown as { __gmind?: unknown }).__gmind;
-    };
-  }, [doc]);
 
   const svgRef = useRef<SVGSVGElement | null>(null);
   const sceneRef = useRef<SceneRoot | null>(null);
@@ -368,6 +358,54 @@ export function EditorPage() {
   // （含主题切换重建场景后）随新布局盒子整集重画。
   const cursorLayerRef = useRef<CursorLayer | null>(null);
   const remoteCursorsRef = useRef<RemoteCursor[]>([]);
+
+  // —— 画布状态中枢（多画布计划三 Task 1）——
+  // activeCanvasId 本地视图态的唯一事实源在 useActiveCanvas（meta.activeCanvasId 仅
+  // 作 LWW 持久化，远端改写不强拽本地视图）；此处只做视图侧接线：闭包全部只读 ref /
+  // 稳定单例（overlay），useMemo 空依赖保 controller 不因重渲染重建（UM 缓存与视口
+  // 存档随之保全）。rebuildForCanvas 经 canvasRebuildRef 桥到装配 effect 内的
+  // rebuildScene（装配晚于本 hook 创建，未装配时 no-op——首装由装配 effect 按
+  // activeCanvasIdRef 直接绑定，不经切换编排）。
+  const canvasRebuildRef = useRef<((saved: ViewportState | null) => void) | null>(null);
+  const canvasSwitchDeps = useMemo<CanvasSwitchDeps>(
+    () => ({
+      captureViewport: () => viewportRef.current?.getState() ?? null,
+      rebuildForCanvas: (_canvasId, saved) => {
+        canvasRebuildRef.current?.(saved);
+      },
+      resetEphemeral: () => {
+        if (overlay.isOpen) overlay.close(true); // 提交在途行内编辑（落旧画布）
+        // 未开编辑的 pending 新建：作废弃置不回收（同「Tab 后点了别处」口径）
+        pendingEditRef.current = null;
+        pendingCancelRef.current = null;
+        selectionRef.current?.clear(); // 清空选区（onChange 顺带重刷类+广播空选区）
+        imageFocusRef.current = null;
+        setEditingClass(null);
+      },
+    }),
+    [],
+  );
+  const { um, activeCanvasIdRef, umRef, switchCanvas } = useActiveCanvas(doc, canvasSwitchDeps);
+  /** 全部读/写路径的当帧画布透传源（空串 = 未装配 → 走 core 缺省解析回退链）。 */
+  const canvasIdGetter = (): string | undefined => activeCanvasIdRef.current || undefined;
+
+  // dev-only 性能压测钩子（e2e/perf-editor.spec.ts 专用）：页面上下文经
+  // window.__gmind.getDoc() 取活动 doc 实例（脚本另用 /@id/@gmind/core 动态导入
+  // 复用页面同一模块实例）。import.meta.env.DEV 在生产构建为 false，本副作用被剔除。
+  // 多画布（计划三 Task 1）：__gmind 增 switchCanvas——画布切换编排的 e2e/调试
+  // 入口，与后续页签条同一通道。
+  useEffect(() => {
+    if (!import.meta.env.DEV || !doc) return;
+    (window as unknown as {
+      __gmind?: { getDoc: () => Y.Doc; switchCanvas: (canvasId: string) => void };
+    }).__gmind = {
+      getDoc: () => doc,
+      switchCanvas,
+    };
+    return () => {
+      delete (window as unknown as { __gmind?: unknown }).__gmind;
+    };
+  }, [doc, switchCanvas]);
   // collab 句柄 ref：afterUserWrite / selection.onChange 需要在装配完成后回调
   // （markEditing / setSelection），时序晚于 startCollab 的调用点。
   const collabHandleRef = useRef<CollabHandle | null>(null);
@@ -1931,7 +1969,7 @@ export function EditorPage() {
     const ids = [...selection.selected].filter((id) => id !== ROOT_NODE_ID);
     if (ids.length === 0) return;
     try {
-      await writeToSystemClipboard(copyNodes(readerOf(doc), ids));
+      await writeToSystemClipboard(copyNodes(readerOf(doc, canvasIdGetter), ids));
     } catch (e) {
       showToast(clipboardErrorMessage(e));
     }
@@ -1948,7 +1986,7 @@ export function EditorPage() {
     if (ids.length === 0) return;
     try {
       writeToSystemClipboard(
-        cutNodes(handleOf(doc), ids, (deleteIds) => {
+        cutNodes(handleOf(doc, canvasIdGetter), ids, (deleteIds) => {
           if (deleteIds.length === 0) return; // 空删集不上报（防御：上游已滤空）
           deleteNodes(doc, deleteIds, ORIGIN_USER);
           track('node_delete', { via, nodeCount: countAliveReachable(doc) }, fileId);
@@ -2023,10 +2061,10 @@ export function EditorPage() {
       if (clip.hasImage) return;
       const idx = getNode(doc, parentId)?.childIds.length ?? 0;
       if (clip.internal) {
-        await pasteNodes(handleOf(doc), parentId, idx, clip.internal, undefined, remapImageKey);
+        await pasteNodes(handleOf(doc, canvasIdGetter), parentId, idx, clip.internal, undefined, remapImageKey);
         fitPendingRef.current = true;
       } else if (clip.text !== null && clip.text.trim() !== '') {
-        pasteText(handleOf(doc), parentId, idx, clip.text);
+        pasteText(handleOf(doc, canvasIdGetter), parentId, idx, clip.text);
         fitPendingRef.current = true;
       } else {
         return; // 无可粘贴内容：无操作
@@ -3033,7 +3071,7 @@ export function EditorPage() {
   // —— 引擎装配主 effect ——
   useEffect(() => {
     if (!state) return;
-    const { doc: d, um: manager } = state;
+    const { doc: d } = state;
     const svgEl = svgRef.current;
     if (!svgEl) return;
 
@@ -3047,7 +3085,7 @@ export function EditorPage() {
       setTick((t) => t + 1);
     };
 
-    const reader = readerOf(d);
+    const reader = readerOf(d, canvasIdGetter);
     const depthById = new Map<string, number>();
     let rafId = 0;
     let scheduled = false;
@@ -3059,7 +3097,7 @@ export function EditorPage() {
       // 聚焦自动失效（键盘导航/框选/清空/远端变更都经此处收敛）。
       let focusId = imageFocusRef.current;
       if (focusId) {
-        const snap = getNode(d, focusId);
+        const snap = getNode(d, focusId, canvasIdGetter());
         const valid =
           selection.selected.size === 1 &&
           selection.selected.has(focusId) &&
@@ -3071,7 +3109,7 @@ export function EditorPage() {
           focusId = null;
         }
       }
-      const theme = THEMES[resolveThemeId(getMeta(d).themeId)];
+      const theme = THEMES[resolveThemeId(getMeta(d, canvasIdGetter()).themeId)];
       for (const [id, entry] of scene.nodeEntries) {
         const selected = selection.selected.has(id);
         entry.g.classList.toggle('gm-selected', selected);
@@ -3085,7 +3123,7 @@ export function EditorPage() {
             const style = resolveNodeStyle(
               theme,
               depthById.get(id) ?? 0,
-              getNode(d, id)?.style ?? {},
+              getNode(d, id, canvasIdGetter())?.style ?? {},
             );
             rect.style.stroke = style.border;
             rect.style.strokeWidth = String(theme.nodeBorderWidth);
@@ -3102,11 +3140,11 @@ export function EditorPage() {
 
     /** 节点图片矩形（场景坐标）；无图/已删/无盒 → null。手柄与聚焦轮廓共用。 */
     const nodeImageRectOf = (id: string): ImageRect | null => {
-      const snap = getNode(d, id);
+      const snap = getNode(d, id, canvasIdGetter());
       if (!snap || snap.deleted || !snap.image) return null;
       const box = boxesRef.current.find((b) => b.id === id);
       if (!box) return null;
-      const theme = THEMES[resolveThemeId(getMeta(d).themeId)];
+      const theme = THEMES[resolveThemeId(getMeta(d, canvasIdGetter()).themeId)];
       return imageSceneRect(box, snap.image, theme.nodePaddingX);
     };
 
@@ -3142,12 +3180,19 @@ export function EditorPage() {
     };
     syncImageHandlesRef.current = syncImageHandles;
 
-    /** 重建场景 + 视口 + 拖拽（主题切换/首次装配；carry-in 裁决 3）。 */
-    const rebuildScene = (): void => {
+    /** 重建场景 + 视口 + 拖拽（主题切换/首次装配；carry-in 裁决 3）。
+     *  多画布（计划三 Task 1）：场景 idPrefix 从当前画布 id 派生（canvasIdPrefix
+     *  契约）；viewportRestore 显式给切换编排用——ViewportState = 恢复存档，
+     *  null = 首访无存档（置 fitPending 交下一帧 rerender fit）；缺省
+     *  （undefined）= 主题切换等现状路径，保留旧视口（getState/restore 取代
+     *  原逐字段拷贝先例，语义等价）。 */
+    const rebuildScene = (viewportRestore?: ViewportState | null): void => {
       const prev = viewportRef.current;
+      const prevState = prev ? prev.getState() : null; // 先快照再 destroy
       dragRef.current?.destroy();
       prev?.destroy();
-      const scene = createScene(svgEl);
+      const canvasId = canvasIdGetter();
+      const scene = createScene(svgEl, canvasId ? { idPrefix: canvasIdPrefix(canvasId) } : undefined);
       sceneRef.current = scene;
       // 远端光标层（M2 Task 5）：挂 nodesLayer 末尾最上层；主题切换重建场景时随
       // 场景整体重建（createCursorLayer 幂等移除旧层），ref 换新句柄。
@@ -3171,10 +3216,13 @@ export function EditorPage() {
       imageDragLayerRef.current = createImageDragLayer(wrapper);
       svgEl.appendChild(wrapper);
       const vp = new Viewport(svgEl, wrapper);
-      if (prev) {
-        vp.scale = prev.scale;
-        vp.tx = prev.tx;
-        vp.ty = prev.ty;
+      if (viewportRestore !== undefined) {
+        // 画布切换编排：显式恢复存档；无存档（null）→ 首访 fit（rerender 消费
+        // fitPendingRef）。restore 内部走 set+apply，transform 同步回写。
+        if (viewportRestore === null) fitPendingRef.current = true;
+        else vp.restore(viewportRestore);
+      } else if (prevState !== null) {
+        vp.restore(prevState); // 主题切换等现状路径：视口保留
       }
       vp.apply(); // fix round 1：构造只写恒等 transform，字段拷贝后必须显式回写
       vp.attach();
@@ -3190,14 +3238,14 @@ export function EditorPage() {
         svg: svgEl,
         viewport: vp,
         getBoxes: () => boxesRef.current,
-        isDescendant: (id, candidateId) => subtreeIds(d, id).includes(candidateId),
+        isDescendant: (id, candidateId) => subtreeIds(d, id, canvasIdGetter()).includes(candidateId),
         // 文档子级序（M7c-D1）：sibling 落点 index 结算输入（engine 纯计算在事务外）。
-        childrenIdsOf: (id) => childrenIds(d, id),
+        childrenIdsOf: (id) => childrenIds(d, id, canvasIdGetter()),
         // 根级左列门控（2026-10-09 需求方修复「左侧没有分支主题时，右侧分支无法拖到
         // 左侧」）：mindmap 恒开放——拖到左半即建首个左列主题（onDrop 内按 target.side
         // setNodeSide 持久化）；logic 向右结构恒右（布局不读 side）；org（down）不经
         // 此门控。
-        rootLeftAllowed: () => getMeta(d).structureType === 'mindmap',
+        rootLeftAllowed: () => getMeta(d, canvasIdGetter()).structureType === 'mindmap',
         // 组拾起（2026-09-30 需求方批量拖动）：按下节点命中当前多选（size>1 且含该
         // 节点）→ 返回整组 id，按布局序（box.y 再 box.x 升序）排序——释放端按
         // index+i 递增插入即还原组内序；排除 root（root 不可移动，组不含 root）。
@@ -3240,7 +3288,7 @@ export function EditorPage() {
                 // 哪侧；setNodeSide 同值零事务幂等）。target.side 仅 root 级落点携带；
                 // 仅 mindmap 消费（logic/org 布局不读）。
                 if (target.side !== undefined && target.parentId === ROOT_NODE_ID
-                    && getMeta(d).structureType === 'mindmap') {
+                    && getMeta(d, canvasIdGetter()).structureType === 'mindmap') {
                   for (const id of ids) setNodeSide(d, id, target.side);
                 }
               }
@@ -3264,7 +3312,9 @@ export function EditorPage() {
     };
 
     const rerender = (): void => {
-      const m = getMeta(d);
+      const canvasId = canvasIdGetter(); // 当前画布口径（多画布 Task 1）
+      const canvasRootId = rootIdOf(d, canvasId);
+      const m = getMeta(d, canvasId);
       const resolvedThemeId = resolveThemeId(m.themeId);
       const theme = THEMES[resolvedThemeId];
       if (sceneRef.current === null || themeRef.current !== resolvedThemeId) {
@@ -3283,9 +3333,11 @@ export function EditorPage() {
         structure: m.structureType,
         theme,
         measure,
+        // 多画布（计划二接口）：布局起始根 = 当前画布 rootId
+        rootId: canvasRootId,
         // carry-in 裁决 2：样式闭合 doc 读取
         styleOf: (id, depth) =>
-          resolveNodeStyle(theme, depth, getNode(d, id)?.style ?? {}).textStyle,
+          resolveNodeStyle(theme, depth, getNode(d, id, canvasId)?.style ?? {}).textStyle,
         // 简洁模式（M7b 补课）：紧凑盒测量（描述/任务行不占几何，进度内联）。
         // ref 直读最新值——切换当帧生效，不等 React 提交（viewRef 同款裁定）。
         compact: compactRef.current,
@@ -3296,8 +3348,8 @@ export function EditorPage() {
       for (const b of result.nodes) depthById.set(b.id, b.depth);
 
       const nodeData = new Map<string, NodeVisual>();
-      for (const id of subtreeIds(d, ROOT_NODE_ID)) {
-        const snap = getNode(d, id);
+      for (const id of subtreeIds(d, canvasRootId, canvasId)) {
+        const snap = getNode(d, id, canvasId);
         if (!snap || snap.deleted) continue;
         nodeData.set(id, {
           text: snap.text,
@@ -3325,7 +3377,7 @@ export function EditorPage() {
             ),
             // 人员进度列头像（2026-10-11 第二步）：拉平条目 + 成员目录显示名
             // （同 ownerNames 口径；engine 任务行绘制圆形文字头像+弧形进度环）。
-            assignees: assigneeEntriesOf(d, id).map((e) => ({
+            assignees: assigneeEntriesOf(d, id, canvasId).map((e) => ({
               ...e,
               name: memberIndexRef.current.get(e.user)?.nickname ?? e.user.slice(0, 8),
               avatar: avatarSrcOf(memberIndexRef.current.get(e.user)?.avatar ?? null, e.user),
@@ -3336,7 +3388,7 @@ export function EditorPage() {
       renderScene(scene, {
         layout: result,
         theme,
-        styleOf: (id) => resolveNodeStyle(theme, depthById.get(id) ?? 0, getNode(d, id)?.style ?? {}),
+        styleOf: (id) => resolveNodeStyle(theme, depthById.get(id) ?? 0, getNode(d, id, canvasId)?.style ?? {}),
         nodeData,
         // 逾期判定「今天」（M7c-C2 接线）：宿主显式传当日，与表格视图口径一致
         today: todayStr(),
@@ -3373,6 +3425,16 @@ export function EditorPage() {
     // 桥接出装配闭包（M7b 补课）：简洁模式切换（纯显示偏好、无文档写入）经此
     // 入口触发画布重排；卸载置空防悬挂调用。
     scheduleRerenderRef.current = scheduleRerender;
+    // 画布切换桥（多画布 Task 1）：controller 编排经此调装配闭包——重建场景
+    // （reader 惰性绑新画布 + idPrefix 从画布 id 派生）；themeRef 对齐新画布
+    // 主题（防紧随的 rerender 因主题差二次重建）；同步缩放指示。saved=null
+    // 的首访 fit 由 rebuildScene 置 fitPendingRef、下一帧 rerender 消费。
+    canvasRebuildRef.current = (saved) => {
+      rebuildScene(saved);
+      themeRef.current = resolveThemeId(getMeta(d, canvasIdGetter()).themeId);
+      syncZoom();
+      scheduleRerender();
+    };
 
     // —— 评论拉取（FR-CMT-002）：进入文档全量 GET；此后仅 comment-updated 广播
     // （服务端在创建/回复成功后广播，含本端自己的 POST——广播经 WS 回来同样触发
@@ -3531,8 +3593,14 @@ export function EditorPage() {
       isEditorOpen: () => overlay.isOpen,
       // 表格视图：画布写/导航键位让路（M7a-T4；撤销/重做不受此闸，见 keyboardMap 注释）
       isInactive: () => viewRef.current === 'table',
-      undo: () => coreUndo(manager),
-      redo: () => coreRedo(manager),
+      undo: () => {
+        const m = umRef.current; // 当前画布撤销栈（裁定 2：不跨画布）
+        if (m) coreUndo(m);
+      },
+      redo: () => {
+        const m = umRef.current;
+        if (m) coreRedo(m);
+      },
       onEnter: handleEnter,
       onEditSelected: () => openNodeEditor(primaryId()),
       onTab: handleTab,
@@ -3578,7 +3646,9 @@ export function EditorPage() {
     svgEl.addEventListener('wheel', onWheelSync);
 
     rerender();
-    selection.selectOnly(ROOT_NODE_ID); // 默认选中中心主题（「选中 root 按 Tab」起点）
+    // 默认选中当前画布中心主题（「选中 root 按 Tab」起点；多画布 Task 1：
+    // 初始画布可能不是迁移首画布，rootId 按画布解析）
+    selection.selectOnly(rootIdOf(d, canvasIdGetter()));
     // 首帧 fit 只缩不放（fitCanvas(1)，kimi 复验 P5）：新文档不被放大到 400%，默认
     // 100% 居中；平移仍居中，工具栏「适应画布」路径不传 maxScale 不受影响。
     requestAnimationFrame(() => fitCanvas(1));
@@ -3604,6 +3674,7 @@ export function EditorPage() {
       collab.destroy(); // provider + IndexedDB 本地副本一并收尾（顺序：先冲刷 saveLoop 决策再断链）
       commentsRefreshRef.current = null; // 文件切换不继承上一文件的评论刷新入口
       scheduleRerenderRef.current = null; // 文件切换不继承上一文件的画布重排入口
+      canvasRebuildRef.current = null; // 文件切换不继承画布切换桥（多画布 Task 1）
       commentCountsRef.current = {};
       setComments({ threads: [], counts: {} });
       setCommentFilter(null);
@@ -3628,7 +3699,6 @@ export function EditorPage() {
       imageFocusRef.current = null;
       layoutRef.current = null;
       themeRef.current = '';
-      void manager.destroy();
     };
   }, [state, fileId, readOnly]);
 
@@ -4645,6 +4715,8 @@ export function EditorPage() {
 // ---------------------------------------------------------------------------
 // core → engine 适配器（模块级纯函数，绑定 doc）
 // ---------------------------------------------------------------------------
+// readerOf/handleOf 已迁入 ../editor/useActiveCanvas（多画布计划三 Task 1：画布
+// 绑定版，末位透传 canvasId 惰性解析），本文件自该模块导入。
 
 /** 剪贴板错误 → 用户文案（M1a 准入欠账，M1 验收修复轮补齐）：
  * engine clipboard 抛 Error('TEXT_TOO_LONG')/'PARENT_INVALID' 与 children 形状
@@ -4655,40 +4727,4 @@ function clipboardErrorMessage(e: unknown): string {
   if (msg === 'TEXT_TOO_LONG') return '节点文本长度已达上限';
   if (msg === 'PARENT_INVALID') return '粘贴目标无效';
   return e instanceof Error ? e.message : '操作失败';
-}
-
-/** @gmind/core 读 API → engine DocReader（summaries 供概要 bracket 布局，M6 T6）。 */
-function readerOf(d: Y.Doc): DocReader {
-  return {
-    getMeta: () => getMeta(d),
-    getNode: (id) => getNode(d, id),
-    childrenIds: (id) => childrenIds(d, id),
-    summaries: () => listSummaries(d),
-  };
-}
-
-/** @gmind/core 写 API → engine IDocHandle（origin 缺省 ORIGIN_USER）。 */
-function handleOf(d: Y.Doc): IDocHandle {
-  return {
-    ...readerOf(d),
-    addChild: (parentId, opts, origin) => addChild(d, parentId, opts, origin ?? ORIGIN_USER),
-    setText: (id, text, origin) => setText(d, id, text, origin ?? ORIGIN_USER),
-    setNote: (id, note, origin) => setNote(d, id, note, origin ?? ORIGIN_USER),
-    setDescription: (id, text, origin) => setDescription(d, id, text, origin ?? ORIGIN_USER),
-    setHref: (id, href, origin) => setHref(d, id, href, origin ?? ORIGIN_USER),
-    setImage: (id, image, origin) => setImage(d, id, image, origin ?? ORIGIN_USER),
-    setIcon: (id, group, value, origin) =>
-      setIcon(d, id, group as IconGroup, value, origin ?? ORIGIN_USER),
-    setStyle: (id, patch, origin) => setStyle(d, id, patch, origin ?? ORIGIN_USER),
-    // custom 透传（engine 剪贴板粘贴路径）：先按目标文档 schema 过滤（未知列/类型
-    // 不符静默丢弃——core sanitizeCustomForDoc 单源，页面不做目录判断），再逐键经
-    // setCustomField 落写（过滤后必合法不抛，粘贴不因跨文档未知列半途失败）。
-    setCustomFields: (id, custom, origin) => {
-      const sanitized = sanitizeCustomForDoc(d, custom);
-      if (sanitized === null) return;
-      for (const [colId, value] of Object.entries(sanitized)) {
-        setCustomField(d, id, colId, value, origin ?? ORIGIN_USER);
-      }
-    },
-  };
 }

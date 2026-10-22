@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type MutableRefObject } from 'react';
 import * as Y from 'yjs';
-import { createUndoManager, docFromState, ORIGIN_USER, setDocMeta } from '@gmind/core';
+import { docFromState, ORIGIN_USER, setDocMeta } from '@gmind/core';
 import { api, ApiError } from '../api/client';
 import { track } from '../api/events';
 import { loadDocFromIndexedDB } from './collab';
@@ -9,8 +9,8 @@ import { loadDocFromIndexedDB } from './collab';
  * 编辑器文档装载 hook — M1b Task 11；M2 Task 3 增加离线刷新兜底；M3a Task 2 起
  * 记录写序 base（baseUpdatedAtRef）。
  *
- * GET /api/files/:id → docState(base64) → docFromState（导入即 normalize）
- * → createUndoManager；响应的 updatedAt（行值 ISO）写入 baseUpdatedAtRef——saveLoop
+ * GET /api/files/:id → docState(base64) → docFromState（导入即 normalize）；
+ * 响应的 updatedAt（行值 ISO）写入 baseUpdatedAtRef——saveLoop
  * PUT 携带为 baseUpdatedAt（陈旧写序守卫，准入 7.1），后续由 persisted ack 携带的
  * updatedAt 经 startCollab 的 onPersisted 回调刷新；随后 POST /:id/open
  * （fire-and-forget，FR-ACC-004 打开标记）。
@@ -22,7 +22,9 @@ import { loadDocFromIndexedDB } from './collab';
 
 export interface EditorDocState {
   doc: Y.Doc;
-  um: Y.UndoManager;
+  /** 撤销栈已迁画布级（多画布计划三 Task 1，裁定 2 不跨画布）：UndoManager 由
+   *  useActiveCanvas 按画布缓存装配（createUndoManager(doc, canvasId)），本通道
+   *  不再建整文档 scope 实例。 */
   /** 文件所有者（M2 Task 6，FR-COL-005 创建者标识）；离线恢复路径拿不到 → null。 */
   ownerUserId: string | null;
   /** 调用人视角的星标状态（M3b 清偿包，FR-FIL-004）：编辑器工具栏加星切换的初始值；
@@ -76,10 +78,9 @@ export function useEditorDoc(fileId: string): {
       try {
         const meta = await api<FileContentResponse>(`/files/${fileId}`);
         const doc = docFromState(base64ToBytes(meta.docState));
-        const um = createUndoManager(doc);
         if (cancelled) return;
         baseUpdatedAtRef.current = meta.updatedAt; // 写序 base 初始值（准入 7.1）
-        setState({ doc, um, ownerUserId: meta.ownerUserId ?? null, starred: meta.starred ?? false });
+        setState({ doc, ownerUserId: meta.ownerUserId ?? null, starred: meta.starred ?? false });
         void api(`/files/${fileId}/open`, { method: 'POST' }).catch(() => undefined);
       } catch (e) {
         if (cancelled) return;
@@ -91,8 +92,7 @@ export function useEditorDoc(fileId: string): {
           return;
         }
         if (restored) {
-          const um = createUndoManager(restored);
-          setState({ doc: restored, um, ownerUserId: null, starred: false }); // 离线恢复拿不到星标态
+          setState({ doc: restored, ownerUserId: null, starred: false }); // 离线恢复拿不到星标态
           void api(`/files/${fileId}/open`, { method: 'POST' }).catch(() => undefined);
           // error_occur 埋点（M5 Task 4）：GET 失败但本地副本接管 → 已自动恢复
           track('error_occur', { kind: 'load-fail', recovered: true }, fileId);
