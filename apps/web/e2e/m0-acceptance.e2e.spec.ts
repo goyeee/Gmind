@@ -18,7 +18,7 @@ test('M0 验收：新建脑图出现在列表首位', async ({ page }) => {
   await page.getByPlaceholder('验证码（开发环境固定 123456）').fill('123456');
   await page.getByRole('button', { name: '登录', exact: true }).click();
   await expect(page).toHaveURL(/\/workspace/);
-  await page.getByRole('button', { name: '新建脑图' }).click();
+  await page.getByTestId('new-file-btn').click();
   // 新建即开（2026-10-20 重设计）：点新建直接进编辑器
   await expect(page).toHaveURL(/\/edit\//);
   await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '中心主题' })).toBeVisible();

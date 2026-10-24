@@ -3367,7 +3367,10 @@ export function EditorPage() {
       }
       const scene = sceneRef.current;
       if (!scene) return; // 不可达（rebuildScene 必建场景）：类型收窄
-      svgEl.style.background = theme.canvasBackground;
+      svgEl.style.background =
+        // 画布点阵背景（2026-10-24 原型换装）：主题底色打底 + 低对比点阵；当前主题
+        // 全系浅色（gmind-blue/warm/accessible），暗色主题引入时需按主题关掉点阵
+        `radial-gradient(rgb(31 35 41 / 0.07) 1px, transparent 1px) 0 0 / 22px 22px, ${theme.canvasBackground}`;
       // M7c-D2：主题节点圆角暴露为 CSS 变量，行内编辑浮层（.gm-text-editor）圆角
       // 随主题与节点卡片一致（12 套主题 nodeBorderRadius 4~12 不等）。浮层挂 body
       // （非 svg 后代），变量须落 :root 才能被继承。

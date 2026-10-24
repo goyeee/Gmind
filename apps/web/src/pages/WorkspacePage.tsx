@@ -120,6 +120,9 @@ function FileCard(p: FileCardProps): ReactElement {
   return (
     <div className="file-card" data-testid="file-card" onClick={() => !p.renaming && p.onOpen()}>
       <div className="file-thumb">
+        <span className="card-kind" aria-hidden>
+          脑图
+        </span>
         {realThumb ? <img className="file-thumb-img" data-testid="file-thumb-img" src={realThumb} alt="" /> : <Thumb seed={f.id} />}
         <button
           className={'card-star' + (f.starred ? ' starred' : '')}
@@ -159,7 +162,7 @@ function FileCard(p: FileCardProps): ReactElement {
           </div>
         )}
         <div className="card-meta">
-          {relTime(f.updatedAt)} · {collab ? (f.ownerName ?? '协作') : '个人'}
+          {f.nodeCount} 节点 · {relTime(f.updatedAt)}
         </div>
       </div>
       <div className="card-ops" onClick={stop}>
@@ -223,6 +226,8 @@ export function WorkspacePage() {
   const [items, setItems] = useState<FileListItemDetailed[]>([]);
   const [recentItems, setRecentItems] = useState<FileListItemDetailed[]>([]);
   const [recentFilter, setRecentFilter] = useState<RecentFilter>('all');
+  // 模板中心分类（2026-10-24 原型换装）：'all' | category
+  const [tplCat, setTplCat] = useState<string>('all');
   const [search, setSearch] = useState<{ q: string; results: FileListItemDetailed[] } | null>(null);
   const [searchText, setSearchText] = useState('');
   const [error, setError] = useState('');
@@ -507,22 +512,31 @@ export function WorkspacePage() {
               <p>今天也来整理一下思绪吧</p>
             </section>
             <section className="ws-quick">
-              <button className="quick-card" data-testid="quick-create-blank" onClick={() => void createFile()}>
-                <span className="quick-icon" style={{ background: '#eef3ff' }}>
+              <button className="quick-card quick-primary" data-testid="quick-create-blank" onClick={() => void createFile()}>
+                <span className="quick-icon" style={{ background: 'rgba(255,255,255,0.18)' }} aria-hidden>
                   🧠
                 </span>
                 <span className="quick-text">
-                  <strong>空白脑图</strong>
-                  <em>从空白开始，自由发散想法</em>
+                  <strong>新建脑图</strong>
+                  <em>从空白画布开始</em>
                 </span>
               </button>
               <button className="quick-card" data-testid="quick-create-template" onClick={() => switchView('templates')}>
-                <span className="quick-icon" style={{ background: '#e6f7f5' }}>
+                <span className="quick-icon" style={{ background: '#e8f6ee' }} aria-hidden>
                   📚
                 </span>
                 <span className="quick-text">
-                  <strong>从模板创建</strong>
-                  <em>精选结构模板，一键套用快速上手</em>
+                  <strong>模板中心</strong>
+                  <em>精选模板，快速开始</em>
+                </span>
+              </button>
+              <button className="quick-card quick-dashed" data-testid="quick-create-import" onClick={() => importInputRef.current?.click()}>
+                <span className="quick-icon" style={{ background: '#f2f3f5' }} aria-hidden>
+                  📥
+                </span>
+                <span className="quick-text">
+                  <strong>导入文件</strong>
+                  <em>支持 XMind</em>
                 </span>
               </button>
             </section>
@@ -530,10 +544,29 @@ export function WorkspacePage() {
               <div className="ws-section-head">
                 <h2>最近文件</h2>
                 <button className="link" data-testid="recent-view-all" onClick={() => switchView('recent')}>
-                  查看全部
+                  查看全部 →
                 </button>
               </div>
-              <CardGrid list={recentItems.slice(0, 8)} empty="暂无最近文件" testid="home-recent-grid" renderCard={renderCard} />
+              <CardGrid list={recentItems.slice(0, 4)} empty="暂无最近文件" testid="home-recent-grid" renderCard={renderCard} />
+            </section>
+            <section>
+              <div className="ws-section-head">
+                <h2>推荐模板</h2>
+                <button className="link" data-testid="home-more-templates" onClick={() => switchView('templates')}>
+                  更多模板 →
+                </button>
+              </div>
+              <div className="tpl-mini-row">
+                {TEMPLATE_CATALOG.slice(0, 3).map((t) => (
+                  <button key={t.id} className="tpl-mini" data-testid={`tpl-mini-${t.id}`} onClick={() => switchView('templates')}>
+                    <span className="tpl-mini-thumb" aria-hidden>
+                      <Thumb seed={t.id} accent={t.accent} />
+                    </span>
+                    <span className="tpl-mini-name">{t.name}</span>
+                    <span className="tpl-mini-blurb">{t.blurb}</span>
+                  </button>
+                ))}
+              </div>
             </section>
             <section>
               <div className="ws-section-head">
@@ -578,18 +611,48 @@ export function WorkspacePage() {
           <>
             <div className="ws-section-head">
               <h2>协作空间</h2>
-              <span className="ws-section-sub">与外部协作的所有文件</span>
+              <span className="ws-section-sub">和团队在同一张画布上思考</span>
             </div>
             <CardGrid list={items} empty="暂无协作文件——打开文档，成员面板一键拉取站内用户" renderCard={renderCard} />
           </>
         ) : (
           <>
+            {(() => {
+              const hero = TEMPLATE_CATALOG[0];
+              return hero ? (
+                <section className="tpl-hero" data-testid="template-hero">
+                  <div className="tpl-hero-text">
+                    <span className="tpl-hero-badge">本周精选</span>
+                    <h2>{hero.name}</h2>
+                    <p>{hero.blurb}</p>
+                    <div className="tpl-hero-actions">
+                      <button className="tpl-hero-use" data-testid="template-hero-use" onClick={() => void createFromTemplate(hero)}>
+                        使用此模板 →
+                      </button>
+                      <button className="tpl-hero-preview" onClick={() => setPreviewTpl(hero)}>
+                        预览
+                      </button>
+                    </div>
+                  </div>
+                  <div className="tpl-hero-thumb" aria-hidden>
+                    <Thumb seed={hero.id} accent={hero.accent} />
+                  </div>
+                </section>
+              ) : null;
+            })()}
+            <div className="tpl-cats" data-testid="template-cats">
+              {(['all', ...Array.from(new Set(TEMPLATE_CATALOG.map((t) => t.category ?? ''))).filter(Boolean)] as string[]).map((c) => (
+                <button key={c} className={tplCat === c ? 'active' : ''} data-testid={`template-cat-${c}`} onClick={() => setTplCat(c)}>
+                  {c === 'all' ? '全部' : c}
+                </button>
+              ))}
+            </div>
             <div className="ws-section-head">
               <h2>模板库</h2>
               <span className="ws-section-sub">内置精选模板，一键套用</span>
             </div>
             <div className="file-grid" data-testid="template-grid">
-              {TEMPLATE_CATALOG.map((t) => (
+              {TEMPLATE_CATALOG.filter((t) => tplCat === 'all' || t.category === tplCat).map((t) => (
                 <button
                   key={t.id}
                   className="file-card template-card"
@@ -601,7 +664,10 @@ export function WorkspacePage() {
                   </div>
                   <div className="file-card-body">
                     <div className="card-title">{t.name}</div>
-                    <div className="card-meta">{t.blurb}</div>
+                    <div className="card-meta">
+                      {t.category && <span className="tpl-cat-tag">{t.category}</span>}
+                      {t.blurb}
+                    </div>
                   </div>
                 </button>
               ))}

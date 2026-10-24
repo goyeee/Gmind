@@ -11,6 +11,8 @@ export interface WorkspaceTemplate {
   name: string;
   /** 画廊卡片/预览的一句话简介。 */
   blurb: string;
+  /** 模板中心分类 chip（2026-10-24 原型换装：全部/会议/项目/团队/学习/个人；缺省只在「全部」出现）。 */
+  category?: string;
   /** 装饰性缩略图主色（企微色系取板）。 */
   accent: string;
   spec: TemplateSpec;
@@ -22,6 +24,7 @@ export const TEMPLATE_CATALOG: WorkspaceTemplate[] = [
     id: 'weekly-plan',
     name: '每周计划',
     blurb: '按工作日铺开一周安排，适合个人/团队周计划',
+    category: '个人',
     accent: '#3370ff',
     spec: {
       title: '每周计划',
@@ -38,6 +41,7 @@ export const TEMPLATE_CATALOG: WorkspaceTemplate[] = [
     id: 'meeting-notes',
     name: '会议纪要',
     blurb: '议题/结论/待办三段式，开完即成型',
+    category: '会议',
     accent: '#0d9488',
     spec: {
       title: '会议纪要',
@@ -53,6 +57,7 @@ export const TEMPLATE_CATALOG: WorkspaceTemplate[] = [
     id: 'okr',
     name: 'OKR 目标管理',
     blurb: '目标 → 关键结果 → 行动项，季度对齐神器',
+    category: '团队',
     accent: '#7c3aed',
     spec: {
       title: 'OKR 目标管理',
@@ -74,6 +79,7 @@ export const TEMPLATE_CATALOG: WorkspaceTemplate[] = [
     id: 'reading-notes',
     name: '读书笔记',
     blurb: '摘录/感悟/行动三层沉淀，读完不白读',
+    category: '学习',
     accent: '#ea580c',
     spec: {
       title: '读书笔记',
@@ -89,6 +95,7 @@ export const TEMPLATE_CATALOG: WorkspaceTemplate[] = [
     id: 'project-review',
     name: '项目复盘',
     blurb: '回顾目标/评估结果/分析原因/总结规律',
+    category: '项目',
     accent: '#db2777',
     spec: {
       title: '项目复盘',
@@ -104,6 +111,7 @@ export const TEMPLATE_CATALOG: WorkspaceTemplate[] = [
     id: 'org-structure',
     name: '组织架构图',
     blurb: '自上而下的组织/汇报关系梳理（org 结构）',
+    category: '团队',
     accent: '#0891b2',
     spec: {
       title: '组织架构',
