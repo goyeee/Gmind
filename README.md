@@ -16,7 +16,7 @@ pnpm db:migrate          # 建表（gmind 库）
 pnpm dev                 # server :3000 + web :5173
 ```
 
-打开 http://localhost:5173 ，手机号 + 验证码 `123456` 登录（开发环境 mock）。
+打开 http://localhost:5173 ，用邮箱验证码注册、邮箱+密码登录（开发环境验证码固定 `123456`，不发真实邮件）。需要演示数据时空库跑一次 `pnpm --filter @gmind/server exec tsx scripts/seed-demo.ts`（server 运行中；演示超管 demo@gmind.dev / demo123456）。
 
 > 说明：MinIO / MailHog 的容器定义已就绪，但镜像来自 Docker Hub；若所在网络拉取受限，二者可暂缺 —— M0 代码路径不依赖它们（文件上传与邮件链路属后续里程碑）。
 
