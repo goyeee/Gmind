@@ -20,11 +20,12 @@ export const EMAIL_CODE_MAX_FAILS = 5;
  * - `email_code_wait:{scene}:{email}`——60s 重发冷却，SET NX EX 60 原子占位，命中 → 429；
  * - `email_code_fail:{scene}:{email}`——验码失败计数，每次错码 INCR + EXPIRE 600，达 5 删码。
  *
- * 码值：dev/test 恒 env.DEV_MAIL_CODE（默认 '123456'，e2e/本地联调可预判）；
- * production 恒随机 6 位数字——不读 DEV_MAIL_CODE，即使设置了也忽略。
+ * 码值与发信（2026-11-13 评审裁定）：dev/test 恒 env.DEV_MAIL_CODE（默认 '123456'，
+ * e2e/本地联调可预判）且不发真实邮件——issue 完全不依赖 SMTP，无配置也成功；
+ * production 恒随机 6 位数字（不读 DEV_MAIL_CODE，设置了也忽略），经真实 SMTP 发信，
+ * sendMail false → 500 并解除 60s 冷却放行重试（一次 SMTP 抖动不得锁死用户 60s）。
  *
- * sendMail 永不抛错的例外：验证码是唯一把 false 当失败的调用方（发信失败 → 500，
- * 并解除 60s 冷却放行重试——否则一次 SMTP 抖动 = 用户 60s 拿不到码）。
+ * 发码成功即清失败计数（评审裁定）：新码=新尝试，旧计数针对旧码已无意义。
  */
 @Injectable()
 export class EmailCodeService {
@@ -51,23 +52,27 @@ export class EmailCodeService {
     return env.DEV_MAIL_CODE;
   }
 
-  /** 发码：60s 冷却 → 生成码 → 发信 → 写码（EX 600）。冷却占位后发信失败须删占位。 */
+  /** 发码：60s 冷却 → 生成码 → production 发真实邮件（失败 500 并解除冷却）→ 写码
+   *  （EX 600）+ 清失败计数。dev/test 不发信（无 SMTP 配置也成功）。 */
   async issue(scene: EmailCodeScene, email: string): Promise<void> {
     const acquired = await this.redis.set(this.waitKey(scene, email), '1', 'EX', EMAIL_CODE_WAIT_SEC, 'NX');
     if (!acquired) {
       throw new HttpException('验证码发送过于频繁，请 60 秒后再试', HttpStatus.TOO_MANY_REQUESTS);
     }
     const code = this.generateCode();
-    const sent = await this.mail.sendMail(
-      email,
-      'Gmind 邮箱验证码',
-      `你的验证码是 ${code}，10 分钟内有效。若非本人操作，请忽略本邮件。`,
-    );
-    if (!sent) {
-      await this.redis.del(this.waitKey(scene, email));
-      throw new HttpException('邮件发送失败，请稍后重试；若持续失败请联系管理员', HttpStatus.INTERNAL_SERVER_ERROR);
+    if (env.NODE_ENV === 'production') {
+      const sent = await this.mail.sendMail(
+        email,
+        'Gmind 邮箱验证码',
+        `你的验证码是 ${code}，10 分钟内有效。若非本人操作，请忽略本邮件。`,
+      );
+      if (!sent) {
+        await this.redis.del(this.waitKey(scene, email));
+        throw new HttpException('邮件发送失败，请稍后重试；若持续失败请联系管理员', HttpStatus.INTERNAL_SERVER_ERROR);
+      }
     }
     await this.redis.set(this.codeKey(scene, email), code, 'EX', EMAIL_CODE_TTL_SEC);
+    await this.redis.del(this.failKey(scene, email));
   }
 
   /** 验码：不符/过期 → 失败计数 INCR（EXPIRE 600，达 5 删码）并 throw 400；成功删码删计数。 */

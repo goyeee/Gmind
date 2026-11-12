@@ -15,7 +15,8 @@ import { env } from '../config/env';
  *
  * sendMail 永不抛错：邮件是尽力而为的旁路，投递失败只影响送达与否，不得波及
  * 通知落库/邀请落库/定时清理主流程；返回布尔供调用方（将来）回写 notifications.emailed_at。
- * （例外见 EmailCodeService：验证码是唯一把 false 当失败的调用方。）
+ * （production 下唯一把 false 当失败的调用方是 EmailCodeService：验证码发不出去=
+ * 注册/找回密码不可用。dev/test 不走此路径，见 email-code.service.ts。）
  */
 @Injectable()
 export class MailService {
