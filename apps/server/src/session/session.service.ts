@@ -55,6 +55,17 @@ export class SessionService {
     await this.redis.zrem(this.userKey(data.userId), token);
   }
 
+  /** 批量吊销某用户全部会话（2026-11-12 重做，忘记密码重置后踢端，Task 4 resetPassword
+   *  消费）：zrange 取全量 token 逐个 del 会话键，最后删 zset 键本身（下次 create 重建）。 */
+  async revokeAllForUser(userId: string): Promise<void> {
+    const zkey = this.userKey(userId);
+    const tokens = await this.redis.zrange(zkey, 0, -1);
+    for (const t of tokens) {
+      await this.redis.del(this.sessKey(t));
+    }
+    await this.redis.del(zkey);
+  }
+
   private ticketKey(ticket: string): string {
     return `ws_ticket:${ticket}`;
   }

@@ -1,34 +1,39 @@
 import { z } from 'zod';
+import { codeSchema, emailSchema, NICKNAME_LENGTH_MESSAGE, PASSWORD_LENGTH_MESSAGE } from '@gmind/shared';
 
 /**
- * 账号设置端点请求 schema（M5 Task 1，FR-ACC-002 收口 + FR-CMT-006 通知偏好收口）。
+ * 账号设置端点请求 schema（2026-11-12 账号体系重做 + FR-CMT-006 通知偏好收口）。
  * 校验失败由全局 ZodExceptionFilter 统一转 400 {message}。
+ *
+ * 邮箱/验证码格式与归一（trim+lowercase）直接复用 @gmind/shared 单点 schema
+ * （Task 1 契约），服务端不再写第二份；密码/昵称长度文案复用 shared 导出常量，防漂移。
  */
 
-/** 改密：强度 = 8~64 位（PRD 未定义强度规则，登记：仅约束长度，任意可见字符均接受）。
- *  有密码（邮箱注册设置过）用户带 currentPassword；无密码（手机号注册）用户带 code。 */
+/** 改密：强度 = 6~64 位（与注册/登录/重置统一口径，文案单点 PASSWORD_LENGTH_MESSAGE，
+ *  旧 8~64 口径作废）；邮箱注册制人人有密码，恒带 currentPassword 核身。 */
 export const changePasswordSchema = z.object({
-  newPassword: z
-    .string()
-    .min(8, '新密码长度需为 8~64 位，请调整后重试')
-    .max(64, '新密码长度需为 8~64 位，请调整后重试'),
-  currentPassword: z.string().min(1).optional(),
-  code: z.string().min(4).max(6).optional(),
+  currentPassword: z.string().min(1, '请输入当前密码'),
+  newPassword: z.string().min(6, PASSWORD_LENGTH_MESSAGE).max(64, PASSWORD_LENGTH_MESSAGE),
 });
 
-/** 换绑基础结构：channel + 新身份 + 验证码。新身份格式校验在 service 内按 channel
- *  二次解析（brief 语义顺序：code 校验 → 格式校验 → 占用检查）。 */
-export const rebindRequestSchema = z.object({
-  channel: z.enum(['phone', 'email']),
-  newIdentity: z.string().min(1).max(191),
-  code: z.string().min(4).max(6),
+/** 换绑邮箱（POST /users/me/email）：当前密码核身 + email_bind 场景验证码 + 新邮箱
+ *  （shared emailSchema 单点 trim+lowercase+格式）。核身顺序（密码 → 码 → 占用）在 service。 */
+export const rebindEmailSchema = z.object({
+  currentPassword: z.string().min(1, '请输入当前密码'),
+  email: emailSchema,
+  code: codeSchema,
 });
 
-/** 新手机号格式（同登录 phoneLoginSchema 的 phone 口径 /^1\d{10}$/）。 */
-export const rebindPhoneIdentitySchema = z.string().regex(/^1\d{10}$/, '手机号格式不正确，请检查后重试');
+/** 换绑手机号（POST /users/me/phone）：仅密码核身；格式同登录手机号口径 /^1\d{10}$/。 */
+export const rebindPhoneSchema = z.object({
+  currentPassword: z.string().min(1, '请输入当前密码'),
+  phone: z.string().regex(/^1\d{10}$/, '手机号格式不正确，请检查后重试'),
+});
 
-/** 新邮箱格式（同登录 emailLoginSchema 的 email 口径）。 */
-export const rebindEmailIdentitySchema = z.string().email('邮箱格式不正确，请检查后重试');
+/** 自助改昵称（PATCH /users/me）：1~32 字符，文案复用 shared 单点导出。 */
+export const updateNicknameSchema = z.object({
+  nickname: z.string().min(1, NICKNAME_LENGTH_MESSAGE).max(32, NICKNAME_LENGTH_MESSAGE),
+});
 
 /** 邮件退订类型（FR-CMT-006）：仅 mention/reply/permission——站内通知不可关闭；
  *  system（FR-FIL-010 回收站提醒恒发）不在可关闭之列，出现在请求中即 400。 */

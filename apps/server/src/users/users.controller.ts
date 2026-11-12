@@ -1,9 +1,16 @@
 import { BadRequestException, Body, Controller, Get, HttpCode, Inject, Patch, Post, Req, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { UserGuard } from '../auth/user.guard';
-import { UsersService } from './users.service';
+import { fullUserView, UsersService } from './users.service';
 import { StorageService, MAX_IMAGE_BYTES } from '../storage/storage.service';
-import { avatarSchema, changePasswordSchema, notifyPrefsSchema, rebindRequestSchema } from './users-request.schema';
+import {
+  avatarSchema,
+  changePasswordSchema,
+  notifyPrefsSchema,
+  rebindEmailSchema,
+  rebindPhoneSchema,
+  updateNicknameSchema,
+} from './users-request.schema';
 
 @Controller('api/users')
 @UseGuards(UserGuard)
@@ -16,23 +23,37 @@ export class UsersController {
 
   @Get('me')
   me(@Req() req: { user: { id: string }; fullUser?: unknown }): unknown {
-    // fullUser 由 UserGuard 装配：id/nickname/avatarUrl + phone/email/hasPassword
-    // （M5 Task 1：账号设置页按身份形态渲染改密区与换绑区）
+    // fullUser 由 UserGuard 经 fullUserView 装配：id/nickname/avatarUrl + phone/email/hasPassword
+    // （账号设置页按身份形态渲染改密区与换绑区）
     return req.fullUser;
   }
 
-  /** 改密（FR-ACC-002 收口）：有密码须 currentPassword，无密码须 code（开发 123456）。 */
+  /** 改密（2026-11-12 重做）：恒旧密码核身（验证码分支已删），成功 204。 */
   @Post('me/password')
   @HttpCode(204)
   async changePassword(@Req() req: { user: { id: string } }, @Body() body: unknown): Promise<void> {
     await this.users.changePassword(req.user.id, changePasswordSchema.parse(body));
   }
 
-  /** 换绑（FR-ACC-002 收口）：code → 格式 → 占用（409）→ 落列。 */
-  @Post('me/rebind')
+  /** 换绑邮箱（2026-11-12 重做）：当前密码 + email_bind 验证码；被占 409，成功 204。 */
+  @Post('me/email')
   @HttpCode(204)
-  async rebind(@Req() req: { user: { id: string } }, @Body() body: unknown): Promise<void> {
-    await this.users.rebind(req.user.id, rebindRequestSchema.parse(body));
+  async rebindEmail(@Req() req: { user: { id: string } }, @Body() body: unknown): Promise<void> {
+    await this.users.rebindEmail(req.user.id, rebindEmailSchema.parse(body));
+  }
+
+  /** 换绑手机号（2026-11-12 重做）：仅当前密码核身；被占 409，成功 204。 */
+  @Post('me/phone')
+  @HttpCode(204)
+  async rebindPhone(@Req() req: { user: { id: string } }, @Body() body: unknown): Promise<void> {
+    await this.users.rebindPhone(req.user.id, rebindPhoneSchema.parse(body));
+  }
+
+  /** 自助改昵称（2026-11-12 重做）：返回设置后的账号视图（形状同 GET me，前端一次刷新）。 */
+  @Patch('me')
+  async updateNickname(@Req() req: { user: { id: string } }, @Body() body: unknown): Promise<unknown> {
+    const user = await this.users.updateNickname(req.user.id, updateNicknameSchema.parse(body).nickname);
+    return fullUserView(user);
   }
 
   /** 通知偏好（FR-CMT-006）：GET 返回解析形态；PATCH 全量替换（非法成员 400）。 */

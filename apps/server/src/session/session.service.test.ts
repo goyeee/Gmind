@@ -54,6 +54,18 @@ describe('SessionService', () => {
     expect(await svc.validate(token)).toBeNull();
   });
 
+  it('revokeAllForUser 后该用户全部 token 失效、zset 键删除；他人会话不受影响（重置密码踢端）', async () => {
+    const { svc, redis } = await makeService();
+    const t1 = await svc.create('u1', false);
+    const t2 = await svc.create('u1', true);
+    const other = await svc.create('u2', false);
+    await svc.revokeAllForUser('u1');
+    expect(await svc.validate(t1.token)).toBeNull();
+    expect(await svc.validate(t2.token)).toBeNull();
+    expect(await redis.exists('user_sessions:u1')).toBe(0);
+    expect(await svc.validate(other.token)).not.toBeNull();
+  });
+
   it('无效 token 返回 null', async () => {
     const { svc } = await makeService();
     expect(await svc.validate('not-exist')).toBeNull();

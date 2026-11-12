@@ -1,6 +1,6 @@
 import { CanActivate, ExecutionContext, Inject, Injectable, UnauthorizedException } from '@nestjs/common';
 import { SessionService } from '../session/session.service';
-import { UsersService } from '../users/users.service';
+import { fullUserView, UsersService } from '../users/users.service';
 
 @Injectable()
 export class UserGuard implements CanActivate {
@@ -24,17 +24,9 @@ export class UserGuard implements CanActivate {
     // systemRole 供 AdminGuard 二段校验（须紧跟 UserGuard 使用）；fullUser 同步带出供前端渲染管理入口
     req.user = { id: user.id, systemRole: user.systemRole };
     req.sessionToken = token;
-    // phone/email/hasPassword（M5 Task 1）：账号设置页按身份形态渲染改密区
-    // （有密码=旧密码验证 / 无密码=验证码核身）与换绑区（展示当前绑定）
-    req.fullUser = {
-      id: user.id,
-      nickname: user.nickname,
-      avatarUrl: user.avatarUrl,
-      phone: user.phone,
-      email: user.email,
-      hasPassword: user.passwordHash !== null,
-      systemRole: user.systemRole,
-    };
+    // fullUser（形状单点 fullUserView，与 GET/PATCH /users/me 同形）：账号设置页渲染
+    // 改密区（2026-11-12 重做：恒旧密码核身）与换绑区（展示当前绑定）
+    req.fullUser = fullUserView(user);
     return true;
   }
 }

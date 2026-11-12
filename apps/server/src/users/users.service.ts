@@ -1,31 +1,10 @@
-import { BadRequestException, ConflictException, Injectable } from '@nestjs/common';
+import { BadRequestException, ConflictException, Inject, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { compare, hash } from 'bcryptjs';
-import type { LoginMethod } from '@gmind/shared';
-import { env } from '../config/env';
+import { EmailCodeService } from '../auth/email-code.service';
 import { UserEntity } from './user.entity';
-import {
-  rebindEmailIdentitySchema,
-  rebindPhoneIdentitySchema,
-  EMAIL_OPT_OUT_TYPES,
-  type EmailOptOutType,
-} from './users-request.schema';
-
-export interface LoginIdentity {
-  method: LoginMethod;
-  phone?: string;
-  email?: string;
-  wechatOpenid?: string;
-  nickname?: string;
-}
-
-/** 换绑请求（已过 rebindRequestSchema 基础校验；格式在 rebind() 内按 channel 二次解析）。 */
-export interface RebindInput {
-  channel: 'phone' | 'email';
-  newIdentity: string;
-  code: string;
-}
+import { EMAIL_OPT_OUT_TYPES, type EmailOptOutType } from './users-request.schema';
 
 /** 通知偏好（FR-CMT-006 + 2026-10-28 P1 总开关）：邮件退订类型集合 + 站内通知总开关
  *  （notifyEnabled，缺省 true）+ 邮件摘要开关（digestEnabled，缺省 true）。 */
@@ -74,84 +53,125 @@ export function digestEnabledOf(raw: string | null): boolean {
   }
 }
 
+/** 账号视图（GET/PATCH /users/me 返回形状）：不外泄 passwordHash。UserGuard 的
+ *  req.fullUser 用同一函数装配（单点，改字段两处同步）。 */
+export function fullUserView(user: UserEntity) {
+  return {
+    id: user.id,
+    nickname: user.nickname,
+    avatarUrl: user.avatarUrl,
+    phone: user.phone,
+    email: user.email,
+    hasPassword: user.passwordHash !== null,
+    systemRole: user.systemRole,
+  };
+}
+
 @Injectable()
 export class UsersService {
-  constructor(@InjectRepository(UserEntity) private readonly repo: Repository<UserEntity>) {}
+  // tsx 无 DI 元数据：类 token 注入显式 @Inject；EmailCodeService（Task 2 产出）供换绑邮箱验码
+  constructor(
+    @InjectRepository(UserEntity) private readonly repo: Repository<UserEntity>,
+    @Inject(EmailCodeService) private readonly emailCode: EmailCodeService,
+  ) {}
 
   findById(id: string): Promise<UserEntity | null> {
     return this.repo.findOneBy({ id });
   }
 
-  findByIdentity(identity: LoginIdentity): Promise<UserEntity | null> {
-    if (identity.method === 'phone') return this.repo.findOneBy({ phone: identity.phone });
-    if (identity.method === 'email') return this.repo.findOneBy({ email: identity.email });
-    return this.repo.findOneBy({ wechatOpenid: identity.wechatOpenid });
+  /** 按邮箱查用户（register/login/换绑占用检查共用；email 已由 shared emailSchema
+   *  归一 trim+lowercase，此处不再二次归一）。 */
+  findByEmail(email: string): Promise<UserEntity | null> {
+    return this.repo.findOneBy({ email });
   }
 
   save(user: UserEntity): Promise<UserEntity> {
     return this.repo.save(user);
   }
 
-  async create(identity: LoginIdentity): Promise<UserEntity> {
+  /** 邮箱注册建号（2026-11-12 重做）：bcrypt hash 在内部做（cost=10，与 changePassword
+   *  一致）；昵称必传（registerSchema 1~32），无默认昵称派生。首注册者=super_admin
+   *  （对齐 mindgrid 语义）：空库建号（count=0）即超管，其余 member。存量库的超管由
+   *  迁移升最早用户；并发首注册存在双双计 0 的竞态（本地单机规模可接受，登记）。
+   *  邮箱占用由 uk_users_email 唯一键兜底（register 前置 findByEmail 检查 + 并发窗口
+   *  兜底转 409 在 Task 4 auth.register）。 */
+  async createByEmail(input: { email: string; nickname: string; password: string }): Promise<UserEntity> {
     const user = this.repo.create();
-    if (identity.method === 'phone') user.phone = identity.phone ?? null;
-    // email 列已 NOT NULL（2026-11-12 重做）：schema 已保证 email 分支 identity.email 存在
-    if (identity.method === 'email') user.email = identity.email ?? '';
-    if (identity.method === 'wechat') user.wechatOpenid = identity.wechatOpenid ?? null;
-    user.nickname = identity.nickname ?? this.defaultNickname(identity);
-    // 首注册者=super_admin（对齐 mindgrid 语义）：空库建号（count=0）即超管，其余 member。
-    // 存量库的超管由迁移升最早用户；并发首注册存在双双计 0 的竞态（本地单机规模可接受，登记）。
+    user.email = input.email;
+    user.nickname = input.nickname;
+    user.passwordHash = await hash(input.password, 10);
     user.systemRole = (await this.repo.count()) === 0 ? 'super_admin' : 'member';
     return this.repo.save(user);
   }
 
-  // ---- 账号设置（M5 Task 1，FR-ACC-002 收口）------------------------------
+  /** 当前密码核身（改密/换绑共用）：不匹配 → 400「当前密码错误，请重新输入」。
+   *  无密码账号（历史手机号建号遗留）同文案 400——重做后新号注册即设密码。 */
+  private async assertCurrentPassword(user: UserEntity, currentPassword: string): Promise<void> {
+    if (!user.passwordHash || !(await compare(currentPassword, user.passwordHash))) {
+      throw new BadRequestException('当前密码错误，请重新输入');
+    }
+  }
 
-  /** 改密：有密码（password_hash 非空）须 currentPassword 验证；无密码（手机号注册）
-   *  须 code 核身——开发环境固定 123456，与登录通道同语义（spec §5.2 DevProvider）。
-   *  成功 204。不吊销其他会话（PRD 未要求，登记：既有会话保持有效）。 */
-  async changePassword(
-    userId: string,
-    input: { newPassword: string; currentPassword?: string; code?: string },
-  ): Promise<void> {
+  /** 改密（2026-11-12 重做）：旧密码核身 → 覆写 passwordHash。旧验证码核身分支与
+   *  verifyDevCode 已删（邮箱注册制人人有密码，恒走旧密码核身）。成功 204。
+   *  校验全部在写之前完成；不吊销其他会话（PRD 未要求，登记：既有会话保持有效）。 */
+  async changePassword(userId: string, input: { currentPassword: string; newPassword: string }): Promise<void> {
     const user = await this.findById(userId);
     if (!user) throw new BadRequestException('用户不存在，请重新登录');
-    if (user.passwordHash) {
-      // 有密码：旧密码验证（防会话劫持者改密）
-      if (!input.currentPassword) throw new BadRequestException('请输入当前密码');
-      if (!(await compare(input.currentPassword, user.passwordHash))) {
-        throw new BadRequestException('当前密码不正确，请重新输入');
-      }
-    } else {
-      // 无密码：验证码核身（通道语义与登录一致）
-      this.verifyDevCode(input.code);
-    }
+    await this.assertCurrentPassword(user, input.currentPassword);
     user.passwordHash = await hash(input.newPassword, 10);
     await this.repo.save(user);
   }
 
-  /** 换绑（FR-ACC-002）：code 校验 → 新身份格式校验（同登录 zod 口径）→ 占用检查
-   *  （被占 409「该手机号/邮箱已绑定其他账号」）→ 改绑落列。不吊销其他会话（登记同改密）。 */
-  async rebind(userId: string, input: RebindInput): Promise<void> {
-    this.verifyDevCode(input.code);
-    if (input.channel === 'phone') {
-      rebindPhoneIdentitySchema.parse(input.newIdentity);
-    } else {
-      rebindEmailIdentitySchema.parse(input.newIdentity);
-    }
+  /** 换绑邮箱（2026-11-12 重做）：先验当前密码（防会话劫持者改绑）→
+   *  emailCode.verify('email_bind', email, code) → 占用（他人）409 → 落列。
+   *  顺序即契约；不吊销其他会话（登记同改密）。 */
+  async rebindEmail(userId: string, input: { email: string; code: string; currentPassword: string }): Promise<void> {
     const user = await this.findById(userId);
     if (!user) throw new BadRequestException('用户不存在，请重新登录');
-    const occupied =
-      input.channel === 'phone'
-        ? await this.repo.findOneBy({ phone: input.newIdentity })
-        : await this.repo.findOneBy({ email: input.newIdentity });
+    await this.assertCurrentPassword(user, input.currentPassword);
+    await this.emailCode.verify('email_bind', input.email, input.code);
+    const occupied = await this.repo.findOneBy({ email: input.email });
     if (occupied && occupied.id !== userId) {
-      throw new ConflictException(input.channel === 'phone' ? '该手机号已绑定其他账号' : '该邮箱已绑定其他账号');
+      throw new ConflictException('该邮箱已绑定其他账号，请换用其他邮箱');
     }
-    if (input.channel === 'phone') user.phone = input.newIdentity;
-    else user.email = input.newIdentity;
+    user.email = input.email;
     await this.repo.save(user);
   }
+
+  /** 换绑手机号（2026-11-12 重做）：仅密码核身（手机号无验证码通道）→ 占用（他人）
+   *  409 → 落列。不吊销其他会话（登记同改密）。 */
+  async rebindPhone(userId: string, input: { phone: string; currentPassword: string }): Promise<void> {
+    const user = await this.findById(userId);
+    if (!user) throw new BadRequestException('用户不存在，请重新登录');
+    await this.assertCurrentPassword(user, input.currentPassword);
+    const occupied = await this.repo.findOneBy({ phone: input.phone });
+    if (occupied && occupied.id !== userId) {
+      throw new ConflictException('该手机号已绑定其他账号，请换用其他手机号');
+    }
+    user.phone = input.phone;
+    await this.repo.save(user);
+  }
+
+  /** 自助改昵称（2026-11-12 重做）：PATCH /users/me；返回落库后实体（controller 映射
+   *  fullUserView 视图）。 */
+  async updateNickname(userId: string, nickname: string): Promise<UserEntity> {
+    const user = await this.findById(userId);
+    if (!user) throw new BadRequestException('用户不存在，请重新登录');
+    user.nickname = nickname;
+    return this.repo.save(user);
+  }
+
+  /** 重置密码专用（忘记密码流，Task 4 resetPassword 消费）：验证码核身在 auth 侧完成，
+   *  此处无当前密码校验直接覆写。调用方须随后 SessionService.revokeAllForUser 踢全部会话。 */
+  async setPasswordForReset(userId: string, newPassword: string): Promise<void> {
+    const user = await this.findById(userId);
+    if (!user) throw new BadRequestException('用户不存在，请重新登录');
+    user.passwordHash = await hash(newPassword, 10);
+    await this.repo.save(user);
+  }
+
+  // ---- 通知偏好（FR-CMT-006）与头像 ---------------------------------------
 
   /** 通知偏好读取（FR-CMT-006）：空/坏列 → {emailOptOut: [], notifyEnabled: true, digestEnabled: true}。 */
   async getNotifyPrefs(userId: string): Promise<NotifyPrefs> {
@@ -191,18 +211,5 @@ export class UsersService {
     user.avatarUrl = avatarUrl;
     await this.repo.save(user);
     return { avatarUrl };
-  }
-
-  /** 开发环境验证码核身（与登录 DevProvider 同源 env.DEV_SMS_CODE；失败文案按
-   *  NFR-USE-005 给原因 + 下一步动作）。 */
-  private verifyDevCode(code: string | undefined): void {
-    if (code !== env.DEV_SMS_CODE) throw new BadRequestException('验证码错误，请重新输入');
-  }
-
-  private defaultNickname(identity: LoginIdentity): string {
-    if (identity.nickname) return identity.nickname;
-    if (identity.phone) return `用户${identity.phone.slice(-4)}`;
-    if (identity.email) return identity.email.split('@')[0] ?? '用户';
-    return '微信用户';
   }
 }
