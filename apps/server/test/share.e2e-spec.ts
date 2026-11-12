@@ -36,12 +36,12 @@ describe('share 域', () => {
   let notifRepo: import('typeorm').Repository<NotificationEntity>;
   let eventRepo: import('typeorm').Repository<EventEntity>;
 
-  /** 邮箱注册建号（走真实 API，注册即登录）；需断言昵称的用例显式传 nickname。 */
-  async function newUser(
-    opts?: { nickname?: string },
-  ): Promise<{ id: string; email: string; nickname: string; token: string }> {
+  /** 邮箱注册建号（走真实 API，注册即登录）。缺省昵称=服务端随机（不可预判）：
+   *  需断言昵称的用例（如邀请邮件邀请人）显式传 opts.nickname 并按字面量断言——
+   *  回传对象不含 nickname，杜绝「空串 toContain 恒真」静默失效（评审 Important #1）。 */
+  async function newUser(opts?: { nickname?: string }): Promise<{ id: string; email: string; token: string }> {
     const acct = await createAccount(app, opts);
-    return { id: acct.id, email: acct.email, nickname: opts?.nickname ?? '', token: acct.token };
+    return { id: acct.id, email: acct.email, token: acct.token };
   }
 
   /** 受邀手机号回填装置（2026-11-12 重做后注册仅邮箱）：注册 → 换绑手机号（密码核身）
@@ -294,7 +294,9 @@ describe('share 域', () => {
   }
 
   it('批量邀请 3 联系人（2 邮箱 1 手机号）：pending 行 + invited_by 正确 + 邮件含邀请人/文件名/注册链接', async () => {
-    const owner = await newUser();
+    // 显式昵称：邀请邮件「含邀请人昵称」断言按字面量核对（缺省随机昵称无法预判，
+    // 空串断言会恒真失效——评审 Important #1）
+    const owner = await newUser({ nickname: '邀请甲' });
     const fileId = await makeFile(owner, '批量邀请域用例');
 
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
@@ -320,7 +322,7 @@ describe('share 域', () => {
     // 邀请邮件（尽力而为旁路，e2e 无 SMTP → log）：内容含邀请人/文件名/注册链接
     expect(mailLogs.length).toBe(2); // 仅 email 类联系人发邮件，手机号无邮件通道
     const mailText = mailLogs.join('\n');
-    expect(mailText).toContain(owner.nickname);
+    expect(mailText).toContain('邀请甲');
     expect(mailText).toContain('批量邀请域用例');
     expect(mailText).toContain('http://localhost:5173/login');
   });
