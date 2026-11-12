@@ -29,4 +29,10 @@ export default defineConfig({
     reuseExistingServer: true,
     timeout: 60000,
   },
+  // 2026-11-13 稳定性裁定：默认 workers=cpu/2（本机 14 核=7 个）会让 ~28 路并发
+  // 打满 dev API 的 DB 连接池（TypeORM 默认 10）+ 单实例 MySQL 5.6 + 单 vite，
+  // 断言默认 5s 窗口随机饿死（负载相关偶发失败，失败集合逐轮漂移：193/9、195/5
+  // 两轮仅 3 例重合，隔离重跑全过）。降到 4 worker + 失败重试 1 次。
+  workers: 4,
+  retries: 1,
 });
