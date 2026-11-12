@@ -1,14 +1,14 @@
 import { z } from 'zod';
-import { ACCOUNT_STATUSES, SYSTEM_ROLES } from '@gmind/shared';
+import { ACCOUNT_STATUSES, emailSchema, SYSTEM_ROLES } from '@gmind/shared';
 
 /**
  * 账号管理端点请求 schema（照 users/files 的 zod 先例：controller 处 .parse(body)，
  * 失败由全局 ZodExceptionFilter 统一转 400 {message}，文案两段式=原因+下一步）。
  */
 
-/** POST /api/admin/users 添加账号：手机号口径与登录 phoneLoginSchema 同源（/^1\d{10}$/）。 */
+/** POST /api/admin/users 添加账号：邮箱口径与登录同源（shared emailSchema 单点归一 trim+lowercase）。 */
 export const createAdminAccountSchema = z.object({
-  phone: z.string().regex(/^1\d{10}$/, '手机号格式不正确，请检查后重试'),
+  email: emailSchema,
   nickname: z
     .string()
     .min(1, '昵称长度需为 1~32 字，请调整后重试')

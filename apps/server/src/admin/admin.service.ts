@@ -23,7 +23,7 @@ export interface AdminUpdateInput {
 }
 
 /**
- * 账号管理（移植 mindgrid admin 轨道，适配 Gmind 手机号建号）：
+ * 账号管理（移植 mindgrid admin 轨道，适配 Gmind 邮箱建号）：
  * - 列表/添加/改角色/改状态/改昵称，全部经 AdminGuard（super_admin）；
  * - 只停用不删除：停用后登录 401、既有会话被 UserGuard 即刻拒绝；
  * - 防呆两道（顺序固定）：先自我保护（不得停用/降级自己），再最后超管保护
@@ -84,22 +84,24 @@ export class AdminService {
     };
   }
 
-  /** 添加账号：建号即 active member、无密码（开发态凭验证码登录，与手机号注册同通道）。
-   *  不种示例文件——种子只在「登录首建号」路径；此号首登走既有身份，不重复种。 */
-  async createAccount(input: { phone: string; nickname: string }): Promise<AdminUserListItem> {
-    const dup = await this.users.findOneBy({ phone: input.phone });
-    if (dup) throw new ConflictException('该手机号已注册，请更换手机号或让该成员直接登录');
+  /** 添加账号（2026-11-12 重做邮箱化）：邮箱建号即 active member、无密码（首次登录
+   *  前先走忘记密码重置设密，email 已由 shared emailSchema 归一）。
+   *  不种示例文件——种子只在「邮箱注册」路径（AuthService.register）；管理员建号
+   *  保持零文件直入。查重 + uk_users_email 唯一键兜底，两道 409 文案一致。 */
+  async createAccount(input: { email: string; nickname: string }): Promise<AdminUserListItem> {
+    const dup = await this.users.findOneBy({ email: input.email });
+    if (dup) throw new ConflictException('该邮箱已绑定其他账号，请换用其他邮箱');
     const user = this.users.create();
-    user.phone = input.phone;
+    user.email = input.email;
     user.nickname = input.nickname;
     user.systemRole = 'member';
     user.status = 'active';
     try {
       return this.toItem(await this.users.save(user), 0, { departmentId: null, groupIds: [] });
     } catch (err) {
-      // 并发窗口内的重复注册由 uk_users_phone 兜底（同 files 先例），文案与前置检查一致
+      // 并发窗口内的重复注册由 uk_users_email 兜底（同 files 先例），文案与前置检查一致
       if (isDuplicateKeyError(err)) {
-        throw new ConflictException('该手机号已注册，请更换手机号或让该成员直接登录');
+        throw new ConflictException('该邮箱已绑定其他账号，请换用其他邮箱');
       }
       throw err;
     }

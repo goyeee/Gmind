@@ -19,7 +19,7 @@ const makeUser = (patch: Partial<UserEntity>): UserEntity =>
 /** users 仓储桩：save 落到 spy 并回传原实体（service 直接改实体再 save）。 */
 const makeUsersRepo = (opts: {
   byId?: Record<string, UserEntity>;
-  byPhone?: Record<string, UserEntity>;
+  byEmail?: Record<string, UserEntity>;
   all?: UserEntity[];
   activeSuperAdmins?: number;
 }) => {
@@ -27,7 +27,7 @@ const makeUsersRepo = (opts: {
   const repo = {
     findOneBy: vi.fn(async (w: Record<string, unknown>) => {
       if (w.id !== undefined) return opts.byId?.[w.id as string] ?? null;
-      if (w.phone !== undefined) return opts.byPhone?.[w.phone as string] ?? null;
+      if (w.email !== undefined) return opts.byEmail?.[w.email as string] ?? null;
       return null;
     }),
     find: vi.fn(async () => opts.all ?? []),
@@ -113,24 +113,35 @@ describe('AdminService.updateAccount：角色升降与防呆', () => {
   });
 });
 
-describe('AdminService.createAccount：建号语义', () => {
-  it('手机号已存在 → 409 不建号', async () => {
-    const { repo, save } = makeUsersRepo({ byPhone: { '13800138000': makeUser({ id: 'u1' }) } });
+describe('AdminService.createAccount：邮箱建号语义（2026-11-12 重做）', () => {
+  it('邮箱已存在 → 409「该邮箱已绑定其他账号，请换用其他邮箱」不建号', async () => {
+    const { repo, save } = makeUsersRepo({ byEmail: { 'a@x.dev': makeUser({ id: 'u1' }) } });
     const svc = new AdminService(repo, makeFilesRepo({}), makeOrgStub());
-    await expect(svc.createAccount({ phone: '13800138000', nickname: '甲' })).rejects.toThrow('该手机号已注册');
+    await expect(svc.createAccount({ email: 'a@x.dev', nickname: '甲' })).rejects.toThrow(
+      new ConflictException('该邮箱已绑定其他账号，请换用其他邮箱'),
+    );
     expect(save).not.toHaveBeenCalled();
   });
 
-  it('新号：active member、无密码、fileCount=0', async () => {
+  it('新号：active member、无密码、fileCount=0，邮箱落库', async () => {
     const { repo, save } = makeUsersRepo({});
     const svc = new AdminService(repo, makeFilesRepo({}), makeOrgStub());
-    const item = await svc.createAccount({ phone: '13800138001', nickname: '新同事' });
+    const item = await svc.createAccount({ email: 'b@x.dev', nickname: '新同事' });
     expect(item.systemRole).toBe('member');
     expect(item.status).toBe('active');
     expect(item.fileCount).toBe(0);
     const saved = save.mock.calls[0]?.[0] as UserEntity;
     expect(saved.passwordHash).toBeNull();
-    expect(saved.phone).toBe('13800138001');
+    expect(saved.email).toBe('b@x.dev');
     expect(saved.nickname).toBe('新同事');
+  });
+
+  it('并发兜底：save 撞 uk_users_email（ER_DUP_ENTRY）→ 409 同文案', async () => {
+    const { repo, save } = makeUsersRepo({});
+    save.mockRejectedValueOnce(Object.assign(new Error('Duplicate entry'), { code: 'ER_DUP_ENTRY' }));
+    const svc = new AdminService(repo, makeFilesRepo({}), makeOrgStub());
+    await expect(svc.createAccount({ email: 'c@x.dev', nickname: '丁' })).rejects.toThrow(
+      new ConflictException('该邮箱已绑定其他账号，请换用其他邮箱'),
+    );
   });
 });

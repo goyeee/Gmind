@@ -29,7 +29,7 @@ export class AdminController {
     return this.admin.list({ page: p, size: s, q: (q ?? '').trim().slice(0, 64) });
   }
 
-  /** 添加账号：手机号去重（409）；建号即 active member、无密码（开发态验证码登录）。 */
+  /** 添加账号：邮箱去重（409）；建号即 active member、无密码（首次登录前先走忘记密码重置设密）。 */
   @Post()
   create(@Body() body: unknown): Promise<AdminUserListItem> {
     return this.admin.createAccount(createAdminAccountSchema.parse(body));
