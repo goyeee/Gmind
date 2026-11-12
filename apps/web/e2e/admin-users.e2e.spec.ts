@@ -159,7 +159,7 @@ test('添加账号 member0002（邮箱） → 列表出现（重跑幂等：已�
   await expect(row.getByTestId('user-role')).toHaveText('成员');
 });
 
-test('停用 member0002（confirm）→ 状态即时变停用，该号登录被拒', async ({ page }) => {
+test('停用（confirm）→ 状态即时变停用；有密码成员停用后登录逐字报「账号已被停用」', async ({ page }) => {
   await ensureMember(page);
   const admin = await superAdmin(page);
 
@@ -176,17 +176,28 @@ test('停用 member0002（confirm）→ 状态即时变停用，该号登录被�
   await expect(row.getByTestId('user-status')).toContainText('停用');
   await expect(row.getByTestId('toggle-status-btn')).toHaveText('启用'); // 操作后控件随状态翻转
 
-  // 停用踢号：该号登录被拒，停留登录页。新契约（2026-11-12）：member0002 系管理员
-  // 建号=无密码，登录时密码闸（401「密码错误…」）先于停用闸命中——这里钉的是 UI
-  // 死路文案；停用闸本体（有密码+停用→「账号已被停用」）由 server auth e2e 覆盖。
-  await uiLogin(page, MEMBER_EMAIL);
-  await expect(page.locator('.error')).toContainText('密码错误');
+  // 停用闸区分度（2026-11-13 终审 Important）：原腿拿 member0002 登录断言「密码错误」
+  // 无区分度——管理员建号无密码，密码闸（核密先于停用闸，auth.service.ts:41-48）先
+  // 命中，停用闸坏了也过。改 apiRegister 造有密码成员 → admin API 停用 → UI 登录
+  // 逐字断言停用文案；member0002 无密码死路已由 login-page.e2e ⑥b 覆盖，不再重复。
+  const victim = await apiRegister(page.request);
+  const listed = await page.request.get(`/api/admin/users?q=${victim.email}`, { headers: auth(admin.token) });
+  const victimId = ((await listed.json()) as { items: AdminItem[] }).items.find((u) => u.email === victim.email)?.id;
+  expect(victimId, '刚注册的成员必须能在管理列表搜到').toBeTruthy();
+  const disabled = await page.request.patch(`/api/admin/users/${victimId}`, {
+    headers: auth(admin.token),
+    data: { status: 'disabled' },
+  });
+  expect(disabled.ok()).toBeTruthy();
+
+  await uiLogin(page, victim.email, victim.password);
+  await expect(page.locator('.error')).toContainText('账号已被停用，请联系管理员');
   await expect(page).toHaveURL(/\/login/);
 });
 
 test('member（邮箱注册）：工作台无「账号管理」入口', async ({ page }) => {
   // member 视角改经 helper 邮箱造号（apiRegister 即有密码可登录；member0002 无密码
-  // 无法走 UI 登录——管理员建号的登录死路已在上用例钉死）
+  // 无法走 UI 登录——管理员建号的登录死路由 login-page.e2e ⑥b 钉死）
   const member = await apiRegister(page.request);
   await injectToken(page, member.token);
   await page.goto('/workspace');

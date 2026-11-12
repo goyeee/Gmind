@@ -147,3 +147,4 @@
 6. **手机号换绑补验证码**：现换绑手机号仅当前密码核身、不向新手机号发码（`apps/server/test/users.e2e-spec.ts:236`）；验收语义=换绑须向新手机号发验证码核验后生效，旧手机号收到变更提醒。
 7. **首注册 super_admin 并发竞态加固**（双双计 0 的窗口，`apps/server/src/users/users.service.ts:95` 注释在案，本地单机规模可接受）：验收语义=并发首注册只产生一个 super_admin（加唯一闸或迁移为显式初始化）。
 8. **cleanup 测试号判据是否需要更激进口径**（Task 8/9 观察：现判据=两域邮箱+名下无文件无协作，`apps/server/scripts/cleanup-test-users.ts:41`，冒烟残留的有文件账号永不命中）：验收语义=需求方拍板「保留冒烟痕迹 vs 放宽到有文件也可清（如限 N 天前）」后有明确口径再动脚本。
+9. **DEV_MAIL_CODE 默认值仅在 NODE_ENV 显式为 development/test 时生效**（更硬的兜底，防漏设 NODE_ENV：`env.NODE_ENV` 缺省 development（`apps/server/src/config/env.ts:4`），生产部署漏设即静默落开发语义——固定验证码 `123456` 可重置任意密码且不发信，SMTP fail-closed 等生产守卫也一并失效）。验收语义=漏设 `NODE_ENV` 启动后固定验证码不再可用（注册/重置密码提交 `123456` 一律失败），不再静默落开发语义。
