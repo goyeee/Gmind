@@ -28,3 +28,13 @@ const envSchema = z.object({
 });
 
 export const env = envSchema.parse(process.env);
+
+// 生产安全门禁（2026-10-28 P0）：DEV_SMS_CODE 是开发环境的固定验证码，生产漏配
+// 就是「万能码可登任意手机号」——fail-closed：production 未显式设置直接拒绝启动，
+// 强制部署者显式选择（设随机长串过渡 / 接真实短信通道）。与 dev-e2e 的
+// devE2eAllowed 同款「缺省不放行」纪律。
+if (env.NODE_ENV === 'production' && !process.env.DEV_SMS_CODE) {
+  throw new Error(
+    '[gmind] NODE_ENV=production 时必须显式配置 DEV_SMS_CODE（随机长串过渡；真实短信通道接好后移除），拒绝以开发固定验证码启动',
+  );
+}

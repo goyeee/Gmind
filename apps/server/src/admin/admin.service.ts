@@ -1,8 +1,9 @@
-import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { ConflictException, Injectable, NotFoundException, Inject } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { IsNull, Like, Repository } from 'typeorm';
 import type { AccountStatus, AdminUserListItem, AdminUserListPage, SystemRole } from '@gmind/shared';
 import { FileEntity } from '../files/file.entity';
+import { OrgService } from '../org/org.service';
 import { UserEntity } from '../users/user.entity';
 import { isDuplicateKeyError } from '../utils/duplicate-key';
 
@@ -16,6 +17,9 @@ export interface AdminUpdateInput {
   systemRole?: SystemRole;
   status?: AccountStatus;
   nickname?: string;
+  /** 组织挂靠（批次 A）：部门单选（null=清空）、分组全量替换——经 OrgService 校验落库。 */
+  departmentId?: string | null;
+  groupIds?: string[];
 }
 
 /**
@@ -31,6 +35,7 @@ export class AdminService {
     // tsx 不发射装饰器元数据，类 token 注入必须显式 @Inject（约定见任务说明）
     @InjectRepository(UserEntity) private readonly users: Repository<UserEntity>,
     @InjectRepository(FileEntity) private readonly files: Repository<FileEntity>,
+    @Inject(OrgService) private readonly org: OrgService,
   ) {}
 
   /** 成员列表：注册时间升序（同毫秒以 id 决出，口径同 mindgrid listAllUsers）；
@@ -64,7 +69,19 @@ export class AdminService {
         .getRawMany()) as Array<{ owner_user_id: string; n: string | number }>;
       counts = new Map(rows.map((r) => [r.owner_user_id, Number(r.n)]));
     }
-    return { items: users.map((u) => this.toItem(u, counts.get(u.id) ?? 0)), total, page, size };
+    const memberships = await this.org.membershipsFor(users.map((u) => u.id));
+    return {
+      items: users.map((u) =>
+        this.toItem(
+          u,
+          counts.get(u.id) ?? 0,
+          memberships.get(u.id) ?? { departmentId: null, groupIds: [] },
+        ),
+      ),
+      total,
+      page,
+      size,
+    };
   }
 
   /** 添加账号：建号即 active member、无密码（开发态凭验证码登录，与手机号注册同通道）。
@@ -78,7 +95,7 @@ export class AdminService {
     user.systemRole = 'member';
     user.status = 'active';
     try {
-      return this.toItem(await this.users.save(user), 0);
+      return this.toItem(await this.users.save(user), 0, { departmentId: null, groupIds: [] });
     } catch (err) {
       // 并发窗口内的重复注册由 uk_users_phone 兜底（同 files 先例），文案与前置检查一致
       if (isDuplicateKeyError(err)) {
@@ -116,7 +133,18 @@ export class AdminService {
     target.status = nextStatus;
     if (input.nickname !== undefined) target.nickname = input.nickname;
     const saved = await this.users.save(target);
-    return this.toItem(saved, await this.aliveFileCount(saved.id));
+    // 组织挂靠（批次 A）：部门/分组校验与落库都在 OrgService（校验先于写）
+    if (input.departmentId !== undefined || input.groupIds !== undefined) {
+      await this.org.setUserOrg(targetId, {
+        ...(input.departmentId !== undefined ? { departmentId: input.departmentId } : {}),
+        ...(input.groupIds !== undefined ? { groupIds: input.groupIds } : {}),
+      });
+    }
+    const membership = (await this.org.membershipsFor([targetId])).get(targetId) ?? {
+      departmentId: null,
+      groupIds: [],
+    };
+    return this.toItem(saved, await this.aliveFileCount(saved.id), membership);
   }
 
   /** 启用状态的超级管理员数（降级/停用前的最后防线，同 mindgrid 口径）。 */
@@ -129,7 +157,11 @@ export class AdminService {
     return this.files.countBy({ ownerUserId: userId, deletedAt: IsNull() });
   }
 
-  private toItem(u: UserEntity, fileCount: number): AdminUserListItem {
+  private toItem(
+    u: UserEntity,
+    fileCount: number,
+    membership: { departmentId: string | null; groupIds: string[] },
+  ): AdminUserListItem {
     return {
       id: u.id,
       nickname: u.nickname,
@@ -137,6 +169,8 @@ export class AdminService {
       email: u.email,
       systemRole: u.systemRole,
       status: u.status,
+      departmentId: membership.departmentId,
+      groupIds: membership.groupIds,
       // 防御历史脏数据（created_at='0000-00-00' 等 Date 零值）：toISOString 会抛
       // RangeError 使整个列表 500——无效日期回退 null（列表仍可用，排序在 SQL 侧）。
       createdAt: u.createdAt instanceof Date && !Number.isNaN(u.createdAt.getTime())

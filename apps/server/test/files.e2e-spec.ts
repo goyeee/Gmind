@@ -57,10 +57,33 @@ describe('files 域', () => {
     // 响应必须符合 FileListItem 契约：docState（Buffer）绝不离开服务端
     expect(created.body.title).toBe('测试新建');
     expect(created.body.docState).toBeUndefined();
-    expect(Object.keys(created.body).sort()).toEqual(['id', 'lastOpenedAt', 'nodeCount', 'structure', 'title', 'updatedAt']);
+    expect(Object.keys(created.body).sort()).toEqual(['id', 'kind', 'lastOpenedAt', 'nodeCount', 'structure', 'title', 'updatedAt']);
 
     const list = await request(app.getHttpServer()).get('/api/files').set('Authorization', `Bearer ${token}`);
     expect(list.body[0].title).toBe('测试新建');
+  });
+
+  it('表格文件（批次 D）：kind=table 创建 + title 缺省「未命名表格」+ 列表回显 kind；缺省 map', async () => {
+    const users = app.get((await import('../src/users/users.service')).UsersService);
+    const user = await users.create({ method: 'phone', phone: '13800007777' });
+    const token = await tokenFor(user.id);
+    const created = await request(app.getHttpServer())
+      .post('/api/files')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ kind: 'table' });
+    expect(created.status).toBe(201);
+    expect(created.body.title).toBe('未命名表格');
+    expect(created.body.kind).toBe('table');
+    // 缺省 map（旧客户端不传 kind 兼容）
+    const blank = await request(app.getHttpServer())
+      .post('/api/files')
+      .set('Authorization', `Bearer ${token}`)
+      .send({});
+    expect(blank.body.kind).toBe('map');
+    const list = await request(app.getHttpServer()).get('/api/files').set('Authorization', `Bearer ${token}`);
+    const kinds = (list.body as Array<{ kind: string }>).map((f) => f.kind);
+    expect(kinds).toContain('table');
+    expect(kinds).toContain('map');
   });
 
   it('标题缺省时默认「未命名脑图」', async () => {
@@ -96,7 +119,7 @@ describe('files 域', () => {
   });
   it('title 为空字符串时返回 400（Zod 校验）', async () => {
     const users = app.get((await import('../src/users/users.service')).UsersService);
-    const user = await users.create({ method: 'phone', phone: '13800004444' });
+    const user = await users.create({ method: 'phone', phone: '13800005555' });
     const token = await tokenFor(user.id);
     const res = await request(app.getHttpServer())
       .post('/api/files')
@@ -112,7 +135,7 @@ describe('files 域', () => {
     const eventsRepo = app.get(DataSource).getRepository(EventEntity);
     const users = app.get((await import('../src/users/users.service')).UsersService);
     const files = app.get((await import('../src/files/files.service')).FilesService);
-    const user = await users.create({ method: 'phone', phone: '13800005555' });
+    const user = await users.create({ method: 'phone', phone: '13800008888' });
     const token = await tokenFor(user.id);
 
     /** 该文件是否恰好有一条 doc_create 行且 payload.entry 匹配。 */
@@ -159,6 +182,48 @@ describe('files 域', () => {
 
   // ── 一键拉取站内用户（2026-10-11 需求方裁定：成员面板 picker 数据源 + 直接添加）──
   describe('站内用户拉取（invitable-users + collaborators POST）', () => {
+    it('移除协作者（DELETE collaborators，2026-10-25 原型 members tab「移除」）：owner 删行收回访问权；非 owner 404；幂等', async () => {
+      const users = app.get((await import('../src/users/users.service')).UsersService);
+      const owner = await users.create({ method: 'phone', phone: '13811110101' });
+      const member = await users.create({ method: 'phone', phone: '13811110102' });
+      const token = await tokenFor(owner.id);
+      const memberToken = await tokenFor(member.id);
+      const created = await request(app.getHttpServer())
+        .post('/api/files')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ title: '移除协作者测试' });
+      const fileId = created.body.id as string;
+      await request(app.getHttpServer())
+        .post(`/api/files/${fileId}/collaborators`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ userIds: [member.id] });
+
+      // 非 owner 移除 → 404（不泄露存在性）
+      const denied = await request(app.getHttpServer())
+        .delete(`/api/files/${fileId}/collaborators/${member.id}`)
+        .set('Authorization', `Bearer ${memberToken}`);
+      expect(denied.status).toBe(404);
+
+      // owner 移除 → 列表回落 owner 单行
+      const removed = await request(app.getHttpServer())
+        .delete(`/api/files/${fileId}/collaborators/${member.id}`)
+        .set('Authorization', `Bearer ${token}`);
+      expect(removed.status).toBe(200);
+      const after = await request(app.getHttpServer())
+        .get(`/api/files/${fileId}/collaborators`)
+        .set('Authorization', `Bearer ${token}`);
+      expect(after.body).toHaveLength(1);
+      expect(after.body[0]).toMatchObject({ userId: owner.id, isOwner: true });
+      // 协作者投影含归属行字段（deptName/groupNames，未挂靠为 null/[]）
+      expect(after.body[0]).toMatchObject({ deptName: null, groupNames: [] });
+
+      // 重复删除幂等（不存在的行零抛）
+      const again = await request(app.getHttpServer())
+        .delete(`/api/files/${fileId}/collaborators/${member.id}`)
+        .set('Authorization', `Bearer ${token}`);
+      expect(again.status).toBe(200);
+    });
+
     it('owner 可查目录（排除 owner/既有协作者、q 模糊搜索、分页）；非 owner 404', async () => {
       const users = app.get((await import('../src/users/users.service')).UsersService);
       const filesSvc = app.get((await import('../src/files/files.service')).FilesService);

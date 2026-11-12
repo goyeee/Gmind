@@ -64,6 +64,8 @@ async function registerAndLogin(page: Page, phone?: string): Promise<string> {
   await page.getByPlaceholder('验证码（开发环境固定 123456）').fill('123456');
   await page.getByRole('button', { name: '登录', exact: true }).click();
   await expect(page).toHaveURL(/\/workspace/);
+  await expect(page.getByTestId('quick-create-blank')).toBeVisible(); // 首页落点（换装后种子文件在「我的文件」视图）
+  await page.goto('/workspace?view=files');
   await expect(page.getByTestId('mine-grid').getByTestId('file-card')).toHaveCount(3);
   return target;
 }
@@ -331,9 +333,21 @@ test('成员面板：编辑/查看分组、创建者标识与离线即时移除'
   const panel = pageA.getByTestId('member-panel');
   await expect(panel).toBeVisible();
   await expect(pageA.getByTestId('members-count')).toHaveText('3');
-  await expect(panel.getByTestId('member-group-editing')).toContainText(nickA, { timeout: 10_000 });
-  await expect(panel.getByTestId('member-group-editing')).toContainText(nickB);
-  await expect(panel.getByTestId('member-group-viewing')).toContainText(nickC);
+  // 2026-10-25 原型重排：面板=全量协作者名单（协作成员 tab，collaborators 投影），
+  // 原「正在编辑/正在查看」分组退役——在线语义行内化（编辑中徽标 + 在线类）
+  const all = panel.getByTestId('member-group-all');
+  await expect(all).toContainText(nickA, { timeout: 10_000 });
+  await expect(all).toContainText(nickB);
+  await expect(all).toContainText(nickC);
+  await expect(
+    all.locator('[data-testid="member-row"]', { hasText: nickA }).getByTestId('member-editing-badge'),
+  ).toBeVisible();
+  await expect(
+    all.locator('[data-testid="member-row"]', { hasText: nickB }).getByTestId('member-editing-badge'),
+  ).toBeVisible();
+  await expect(
+    all.locator('[data-testid="member-row"]', { hasText: nickC }).getByTestId('member-editing-badge'),
+  ).toHaveCount(0);
 
   // 创建者标识：owner（A 自己）行带「创建者」，B/C 行不带
   const rowA = panel.locator('[data-testid="member-row"]', { hasText: nickA });
@@ -341,12 +355,13 @@ test('成员面板：编辑/查看分组、创建者标识与离线即时移除'
   const rowB = panel.locator('[data-testid="member-row"]', { hasText: nickB });
   await expect(rowB.getByTestId('owner-badge')).toHaveCount(0);
 
-  // C 关闭页面 → A 面板内 C 行即时移除（在线数回落 2）
+  // C 关闭页面 → 在线数回落 2；名单行保留（离线不再随 presence 即时移除，转灰显）
   await ctxC.close();
-  await expect(
-    panel.locator('[data-testid="member-row"]', { hasText: nickC }),
-  ).toHaveCount(0, { timeout: 6_000 });
   await expect(pageA.getByTestId('members-count')).toHaveText('2');
+  await expect(panel.locator('[data-testid="member-row"]', { hasText: nickC })).toHaveCount(1);
+  await expect(panel.locator('[data-testid="member-row"]', { hasText: nickC })).not.toHaveClass(
+    /member-row-online/,
+  );
 });
 
 // ---------------------------------------------------------------------------

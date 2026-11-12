@@ -216,16 +216,28 @@ body.painter-active .editor-canvas svg {
   }
   /* M7b 补课（简洁模式钮入列宽度预算）：标题输入 120→104px（超宽仍省略号截断）、
      视图 Tab 水平 padding 12→10px、文字钮 6→5px——合计回收 ~44px，抵消「简洁」
-     文字钮（图标+文字 ≈57px）的增量，1440/1280 维持单行承诺（e2e 锚点用例兜底）。 */
+     文字钮（图标+文字 ≈57px）的增量，1440/1280 维持单行承诺（e2e 锚点用例兜底）。
+     二期对齐轮（2026-10-24「待办」文字钮 +「分享」主按钮入列，≈110px 增量）再收：
+     标题 104→84、视图 Tab 10→7、文字钮 5→3、图标钮 28→26、容器 padding 8→4、
+     分享钮 14→10——1440/1280 维持单行（toolbar.e2e 锚点用例兜底）。 */
   .editor-toolbar .title-input {
-    width: 104px;
+    width: 84px;
   }
   .editor-toolbar .view-tabs button {
-    padding: 0 10px;
+    padding: 0 7px;
   }
   /* 文字钮收窄水平 padding + 图标-文字间距（文字常显后的宽度预算） */
   .editor-toolbar .toolbar-btn.toolbar-btn-text {
-    padding: 0 5px;
+    padding: 0 3px;
+  }
+  .editor-toolbar .toolbar-btn {
+    width: 26px;
+  }
+  .editor-toolbar {
+    padding: 6px 4px;
+  }
+  .toolbar-share-btn {
+    padding: 0 10px;
   }
   .editor-toolbar .toolbar-btn-label {
     margin-left: 2px;
@@ -640,6 +652,101 @@ body.painter-active .editor-canvas svg {
   flex: 1;
   display: flex;
   min-height: 0;
+}
+
+/* 迷你工作台导航 rail（二期对齐轮，原型 Sidebar compact）：编辑器左缘图标列，
+   窄屏隐藏（编辑器保持全宽画布）。 */
+.editor-center {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+}
+.editor-rail-wrap {
+  position: relative;
+  z-index: 30;
+  flex: none;
+  width: 46px;
+}
+.editor-rail {
+  position: absolute;
+  inset: 0 auto 0 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  width: 46px;
+  padding: 10px 0 12px;
+  background: #fff;
+  border-right: 1px solid var(--gm-line, #e5e6eb);
+  overflow-y: auto;
+  overflow-x: hidden;
+  transition: width 0.2s ease-out;
+  white-space: nowrap;
+}
+/* 悬停展开（2026-10-27 原型）：浮层 140px 显文字标签，absolute 定位不推挤画布 */
+.editor-rail:hover {
+  width: 140px;
+  box-shadow: 8px 0 24px rgb(31 35 41 / 0.12);
+}
+.editor-rail .editor-rail-label {
+  display: none;
+}
+.editor-rail:hover .editor-rail-label {
+  display: inline;
+  font-size: 12px;
+}
+.editor-rail button {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  width: 34px;
+  height: 34px;
+  border: none;
+  border-radius: 8px;
+  background: none;
+  font-size: 16px;
+  cursor: pointer;
+}
+.editor-rail:hover button {
+  justify-content: flex-start;
+  width: auto;
+  align-self: stretch;
+  margin: 0 6px;
+  padding: 0 8px;
+}
+.editor-rail button:hover {
+  background: var(--gm-canvas, #f2f3f5);
+}
+.editor-rail-gap {
+  flex: 1;
+}
+@media (max-width: 900px) {
+  .editor-rail-wrap {
+    display: none;
+  }
+}
+
+/* 分享主按钮（二期对齐轮，原型顶栏主按钮口径）：成员钮左缘、品牌底白字。
+   特异性对齐 .editor-toolbar button（白盒规避，同 star-toggle 先例）。 */
+.editor-toolbar .toolbar-share-btn {
+  display: inline-flex;
+  align-items: center;
+  height: 32px;
+  margin-right: 6px;
+  padding: 0 14px;
+  border: none;
+  border-radius: 6px;
+  background: var(--gm-brand, #3370ff);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.toolbar-share-btn:hover {
+  filter: brightness(1.08);
 }
 
 /* 右列装配（M3b Task 7 裁决）：RichPanel 在上（滚动），CommentPanel 常驻下方。
@@ -1115,4 +1222,97 @@ body.painter-active .editor-canvas svg {
 .editor-canvas svg g.gm-drag-ghost-badge > text {
   font-weight: 600;
   user-select: none;
+}
+
+/* ── 2026-10-25 原型顶栏重组：默认视图徽标 / 协作成员钮 / 更多菜单 ── */
+
+/* 视图切换「默认」小徽标：标注文件 kind 对应的默认视图 */
+.view-tab-default {
+  margin-left: 5px;
+  padding: 0 4px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 400;
+  line-height: 15px;
+}
+.view-tabs .active .view-tab-default {
+  background: #e8f0ff;
+  color: #3370ff;
+}
+.view-tabs button:not(.active) .view-tab-default {
+  background: #e5e6eb;
+  color: #8f959e;
+}
+
+/* 协作成员钮（原型 Users+文案+人数形态）：数字语义保持在线数 */
+.toolbar-members-btn {
+  gap: 4px;
+}
+.toolbar-members-btn .members-badge {
+  flex: none;
+}
+
+/* 「更多」下拉（原型：Ellipsis + 文字，低频入口收纳） */
+.more-wrap {
+  position: relative;
+}
+.more-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 60;
+  min-width: 120px;
+  padding: 4px;
+  border: 1px solid #e5e6eb;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 8px 24px rgb(31 35 41 / 0.15);
+}
+.more-menu button {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: #646a73;
+  cursor: pointer;
+  font-size: 12px;
+  height: 32px;
+  text-align: left;
+}
+.more-menu button:hover {
+  background: #f5f6f7;
+  color: #3370ff;
+}
+.more-menu svg {
+  flex: none;
+}
+
+/* 成员钮头像堆（2026-10-25 原型 AvatarStack：本人 + 前 2 协作者 + 溢出 +N） */
+.members-stack {
+  display: flex;
+  align-items: center;
+}
+.members-stack-avatar {
+  width: 20px;
+  height: 20px;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  margin-left: -6px;
+  color: #fff;
+  font-size: 10px;
+  line-height: 20px;
+  text-align: center;
+  object-fit: cover;
+  box-shadow: 0 0 0 1px #e5e6eb;
+}
+.members-stack-avatar:first-child {
+  margin-left: 0;
+}
+.members-stack-more {
+  background: #34c724;
+  box-shadow: none;
 }

@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import request from 'supertest';
 import { ulid } from 'ulid';
 import { DataSource } from 'typeorm';
 import type { AddressInfo } from 'node:net';
@@ -79,7 +80,14 @@ function connect(port: number, docId: string, token: string): TrackedClient {
   const provider = new HocuspocusProvider({
     url: `ws://127.0.0.1:${port}/collab`,
     name: docId,
-    token,
+    // 2026-10-28 P0：token 语义=一次性 ticket（60s 单次）——每次连接/重连先经
+    // POST /auth/ws-ticket 换票（与 web 端同形态，Hocuspocus token 支持 async fn）
+    token: async () => {
+      const res = await request(`http://127.0.0.1:${port}`)
+        .post('/api/auth/ws-ticket')
+        .set('Authorization', `Bearer ${token}`);
+      return (res.body as { ticket: string }).ticket;
+    },
     WebSocketPolyfill: WsImpl,
   } as HocuspocusProviderConfiguration);
   const client = { provider };

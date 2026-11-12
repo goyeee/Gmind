@@ -4,7 +4,7 @@ import { colorForUser, type RemoteCursor } from '@gmind/engine';
 import { avatarSrcOf } from './TaskFields';
 import * as Y from 'yjs';
 import { IndexeddbPersistence } from 'y-indexeddb';
-import { api, getToken } from '../api/client';
+import { api, apiPost } from '../api/client';
 
 /**
  * 协同接入封装（M2 Task 3，FR-EDT-034/035；Task 5 起 Awareness 身份/选区广播）。
@@ -204,7 +204,10 @@ export function startCollab(fileId: string, doc: Y.Doc, opts: CollabOptions): Co
     url: `${wsScheme}://${location.host}/collab`,
     name: fileId,
     document: doc,
-    token: getToken() ?? '',
+    // 一次性 ticket（2026-10-28 P0）：URL/auth 帧不再带长效 session token——每次
+    // 连接/重连经 POST /auth/ws-ticket 换 60s 单次票据（Hocuspocus token 支持
+    // ()=>Promise<string>，自动逐次取新）；票据用后即焚，泄露不进日志。
+    token: async () => (await apiPost<{ ticket: string }>('/auth/ws-ticket')).ticket,
   });
 
   // —— Awareness 身份/选区广播（M2 Task 5）——

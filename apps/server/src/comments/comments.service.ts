@@ -101,6 +101,8 @@ export class CommentsService {
   /** POST /api/files/:id/comments：节点须存在于当前 docState（400「节点不存在或已删除」）。 */
   async create(userId: string, fileId: string, input: CreateCommentInput): Promise<CommentThreadView> {
     const file = await this.files.getOwnedFileWithState(userId, fileId);
+    // viewer 只读（2026-10-28 P0）：写评论要求 editor 角色
+    if (!(await this.files.canWrite(userId, fileId))) throw new NotFoundException('文件不存在');
     const doc = this.decodeDocState(file.docState, file.title);
     const node = getNode(doc, input.nodeId);
     if (!node || node.deleted) throw new BadRequestException('节点不存在或已删除');
@@ -134,6 +136,8 @@ export class CommentsService {
    *  不做节点存在性校验（讨论不随节点死亡终止）；快照继承楼主行值。 */
   async reply(userId: string, fileId: string, commentId: string, input: CreateReplyInput): Promise<CommentView> {
     const file = await this.files.getOwnedFileWithState(userId, fileId);
+    // viewer 只读（2026-10-28 P0）：写回复要求 editor 角色
+    if (!(await this.files.canWrite(userId, fileId))) throw new NotFoundException('文件不存在');
     const doc = this.decodeDocState(file.docState, file.title);
     const alive = this.aliveNodeIds(doc);
 

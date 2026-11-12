@@ -135,12 +135,14 @@ describe('文件四视图 + 删除 + last_modifier（FR-FIL-001）', () => {
     expect(res.body[0].updatedAt).toBe('2026-01-01T00:00:10.000Z');
 
     // 详细投影：键集封闭（docState/deletedAt/deleted_by 等内部列绝不出现）
+    // （2026-10-25 原型文件卡创建者头像：ownerAvatarUrl 入列——无自定义头像 null）
     expect(Object.keys(res.body[0]).sort()).toEqual([
-      'folderId', 'folderName', 'id', 'lastModifierName', 'lastOpenedAt',
-      'nodeCount', 'ownerName', 'ownerUserId', 'starred', 'structure', 'title', 'updatedAt',
+      'createdAt', 'folderId', 'folderName', 'id', 'kind', 'lastModifierName', 'lastOpenedAt',
+      'nodeCount', 'ownerAvatarUrl', 'ownerName', 'ownerUserId', 'starred', 'structure', 'title', 'updatedAt',
     ]);
     expect(res.body[0].ownerUserId).toBe(ownerId);
     expect(res.body[0].ownerName).toBe('文件甲');
+    expect(res.body[0].ownerAvatarUrl).toBeNull(); // 无自定义头像 → null（前端兜底首字符）
     expect(res.body[0].lastModifierName).toBeNull(); // 无人编辑过
     expect(res.body[0].starred).toBe(true); // fMine2 已加星
     expect(res.body[0].lastOpenedAt).toBe('2026-01-02T00:00:02.000Z');
@@ -377,7 +379,7 @@ describe('文件复制与星标（FR-FIL-003/004）', () => {
     const res = await authed(ownerToken, 'post', `/api/files/${fSource}/copy`);
     expect(res.status).toBe(201);
     // FileListItem 契约（与 POST /api/files 一致），docState 绝不外泄
-    expect(Object.keys(res.body).sort()).toEqual(['id', 'lastOpenedAt', 'nodeCount', 'structure', 'title', 'updatedAt']);
+    expect(Object.keys(res.body).sort()).toEqual(['id', 'kind', 'lastOpenedAt', 'nodeCount', 'structure', 'title', 'updatedAt']);
     expect(res.body.id).not.toBe(fSource);
     expect(res.body.title).toBe('复制源-副本');
     expect(res.body.nodeCount).toBe(sourceBefore.body.nodeCount);
@@ -665,23 +667,25 @@ describe('标题全局搜索（FR-FIL-008）', () => {
   it('命中自己 + 协作文件；他人私有与不可见文件不含；键集封闭', async () => {
     const res = await search(collaboratorToken, '搜索');
     expect(res.status).toBe(200);
-    const ids = res.body.map((f: { id: string }) => f.id);
+    // 2026-10-28 P1 全文搜索：返回 {files, nodes}（此前仅文件标题数组）
+    const ids = res.body.files.map((f: { id: string }) => f.id);
     expect(ids).toContain(await findIdByTitle('乙的搜索私有')); // 自己的私有文件
     expect(ids).toContain(await findIdByTitle('搜索共享件')); // 协作文件（owner=甲）
     expect(ids).not.toContain(await findIdByTitle('丙的搜索私有')); // 他人私有
     expect(ids).not.toContain(await findIdByTitle('项目规划书')); // 甲的私有不可见
 
     // 详细投影键集封闭（复用 listByView 的投影契约；prefixHit 仅排序内部用，不外泄）
-    expect(Object.keys(res.body[0]).sort()).toEqual([
-      'folderId', 'folderName', 'id', 'lastModifierName', 'lastOpenedAt',
-      'nodeCount', 'ownerName', 'ownerUserId', 'starred', 'structure', 'title', 'updatedAt',
+    // （2026-10-25 原型创建者头像：ownerAvatarUrl 入列）
+    expect(Object.keys(res.body.files[0]).sort()).toEqual([
+      'createdAt', 'folderId', 'folderName', 'id', 'kind', 'lastModifierName', 'lastOpenedAt',
+      'nodeCount', 'ownerAvatarUrl', 'ownerName', 'ownerUserId', 'starred', 'structure', 'title', 'updatedAt',
     ]);
-    const sharedItem = res.body.find((f: { title: string }) => f.title === '搜索共享件');
+    const sharedItem = res.body.files.find((f: { title: string }) => f.title === '搜索共享件');
     expect(sharedItem.ownerName).toBe('搜索甲');
 
     // owner 自己搜：自己的 + 自己拥有的（协作视角反向：乙的私有对甲不可见）
     const selfRes = await search(ownerToken, '搜索');
-    const selfIds = selfRes.body.map((f: { title: string }) => f.title);
+    const selfIds = selfRes.body.files.map((f: { title: string }) => f.title);
     expect(selfIds).toContain('搜索共享件');
     expect(selfIds).not.toContain('乙的搜索私有');
   });
@@ -689,11 +693,11 @@ describe('标题全局搜索（FR-FIL-008）', () => {
   it('前缀命中排序在前，其余按 updatedAt DESC（q 与两段检索口径一致）', async () => {
     const res = await search(ownerToken, '项目');
     expect(res.status).toBe(200);
-    expect(res.body.map((f: { id: string }) => f.id)).toEqual([fPrefix, fContains]); // 前缀优先，尽管 updatedAt 更早
+    expect(res.body.files.map((f: { id: string }) => f.id)).toEqual([fPrefix, fContains]); // 前缀优先，尽管 updatedAt 更早
 
     // 无前缀命中时全部落「其余」组：updatedAt DESC（我的项目规划 更新）
     const noPrefix = await search(ownerToken, '规划');
-    expect(noPrefix.body.map((f: { id: string }) => f.id)).toEqual([fContains, fPrefix]);
+    expect(noPrefix.body.files.map((f: { id: string }) => f.id)).toEqual([fContains, fPrefix]);
 
     // LIMIT 20（fix round 1）：再造 22 个前缀命中 → 连同上述 2 个共 24 个匹配，仅返回 20
     for (let i = 1; i <= 22; i += 1) {
@@ -702,9 +706,9 @@ describe('标题全局搜索（FR-FIL-008）', () => {
     }
     const limited = await search(ownerToken, '项目');
     expect(limited.status).toBe(200);
-    expect(limited.body).toHaveLength(20);
-    expect(limited.body[0].title).toBe('项目条目22'); // 同为前缀组：updatedAt DESC，最新在前
-    expect(limited.body.map((f: { title: string }) => f.title)).not.toContain('我的项目规划'); // 非前缀组被截断
+    expect(limited.body.files).toHaveLength(20);
+    expect(limited.body.files[0].title).toBe('项目条目22'); // 同为前缀组：updatedAt DESC，最新在前
+    expect(limited.body.files.map((f: { title: string }) => f.title)).not.toContain('我的项目规划'); // 非前缀组被截断
   });
 
   it('空/缺失/纯空白 q → 400「搜索关键词不能为空」', async () => {
@@ -721,16 +725,16 @@ describe('标题全局搜索（FR-FIL-008）', () => {
     // q='%'：未转义时 pattern '%%%' 会命中全部文件；转义后只命中标题含字面量 % 者
     const pct = await search(ownerToken, '%');
     expect(pct.status).toBe(200);
-    expect(pct.body.map((f: { title: string }) => f.title)).toEqual(['100%完成']);
+    expect(pct.body.files.map((f: { title: string }) => f.title)).toEqual(['100%完成']);
 
     // q='_'：未转义时 '%_%' 会命中所有非空标题；转义后只命中字面量下划线者
     const under = await search(ownerToken, '_');
-    expect(under.body.map((f: { title: string }) => f.title)).toEqual(['进度_草稿']);
+    expect(under.body.files.map((f: { title: string }) => f.title)).toEqual(['进度_草稿']);
 
     // 反斜杠本身亦按字面量：无标题含 \ → 空
     const bslash = await search(ownerToken, '\\');
     expect(bslash.status).toBe(200);
-    expect(bslash.body).toHaveLength(0);
+    expect(bslash.body.files).toHaveLength(0);
   });
 
   /** 按标题查文件 id（fixtures 无返回表时的可读性辅助）。 */

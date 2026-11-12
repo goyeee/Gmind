@@ -255,6 +255,8 @@ export interface SceneRoot {
   readonly nodeEntries: Map<string, NodeEntry>;
   readonly edgeEntries: Map<string, EdgeEntry>;
   readonly summaryEntries: Map<string, SummaryEntry>;
+  /** 筛选淡化是否曾生效（SceneInput.fadeOf 撤除后清残留 opacity 的依据；内部可变态）。 */
+  fadeApplied: boolean;
   /**
    * defs clipPath 的场景 id 前缀（多画布并存，计划二 Task 2）：createScene 的
    * opts.idPrefix 原样携带（缺省 '' = 无前缀，现状 id gm-avatar-clip 不动）；
@@ -304,6 +306,14 @@ export interface SceneInput {
    * 缺省 false = 原路径，DOM 逐字节不变（金样锁定）。
    */
   compact?: boolean;
+  /**
+   * 筛选淡化（二期对齐轮 2026-10-24，原型 FilterBar 脑图口径）：给定「节点 id →
+   * 命中态」映射函数时，非命中节点/边降不透明度（dim=0.18、路径祖先 path=0.55、
+   * 命中 hit 与未提及=不透明）。**缺省不传 = 从不触碰 opacity 属性，DOM 逐字节
+   * 不变（金样锁定，只增不改）**；传入后由场景级 fadeApplied 标记负责在撤除
+   * 筛选（fadeOf 不再传）时清干净残留的 opacity 属性。
+   */
+  fadeOf?: (id: string) => 'hit' | 'path' | 'dim' | undefined;
 }
 
 /**
@@ -338,6 +348,7 @@ export function createScene(svg: SVGSVGElement, opts?: { idPrefix?: string }): S
     nodeEntries: new Map(),
     edgeEntries: new Map(),
     summaryEntries: new Map(),
+    fadeApplied: false,
     idPrefix,
   };
 }
@@ -1210,6 +1221,30 @@ export function renderScene(scene: SceneRoot, input: SceneInput): void {
       entry.path.remove();
       scene.edgeEntries.delete(id);
     }
+  }
+
+  // 筛选淡化（二期对齐轮，SceneInput.fadeOf）：命中=不透明、路径祖先=0.55、
+  // 其余=0.18；边随子节点（edge id = `${parent}->${child}`）同步淡化。缺省不传
+  // 时仅在「曾生效」前提下清残留 opacity——常规路径从不触碰该属性（金样锁定）。
+  if (input.fadeOf) {
+    scene.fadeApplied = true;
+    for (const [id, entry] of scene.nodeEntries) {
+      const f = input.fadeOf(id);
+      if (f === 'dim') entry.g.setAttribute('opacity', '0.18');
+      else if (f === 'path') entry.g.setAttribute('opacity', '0.55');
+      else entry.g.removeAttribute('opacity');
+    }
+    for (const [id, entry] of scene.edgeEntries) {
+      const childId = id.slice(id.indexOf('->') + 2);
+      const f = input.fadeOf(childId);
+      if (f === 'dim') entry.path.setAttribute('opacity', '0.18');
+      else if (f === 'path') entry.path.setAttribute('opacity', '0.55');
+      else entry.path.removeAttribute('opacity');
+    }
+  } else if (scene.fadeApplied) {
+    for (const [, entry] of scene.nodeEntries) entry.g.removeAttribute('opacity');
+    for (const [, entry] of scene.edgeEntries) entry.path.removeAttribute('opacity');
+    scene.fadeApplied = false;
   }
 
   // 概要 bracket（M6 Task 6，只增不改）：同款按 id 集合差分协调。

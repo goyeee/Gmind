@@ -100,9 +100,7 @@ test('超管：工作台「账号管理」入口 → 列表渲染，自己那行
   await uiLogin(page, admin.phone);
   await expect(page).toHaveURL(/\/workspace/);
 
-  await page.getByTestId('user-card').click();
-  await expect(page.getByTestId('admin-users-entry')).toBeVisible();
-  await page.getByTestId('admin-users-entry').click();
+  await page.getByTestId('nav-org').click(); // 组织管理=侧栏一级入口（仅超管渲染，原型同款）
   await expect(page).toHaveURL(/\/admin\/users/);
   await expect(page.getByTestId('admin-users-page')).toBeVisible();
   await expect(page.getByTestId('admin-user-table')).toBeVisible();
@@ -136,8 +134,7 @@ test('添加账号 13900000002 → 列表出现（重跑幂等：已存在则 40
   }
 
   await uiLogin(page, admin.phone);
-  await page.getByTestId('user-card').click();
-  await page.getByTestId('admin-users-entry').click();
+  await page.getByTestId('nav-org').click();
   await expect(page.getByTestId('admin-users-page')).toBeVisible();
 
   await page.getByTestId('add-user-btn').click();
@@ -162,8 +159,7 @@ test('停用 13900000002（confirm）→ 状态即时变停用，该号登录被
 
   await uiLogin(page, admin.phone);
   // 经入口按钮走 SPA 导航（整页 reload 在 1.6 万行的开发库下更慢，且入口本身已另有用例覆盖）
-  await page.getByTestId('user-card').click();
-  await page.getByTestId('admin-users-entry').click();
+  await page.getByTestId('nav-org').click();
   await expect(page.getByTestId('admin-user-table')).toBeVisible();
 
   await page.getByTestId('admin-user-search').fill(MEMBER_PHONE); // 分页后搜索定位
@@ -185,8 +181,47 @@ test('member（13900000002 启用后）：工作台无「账号管理」入口',
   await uiLogin(page, MEMBER_PHONE);
   await expect(page).toHaveURL(/\/workspace/);
 
-  // 对照组：用户卡菜单已渲染（账号设置在），仅账号管理入口不渲染
-  await page.getByTestId('user-card').click();
-  await expect(page.getByTestId('settings-entry')).toBeVisible();
-  await expect(page.getByTestId('admin-users-entry')).toHaveCount(0);
+  // 对照组：member 侧栏无「组织管理」入口（原型口径：仅管理员可见）
+  await expect(page.getByTestId('nav-org')).toHaveCount(0);
+});
+
+test('组织管理三页签（批次 A）：建部门/分组 → 账号行挂靠 → 回显；删除防呆', async ({ page }) => {
+  const admin = await superAdmin(page);
+  await uiLogin(page, admin.phone);
+  await expect(page).toHaveURL(/\/workspace/); // 等 token 落地（goto 整页刷新早于登录写入会弹回登录页）
+  await page.goto('/admin/users');
+  await expect(page.getByTestId('org-tabs')).toBeVisible();
+
+  // 部门管理：新增 + 列表出现
+  await page.getByTestId('org-tab-departments').click();
+  const deptName = `研发部-${Date.now() % 100000}`;
+  await page.getByTestId('dept-name-input').fill(deptName);
+  await page.getByTestId('dept-add-btn').click();
+  const deptItem = page.getByTestId('dept-item').filter({ hasText: deptName });
+  await expect(deptItem).toBeVisible();
+
+  // 账号管理：行内下拉挂部门 + 分组管理建组后挂靠
+  await page.getByTestId('org-tab-groups').click();
+  const groupName = `前端组-${Date.now() % 100000}`;
+  await page.getByTestId('group-name-input').fill(groupName);
+  await page.getByTestId('group-add-btn').click();
+  await expect(page.getByTestId('group-item').filter({ hasText: groupName })).toBeVisible();
+
+  await page.getByTestId('org-tab-accounts').click();
+  await page.getByTestId('admin-user-search').fill(admin.phone);
+  const selfRow = rowOf(page, admin.phone);
+  await selfRow.getByTestId('account-dept-select').selectOption({ label: deptName });
+  await expect(selfRow.getByTestId('account-dept-select')).toHaveValue(/.+/);
+  // 分组 popover 勾选（勾选即存，popover 关闭由 mask）
+  await selfRow.locator('[data-testid^="account-groups-btn-"]').click();
+  await selfRow.locator('[data-testid^="groups-popover-"]').locator('label').filter({ hasText: groupName }).click();
+  // mask 全屏铺底、popover 浮其上——点视口左上角避开浮层本体
+  await page.locator('.popover-mask').click({ position: { x: 5, y: 5 } });
+  await expect(selfRow.locator('.group-tag').filter({ hasText: groupName })).toBeVisible();
+
+  // 删除防呆：账号仍挂部门 → 删除 409 文案 toast
+  await page.getByTestId('org-tab-departments').click();
+  await page.on('dialog', (d) => d.accept());
+  await deptItem.getByRole('button', { name: '删除' }).click();
+  await expect(page.getByTestId('toast')).toContainText('请先转移账号');
 });

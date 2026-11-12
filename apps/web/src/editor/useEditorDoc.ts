@@ -40,11 +40,15 @@ interface FileContentResponse {
   title: string;
   structure: string;
   themeId: string;
+  /** 文件类型（批次 D）：table=表格文件（编辑器默认开表格视图）。 */
+  kind?: string;
   nodeCount: number;
   ownerUserId: string | null;
   updatedAt: string;
   starred: boolean;
   docState: string;
+  /** 本人角色（2026-10-28 P0）：viewer=只读装配（只读链接加入/只读协作者）。 */
+  myRole?: 'owner' | 'editor' | 'viewer';
 }
 
 function base64ToBytes(b64: string): Uint8Array {
@@ -61,6 +65,10 @@ export function useEditorDoc(fileId: string): {
   state: EditorDocState | null;
   error: string;
   setTitle: (title: string) => void;
+  /** 文件 kind（'map'|'table'，批次 D）：表格文件默认开表格视图的判定源。 */
+  fileKind: 'map' | 'table';
+  /** 本人角色（2026-10-28 P0）：viewer=只读装配（服务端随文件详情下发）。 */
+  myRole: 'owner' | 'editor' | 'viewer' | null;
   /** 写序 base（准入 7.1）：GET 装载的行 updated_at，persisted ack 刷新；null = 无 base
    *  （离线恢复路径/未装载）。ref 形态：saveLoop 决策与 collab 回调都要读/写最新值，
    *  不需要触发渲染。 */
@@ -68,6 +76,8 @@ export function useEditorDoc(fileId: string): {
 } {
   const [state, setState] = useState<EditorDocState | null>(null);
   const [error, setError] = useState('');
+  const [fileKind, setFileKind] = useState<'map' | 'table'>('map');
+  const [myRole, setMyRole] = useState<'owner' | 'editor' | 'viewer' | null>(null);
   const patchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingTitle = useRef<string | null>(null);
   const baseUpdatedAtRef = useRef<string | null>(null);
@@ -80,6 +90,8 @@ export function useEditorDoc(fileId: string): {
     (async () => {
       try {
         const meta = await api<FileContentResponse>(`/files/${fileId}`);
+        setFileKind(meta.kind === 'table' ? 'table' : 'map');
+        setMyRole(meta.myRole ?? null);
         const doc = docFromState(base64ToBytes(meta.docState));
         if (cancelled) return;
         baseUpdatedAtRef.current = meta.updatedAt; // 写序 base 初始值（准入 7.1）
@@ -151,5 +163,5 @@ export function useEditorDoc(fileId: string): {
     }, TITLE_PATCH_DEBOUNCE_MS);
   };
 
-  return { state, error, setTitle, baseUpdatedAtRef };
+  return { state, error, setTitle, fileKind, myRole, baseUpdatedAtRef };
 }

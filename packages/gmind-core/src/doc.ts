@@ -14,6 +14,15 @@ export const ROOT_NODE_ID = 'root';
 export interface TemplateNodeSpec {
   text: string;
   children?: TemplateNodeSpec[];
+  /** 任务字段（2026-10-25 表格类模板：负责人/进度/日期随模板预置）。
+   *  buildSubtree 为装载通道直写（同 docFromState 例外口径）；status 由 progress
+   *  派生（100=done、>0=doing、0=todo），owners 建号后按序回填 nickname 占位。 */
+  task?: {
+    progress?: number;
+    dueDate?: string;
+    startDate?: string;
+    owners?: string[];
+  };
 }
 
 export interface TemplateSpec {
@@ -140,6 +149,19 @@ function buildSubtree(
   nodes.set(id, node);
   node.set('text', spec.text);
   node.set('parentId', parentId);
+  // 任务预置（2026-10-25 表格类模板）：装载通道直写（docFromState 同例外口径）；
+  // status 由 progress 派生（readTask 归一化同语义），owners 恒空（模板无真实账号
+  // 可指——负责人列由使用者落库后自行分配）。键集与 readTask 消费面一致。
+  if (spec.task) {
+    const task = new Y.Map();
+    const progress = Math.min(100, Math.max(0, Math.round(spec.task.progress ?? 0)));
+    task.set('progress', progress);
+    task.set('status', progress >= 100 ? 'done' : progress > 0 ? 'doing' : 'todo');
+    task.set('owners', []);
+    if (spec.task.startDate) task.set('startDate', spec.task.startDate);
+    if (spec.task.dueDate) task.set('dueDate', spec.task.dueDate);
+    node.set('task', task);
+  }
   const children = new Y.Array<string>();
   node.set('children', children);
   parentChildren.push([id]);

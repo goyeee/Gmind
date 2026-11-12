@@ -99,7 +99,9 @@ describe('文件内容端点（读取/回写/改名/打开）', () => {
     const res = await authed(ownerToken, 'get', `/api/files/${fileId}`);
     expect(res.status).toBe(200);
     // starred（M3b 清偿包，FR-FIL-004）：编辑器加星入口的当前视角星标状态
-    expect(Object.keys(res.body).sort()).toEqual(['docState', 'id', 'nodeCount', 'ownerUserId', 'starred', 'structure', 'themeId', 'title', 'updatedAt']);
+    // myRole（2026-10-28 P0 链接档位）：编辑器只读装配依据
+    expect(Object.keys(res.body).sort()).toEqual(['docState', 'id', 'kind', 'myRole', 'nodeCount', 'ownerUserId', 'starred', 'structure', 'themeId', 'title', 'updatedAt']);
+    expect(res.body.myRole).toBe('owner');
     expect(res.body.title).toBe('内容文件');
     expect(res.body.starred).toBe(false);
     // 可达活跃口径（countAliveReachable，root 不计）：root + 1 子级 → 1
@@ -221,7 +223,7 @@ describe('文件内容端点（读取/回写/改名/打开）', () => {
     expect(res.status).toBe(200);
     // 响应 = FileListItem 契约（toListItem 唯一出口）+ folderId（M3a Task 5 移动语义，
     // 客户端移动后无需回查列表即知落点；未移动时为当前落点 null/文件夹 id）
-    expect(Object.keys(res.body).sort()).toEqual(['folderId', 'id', 'lastOpenedAt', 'nodeCount', 'structure', 'title', 'updatedAt']);
+    expect(Object.keys(res.body).sort()).toEqual(['folderId', 'id', 'kind', 'lastOpenedAt', 'nodeCount', 'structure', 'title', 'updatedAt']);
     expect(res.body.title).toBe('新名字');
     expect(res.body.folderId).toBeNull();
 
@@ -347,7 +349,13 @@ describe('PUT 陈旧快照写序守卫（准入 7.1）', () => {
     const provider = new HocuspocusProvider({
       url: `ws://127.0.0.1:${port}/collab`,
       name: docId,
-      token,
+      // 2026-10-28 P0：token=一次性 ticket——连接/重连先 POST /auth/ws-ticket 换票
+      token: async () => {
+        const res = await request(`http://127.0.0.1:${port}`)
+          .post('/api/auth/ws-ticket')
+          .set('Authorization', `Bearer ${token}`);
+        return (res.body as { ticket: string }).ticket;
+      },
       WebSocketPolyfill: WsImpl,
     } as HocuspocusProviderConfiguration);
     const client = { provider };

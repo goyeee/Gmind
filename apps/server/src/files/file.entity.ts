@@ -25,6 +25,10 @@ export class FileEntity {
   @Column({ type: 'varchar', length: 32, name: 'theme_id' })
   themeId: string = 'gmind-light';
 
+  /** 文件类型（批次 D）：table=表格文件（同构 docState，默认开表格视图）。 */
+  @Column({ type: 'varchar', length: 16, default: 'map' })
+  kind: string = 'map';
+
   @Column({ type: 'int', name: 'node_count' })
   nodeCount: number = 1;
 

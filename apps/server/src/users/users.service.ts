@@ -27,9 +27,12 @@ export interface RebindInput {
   code: string;
 }
 
-/** 通知偏好（FR-CMT-006）：邮件退订类型集合，PATCH 全量替换。 */
+/** 通知偏好（FR-CMT-006 + 2026-10-28 P1 总开关）：邮件退订类型集合 + 站内通知总开关
+ *  （notifyEnabled，缺省 true）+ 邮件摘要开关（digestEnabled，缺省 true）。 */
 export interface NotifyPrefs {
   emailOptOut: EmailOptOutType[];
+  notifyEnabled?: boolean;
+  digestEnabled?: boolean;
 }
 
 /** notify_prefs 列容错解析（M0 预留 text 列，历史值可能为空/坏 JSON）：形状不符 → []。 */
@@ -43,6 +46,31 @@ export function parseEmailOptOut(raw: string | null): EmailOptOutType[] {
     return list.filter((v): v is EmailOptOutType => (EMAIL_OPT_OUT_TYPES as readonly string[]).includes(v));
   } catch {
     return [];
+  }
+}
+
+/** 通知总开关读取（2026-10-28 P1）：notify_prefs.notifyEnabled !== false——缺省 true
+ *  （历史 JSON 无此键视为开）。 */
+export function notifyEnabledOf(raw: string | null): boolean {
+  if (!raw) return true;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return true;
+    return (parsed as { notifyEnabled?: unknown }).notifyEnabled !== false;
+  } catch {
+    return true;
+  }
+}
+
+/** 邮件摘要开关读取（2026-10-28 P1）：notify_prefs.digestEnabled !== false——缺省 true。 */
+export function digestEnabledOf(raw: string | null): boolean {
+  if (!raw) return true;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return true;
+    return (parsed as { digestEnabled?: unknown }).digestEnabled !== false;
+  } catch {
+    return true;
   }
 }
 
@@ -124,20 +152,29 @@ export class UsersService {
     await this.repo.save(user);
   }
 
-  /** 通知偏好读取（FR-CMT-006）：空/坏列 → {emailOptOut: []}。 */
+  /** 通知偏好读取（FR-CMT-006）：空/坏列 → {emailOptOut: [], notifyEnabled: true, digestEnabled: true}。 */
   async getNotifyPrefs(userId: string): Promise<NotifyPrefs> {
     const user = await this.findById(userId);
     if (!user) throw new BadRequestException('用户不存在，请重新登录');
-    return { emailOptOut: parseEmailOptOut(user.notifyPrefs) };
+    return {
+      emailOptOut: parseEmailOptOut(user.notifyPrefs),
+      notifyEnabled: notifyEnabledOf(user.notifyPrefs),
+      digestEnabled: digestEnabledOf(user.notifyPrefs),
+    };
   }
 
-  /** 通知偏好全量替换（FR-CMT-006）：users.notify_prefs 存 JSON {"emailOptOut":[...]}。 */
+  /** 通知偏好全量替换（FR-CMT-006）：users.notify_prefs 存 JSON——emailOptOut 数组 +
+   *  notifyEnabled/digestEnabled 两开关（2026-10-28 P1，缺省 true）。 */
   async setNotifyPrefs(userId: string, prefs: NotifyPrefs): Promise<NotifyPrefs> {
     const user = await this.findById(userId);
     if (!user) throw new BadRequestException('用户不存在，请重新登录');
-    user.notifyPrefs = JSON.stringify({ emailOptOut: prefs.emailOptOut });
+    user.notifyPrefs = JSON.stringify({
+      emailOptOut: prefs.emailOptOut,
+      notifyEnabled: prefs.notifyEnabled !== false,
+      digestEnabled: prefs.digestEnabled !== false,
+    });
     await this.repo.save(user);
-    return { emailOptOut: [...prefs.emailOptOut] };
+    return this.getNotifyPrefs(userId);
   }
 
   /** 头像设置（2026-10-11 需求方裁定）：白名单 = 5 个预置 SVG 路径或本人上传键

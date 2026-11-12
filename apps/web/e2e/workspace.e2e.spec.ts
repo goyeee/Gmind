@@ -19,19 +19,24 @@ async function registerAndLogin(page: Page): Promise<string> {
   await page.getByPlaceholder('验证码（开发环境固定 123456）').fill('123456');
   await page.getByRole('button', { name: '登录', exact: true }).click();
   await expect(page).toHaveURL(/\/workspace/);
+  await expect(page.getByTestId('quick-create-blank')).toBeVisible(); // 首页落点（换装后首页=问候+快速创建+最近文件）
+  await page.goto('/workspace?view=files');
   await expect(page.getByTestId('mine-grid').getByTestId('file-card')).toHaveCount(3); // 3 个种子
   return phone;
 }
 
 /** 新建一个脑图（即建即开编辑器）后返回工作台。 */
 async function createFileNamed(page: Page, title: string): Promise<void> {
+  // 顶栏「＋ 新建」为下拉（批次 D）：脑图/表格/模板
   await page.getByTestId('new-file-btn').click();
+  await page.getByTestId('create-menu-map').click();
   await expect(page).toHaveURL(/\/edit\//);
   await expect(page.locator('.editor-canvas svg .gm-text').first()).toBeVisible();
   // 编辑器标题改名（即建即开后的命名路径）再返回
   await page.getByTestId('title-input').fill(title);
   await page.getByTestId('back-btn').click();
   await expect(page).toHaveURL(/\/workspace/);
+  await page.goto('/workspace?view=files');
   await expect(mineCardOf(page, title)).toBeVisible();
 }
 
@@ -69,12 +74,16 @@ async function apiLogin(request: APIRequestContext, phone: string): Promise<stri
 const randomPhone = () => '138' + String(Math.floor(10000000 + Math.random() * 89999999));
 
 test('新建脑图即建即开，行内重命名落库', async ({ page }) => {
+  page.on('framenavigated', (f) => console.log('[NAV]', f.url()));
   await registerAndLogin(page);
   await page.getByTestId('new-file-btn').click();
+  await page.getByTestId('create-menu-map').click(); // 顶栏新建=下拉（批次 D）
   // 新建即开编辑器（参考图「空白脑图」卡语义）
   await expect(page).toHaveURL(/\/edit\//);
   await page.getByTestId('back-btn').click();
   await expect(page).toHaveURL(/\/workspace/);
+  // 换装后重命名在「我的文件」视图（首页不再有文件网格）
+  await page.getByTestId('nav-files').click();
   await renameCard(page, '未命名脑图', '会议记录');
 });
 test('星标切换：加入星标收藏视图，取消后移出', async ({ page }) => {
@@ -83,14 +92,17 @@ test('星标切换：加入星标收藏视图，取消后移出', async ({ page 
   await card.hover();
   await card.getByTestId('star-btn').click();
   await expect(card.getByTestId('star-btn')).toHaveText('★');
-  await page.getByTestId('nav-starred').click();
+  // 2026-10-27 原型：收藏退出侧栏——经「我的文件→收藏页签」
+  await page.getByTestId('nav-files').click();
+  await page.getByTestId('file-tab-starred').click();
   await expect(cardOf(page, '本周计划')).toBeVisible();
   // 取消星标 → 星标视图为空
-  await page.getByTestId('nav-mine').click();
+  await page.getByTestId('nav-files').click();
   const card2 = cardOf(page, '本周计划');
   await card2.hover();
   await card2.getByTestId('star-btn').click();
-  await page.getByTestId('nav-starred').click();
+  await page.getByTestId('nav-files').click();
+  await page.getByTestId('file-tab-starred').click();
   await expect(cardOf(page, '本周计划')).toHaveCount(0);
   await expect(page.locator('.grid-empty')).toBeVisible();
 });
@@ -163,7 +175,7 @@ test('真实内容缩略图：编辑保存后卡片出真实快照 img；未编�
   await page.getByTestId('rich-panel').getByTitle('填充-红').click();
   await expect(page.getByTestId('save-status')).toHaveText(/已保存/);
   // 回工作台：本周计划卡片出真实快照（懒加载 + 服务端往返，重试窗口放宽）
-  await page.goto('/workspace');
+  await page.goto('/workspace?view=files');
   const edited = mineCardOf(page, '本周计划');
   await expect(edited.getByTestId('file-thumb-img')).toBeVisible({ timeout: 10_000 });
   // 未编辑过的种子卡仍回退装饰性示意图
@@ -174,14 +186,16 @@ test('真实内容缩略图：编辑保存后卡片出真实快照 img；未编�
 
 test('搜索命中标题并展示结果卡片，清除后回到当前视图', async ({ page }) => {
   await registerAndLogin(page);
+  await page.goto('/workspace'); // 从首页搜索（清除后回首页）
   await page.getByTestId('search-input').fill('本周');
   await page.getByTestId('search-input').press('Enter');
   await expect(page.getByTestId('search-results')).toBeVisible();
   await expect(cardOf(page, '本周计划')).toBeVisible();
   await expect(cardOf(page, '产品需求评审纪要')).toHaveCount(0);
   await page.getByTestId('search-clear').click();
-  await expect(page.getByTestId('ws-greeting')).toBeVisible(); // 回首页
-  await expect(page.getByTestId('file-card')).toHaveCount(3);
+  await expect(page.getByTestId('ws-greeting')).toBeVisible(); // 回到进入前视图（首页）
+  await page.goto('/workspace?view=files');
+  await expect(page.getByTestId('mine-grid').getByTestId('file-card')).toHaveCount(3);
 });
 
 test('Ctrl/Cmd+Shift+F 聚焦搜索框（FR-FIL-008 收口）', async ({ page }) => {
@@ -209,17 +223,20 @@ test('协作空间与最近使用筛选：协作文件带图标、筛选器按�
   await page.getByTestId('nav-collab').click();
   await expect(cardOf(page, '乙的协作文件')).toBeVisible();
   await expect(cardOf(page, '本周计划')).toHaveCount(0);
-  // 我的文件不含协作件
-  await page.getByTestId('nav-mine').click();
+  // 我的文件页（批次 D）：「全部」=我的+共享；「我创建的」页签不含协作件
+  await page.getByTestId('nav-files').click();
+  await expect(cardOf(page, '乙的协作文件')).toBeVisible();
+  await page.getByTestId('file-tab-mine').click();
   await expect(cardOf(page, '乙的协作文件')).toHaveCount(0);
+  await page.getByTestId('file-tab-all').click();
+  await expect(cardOf(page, '乙的协作文件')).toBeVisible();
   // 打开协作文件 → 最近使用出现且带协作图标；筛选器切「协作」只剩它、切「个人」不见
   await page.getByTestId('nav-collab').click();
   await cardOf(page, '乙的协作文件').click();
   await expect(page).toHaveURL(/\/edit\//);
   // 等编辑器装载完成（last_opened_at 由装载期 POST /open 打点）再离开，防打点竞态
   await expect(page.locator('.editor-canvas svg .gm-text').first()).toBeVisible();
-  await page.goto('/workspace');
-  await page.getByTestId('nav-recent').click();
+  await page.goto('/workspace?view=recent'); // 最近使用：原型无侧栏项，路由保留
   const collabCard = cardOf(page, '乙的协作文件');
   await expect(collabCard).toBeVisible();
   await expect(collabCard.getByLabel('协作文件')).toBeVisible();
@@ -269,9 +286,30 @@ test('模板库：画廊 → 预览 → 使用模板一键建文档并打开', a
 
 test('首页快速创建卡：从模板创建卡直达模板库', async ({ page }) => {
   await registerAndLogin(page);
+  await page.goto('/workspace'); // 回首页（registerAndLogin 现落在文件视图）
   await expect(page.getByTestId('ws-greeting')).toContainText('，用户'); // 时段问候+昵称
   await page.getByTestId('quick-create-template').click();
   await expect(page.getByTestId('template-grid')).toBeVisible();
+});
+
+test('表格文件（批次 D）：新建表格默认开表格视图；卡片徽标+类型筛选', async ({ page }) => {
+  await registerAndLogin(page);
+  await page.getByTestId('new-file-btn').click();
+  await page.getByTestId('create-menu-table').click();
+  await expect(page).toHaveURL(/\/edit\//);
+  // 标题=未命名表格；默认视图=表格（view-tab-table active）
+  await expect(page.getByTestId('title-input')).toHaveValue('未命名表格');
+  await expect(page.getByTestId('view-tab-table')).toHaveAttribute('aria-selected', 'true');
+  await page.getByTestId('back-btn').click();
+  await expect(page).toHaveURL(/\/workspace/);
+  await page.goto('/workspace?view=files');
+  // 徽标=表格；类型页签生效
+  const card = mineCardOf(page, '未命名表格');
+  await expect(card.locator('.card-kind')).toHaveText('表格');
+  await page.getByTestId('file-tab-map').click();
+  await expect(mineCardOf(page, '未命名表格')).toHaveCount(0);
+  await page.getByTestId('file-tab-table').click();
+  await expect(mineCardOf(page, '未命名表格')).toBeVisible();
 });
 
 test('用户菜单：账号设置入口 + 退出登录清 token 回登录页', async ({ page }) => {

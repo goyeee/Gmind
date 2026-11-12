@@ -101,6 +101,13 @@ export function todayStr(): string {
   return dayKey(Date.now());
 }
 
+/** 「今日待办」统一口径（2026-10-28 P1）：今日到期或已逾期——dueDate<=今天。
+ *  三处消费同源：我的待办页签（TodosPage）、统计面板 range=today（todos.service
+ *  SQL 条件）、其他「今日」语义一律以本函数为准（原「今日有更新」口径退役）。 */
+export function isDueTodayOrOverdue(dueDate: string | null, today: string = todayStr()): boolean {
+  return dueDate !== null && dueDate <= today;
+}
+
 /* ---------- 树结构（源自 mindgrid derive.ts，平铺数组版） ---------- */
 
 /** 直属子级，按 order 升序（缺省 order 视为 0；ES2019+ sort 稳定保同序兜底） */

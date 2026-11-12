@@ -15,7 +15,8 @@ export const createAdminAccountSchema = z.object({
     .max(32, '昵称长度需为 1~32 字，请调整后重试'),
 });
 
-/** PATCH /api/admin/users/:id：三字段均可选但至少其一（空 patch 400）。 */
+/** PATCH /api/admin/users/:id：字段均可选但至少其一（空 patch 400）。
+ *  departmentId/groupIds（组织管理批次 A）：部门单选（null=清空）、分组全量替换。 */
 export const updateAdminAccountSchema = z
   .object({
     systemRole: z.enum(SYSTEM_ROLES, { message: '角色仅支持 super_admin/member，请重新选择' }).optional(),
@@ -25,7 +26,15 @@ export const updateAdminAccountSchema = z
       .min(1, '昵称长度需为 1~32 字，请调整后重试')
       .max(32, '昵称长度需为 1~32 字，请调整后重试')
       .optional(),
+    departmentId: z.string().min(1).nullable().optional(),
+    groupIds: z.array(z.string().min(1)).optional(),
   })
-  .refine((v) => v.systemRole !== undefined || v.status !== undefined || v.nickname !== undefined, {
-    message: '没有需要更新的字段，请至少指定角色、状态或昵称之一',
-  });
+  .refine(
+    (v) =>
+      v.systemRole !== undefined ||
+      v.status !== undefined ||
+      v.nickname !== undefined ||
+      v.departmentId !== undefined ||
+      v.groupIds !== undefined,
+    { message: '没有需要更新的字段，请至少指定角色、状态、昵称、部门或分组之一' },
+  );

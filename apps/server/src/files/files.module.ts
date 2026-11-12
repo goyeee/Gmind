@@ -2,7 +2,9 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { CollabModule } from '../collab/collab.module';
 import { EventsModule } from '../events/events.module';
+import { OrgModule } from '../org/org.module';
 import { StorageCoreModule } from '../storage/storage-core.module';
+import { TaskIndexModule } from '../todos/task-index.module';
 import { UserEntity } from '../users/user.entity';
 import { UsersModule } from '../users/users.module';
 import { FileEntity } from './file.entity';
@@ -22,12 +24,16 @@ import { FilesController, SearchController } from './files.controller';
   // StorageService.copyImage——叶子模块（不含鉴权端点层），不与 StorageModule 成环
   // UserEntity（M3b Task 8，FR-CMT-005）：collaborators 候选列表的 nickname JOIN
   // EventsModule（M5 Task 4）：doc_create 埋点（EventsModule 不依赖任何业务域，无环）
+  // OrgModule（2026-10-25 原型成员归属行）：collaborators/invitable-users 投影补
+  //   部门·分组归属（membershipsFor + 部门/分组名录），OrgService 只读挂靠查询无环
   imports: [
     TypeOrmModule.forFeature([FileEntity, FileCollaboratorEntity, FileStarEntity, FolderEntity, UserEntity]),
     UsersModule,
     CollabModule,
+    TaskIndexModule,
     StorageCoreModule,
     EventsModule,
+    OrgModule,
   ],
   providers: [FilesService],
   controllers: [FilesController, SearchController],

@@ -11,6 +11,9 @@ import { EventEntity } from '../events/event.entity';
 import { NotificationEntity } from '../notifications/notification.entity';
 import { InviteEntity } from '../share/invite.entity';
 import { ShareLinkEntity } from '../share/share-link.entity';
+import { OrgDepartmentEntity, OrgGroupEntity, OrgUserGroupEntity } from '../org/org.entity';
+import { NodeIndexEntity } from '../todos/node-index.entity';
+import { TaskIndexEntity } from '../todos/task-index.entity';
 import { UserEntity } from '../users/user.entity';
 import { VersionEntity } from '../versions/version.entity';
 
@@ -24,7 +27,7 @@ import { VersionEntity } from '../versions/version.entity';
         // 约定：新增实体必须同步追加到此处（forFeature 之外的运行时建元数据来源）。
         return {
           ...ds.options,
-          entities: [UserEntity, FileEntity, FileCollaboratorEntity, FileStarEntity, FolderEntity, CommentEntity, EventEntity, NotificationEntity, ShareLinkEntity, InviteEntity, VersionEntity],
+          entities: [UserEntity, FileEntity, FileCollaboratorEntity, FileStarEntity, FolderEntity, CommentEntity, EventEntity, NotificationEntity, ShareLinkEntity, InviteEntity, VersionEntity, OrgDepartmentEntity, OrgGroupEntity, OrgUserGroupEntity, TaskIndexEntity, NodeIndexEntity],
         };
       },
     }),

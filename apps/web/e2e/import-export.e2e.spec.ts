@@ -29,6 +29,8 @@ async function registerAndLogin(page: Page): Promise<void> {
   await page.getByPlaceholder('验证码（开发环境固定 123456）').fill('123456');
   await page.getByRole('button', { name: '登录', exact: true }).click();
   await expect(page).toHaveURL(/\/workspace/);
+  await expect(page.getByTestId('quick-create-blank')).toBeVisible(); // 首页落点（换装后种子文件在「我的文件」视图）
+  await page.goto('/workspace?view=files');
   await expect(page.getByTestId('mine-grid').getByTestId('file-card')).toHaveCount(3);
 }
 
@@ -42,7 +44,8 @@ async function openSeedDoc(page: Page, title: string): Promise<void> {
 
 test('工作台导入 .xmind：新文件出现且层级/备注正确渲染', async ({ page }) => {
   await registerAndLogin(page);
-  await page.getByTestId('import-button').click();
+  await page.goto('/workspace'); // 导入入口=首页「导入文件」卡
+  await page.getByTestId('quick-create-import').click();
   await page.getByTestId('import-input').setInputFiles({
     name: '项目.xmind',
     mimeType: 'application/octet-stream',
@@ -63,7 +66,8 @@ test('工作台导入 .xmind：新文件出现且层级/备注正确渲染', asy
 test('导入 25MB 超限：提示大小上限+压缩重试；损坏文件：提示已损坏+检查重试', async ({ page }) => {
   await registerAndLogin(page);
   // 超限 buffer 用恒定填充（大小检查先于解析，垃圾内容不会进入解析器）
-  await page.getByTestId('import-button').click();
+  await page.goto('/workspace'); // 导入入口=首页「导入文件」卡
+  await page.getByTestId('quick-create-import').click();
   await page.getByTestId('import-input').setInputFiles({
     name: '超大.xmind',
     mimeType: 'application/octet-stream',
@@ -72,13 +76,16 @@ test('导入 25MB 超限：提示大小上限+压缩重试；损坏文件：提�
   await expect(page.getByTestId('toast')).toHaveText('文件大小超过 20MB 上限，请压缩后重试');
 
   // 损坏文件（< 20MB 乱字节，非 zip）：归因「文件已损坏，无法解析」且不产生新文件
-  await page.getByTestId('import-button').click();
+  await page.goto('/workspace'); // 导入入口=首页「导入文件」卡
+  await page.getByTestId('quick-create-import').click();
   await page.getByTestId('import-input').setInputFiles({
     name: '损坏.xmind',
     mimeType: 'application/octet-stream',
     buffer: Buffer.alloc(1024, 0x07),
   });
   await expect(page.getByTestId('toast')).toHaveText('文件已损坏，无法解析，请检查文件后重试');
+  await expect(page.getByTestId('quick-create-blank')).toBeVisible(); // 首页落点（换装后种子文件在「我的文件」视图）
+  await page.goto('/workspace?view=files');
   await expect(page.getByTestId('mine-grid').getByTestId('file-card')).toHaveCount(3);
 });
 
@@ -131,6 +138,9 @@ async function openSeedDocWithNote(page: Page): Promise<void> {
 // 用例 3（M4 Task 5，FR-IO-004 一期 XMind 部分）：导出菜单 → 下载 .xmind →
 // xmind-io 直接解析断言层级/文本/备注 → 下载产物回灌工作台导入，新文件出现且渲染一致。
 test('导出 XMind 并往返导入：层级/文本/备注一致', async ({ page }) => {
+  page.on('console', (m) => {
+    if (m.text().includes('[probe:loadFiles]')) console.log('[page]', m.text());
+  });
   await openSeedDocWithNote(page);
   // 工具栏「导出」按钮点开下拉（Task 9 前仅 XMind 一项），点击触发下载
   await page.getByTestId('export-menu').click();
@@ -156,14 +166,17 @@ test('导出 XMind 并往返导入：层级/文本/备注一致', async ({ page 
 
   // 往返：下载产物 setInputFiles 回灌导入 → 新文件出现（4 行 = 3 种子 + 导入件，
   // 新件 updated_at 最新置顶）
-  await page.goto('/workspace');
-  await page.getByTestId('import-button').click();
+  await page.goto('/workspace'); // 导入入口=首页「导入文件」卡
+  await page.getByTestId('quick-create-import').click();
   await page.getByTestId('import-input').setInputFiles({
     name: '本周计划.xmind',
     mimeType: 'application/octet-stream',
     buffer: Buffer.from(bytes),
   });
-  await expect(page.getByTestId('mine-grid').getByTestId('file-card')).toHaveCount(4);
+  // SPA 切「我的文件」（导入完成后 importXmind 亦切到此视图）；网格 = 3 种子 + 导入件，
+  // 15s 窗口覆盖「导入 POST 落库 + 视图装载」的端到端时序
+  await page.getByTestId('nav-files').click();
+  await expect(page.getByTestId('mine-grid').getByTestId('file-card')).toHaveCount(4, { timeout: 15_000 });
   await page.getByTestId('mine-grid').getByTestId('file-card').first().click();
   await expect(page).toHaveURL(/\/edit\//);
   // 导入件渲染一致：层级（root/周一/周会对齐）与备注角标（恰 1 个）

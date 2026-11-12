@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { UsersModule } from '../users/users.module';
 import { NotificationEntity } from '../notifications/notification.entity';
+import { UserEntity } from '../users/user.entity';
 import { NotificationsController, NotifyStreamController } from './notify.controller';
 import { NotifyService } from './notify.service';
 
@@ -13,7 +14,7 @@ import { NotifyService } from './notify.service';
  * 评论/文件域，无环）。
  */
 @Module({
-  imports: [TypeOrmModule.forFeature([NotificationEntity]), UsersModule],
+  imports: [TypeOrmModule.forFeature([NotificationEntity, UserEntity]), UsersModule],
   providers: [NotifyService],
   controllers: [NotifyStreamController, NotificationsController],
   exports: [NotifyService],

@@ -26,6 +26,7 @@ import { FileCollaboratorEntity } from '../files/file-collaborator.entity';
 import { FileEntity } from '../files/file.entity';
 import { SessionService } from '../session/session.service';
 import { VersionEntity } from '../versions/version.entity';
+import { TaskIndexService } from '../todos/task-index.service';
 
 /** 协同 WebSocket 升级路由（挂在与 REST API 相同的 HTTP server 上）。 */
 export const COLLAB_WS_PATH = '/collab';
@@ -80,6 +81,7 @@ export class CollabService implements OnApplicationShutdown {
     @InjectRepository(FileEntity) private readonly files: Repository<FileEntity>,
     @InjectRepository(FileCollaboratorEntity) private readonly collaborators: Repository<FileCollaboratorEntity>,
     @InjectRepository(VersionEntity) private readonly versions: Repository<VersionEntity>,
+    @Inject(TaskIndexService) private readonly taskIndex: TaskIndexService,
   ) {
     this.hocuspocus = new Hocuspocus({
       quiet: true,
@@ -89,6 +91,11 @@ export class CollabService implements OnApplicationShutdown {
       onLoadDocument: async (data) => this.loadDocument(data),
       onChange: async (data) => this.handleChange(data),
       onStoreDocument: async (data) => this.storeDocument(data),
+      // 写拦截（2026-10-28 P0 链接档位）：viewer 连接的文档写消息在应用前拒绝
+      // （awareness 光标/选区走另一钩子不受影响——只读协作者仍可见彼此光标）
+      beforeHandleMessage: async (data) => {
+        if (data.context.readOnly === true) throw new Error('permission-denied');
+      },
       beforeUnloadDocument: async (data) => {
         // 卸载兜底（FR-VER-001）：会话结束仍有未快照的变更 → 立即落行（补「编辑 1 分钟
         // 即关页」窗口；v4 在最终 store 之后、文档仍在内存时调用本钩子）。快照失败不
@@ -214,15 +221,29 @@ export class CollabService implements OnApplicationShutdown {
   }
 
   /** 鉴权 + 准入（唯一强制点）：token 优先取 auth 帧（@hocuspocus v4 的 token 通道），
-   *  回落升级请求 query 的 ?token=；会话无效 / 文件缺失已删 / 无权限一律抛
-   *  permission-denied（v4 统一回写该 reason），不泄露文件存在性。 */
+   *  回落升级请求 query 的 ?token=。2026-10-28 P0：token 语义从长效 session 改为
+   *  **一次性 ticket**（GETDEL 单次消费，60s 有效）——浏览器 WS 不允许自定义
+   *  Authorization 头，URL/日志里不再出现长效凭证；Hocuspocus 客户端 token 支持
+   *  ()=>Promise<string>，每次连接/重连换一张新票。无效 / 文件缺失已删 / 无权限
+   *  一律抛 permission-denied（v4 统一回写该 reason），不泄露文件存在性。 */
   private async authenticate(data: onAuthenticatePayload): Promise<void> {
     const token = data.token || data.requestParameters.get('token') || '';
-    const session = await this.sessions.validate(token);
-    if (!session) throw new Error('permission-denied');
-    const allowed = await this.canOpen(data.documentName, session.userId);
+    const ticket = await this.sessions.consumeWsTicket(token);
+    if (!ticket) throw new Error('permission-denied');
+    const allowed = await this.canOpen(data.documentName, ticket.userId);
     if (!allowed) throw new Error('permission-denied');
-    data.context.userId = session.userId;
+    data.context.userId = ticket.userId;
+    // 只读连接标记（2026-10-28 P0）：viewer（只读链接/只读协作者）读放行、写由
+    // beforeHandleMessage 拒绝——同 canWrite 口径，此处本地查询避免引入 FilesService 环
+    const file = await this.files.findOne({ where: { id: data.documentName, deletedAt: IsNull() } });
+    if (file) {
+      if (file.ownerUserId === ticket.userId) {
+        data.context.readOnly = false;
+      } else {
+        const row = await this.collaborators.findOneBy({ fileId: data.documentName, userId: ticket.userId });
+        data.context.readOnly = row?.role !== 'editor';
+      }
+    }
     // 快照基线：会话建立即计时（lastAutoAt=当前时刻，dirty=false）——首窗口内编辑
     // 只走防抖落库，不立即产生版本行
     this.ensureSnapMeta(data.documentName);
@@ -328,6 +349,9 @@ export class CollabService implements OnApplicationShutdown {
     } catch (err) {
       console.error(`[collab] auto 快照失败（${data.documentName}）`, err);
     }
+    // 任务索引重建（第二期批次 B）：落库成功后异步全量重建（fire-and-forget 同快照
+    // 模式——失败不阻断 ack，下个保存窗口自愈）。
+    this.taskIndex.rebuildInBackground(data.documentName, data.document);
     // ack 只在成功写入后广播（放在 try 之外，失败路径不可达此处）
     data.document.broadcastStateless(
       JSON.stringify({

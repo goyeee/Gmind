@@ -7,8 +7,16 @@ function msgOf(e: unknown): string {
   return e instanceof Error ? e.message : '操作失败';
 }
 
+/** 剩余保留天数（2026-10-25 原型：到期倒计时，30 天窗口；向下取整跨天口径，
+ *  删除即 D30→当天显示 30）。负值（清理任务滞后未跑）按 0 显示。 */
+function daysLeftOf(deletedAt: string): number {
+  const elapsed = Date.now() - new Date(deletedAt).getTime();
+  return Math.max(0, 30 - Math.floor(elapsed / 86_400_000));
+}
+
 /** 回收站（M3a Task 9 接线，FR-FIL-005~007）：还原 / 彻底删除（二次确认）/ 30 天保留提示。
- *  2026-10-21 收进 WorkspaceShell 外壳（侧栏 nav-trash 高亮），样式对齐工作台重设计。 */
+ *  2026-10-21 收进 WorkspaceShell 外壳（侧栏 nav-trash 高亮），样式对齐工作台重设计。
+ *  2026-10-25 原型临期警示：行内「剩余 N 天」胶囊，≤3 天红色加粗。 */
 export function TrashPage() {
   const [items, setItems] = useState<TrashItem[]>([]);
   const [error, setError] = useState('');
@@ -51,22 +59,31 @@ export function TrashPage() {
         </div>
         {error && <p className="error">{error}</p>}
         <ul className="trash-list">
-          {items.map((t) => (
-            <li key={t.id}>
-              <span className="title">{t.title}</span>
-              <span className="meta">删除时间 {new Date(t.deletedAt).toLocaleString()}</span>
-              <span className="meta">删除人 {t.deletedByName ?? '—'}</span>
-              <span className="meta">{t.folderName ? `原位置 ${t.folderName}` : '原位置 根目录'}</span>
-              <span className="ops">
-                <button data-testid="restore-btn" onClick={() => void restore(t)}>
-                  还原
-                </button>
-                <button className="danger" data-testid="purge-btn" onClick={() => setPurgeTarget(t)}>
-                  彻底删除
-                </button>
-              </span>
-            </li>
-          ))}
+          {items.map((t) => {
+            const daysLeft = daysLeftOf(t.deletedAt);
+            return (
+              <li key={t.id}>
+                <span className="title">{t.title}</span>
+                <span className="meta">删除时间 {new Date(t.deletedAt).toLocaleString()}</span>
+                <span className="meta">删除人 {t.deletedByName ?? '—'}</span>
+                <span className="meta">{t.folderName ? `原位置 ${t.folderName}` : '原位置 根目录'}</span>
+                <span
+                  className={daysLeft <= 3 ? 'trash-days-left danger' : 'trash-days-left'}
+                  data-testid="trash-days-left"
+                >
+                  剩余 {daysLeft} 天
+                </span>
+                <span className="ops">
+                  <button data-testid="restore-btn" onClick={() => void restore(t)}>
+                    还原
+                  </button>
+                  <button className="danger" data-testid="purge-btn" onClick={() => setPurgeTarget(t)}>
+                    彻底删除
+                  </button>
+                </span>
+              </li>
+            );
+          })}
           {items.length === 0 && <li className="empty">回收站为空</li>}
         </ul>
       </main>

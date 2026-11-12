@@ -66,12 +66,15 @@ export class FilesController {
 
   @Post()
   async create(@Req() req: { user: { id: string } }, @Body() body: unknown) {
-    const { title, docState } = createBodySchema.parse(body ?? {});
+    const { title, docState, kind } = createBodySchema.parse(body ?? {});
+    // title 缺省按 kind（批次 D）：表格文件默认「未命名表格」
+    const resolvedTitle = title ?? (kind === 'table' ? '未命名表格' : '未命名脑图');
     // 按 FileListItem 契约序列化，避免裸实体（含 docState Buffer）被 Nest 原样序列化
     const created = await this.files.createForUser(
       req.user.id,
       {
-        title,
+        title: resolvedTitle,
+        kind,
         // docState 缺省 → 既有空白模板路径；存在 → 按导入初始状态落库（M4 Task 4）
         state: docState === undefined ? undefined : new Uint8Array(Buffer.from(docState, 'base64')),
       },
@@ -131,6 +134,13 @@ export class FilesController {
     @Body() body: unknown,
   ) {
     return this.files.addCollaborators(req.user.id, id, addCollaboratorsSchema.parse(body ?? {}).userIds);
+  }
+
+  /** 移除协作者（2026-10-25 原型 ShareModal members tab「移除」）：仅 owner（404
+   *  不泄露存在性）；删 file_collaborators 行即收回访问权，幂等。 */
+  @Delete(':id/collaborators/:userId')
+  removeCollaborator(@Req() req: { user: { id: string } }, @Param('id') id: string, @Param('userId') targetUserId: string) {
+    return this.files.removeCollaborator(req.user.id, id, targetUserId);
   }
 
   @Put(':id/doc-state')
@@ -194,6 +204,7 @@ export class SearchController {
   @Get()
   search(@Req() req: { user: { id: string } }, @Query() query: unknown) {
     const { q } = searchQuerySchema.parse(query ?? {});
-    return this.files.searchByTitle(req.user.id, q);
+    // 全文搜索（2026-10-28 P1）：标题命中 files + 节点内容命中 nodes（此前仅标题）
+    return this.files.searchGlobal(req.user.id, q);
   }
 }

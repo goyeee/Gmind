@@ -1,8 +1,12 @@
-import { Body, Controller, Delete, Get, HttpCode, Inject, Param, Post, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, Inject, Param, Patch, Post, Req, UseGuards } from '@nestjs/common';
+import { z } from 'zod';
 import { UserGuard } from '../auth/user.guard';
 import { InviteService } from './invite.service';
 import { inviteRequestSchema } from './invite-request.schema';
 import { ShareService } from './share.service';
+
+/** 链接权限档位（2026-10-28 P0）：editor|viewer，缺省 editor（存量行为不变）。 */
+const shareRoleSchema = z.object({ role: z.enum(['editor', 'viewer']).default('editor') });
 
 /**
  * 分享域端点（M3b Task 4，FR-SHR-001 + Task 5，FR-SHR-004）。
@@ -24,8 +28,20 @@ export class ShareManageController {
   ) {}
 
   @Post(':id/share')
-  create(@Req() req: { user: { id: string } }, @Param('id') id: string) {
-    return this.share.createForOwner(req.user.id, id);
+  create(@Req() req: { user: { id: string } }, @Param('id') id: string, @Body() body: unknown) {
+    return this.share.createForOwner(req.user.id, id, shareRoleSchema.parse(body ?? {}).role);
+  }
+
+  /** 链接分享状态（2026-10-25 原型链接页签）：owner-only；无 active 行是合法态非错误。 */
+  @Get(':id/share')
+  describe(@Req() req: { user: { id: string } }, @Param('id') id: string) {
+    return this.share.describeForOwner(req.user.id, id);
+  }
+
+  /** 修改权限档位（2026-10-28 P0）：token 不变即改即生效；无 active 行 404。 */
+  @Patch(':id/share')
+  setRole(@Req() req: { user: { id: string } }, @Param('id') id: string, @Body() body: unknown) {
+    return this.share.setRoleForOwner(req.user.id, id, shareRoleSchema.parse(body ?? {}).role);
   }
 
   @Delete(':id/share')

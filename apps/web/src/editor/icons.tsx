@@ -1,189 +1,60 @@
 /**
- * 工具栏内联 SVG 图标集 — M6 Task 1（企微对标）。
- *
- * 约定：16×16 视窗、stroke=currentColor、fill=none、strokeWidth=1.6、
- * 极简线条字形，无外部依赖；颜色随按钮文字色（含禁用态降透明度）走。
- * 组件不接收内容 props（只作纯字形）；如需尺寸微调用 CSS 控制 svg 大小。
+ * 工具栏图标集（二期样式对齐轮 2026-10-25）：内部字形整体切换为 lucide
+ * （与 Figma 原型像素级同源，见 components/lucide-data.tsx）；导出名与
+ * 消费面（EditorPage 等）保持不变，零接线改动。尺寸 17 = 原型 Tool icon。
  */
+import type { ReactElement } from 'react';
+import { Lucide } from '../components/lucide-data';
 
 type IconProps = {
-  /** 可选的 className（如 a11y 隐藏辅助），默认无 */
   className?: string;
 };
 
-function svgProps(className?: string) {
-  return {
-    className,
-    width: 16,
-    height: 16,
-    viewBox: '0 0 16 16',
-    fill: 'none',
-    stroke: 'currentColor',
-    strokeWidth: 1.6,
-    strokeLinecap: 'round' as const,
-    strokeLinejoin: 'round' as const,
-    'aria-hidden': true,
-  };
-}
+const I = (name: string, className?: string): ReactElement => <Lucide name={name} size={17} className={className} />;
 
-/** 返回（左箭头 + 左侧竖线锚点）：返回工作台 */
+/** 返回工作台 */
 export function BackIcon({ className }: IconProps) {
-  return (
-    <svg {...svgProps(className)}>
-      <path d="M6.5 3.5 3 7l3.5 3.5" />
-      <path d="M3 7h10" />
-    </svg>
-  );
+  return I('ArrowLeft', className);
 }
-
-/** 撤销（回退弧形箭头） */
 export function UndoIcon({ className }: IconProps) {
-  return (
-    <svg {...svgProps(className)}>
-      <path d="M3.5 6h6a3.5 3.5 0 1 1 0 7H6" />
-      <path d="M6 3.5 3.5 6 6 8.5" />
-    </svg>
-  );
+  return I('Undo2', className);
 }
-
-/** 重做（前进弧形箭头，撤销的镜像） */
 export function RedoIcon({ className }: IconProps) {
-  return (
-    <svg {...svgProps(className)}>
-      <path d="M12.5 6h-6a3.5 3.5 0 1 0 0 7H10" />
-      <path d="M10 3.5 12.5 6 10 8.5" />
-    </svg>
-  );
+  return I('Redo2', className);
 }
-
-/** 结构（节点树：根 + 两层分支） */
 export function StructureIcon({ className }: IconProps) {
-  return (
-    <svg {...svgProps(className)}>
-      <rect x="6" y="1.5" width="4" height="3" rx="0.8" />
-      <rect x="1.5" y="11.5" width="4" height="3" rx="0.8" />
-      <rect x="10.5" y="11.5" width="4" height="3" rx="0.8" />
-      <path d="M8 4.5v2.5M3.5 11.5v-2a1.5 1.5 0 0 1 1.5-1.5h6a1.5 1.5 0 0 1 1.5 1.5v2M8 7v2" />
-    </svg>
-  );
+  return I('Network', className);
 }
-
-/** 主题（调色板：盘面 + 两色点） */
 export function ThemeIcon({ className }: IconProps) {
-  return (
-    <svg {...svgProps(className)}>
-      <path d="M8 1.8a6.2 6.2 0 0 0 0 12.4c1 0 1.6-.7 1.6-1.6 0-.9-.6-1.5-.6-2.2 0-.7.6-1.3 1.5-1.3h1.4A2.3 2.3 0 0 0 14.2 7 5.6 5.6 0 0 0 8 1.8Z" />
-      <circle cx="5.2" cy="5.6" r="0.2" fill="currentColor" />
-      <circle cx="8" cy="4.2" r="0.2" fill="currentColor" />
-      <circle cx="10.6" cy="5.8" r="0.2" fill="currentColor" />
-    </svg>
-  );
+  return I('LayoutPanelTop', className);
 }
-
-/** 导出（托盘向上箭头） */
 export function ExportIcon({ className }: IconProps) {
-  return (
-    <svg {...svgProps(className)}>
-      <path d="M8 10V2.5" />
-      <path d="M5 5l3-2.8L11 5" />
-      <path d="M2.5 10.5v2a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1v-2" />
-    </svg>
-  );
+  return I('Upload', className);
 }
-
-/** 成员（双人侧影） */
 export function MembersIcon({ className }: IconProps) {
-  return (
-    <svg {...svgProps(className)}>
-      <circle cx="6" cy="5" r="2.4" />
-      <path d="M1.8 13.2a4.4 4.4 0 0 1 8.4 0" />
-      <path d="M10.4 3a2.4 2.4 0 0 1 0 4.6M11.4 9.4a4.4 4.4 0 0 1 2.8 3.8" />
-    </svg>
-  );
+  return I('Users', className);
 }
-
-/** 版本历史（时钟倒转） */
 export function HistoryIcon({ className }: IconProps) {
-  return (
-    <svg {...svgProps(className)}>
-      <path d="M8 4v4l2.6 1.6" />
-      <path d="M1.8 8a6.2 6.2 0 1 0 1.9-4.5M1.8 1.8v2.4h2.4" />
-    </svg>
-  );
+  return I('History', className);
 }
-
-/** 快捷键（键盘：底板 + 三键位） */
 export function KeyboardIcon({ className }: IconProps) {
-  return (
-    <svg {...svgProps(className)}>
-      <rect x="1.5" y="4" width="13" height="8" rx="1.2" />
-      <path d="M4 6.5v3M6.5 6.5h.01M9 6.5h.01M11.5 6.5h.01M6.5 9.5h.01M9 9.5h.01M11.5 9.5h.01" />
-    </svg>
-  );
+  return I('Keyboard', className);
 }
-
-/** 查找（放大镜） */
 export function SearchIcon({ className }: IconProps) {
-  return (
-    <svg {...svgProps(className)}>
-      <circle cx="7" cy="7" r="4.5" />
-      <path d="M10.4 10.4 14 14" />
-    </svg>
-  );
+  return I('Search', className);
 }
-
-/** 全屏（四角外扩） */
 export function FullscreenIcon({ className }: IconProps) {
-  return (
-    <svg {...svgProps(className)}>
-      <path d="M9.5 2H14v4.5M6.5 14H2V9.5" />
-      <path d="M14 2 9.7 6.3M2 14l4.3-4.3" />
-    </svg>
-  );
+  return I('Maximize2', className);
 }
-
-/** 格式刷（斜置刷子：右上刷柄 + 左下刷头）：T7 格式刷按钮 */
 export function PainterIcon({ className }: IconProps) {
-  return (
-    <svg {...svgProps(className)}>
-      {/* 刷柄（圆头斜杠） */}
-      <path d="M8.2 7.1 11.7 3.6a1.9 1.9 0 0 1 2.7 2.7L10.9 9.8Z" />
-      {/* 刷颈（柄与刷头的短连接） */}
-      <path d="M7.2 8.1 7.9 8.8" />
-      {/* 刷头（蘸色楔形） */}
-      <path d="M2.6 9.9 6.3 13.6C5 14.5 3.4 14.7 1.8 14.1 1.2 12.5 1.5 10.9 2.6 9.9Z" />
-    </svg>
-  );
+  return I('Paintbrush', className);
 }
-
-/** 插入（方框内加号：插入标记/备注/链接/图片的菜单入口）：标记面板任务 */
 export function InsertIcon({ className }: IconProps) {
-  return (
-    <svg {...svgProps(className)}>
-      <rect x="1.5" y="1.5" width="13" height="13" rx="2.5" />
-      <path d="M8 4.8v6.4M4.8 8h6.4" />
-    </svg>
-  );
+  return I('Plus', className);
 }
-
-/** 任务（对勾方框：任务面板入口）：M7c-C4 右侧任务面板 */
 export function TaskIcon({ className }: IconProps) {
-  return (
-    <svg {...svgProps(className)}>
-      <rect x="1.5" y="1.5" width="13" height="13" rx="2.5" />
-      <path d="M5 8.2 7.2 10.4 11.2 5.6" />
-    </svg>
-  );
+  return I('SquareCheck', className);
 }
-
-/** 动态（信息流：左列时间圆点 + 事件行）：T8 文档动态面板入口 */
 export function ActivityIcon({ className }: IconProps) {
-  return (
-    <svg {...svgProps(className)}>
-      <circle cx="2.8" cy="3.5" r="0.9" />
-      <circle cx="2.8" cy="8" r="0.9" />
-      <circle cx="2.8" cy="12.5" r="0.9" />
-      <path d="M5.5 3.5h8M5.5 8h8M5.5 12.5h5.5" />
-    </svg>
-  );
+  return I('ListChecks', className);
 }

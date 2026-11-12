@@ -93,7 +93,7 @@ import { attachKeyboardMap, isEditableTarget, resolveDirectEditKey } from '../ed
 import { rootKidEffectiveSides, rootSiblingForceSide } from '../editor/rootSiblingSide';
 import { nextChildText } from '../editor/defaultNodeText';
 import { avatarSrcOf, assigneeRowsOf } from '../editor/TaskFields';
-import { buildThumbSvg, invalidateThumb } from '../editor/thumbnail';
+import { buildThumbSvg, buildTableThumbSvg, invalidateThumb } from '../editor/thumbnail';
 import { ActivityPanel } from '../editor/ActivityPanel';
 import { ThemePanel } from '../editor/ThemePanel';
 import {
@@ -103,7 +103,6 @@ import {
   FullscreenIcon,
   HistoryIcon,
   KeyboardIcon,
-  MembersIcon,
   PainterIcon,
   RedoIcon,
   SearchIcon,
@@ -112,6 +111,7 @@ import {
   ThemeIcon,
   UndoIcon,
 } from '../editor/icons';
+import { Lucide } from '../components/lucide-data';
 import {
   clampImageSize,
   imageFileFromClipboard,
@@ -142,7 +142,12 @@ import { MarkerChip } from '../editor/MarkerChip';
 import { MemberPanel } from '../editor/MemberPanel';
 import { RichPanel } from '../editor/RichPanel';
 import { StructurePanel, type StructureTypeValue } from '../editor/StructurePanel';
-import { TaskTable } from '../editor/TaskTable';
+import { TaskTable, EMPTY_FILTERS, type Filters } from '../editor/TaskTable';
+import { MapFilterBar } from '../editor/MapFilterBar';
+import { evalCond, resolveCondVal, condFieldsOf } from '../editor/taskFilter';
+import type { CustomColumnType } from '@gmind/core';
+import { TodoBench, type BenchRow } from '../editor/TodoBench';
+import { remindTodo } from '../api/todos';
 import { TaskPanel } from '../editor/TaskPanel';
 import { useTaskMembers, deriveNodesOfDoc } from '../editor/TaskFields';
 import { CommentPanel, type CommentThreadView } from '../editor/CommentPanel';
@@ -157,6 +162,7 @@ import {
   startSaveLoop,
 } from '../editor/saveLoop';
 import { useEditorDoc } from '../editor/useEditorDoc';
+import { ShareDialog } from '../editor/ShareDialog';
 import { CanvasTabBar } from '../editor/CanvasTabBar';
 import {
   canvasIdPrefix,
@@ -321,8 +327,9 @@ export function EditorPage() {
   // 查看+发表+角标点击过滤）。**非安全边界**：服务端不区分移动端写请求（验收
   // 文档登记）。matchMedia change 监听驱动：断点跨越即时升降级（装配 effect 以
   // readOnly 为依赖，跨越即按文件切换同款路径重建场景/协同）。
-  const readOnly = useIsMobileViewport();
-  const { state, error, setTitle, baseUpdatedAtRef } = useEditorDoc(fileId);
+  const { state, error, setTitle, fileKind, myRole, baseUpdatedAtRef } = useEditorDoc(fileId);
+  // 2026-10-28 P0：viewer（只读链接加入/只读协作者）与移动端共用同一只读装配。
+  const readOnly = useIsMobileViewport() || myRole === 'viewer';
   const doc = state?.doc ?? null;
   // 创建者标识依据（M2 Task 6，FR-COL-005）：GET /api/files/:id 扩展字段
   const ownerUserId = state?.ownerUserId ?? null;
@@ -419,6 +426,12 @@ export function EditorPage() {
   // 在线成员（FR-COL-005）：collab onPresence 推进；成员面板开合。
   const [members, setMembers] = useState<PresenceMember[]>([]);
   const [membersOpen, setMembersOpen] = useState(false);
+  // 「更多」下拉（2026-10-25 原型顶栏重组）：评论/快捷键两入口的收纳菜单——
+  // 原标题组「评论」钮与协作组「快捷键」钮随本轮改版移入（移动端只读分支的
+  // 常驻评论钮不受影响）。
+  const [moreOpen, setMoreOpen] = useState(false);
+  // 分享弹窗（2026-10-25 原型 ShareModal）：share-btn 打开（邀请/链接/导出三页签）。
+  const [shareOpen, setShareOpen] = useState(false);
   // 头像点击定位目标（M6 Task 9 评审修复轮）：随面板打开传给 MemberPanel——滚动
   // 目标成员行进视口并短时高亮。members-btn 打开置 null（无定位目标）；面板关闭
   // 时清空（下次普通打开不复用旧目标）。注：头像栏随 2026-10-11 裁定退役，本
@@ -525,6 +538,19 @@ export function EditorPage() {
   const [view, setView] = useState<'mind' | 'table'>('mind');
   const viewRef = useRef<'mind' | 'table'>('mind');
   viewRef.current = view;
+  // 表格文件（批次 D）：装载后默认开表格视图（kind 随 GET 异步到达——按 fileId+kind
+  // 信号一次性初始化，文件切换/互切互不干扰；同构 docState，脑图⇄表格随时互切）。
+  const viewInitRef = useRef('');
+  // kind 的同步读通道（2026-10-25 表格缩略图）：缩略图上传闭包建在装配 effect 内
+  // （mount 时 kind 尚未到达），经 ref 读最新值避免闭包捕旧。
+  const fileKindRef = useRef(fileKind);
+  fileKindRef.current = fileKind;
+  useEffect(() => {
+    const sig = `${fileId}:${fileKind}`;
+    if (viewInitRef.current === sig) return;
+    viewInitRef.current = sig;
+    setView(fileKind === 'table' ? 'table' : 'mind');
+  }, [fileId, fileKind]);
   // 移动端只读降级（M7a 范围注记）：只读工具栏不装配视图 Tab（维持现状），停留表格
   // 视图会失去切回入口——降级即回落画布视图。
   useEffect(() => {
@@ -549,6 +575,45 @@ export function EditorPage() {
   const scheduleRerenderRef = useRef<(() => void) | null>(null);
 
   const [tick, setTick] = useState(0);
+
+  // —— 二期对齐轮（原型 FilterBar/Workbench 对齐）：画布筛选栏 + 待办汇总抽屉 ——
+  // 表格筛选状态提升到编辑器层：脑图筛选栏（淡化未命中）与表格内置筛选条共用同一
+  // 状态（切视图不丢）；待办抽屉按人/组汇总本文件任务并可「在表格中查看」。
+  const [tableFilters, setTableFilters] = useState<Filters>(EMPTY_FILTERS);
+  const tableFiltersRef = useRef<Filters>(EMPTY_FILTERS);
+  tableFiltersRef.current = tableFilters;
+  const [benchOpen, setBenchOpen] = useState(false);
+  /** 最新一帧节点视觉快照（rerender 装配）：待办抽屉/筛选计数的数据源。 */
+  const nodeDataRef = useRef<Map<string, NodeVisual>>(new Map());
+  // 组织挂靠索引（grp/dept 筛选求值；目录拉一次，懒触发于装配后）
+  const [orgMembership, setOrgMembership] = useState<Map<string, { deptId: string | null; groupIds: string[] }>>(new Map());
+  const meIdRef = useRef('');
+  meIdRef.current = meId;
+  const orgMembershipRef = useRef(orgMembership);
+  orgMembershipRef.current = orgMembership;
+  const [orgOptions, setOrgOptions] = useState<{ depts: Array<{ id: string; name: string }>; groups: Array<{ id: string; name: string }> }>({ depts: [], groups: [] });
+  const [customColumns, setCustomColumns] = useState<Array<{ id: string; name: string; type: CustomColumnType }>>([]);
+  useEffect(() => {
+    if (meId === '') return;
+    let alive = true;
+    void api<{ departments: Array<{ id: string; name: string }>; groups: Array<{ id: string; name: string }>; memberships: Array<{ userId: string; departmentId: string | null; groupIds: string[] }> }>('/org/directory')
+      .then((dir) => {
+        if (!alive) return;
+        setOrgOptions({ depts: dir.departments, groups: dir.groups });
+        const m = new Map<string, { deptId: string | null; groupIds: string[] }>();
+        for (const x of dir.memberships) m.set(x.userId, { deptId: x.departmentId, groupIds: x.groupIds });
+        setOrgMembership(m);
+      })
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, [meId]);
+  useEffect(() => {
+    // 筛选变化 → 画布重排重绘（fadeOf 增删）
+    scheduleRerenderRef.current?.();
+  }, [tableFilters]);
+
   const [status, setStatus] = useState('尚未编辑');
   // 负责人显示名目录（2026-10-10 mindgrid 对齐：节点 footer 文字名取代色点）：
   // 渲染期派生（协作者 ∪ presence ∪ 文档内既有负责人），随 nodeData 透传 engine，
@@ -564,6 +629,101 @@ export function EditorPage() {
   const memberIndex = useTaskMembers(fileId, members, docOwnerIds);
   const memberIndexRef = useRef(memberIndex);
   memberIndexRef.current = memberIndex;
+
+  useEffect(() => {
+    if (!doc) return;
+    setCustomColumns(getMeta(doc).customColumns.map((c) => ({ id: c.id, name: c.name, type: c.type })));
+  }, [doc, tick]);
+
+  /** 当前画布任务行快照（待办抽屉/筛选计数数据源；nodeData 已含有效进度派生）。 */
+  const benchRows = useMemo<BenchRow[]>(() => {
+    const out: BenchRow[] = [];
+    for (const [id, v] of nodeDataRef.current) {
+      if (!v.task) continue;
+      out.push({
+        id,
+        text: v.text,
+        owners: v.task.owners ?? [],
+        status: v.task.status ?? 'todo',
+        dueDate: v.task.dueDate ?? null,
+        progress: v.task.progress ?? 0,
+        assignees: (v.task.assignees ?? []).map((a) => ({ user: a.user, name: a.name, progress: a.progress, colId: a.colId })),
+      });
+    }
+    return out;
+  }, [tick]);
+  /** 负责人候选（文档内负责人 ∪ 在线成员；昵称经成员目录，回退 ID 尾段）。 */
+  const ownerCandidates = useMemo(() => {
+    const ids = new Set<string>();
+    for (const [, v] of nodeDataRef.current) {
+      for (const o of v.task?.owners ?? []) ids.add(o);
+      for (const a of v.task?.assignees ?? []) ids.add(a.user);
+    }
+    for (const m of members) ids.add(m.userId);
+    return [...ids].map((id) => ({ id, label: memberIndexRef.current.get(id)?.nickname ?? `成员 ${id.slice(-4)}` }));
+  }, [tick, members]);
+  const taskCounts = useMemo(() => {
+    const flt = tableFilters;
+    const kw = flt.keyword.trim().toLowerCase();
+    const fields = condFieldsOf(customColumns);
+    let hit = 0;
+    for (const r of benchRows) {
+      let ok = true;
+      if (kw !== '' && !r.text.toLowerCase().includes(kw)) ok = false;
+      if (ok && flt.owners.size > 0 && !r.owners.some((o) => flt.owners.has(o))) ok = false;
+      if (ok && flt.statuses.size > 0 && !flt.statuses.has(r.status)) ok = false;
+      if (ok && flt.overdueOnly && !((r.dueDate ?? '') !== '' && (r.dueDate ?? '') < todayStr() && r.status !== 'done')) ok = false;
+      if (ok && flt.unassignedOnly && r.owners.length > 0) ok = false;
+      if (ok && flt.scope === 'me' && meId !== '' && !r.owners.includes(meId)) ok = false;
+      if (ok && (flt.grp !== '' || flt.dept !== '')) {
+        const mHit = r.owners.some((o) => {
+          const mm = orgMembership.get(o);
+          if (!mm) return false;
+          return (flt.grp !== '' && mm.groupIds.includes(flt.grp)) || (flt.dept !== '' && mm.deptId === flt.dept);
+        });
+        if (!mHit) ok = false;
+      }
+      if (ok && flt.conds.length > 0 && doc) {
+        const snap = getNode(doc, r.id, activeCanvasId || undefined);
+        const t = snap?.task;
+        const ctx = {
+          owners: r.owners,
+          hasTask: !!t,
+          progress: r.progress,
+          startDate: t?.startDate ?? null,
+          dueDate: t?.dueDate ?? null,
+          finishDate: t?.doneDate ?? null,
+          custom: snap?.custom ?? {},
+          assigneeUsers: (colId: string) => {
+            const v = snap?.custom?.[colId];
+            return v && typeof v === 'object' ? Object.keys(v as Record<string, unknown>) : [];
+          },
+        };
+        for (const c of flt.conds) {
+          const field = fields.find((f) => f.key === c.col);
+          if (!evalCond({ ...c, val: resolveCondVal(c.val, meId) }, field, ctx)) {
+            ok = false;
+            break;
+          }
+        }
+      }
+      if (ok) hit += 1;
+    }
+    return { total: benchRows.length, hit };
+  }, [benchRows, tableFilters, customColumns, meId, orgMembership, doc, activeCanvasId]);
+
+  /** 分组（自定义人员列）：id=列 id、计数=该列未完成条目（待办抽屉「按分组」）。 */
+  const benchGroups = useMemo(() => {
+    const cols = doc ? getMeta(doc).customColumns.filter((c) => c.type === 'assignee') : [];
+    return cols.map((c) => {
+      let count = 0;
+      for (const r of benchRows) {
+        if (r.status === 'done') continue;
+        for (const a of r.assignees) if (a.colId === c.id && a.progress < 100) count += 1;
+      }
+      return { id: c.id, name: c.name, count };
+    });
+  }, [doc, tick, benchRows]);
   // 成员目录异步就绪（协作者拉取返回/presence 变化）→ 画布补一轮重绘刷新节点名字
   useEffect(() => {
     scheduleRerenderRef.current?.();
@@ -747,6 +907,7 @@ export function EditorPage() {
     // 制收）。其余弹层维持外点即关。
     const anyOpen =
       membersOpen ||
+      moreOpen ||
       versionsOpen ||
       activityOpen ||
       helpOpen ||
@@ -770,13 +931,14 @@ export function EditorPage() {
       if (
         el.closest('[data-popover-toggle]') ||
         el.closest(
-          '.editor-right, .editor-mobile-comments, .theme-panel, .structure-panel, .theme-wrap, .structure-wrap, .activity-panel, .help-panel, .find-bar, .member-panel, .version-panel, .marker-panel, .personal-menu, .gm-task-assignee, .gm-task-owner-avatar, .assignee-picker',
+          '.editor-right, .editor-mobile-comments, .theme-panel, .structure-panel, .theme-wrap, .structure-wrap, .activity-panel, .help-panel, .find-bar, .member-panel, .version-panel, .marker-panel, .personal-menu, .more-menu, .gm-task-assignee, .gm-task-owner-avatar, .assignee-picker',
         ) ||
         exportWrapRef.current?.contains(el)
       ) {
         return;
       }
       setMembersOpen(false);
+      setMoreOpen(false); // MARKER-XF-2026 更多下拉：anyOpen 判定同步补关闭动作
       setVersionsOpen(false);
       setActivityOpen(false);
       setHelpOpen(false);
@@ -3432,6 +3594,84 @@ export function EditorPage() {
           },
         });
       }
+      nodeDataRef.current = nodeData;
+      // 筛选淡化（二期对齐轮）：与表格筛选同语义——关键词/负责人/状态/仅逾期/仅
+      // 未分配；命中=不透明、命中祖先路径=0.55、其余=0.18（引擎 fadeOf，缺省关）。
+      const flt = tableFiltersRef.current;
+      const fltOn =
+        flt.keyword.trim() !== '' ||
+        flt.owners.size > 0 ||
+        flt.statuses.size > 0 ||
+        flt.overdueOnly ||
+        flt.unassignedOnly ||
+        flt.conds.length > 0 ||
+        flt.scope === 'me' ||
+        flt.grp !== '' ||
+        flt.dept !== '';
+      let fadeOf: ((id: string) => 'hit' | 'path' | 'dim' | undefined) | undefined;
+      if (fltOn) {
+        const today0 = todayStr();
+        const me0 = meIdRef.current;
+        const membership = orgMembershipRef.current;
+        const fields = condFieldsOf(m.customColumns);
+        const fadeState = new Map<string, 'hit' | 'path' | 'dim'>();
+        const parentById = new Map<string, string>();
+        for (const b of result.nodes) if (b.parentId) parentById.set(b.id, b.parentId);
+        for (const b of result.nodes) {
+          const snap = getNode(d, b.id, canvasId);
+          const t = snap?.task;
+          const owners = t?.owners ?? [];
+          const st = t?.status ?? 'todo';
+          const kw = flt.keyword.trim().toLowerCase();
+          let hit = true;
+          if (kw && !(nodeData.get(b.id)?.text ?? '').toLowerCase().includes(kw)) hit = false;
+          if (hit && flt.owners.size > 0 && !owners.some((o) => flt.owners.has(o))) hit = false;
+          if (hit && flt.statuses.size > 0 && !flt.statuses.has(st)) hit = false;
+          if (hit && flt.overdueOnly && !((t?.dueDate ?? '') !== '' && (t?.dueDate ?? '') < today0 && st !== 'done')) hit = false;
+          if (hit && flt.unassignedOnly && owners.length > 0) hit = false;
+          if (hit && flt.scope === 'me' && me0 !== '' && !owners.includes(me0)) hit = false;
+          if (hit && (flt.grp !== '' || flt.dept !== '')) {
+            const mHit = owners.some((o) => {
+              const mm = membership.get(o);
+              if (!mm) return false;
+              return (flt.grp !== '' && mm.groupIds.includes(flt.grp)) || (flt.dept !== '' && mm.deptId === flt.dept);
+            });
+            if (!mHit) hit = false;
+          }
+          if (hit && flt.conds.length > 0) {
+            const ctx = {
+              owners,
+              hasTask: !!t,
+              progress: nodeData.get(b.id)?.task?.progress ?? 0,
+              startDate: t?.startDate ?? null,
+              dueDate: t?.dueDate ?? null,
+              finishDate: t?.doneDate ?? null,
+              custom: snap?.custom ?? {},
+              assigneeUsers: (colId: string) => {
+                const v = snap?.custom?.[colId];
+                return v && typeof v === 'object' ? Object.keys(v as Record<string, unknown>) : [];
+              },
+            };
+            for (const c of flt.conds) {
+              const field = fields.find((f) => f.key === c.col);
+              if (!evalCond({ ...c, val: resolveCondVal(c.val, me0) }, field, ctx)) {
+                hit = false;
+                break;
+              }
+            }
+          }
+          fadeState.set(b.id, hit ? 'hit' : 'dim');
+        }
+        for (const [id, st0] of fadeState) {
+          if (st0 !== 'hit') continue;
+          let p0 = parentById.get(id);
+          while (p0) {
+            if (fadeState.get(p0) === 'dim') fadeState.set(p0, 'path');
+            p0 = parentById.get(p0);
+          }
+        }
+        fadeOf = (id) => fadeState.get(id) ?? 'dim';
+      }
       renderScene(scene, {
         layout: result,
         theme,
@@ -3442,6 +3682,7 @@ export function EditorPage() {
         // 简洁模式（M7b 补课）：状态条/任务行条带隐藏、进度内联标题行右缘——
         // 与 layout 侧同帧同值（compactRef 直读）。
         compact: compactRef.current,
+        fadeOf,
       });
       applySelectionClasses();
       // 远端光标重画（FR-COL-002）：awareness 变化与 rerender（布局/主题变化）双
@@ -3543,7 +3784,8 @@ export function EditorPage() {
     const uploadThumb = (): void => {
       thumbLastAt = Date.now();
       try {
-        const svg = buildThumbSvg(d, measure);
+        // 表格文件按表格形态直出（2026-10-25 原型 TableThumb）；脑图走 engine 布局快照
+        const svg = fileKindRef.current === 'table' ? buildTableThumbSvg(d) : buildThumbSvg(d, measure);
         if (svg === null) return; // 超限/空文档：放弃本次（卡片回退装饰图）
         void apiPost(`/files/${fileId}/thumbnail`, { svg })
           .then(() => invalidateThumb(fileId))
@@ -3872,23 +4114,14 @@ export function EditorPage() {
           <span className="save-status" data-testid="save-status">
             {status}
           </span>
-          {/* 评论开关（2026-10-10 需求方裁定：插入「评论」项随菜单删除后桌面端补
-              入口——与移动端分支同一 testid 同一动作，标题组尾随 save-status，
-              位置语义与移动端一致）。 */}
-          <button
-            data-testid="comment-toggle"
-            data-popover-toggle="comment-toggle"
-            className="toolbar-btn toolbar-btn-text"
-            title="评论"
-            aria-label="评论"
-            onClick={() => setCommentsOpen((v) => !v)}
-          >
-            评论
-          </button>
+          {/* 评论入口（2026-10-25 原型顶栏重组）：标题组常驻「评论」钮移入「更多」
+              下拉（见协作组后的 more-wrap）；移动端只读分支的常驻评论钮不受影响。 */}
         </div>
         <span className="toolbar-sep" />
         {/* 视图切换（M7a-T4）：脑图 | 表格 分段控件。切换互斥、各自状态保留
-            （画布引擎不卸载仅隐藏；表格常驻挂载保筛选态）。移动端只读分支不装配。 */}
+            （画布引擎不卸载仅隐藏；表格常驻挂载保筛选态）。移动端只读分支不装配。
+            「默认」徽标（2026-10-25 原型）：按文件 kind 标注默认视图（表格文件=表格、
+            脑图文件=脑图；kind 随 GET /files/:id 异步到达，到达前无徽标）。 */}
         <div className="toolbar-group">
           <div className="view-tabs" role="tablist" aria-label="视图切换">
             <button
@@ -3900,6 +4133,7 @@ export function EditorPage() {
               onClick={() => setView('mind')}
             >
               脑图
+              {fileKind === 'map' && <span className="view-tab-default">默认</span>}
             </button>
             <button
               type="button"
@@ -3910,11 +4144,13 @@ export function EditorPage() {
               onClick={() => setView('table')}
             >
               表格
+              {fileKind === 'table' && <span className="view-tab-default">默认</span>}
             </button>
           </div>
         </div>
         <span className="toolbar-sep" />
-        {/* 历史组：撤销 / 重做 */}
+        {/* 历史组（2026-10-25 原型顶栏重组）：撤销/重做固定于视图切换器右侧（不随
+            工具区横向滚动）；格式刷移入主题三钮组开头。 */}
         <div className="toolbar-group">
           <button
             data-testid="undo-btn"
@@ -3932,8 +4168,15 @@ export function EditorPage() {
           >
             <RedoIcon />
           </button>
+        </div>
+        <span className="toolbar-sep" />
+        {/* 主题三按钮（M7b-R4 需求方裁定，企微工具栏对标）：添加上级主题/添加子主题/
+            添加同级主题——复用 Shift+Tab/Tab/Enter 键位的同一处理路径（handleTab/
+            handleEnter），语义与快捷键一一对应；无选中节点置灰。 */}
+        <div className="toolbar-group">
           {/* 格式刷（M6 Task 7，企微对标）：单击复制选中节点样式/图标 → 点目标应用
-              （单发）；双击粘滞连续刷；Esc / 再点按钮退出 */}
+              （单发）；双击粘滞连续刷；Esc / 再点按钮退出。2026-10-25 自历史组移入
+              （原型：撤销重做独立于工具区，格式刷为工具区首钮）。 */}
           <button
             data-testid="format-painter"
             className={painter ? 'toolbar-btn toolbar-btn-text active' : 'toolbar-btn toolbar-btn-text'}
@@ -3946,12 +4189,6 @@ export function EditorPage() {
             <PainterIcon />
             <span className="toolbar-btn-label">格式刷</span>
           </button>
-        </div>
-        <span className="toolbar-sep" />
-        {/* 主题三按钮（M7b-R4 需求方裁定，企微工具栏对标）：添加上级主题/添加子主题/
-            添加同级主题——复用 Shift+Tab/Tab/Enter 键位的同一处理路径（handleTab/
-            handleEnter），语义与快捷键一一对应；无选中节点置灰。 */}
-        <div className="toolbar-group">
           <button
             data-testid="toolbar-add-parent"
             className="toolbar-btn toolbar-btn-text toolbar-add-node"
@@ -4017,6 +4254,19 @@ export function EditorPage() {
           >
             <TaskIcon />
             <span className="toolbar-btn-label">任务</span>
+          </button>
+          {/* 待办汇总抽屉（二期对齐轮，原型 Workbench）：本文件按人/组待办 + 日报
+              复制 + 通知待办 + 在表格中查看。 */}
+          <button
+            type="button"
+            data-testid="bench-toggle"
+            className="toolbar-btn toolbar-btn-text"
+            title="待办"
+            aria-label="待办"
+            onClick={() => setBenchOpen(true)}
+          >
+            <ActivityIcon />
+            <span className="toolbar-btn-label">待办</span>
           </button>
           {/* 简洁模式切换（M7b 补课，mindgrid 账号级显示偏好）：隐藏描述与任务详情、
               节点收敛紧凑盒（表格视图不受影响，有自己的密度）。与「任务」钮同族装配
@@ -4194,8 +4444,8 @@ export function EditorPage() {
           </div>
         </div>
         <span className="toolbar-sep" />
-        {/* 协作/视图组：版本历史 / 快捷键 / 查找（T3 查找替换已接线）；成员入口
-            2026-10-11 迁至顶栏最右（头像左侧），本组不再含 members-btn */}
+        {/* 协作/视图组（2026-10-25 原型顶栏重组）：版本历史 / 动态 / 查找；快捷键
+            入口移入「更多」下拉（评论同）；成员入口 2026-10-11 迁至顶栏最右 */}
         <div className="toolbar-group">
           {/* 版本历史（M4 Task 8，FR-VER-004 UI）：时间轴/只读预览/一键恢复入口 */}
           <button
@@ -4218,16 +4468,6 @@ export function EditorPage() {
           >
             <ActivityIcon />
           </button>
-          {/* 快捷键帮助（M5 Task 2，FR-EDT-007）：工具栏入口，Ctrl/Cmd+? 同一开关 */}
-          <button
-            data-testid="help-toggle"
-            data-popover-toggle="help-toggle"
-            className="toolbar-btn"
-            title="快捷键帮助 (Ctrl+?)"
-            onClick={() => setHelpOpen((v) => !v)}
-          >
-            <KeyboardIcon />
-          </button>
           <button
             data-testid="find-toggle"
             data-popover-toggle="find-toggle"
@@ -4239,16 +4479,76 @@ export function EditorPage() {
             <SearchIcon />
           </button>
         </div>
+        {/* 「更多」下拉（2026-10-25 原型顶栏重组）：低频入口收纳——评论（自标题组
+            移入）+ 快捷键（自协作组移入）。开合互斥同其余弹层：菜单项点击后收起
+            再触发目标面板；外点关闭走统一 effect（.more-menu 在豁免清单）。 */}
+        <div className="more-wrap">
+          <button
+            data-testid="more-toggle"
+            data-popover-toggle="more-toggle"
+            className={moreOpen ? 'toolbar-btn toolbar-btn-text active' : 'toolbar-btn toolbar-btn-text'}
+            title="更多"
+            aria-label="更多"
+            aria-haspopup="menu"
+            aria-expanded={moreOpen}
+            onClick={() => setMoreOpen((v) => !v)}
+          >
+            <span aria-hidden>⋯</span>
+            <span className="toolbar-btn-label">更多</span>
+          </button>
+          {moreOpen && (
+            <div className="more-menu" data-testid="more-menu" role="menu" aria-label="更多">
+              <button
+                type="button"
+                role="menuitem"
+                data-testid="comment-toggle"
+                onClick={() => {
+                  setMoreOpen(false);
+                  setCommentsOpen((v) => !v);
+                }}
+              >
+                评论
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                data-testid="help-toggle"
+                onClick={() => {
+                  setMoreOpen(false);
+                  setHelpOpen((v) => !v);
+                }}
+              >
+                <KeyboardIcon />
+                快捷键
+              </button>
+            </div>
+          )}
+        </div>
         {/* 顶栏右缘（2026-10-11 需求方裁定）：[成员钮][本人头像=个人中心]。
-            成员钮=成员面板唯一入口（MembersIcon + 在线数角标，testid 自协作组迁移，
-            既有用例零改动）；本人头像=个人中心下拉（昵称/手机号 + 返回工作台 +
-            退出登录）。协作者头像栏（M6 Task 9）整体退役——在线名单以成员面板为
-            准；移动端只读分支不装配（随桌面工具栏整体隐藏）。 */}
+            成员钮=成员面板唯一入口（2026-10-25 原型头像堆形态：本人头像 + 前 2 位
+            协作者头像 + 溢出 +N，数据源 memberIndex=collaborators∪presence；
+            在线数徽标保留——数字语义在线数，testid members-count 既有用例零改动）；
+            本人头像=个人中心下拉（昵称/手机号 + 返回工作台 + 退出登录）。协作者头像
+            栏（M6 Task 9）整体退役——在线名单以成员面板为准；移动端只读分支不装配
+            （随桌面工具栏整体隐藏）。 */}
         <div className="toolbar-trailing">
+          {/* 分享（2026-10-25 原型 ShareModal）：打开分享弹窗（邀请协作/链接分享/
+              导出三页签——链接管理与 MD/CSV 导出本弹窗新增；直接复制链接的旧行为
+              由弹窗 link 页签承接）。 */}
+          <button
+            type="button"
+            data-testid="share-btn"
+            className="toolbar-share-btn"
+            title="分享"
+            aria-label="分享"
+            onClick={() => setShareOpen(true)}
+          >
+            分享
+          </button>
           <button
             data-testid="members-btn"
             data-popover-toggle="members-btn"
-            className="toolbar-btn"
+            className="toolbar-btn toolbar-members-btn"
             title="在线成员"
             aria-label="在线成员"
             onClick={() => {
@@ -4256,7 +4556,24 @@ export function EditorPage() {
               setMembersOpen((v) => !v);
             }}
           >
-            <MembersIcon />
+            <span className="members-stack" aria-hidden>
+              <MemberChipAvatar
+                userId={me?.id ?? 'me'}
+                nickname={me?.nickname ?? '我'}
+                avatar={me ? memberIndex.get(me.id)?.avatar : undefined}
+              />
+              {[...memberIndex.values()]
+                .filter((u) => u.userId !== me?.id)
+                .slice(0, 2)
+                .map((u) => (
+                  <MemberChipAvatar key={u.userId} userId={u.userId} nickname={u.nickname} avatar={u.avatar} />
+                ))}
+              {memberIndex.size - 3 > 0 && (
+                <span className="members-stack-avatar members-stack-more">
+                  +{Math.max(0, memberIndex.size - 3)}
+                </span>
+              )}
+            </span>
             <span className="members-badge" data-testid="members-count">
               {members.length}
             </span>
@@ -4319,6 +4636,50 @@ export function EditorPage() {
       </header>
 
       <div className="editor-main">
+        {/* 迷你工作台导航 rail（二期对齐轮，原型 Sidebar compact；2026-10-27 原型
+            悬停展开）：编辑器内快速跳转工作台各页；收起 46px 纯图标，悬停浮层展开
+            显文字标签（absolute 定位不推挤画布）；导航序对齐侧栏新序（收藏项移除）；
+            窄屏隐藏（编辑器保持全宽画布）。 */}
+        <div className="editor-rail-wrap">
+          <nav className="editor-rail" aria-label="工作台导航" data-testid="editor-rail">
+            {(
+              [
+                ['首页', 'House', '/workspace'],
+                ['我的文件', 'FolderOpen', '/workspace?view=files'],
+                ['我的待办', 'ListTodo', '/todos'],
+                ['统计面板', 'ChartColumn', '/todo-space'],
+                ['协作空间', 'Users', '/workspace?view=collab'],
+                ['模板中心', 'LayoutTemplate', '/workspace?view=templates'],
+              ] as const
+            ).map(([label, icon, to]) => (
+              <button key={to} type="button" title={label} aria-label={label} onClick={() => navigate(to)}>
+                <Lucide name={icon} size={19} />
+                <span className="editor-rail-label">{label}</span>
+              </button>
+            ))}
+            <span className="editor-rail-gap" aria-hidden />
+            <button type="button" title="回收站" aria-label="回收站" onClick={() => navigate('/trash')}>
+              <Lucide name="Trash2" size={19} />
+              <span className="editor-rail-label">回收站</span>
+            </button>
+          </nav>
+        </div>
+        {/* 中列（原型 Editor main）：筛选栏 + 画布/表格——rail 通高在其左 */}
+        <div className="editor-center">
+        {/* 画布筛选栏（二期对齐轮，原型 FilterBar）：双视图常驻（同一筛选状态——
+              脑图淡化未命中、表格仅显示命中行；表格工具行只留 搜索任务名/列设置）。 */}
+            <MapFilterBar
+            filters={tableFilters}
+            onFiltersChange={setTableFilters}
+            candidates={ownerCandidates}
+            meId={meId}
+            view={view}
+            totalTasks={taskCounts.total}
+            hitCount={taskCounts.hit}
+            customColumns={customColumns}
+            orgOptions={orgOptions}
+            fileId={fileId}
+          />
         {/* 表格视图（M7a-T4）：画布仅 CSS 隐藏（引擎场景/视口/选中不卸载，切回即恢复），
             概要行内编辑随画布容器一并隐藏。 */}
         <div
@@ -4396,9 +4757,49 @@ export function EditorPage() {
               showToast={showToast}
               checkQuota={addBlockedByQuota}
               onSelectNode={(id) => selectionRef.current?.selectOnly(id)}
+              filters={tableFilters}
+              onFiltersChange={setTableFilters}
+              meId={meId}
+              orgMembership={orgMembership}
               canvasId={activeCanvasId || undefined} // 表格快照/写路径 = 当前画布（Task 4）
             />
           </div>
+        )}
+
+        </div>
+        {/* /editor-center */}
+
+
+        {/* 待办汇总抽屉（二期对齐轮，原型 Workbench）。 */}
+        {doc && (
+          <TodoBench
+            open={benchOpen}
+            onClose={() => setBenchOpen(false)}
+            rows={benchRows}
+            candidates={ownerCandidates}
+            meId={meId}
+            groups={benchGroups}
+            onShowInTable={(ownerId) => {
+              setTableFilters({ ...EMPTY_FILTERS, owners: new Set([ownerId]) });
+              setView('table');
+            }}
+            onNotify={(ownerId, pend) => {
+              void (async () => {
+                let sent = 0;
+                for (const p of pend.slice(0, 12)) {
+                  try {
+                    await remindTodo(fileId, p.row.id, ownerId);
+                    sent += 1;
+                  } catch {
+                    // 单条失败继续（通知类操作不因个别失败中断）
+                  }
+                }
+                const name = ownerId === meId ? '我' : (ownerCandidates.find((c) => c.id === ownerId)?.label ?? '成员');
+                showToast(sent > 0 ? `已向 ${name} 推送 ${sent} 条待办提醒` : '提醒发送失败，请稍后重试');
+              })();
+            }}
+            showToast={showToast}
+          />
         )}
 
         {/*
@@ -4750,6 +5151,30 @@ export function EditorPage() {
         memberIndex={memberIndex}
       />
       <HelpPanel open={helpOpen} onClose={() => setHelpOpen(false)} />
+      {/* 分享弹窗（2026-10-25 原型 ShareModal）：邀请/链接/导出三页签；导出转发
+          既有通道（XMind/PNG/JPG 与工具栏导出菜单同源），MD/CSV 为弹窗内真实下载。 */}
+      <ShareDialog
+        open={shareOpen}
+        onClose={() => setShareOpen(false)}
+        fileId={fileId}
+        title={meta?.title ?? ''}
+        canManage={meId !== '' && meId === ownerUserId}
+        doc={doc}
+        nameOf={(uid) => memberIndexRef.current.get(uid)?.nickname ?? `成员 ${uid.slice(-4)}`}
+        showToast={showToast}
+        onExport={(kind, scale) => {
+          if (kind === 'xmind') {
+            if (!doc || !meta) return;
+            try {
+              exportXmind(doc, meta.title);
+            } catch (e) {
+              showToast(e instanceof Error ? e.message : '导出失败');
+            }
+            return;
+          }
+          runImageExport(kind, scale ?? 1);
+        }}
+      />
       {/* 图片大图预览（双击图片）：读操作，只读/移动端同样可开 */}
       {imagePreview && (
         <ImagePreview
@@ -4794,4 +5219,25 @@ function clipboardErrorMessage(e: unknown): string {
   if (msg === 'TEXT_TOO_LONG') return '节点文本长度已达上限';
   if (msg === 'PARENT_INVALID') return '粘贴目标无效';
   return e instanceof Error ? e.message : '操作失败';
+}
+
+/** 成员钮头像堆单元（2026-10-25 原型 AvatarStack 形态）：自定义头像直出，
+ *  无头像 = 首字符 + colorForUser 个人色。 */
+function MemberChipAvatar({
+  userId,
+  nickname,
+  avatar,
+}: {
+  userId: string;
+  nickname: string;
+  avatar?: string | null;
+}) {
+  const label = (nickname ?? '').trim().charAt(0) || '?';
+  return avatar ? (
+    <img className="members-stack-avatar" src={avatar} alt="" />
+  ) : (
+    <span className="members-stack-avatar" style={{ background: colorForUser(userId) }}>
+      {label}
+    </span>
+  );
 }

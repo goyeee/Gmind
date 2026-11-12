@@ -1,4 +1,4 @@
-import { getToken } from './api/client';
+import { apiPost, getToken } from './api/client';
 
 /** 站内通知（M3b Task 8，FR-CMT-005）：SSE 订阅与事件分发。
  *
@@ -21,6 +21,8 @@ export interface NotifyEvent {
     commenterName?: string;
     content?: string;
     nodeId?: string;
+    /** 通知子类（2026-10-28 P1）：'remind'=催办提醒（区别于评论提及）。 */
+    kind?: string;
   } | null;
   createdAt: string;
 }
@@ -36,28 +38,40 @@ const listeners = new Set<Listener>();
 let es: EventSource | null = null;
 
 /** 建立 SSE 连接（幂等）：未登录 / 已连接时 no-op。onopen 置 window.__gmindNotifyReady
- *  供 e2e 等待握手完成；onerror 关闭并复位（下次 connectNotifications 调用重建）。 */
+ *  供 e2e 等待握手完成；onerror 关闭并复位（下次 connectNotifications 调用重建）。
+ *  2026-10-28 P0：URL 只带一次性 ticket（POST /auth/ws-ticket，60s 单次消费），
+ *  不再把长效 session token 放进 query——EventSource 自动重试若票据失效会触发
+ *  onerror 复位，下次路由切换重建时换新票（轮询未读计数兜底不受影响）。 */
 export function connectNotifications(): void {
   const token = getToken();
   if (!token || es) return;
-  es = new EventSource(`/api/notify?token=${encodeURIComponent(token)}`);
-  es.onopen = () => {
-    (window as unknown as Record<string, unknown>)['__gmindNotifyReady'] = true;
-  };
-  es.onmessage = (e: MessageEvent<string>) => {
-    let event: NotifyEvent;
+  void (async () => {
+    let ticket: string;
     try {
-      event = JSON.parse(e.data) as NotifyEvent;
+      ticket = (await apiPost<{ ticket: string }>('/auth/ws-ticket')).ticket;
     } catch {
-      return; // 坏帧丢弃（服务端写入恒为 JSON，理论不可达）
+      return; // 换票失败保持未连接，铃铛轮询兜底
     }
-    for (const listener of listeners) listener(event);
-  };
-  es.onerror = () => {
-    es?.close();
-    es = null;
-    (window as unknown as Record<string, unknown>)['__gmindNotifyReady'] = false;
-  };
+    if (es) return; // 异步窗口内已被别处建立
+    es = new EventSource(`/api/notify?token=${encodeURIComponent(ticket)}`);
+    es.onopen = () => {
+      (window as unknown as Record<string, unknown>)['__gmindNotifyReady'] = true;
+    };
+    es.onmessage = (e: MessageEvent<string>) => {
+      let event: NotifyEvent;
+      try {
+        event = JSON.parse(e.data) as NotifyEvent;
+      } catch {
+        return; // 坏帧丢弃（服务端写入恒为 JSON，理论不可达）
+      }
+      for (const listener of listeners) listener(event);
+    };
+    es.onerror = () => {
+      es?.close();
+      es = null;
+      (window as unknown as Record<string, unknown>)['__gmindNotifyReady'] = false;
+    };
+  })();
 }
 
 /** 订阅推送事件（UI 层据此刷新未读角标/列表），返回取消订阅函数。 */

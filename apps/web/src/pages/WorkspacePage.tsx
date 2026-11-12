@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, Fragment, type MouseEvent, type ReactElement } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, Fragment, type MouseEvent, type ReactElement } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import type { FileListItemDetailed } from '@gmind/shared';
 import { createTemplateDoc, docToState } from '@gmind/core';
@@ -6,8 +6,10 @@ import { api, apiDel, apiPatch, apiPost, apiPut } from '../api/client';
 import { GUIDE_DONE_KEY, GuideOverlay, type GuideStep } from './GuideOverlay';
 import { degradedSummary, importXmindFile } from '../editor/xmind-import';
 import { TEMPLATE_CATALOG, type WorkspaceTemplate } from '../editor/templates';
+import { TemplateThumb, specNodeCount } from '../editor/TemplateThumb';
 import { useRealThumb } from '../editor/thumbnail';
-import { WorkspaceShell } from './WorkspaceShell';
+import { WorkspaceShell, type ShellNav } from './WorkspaceShell';
+import { Lucide } from '../components/lucide-data';
 import './workspace.css';
 
 /**
@@ -22,15 +24,40 @@ import './workspace.css';
  */
 
 /** 视图（FR-FIL-001 口径扩展）：侧栏一级导航。 */
-type View = 'mine' | 'recent' | 'starred' | 'collab' | 'templates';
+type View = 'mine' | 'files' | 'recent' | 'starred' | 'collab' | 'templates';
 
-const VIEW_PARAMS: ReadonlySet<string> = new Set(['recent', 'starred', 'collab', 'templates']);
+const VIEW_PARAMS: ReadonlySet<string> = new Set(['files', 'recent', 'starred', 'collab', 'templates']);
 
 /** 最近使用的归属筛选（协作文件带协作图标 + 筛选，2026-10-20 裁定 3）。 */
 type RecentFilter = 'all' | 'mine' | 'collab';
 
 function msgOf(e: unknown): string {
   return e instanceof Error ? e.message : '操作失败';
+}
+
+/* —— 文件列表 SWR 缓存（2026-10-27 需求方：进入先出缓存、拿到数据再更新，消掉
+ *    首秒空白）：内存 Map + sessionStorage 双层，键 = `${userId}:${view}`。
+ *    进入视图先 setItems(缓存) 秒渲染，后台拉新后覆盖（loadSeq 竞态守卫不变）。 */
+const FILE_CACHE_KEY = 'gmind.files.cache.v1';
+const fileCacheMem = new Map<string, FileListItemDetailed[]>();
+
+function readFileCache(): Record<string, FileListItemDetailed[]> {
+  try {
+    return JSON.parse(sessionStorage.getItem(FILE_CACHE_KEY) ?? '{}') as Record<string, FileListItemDetailed[]>;
+  } catch {
+    return {};
+  }
+}
+
+function writeFileCacheEntry(key: string, data: FileListItemDetailed[]): void {
+  fileCacheMem.set(key, data);
+  try {
+    const all = readFileCache();
+    all[key] = data;
+    sessionStorage.setItem(FILE_CACHE_KEY, JSON.stringify(all));
+  } catch {
+    // 存储满/隐私模式：内存缓存仍生效
+  }
 }
 
 /** 相对时间（卡片用）：刚刚 / N 分钟前 / N 小时前 / 昨天 / N 天前 / 日期。 */
@@ -109,8 +136,36 @@ interface FileCardProps {
   onDelete(): void;
 }
 
+/** 创建者头像（2026-10-25 原型文件卡）：自定义头像直出；无头像=ownerUserId 稳定
+ *  色相的首字符圆块（与协同个人色同思路，工作台本地实现避免耦合 editor 模块）。 */
+function OwnerAvatar({ userId, name, url }: { userId: string; name: string | null; url: string | null }) {
+  const label = (name ?? '').trim().charAt(0) || '?';
+  const hue = [...userId].reduce((acc, ch) => acc + (ch.codePointAt(0) ?? 0), 0) % 360;
+  return url ? (
+    <img
+      className="card-owner-avatar"
+      src={url}
+      alt=""
+      aria-hidden
+      title={name ?? undefined}
+      data-testid="card-owner-avatar"
+    />
+  ) : (
+    <span
+      className="card-owner-avatar"
+      style={{ background: `hsl(${hue} 62% 58%)` }}
+      aria-hidden
+      title={name ?? undefined}
+      data-testid="card-owner-avatar"
+    >
+      {label}
+    </span>
+  );
+}
+
 /** 文件卡片（重设计主形态）：装饰性缩略图 + 标题（行内重命名）+ 相对时间·所属 +
- *  星标 + hover ⋯ 菜单（重命名/复制/复制分享链接/删除——后两项 owner-only）。 */
+ *  星标 + hover ⋯ 菜单（重命名/复制/复制分享链接/删除——后两项 owner-only）。
+ *  2026-10-25 原型：meta 行尾追加创建者头像（ownerAvatarUrl，无头像兜底首字符）。 */
 function FileCard(p: FileCardProps): ReactElement {
   const { f, meId } = p;
   const collab = meId !== undefined && f.ownerUserId !== meId;
@@ -120,8 +175,8 @@ function FileCard(p: FileCardProps): ReactElement {
   return (
     <div className="file-card" data-testid="file-card" onClick={() => !p.renaming && p.onOpen()}>
       <div className="file-thumb">
-        <span className="card-kind" aria-hidden>
-          脑图
+        <span className={f.kind === 'table' ? 'card-kind kind-table' : 'card-kind'} aria-hidden>
+          {f.kind === 'table' ? '表格' : '脑图'}
         </span>
         {realThumb ? <img className="file-thumb-img" data-testid="file-thumb-img" src={realThumb} alt="" /> : <Thumb seed={f.id} />}
         <button
@@ -162,7 +217,10 @@ function FileCard(p: FileCardProps): ReactElement {
           </div>
         )}
         <div className="card-meta">
-          {f.nodeCount} 节点 · {relTime(f.updatedAt)}
+          <span className="card-meta-text">
+            {f.nodeCount} 节点 · {relTime(f.updatedAt)}
+          </span>
+          <OwnerAvatar userId={f.ownerUserId} name={f.ownerName} url={f.ownerAvatarUrl} />
         </div>
       </div>
       <div className="card-ops" onClick={stop}>
@@ -196,8 +254,173 @@ function FileCard(p: FileCardProps): ReactElement {
   );
 }
 
+/** 文件列表行（2026-10-25 原型 Files 页列表视图）：小缩略图 + 标题（行内重命名/
+ *  hover 星标）+ 类型文字 + 创建者（头像+名）+ 最近编辑 + 规模 + ⋯ 菜单（同 FileCard
+ *  菜单结构，testid 独立——e2e 既有 card-menu-btn 断言均以 file-card 定界）。 */
+function FileRow(p: FileCardProps): ReactElement {
+  const { f } = p;
+  const stop = (e: MouseEvent) => e.stopPropagation();
+  const realThumb = useRealThumb(f.id);
+  return (
+    <div className="file-row" data-testid="file-row" onClick={() => !p.renaming && p.onOpen()}>
+      <span className="file-row-thumb" aria-hidden>
+        {realThumb ? <img src={realThumb} alt="" /> : <Thumb seed={f.id} />}
+      </span>
+      <span className="file-row-title">
+        {p.renaming ? (
+          <input
+            className="card-rename-input"
+            data-testid="rename-input"
+            autoFocus
+            value={p.renameDraft}
+            onClick={stop}
+            onChange={(e) => p.onRenameDraft(e.target.value)}
+            onBlur={p.onRenameCommit}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') p.onRenameCommit();
+              if (e.key === 'Escape') p.onRenameCancel();
+            }}
+          />
+        ) : (
+          <>
+            <span className="file-row-name" title={f.title}>
+              {f.title}
+            </span>
+            <button
+              className={'card-star row' + (f.starred ? ' starred' : '')}
+              data-testid="file-row-star"
+              title={f.starred ? '取消星标' : '加星标'}
+              onClick={(e) => {
+                stop(e);
+                p.onStar();
+              }}
+            >
+              {f.starred ? '★' : '☆'}
+            </button>
+          </>
+        )}
+      </span>
+      <span className="file-row-kind">{f.kind === 'table' ? '表格' : '脑图'}</span>
+      <span className="file-row-owner">
+        <OwnerAvatar userId={f.ownerUserId} name={f.ownerName} url={f.ownerAvatarUrl} />
+        <span className="file-row-owner-name">{f.ownerName ?? '—'}</span>
+      </span>
+      <span className="file-row-meta">{relTime(f.updatedAt)}</span>
+      <span className="file-row-meta">{f.nodeCount} 节点</span>
+      <span className="file-row-ops" onClick={stop}>
+        <button
+          className="card-menu-btn"
+          data-testid="file-row-menu-btn"
+          title="更多操作"
+          aria-label="更多操作"
+          onClick={p.onMenuToggle}
+        >
+          ⋯
+        </button>
+        {p.menuOpen && (
+          <div className="card-menu" data-testid="file-row-menu">
+            <button onClick={p.onRenameStart}>重命名</button>
+            <button onClick={p.onCopy}>复制</button>
+            {f.ownerUserId === p.meId && (
+              <button data-testid="share-action" onClick={p.onShare}>
+                复制分享链接
+              </button>
+            )}
+            {f.ownerUserId === p.meId && (
+              <button className="danger" onClick={p.onDelete}>
+                删除
+              </button>
+            )}
+          </div>
+        )}
+      </span>
+    </div>
+  );
+}
+
 /** 卡片网格（空态文案随视图；testid 供 e2e 区分首页双网格——最近/我的同文件
  *  双卡并存，操作类断言须按网格定界）。 */
+/** 我的文件页（批次 D + 2026-10-25 原型布局切换）：页签过滤 + 排序（最近编辑/
+ *  名称/节点数）后按布局分流——宫格复用 CardGrid；列表走 FileRow 表格形态。 */
+function FileGridSorted({
+  items,
+  fileTab,
+  fileSort,
+  layout,
+  isCollab,
+  renderCard,
+  renderRow,
+}: {
+  items: FileListItemDetailed[];
+  fileTab: 'all' | 'starred' | 'map' | 'table' | 'mine' | 'shared';
+  fileSort: 'recent' | 'name' | 'nodes';
+  layout: 'grid' | 'list';
+  isCollab: (f: FileListItemDetailed) => boolean;
+  renderCard: (f: FileListItemDetailed, scope: string) => ReactElement;
+  renderRow: (f: FileListItemDetailed, scope: string) => ReactElement;
+}): ReactElement {
+  const filtered = items.filter((f) =>
+    fileTab === 'all'
+      ? true
+      : fileTab === 'starred'
+        ? f.starred
+        : fileTab === 'map'
+          ? f.kind === 'map'
+          : fileTab === 'table'
+            ? f.kind === 'table'
+            : fileTab === 'mine'
+              ? !isCollab(f)
+              : isCollab(f),
+  );
+  const sorted = [...filtered].sort((x, y) => {
+    if (fileSort === 'name') return x.title.localeCompare(y.title, 'zh');
+    if (fileSort === 'nodes') return y.nodeCount - x.nodeCount;
+    return y.updatedAt.localeCompare(x.updatedAt);
+  });
+  if (layout === 'list') {
+    const empty =
+      fileTab === 'table'
+        ? '暂无表格文件，点击「新建表格」创建'
+        : fileTab === 'starred'
+          ? '点击文件卡右上角的星标，把它放到收藏里'
+          : fileTab === 'shared'
+            ? '暂无与我共享的文件'
+            : '暂无文件，点击「新建脑图」开始';
+    return (
+      <div className="file-list-view" data-testid="file-list-view">
+        <div className="file-list-head" aria-hidden>
+          <span>名称</span>
+          <span>类型</span>
+          <span>创建者</span>
+          <span>最近编辑</span>
+          <span>规模</span>
+          <span />
+        </div>
+        {sorted.map((f) => (
+          <Fragment key={f.id}>{renderRow(f, 'files-list')}</Fragment>
+        ))}
+        {sorted.length === 0 && <p className="file-list-empty">{empty}</p>}
+      </div>
+    );
+  }
+  return (
+    <CardGrid
+      list={sorted}
+      empty={
+        fileTab === 'table'
+          ? '暂无表格文件，点击「新建表格」创建'
+          : fileTab === 'starred'
+            ? '点击文件卡右上角的星标，把它放到收藏里'
+            : fileTab === 'shared'
+              ? '暂无与我共享的文件'
+              : '暂无文件，点击「新建脑图」开始'
+      }
+      testid="mine-grid"
+      renderCard={renderCard}
+    />
+  );
+}
+
 function CardGrid({
   list,
   empty,
@@ -224,11 +447,30 @@ export function WorkspacePage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [me, setMe] = useState<{ id: string; nickname: string; systemRole?: 'super_admin' | 'member'; avatar?: string | null } | null>(null);
   const [items, setItems] = useState<FileListItemDetailed[]>([]);
+  /** 本周新建数（原型 Home 副标口径；下限 3）。 */
+  const weekCreated = useMemo(() => {
+    const monday = new Date();
+    const day = monday.getDay() === 0 ? 7 : monday.getDay();
+    monday.setDate(monday.getDate() - (day - 1));
+    monday.setHours(0, 0, 0, 0);
+    const n = items.filter((f) => new Date(f.createdAt).getTime() >= monday.getTime()).length;
+    return Math.max(n, 3);
+  }, [items]);
   const [recentItems, setRecentItems] = useState<FileListItemDetailed[]>([]);
   const [recentFilter, setRecentFilter] = useState<RecentFilter>('all');
   // 模板中心分类（2026-10-24 原型换装）：'all' | category
   const [tplCat, setTplCat] = useState<string>('all');
-  const [search, setSearch] = useState<{ q: string; results: FileListItemDetailed[] } | null>(null);
+  // 我的文件页签/排序（原型 FilesPage）：all/starred/map/table/mine/shared + recent/name/nodes
+  // （starred=收藏，2026-10-27 原型：收藏退出侧栏后并入我的文件页签）
+  const [fileTab, setFileTab] = useState<'all' | 'starred' | 'map' | 'table' | 'mine' | 'shared'>('all');
+  const [fileSort, setFileSort] = useState<'recent' | 'name' | 'nodes'>('recent');
+  // 列表/宫格布局（2026-10-25 原型 Files 页双 icon 切换）：默认宫格（既有形态）
+  const [fileLayout, setFileLayout] = useState<'grid' | 'list'>('grid');
+  const [search, setSearch] = useState<{
+    q: string;
+    files: FileListItemDetailed[];
+    nodes: Array<{ fileId: string; fileTitle: string; nodeId: string; text: string }>;
+  } | null>(null);
   const [searchText, setSearchText] = useState('');
   const [error, setError] = useState('');
   const [menuFor, setMenuFor] = useState<string | null>(null);
@@ -267,12 +509,37 @@ export function WorkspacePage() {
   const loadSeq = useRef(0);
   const loadFiles = useCallback(async (v: View) => {
     const seq = ++loadSeq.current;
+    const key = `${me?.id ?? ''}:${v}`;
+    const cached = fileCacheMem.get(key) ?? readFileCache()[key];
+    if (cached) setItems(cached); // 先出缓存秒渲染，再静默拉新
+    if (v === 'files') {
+      // 我的文件页（批次 D）：全部=我的+与我共享（合并去重）
+      const [mine, shared] = await Promise.all([
+        api<FileListItemDetailed[]>('/files?view=mine'),
+        api<FileListItemDetailed[]>('/files?view=shared'),
+      ]);
+      const seen = new Set<string>();
+      const merged = [...mine, ...shared].filter((f) => (seen.has(f.id) ? false : seen.add(f.id)));
+      if (seq === loadSeq.current) {
+        setItems(merged);
+        writeFileCacheEntry(key, merged);
+      }
+      return;
+    }
     const data = await api<FileListItemDetailed[]>(`/files?view=${viewParam(v)}`);
-    if (seq === loadSeq.current) setItems(data);
-  }, []);
+    if (seq === loadSeq.current) {
+      setItems(data);
+      writeFileCacheEntry(key, data);
+    }
+  }, [me?.id]);
   const loadRecent = useCallback(async () => {
-    setRecentItems(await api<FileListItemDetailed[]>('/files?view=recent'));
-  }, []);
+    const key = `${me?.id ?? ''}:recent`;
+    const cached = fileCacheMem.get(key) ?? readFileCache()[key];
+    if (cached) setRecentItems(cached);
+    const data = await api<FileListItemDetailed[]>('/files?view=recent');
+    setRecentItems(data);
+    writeFileCacheEntry(key, data);
+  }, [me?.id]);
 
   // 挂载：身份 + 首页「最近文件」流（失败静默，非关键路径）
   useEffect(() => {
@@ -288,17 +555,21 @@ export function WorkspacePage() {
     void loadFiles(view).catch((e) => setError(msgOf(e)));
   }, [view, loadFiles]);
 
-  // 引导触发（M5 Task 3）：完成/跳过前首进即开
+  // 引导触发（M5 Task 3）：完成/跳过前首进即开。换装后数据分视图装载
+  // （首页=recent、我的文件=items），任一有数据即触发。
   useEffect(() => {
-    if (!guideOpen && localStorage.getItem(GUIDE_DONE_KEY) === null && items.length > 0) {
+    if (!guideOpen && localStorage.getItem(GUIDE_DONE_KEY) === null && (recentItems.length > 0 || items.length > 0)) {
       setGuideOpen(true);
     }
-  }, [items, guideOpen]);
+  }, [recentItems, items, guideOpen]);
 
   async function refresh(): Promise<void> {
     if (search) {
-      const results = await api<FileListItemDetailed[]>(`/search?q=${encodeURIComponent(search.q)}`);
-      setSearch({ q: search.q, results });
+      const res = await api<{
+        files: FileListItemDetailed[];
+        nodes: Array<{ fileId: string; fileTitle: string; nodeId: string; text: string }>;
+      }>(`/search?q=${encodeURIComponent(search.q)}`);
+      setSearch({ q: search.q, files: res.files, nodes: res.nodes });
       return;
     }
     await loadFiles(view);
@@ -328,8 +599,12 @@ export function WorkspacePage() {
     if (!q) return;
     setMenuFor(null);
     try {
-      const results = await api<FileListItemDetailed[]>(`/search?q=${encodeURIComponent(q)}`);
-      setSearch({ q, results });
+      // 全文搜索（2026-10-28 P1）：标题命中 files + 节点内容命中 nodes
+      const res = await api<{
+        files: FileListItemDetailed[];
+        nodes: Array<{ fileId: string; fileTitle: string; nodeId: string; text: string }>;
+      }>(`/search?q=${encodeURIComponent(q)}`);
+      setSearch({ q, files: res.files, nodes: res.nodes });
       setError('');
     } catch (e) {
       setError(msgOf(e));
@@ -347,9 +622,9 @@ export function WorkspacePage() {
     }
   }
 
-  async function createFile(): Promise<void> {
+  async function createFile(kind: 'map' | 'table' = 'map'): Promise<void> {
     try {
-      const created = await apiPost<{ id: string }>('/files', {});
+      const created = await apiPost<{ id: string }>('/files', kind === 'table' ? { kind } : {});
       navigate(`/edit/${created.id}`); // 2026-10-20 重设计：新建即开（参考图「空白脑图」卡语义）
     } catch (e) {
       setError(msgOf(e));
@@ -357,13 +632,18 @@ export function WorkspacePage() {
   }
 
   /** 使用模板（2026-10-20 裁定 5）：客户端 createTemplateDoc 直出 docState →
-   *  POST /files（导入落库路径）→ 建完即开。 */
+   *  POST /files（导入落库路径）→ 建完即开。表格类模板（2026-10-25 原型）随建
+   *  带 kind='table'——编辑器默认开表格视图（批次 D 同款信号）。 */
   async function createFromTemplate(tpl: WorkspaceTemplate): Promise<void> {
     try {
       const doc = createTemplateDoc(tpl.spec);
       const state = btoa(String.fromCharCode(...docToState(doc)));
       doc.destroy();
-      const created = await apiPost<{ id: string }>('/files', { title: tpl.spec.title, docState: state });
+      const created = await apiPost<{ id: string }>('/files', {
+        title: tpl.spec.title,
+        kind: tpl.kind ?? 'map',
+        docState: state,
+      });
       setPreviewTpl(null);
       navigate(`/edit/${created.id}`);
     } catch (e) {
@@ -376,8 +656,8 @@ export function WorkspacePage() {
     try {
       const { title, state, degraded } = await importXmindFile(file);
       await apiPost('/files', { title, docState: state });
-      switchView('mine');
-      await loadFiles('mine'); // 已在 mine 时 URL 不变、视图 effect 不触发——手动补装
+      switchView('files'); // 导入完成落在「我的文件」视图（批次 D 拆分后文件网格所在）
+      await loadFiles('files'); // 已在 files 时 URL 不变、视图 effect 不触发——手动补装
       if (degraded.length > 0) showToast(degradedSummary(degraded));
     } catch (e) {
       showToast(msgOf(e));
@@ -422,7 +702,7 @@ export function WorkspacePage() {
     recentFilter === 'all' ? true : recentFilter === 'collab' ? isCollab(f) : !isCollab(f),
   );
 
-  const shownItems = search ? search.results : items;
+  const shownItems = search ? search.files : items;
 
   /** 卡片渲染闭包（模块级 FileCard/CardGrid 的回调装配）。renamingId/menuFor 带网格
    *  作用域前缀（`${scope}:${fileId}`）——首页最近/我的双网格同文件双卡并存，不区分
@@ -451,57 +731,94 @@ export function WorkspacePage() {
     />
   );
 
+  /** 列表行渲染闭包（2026-10-25 原型列表视图）：与 renderCard 同回调集（scope 固定
+   *  'files-list'——列表只在「我的文件」页渲染，无双网格并存问题）。 */
+  const renderRow = (f: FileListItemDetailed, scope: string): ReactElement => (
+    <FileRow
+      f={f}
+      meId={me?.id}
+      renaming={renamingId === `${scope}:${f.id}`}
+      renameDraft={renameDraft}
+      menuOpen={menuFor === `${scope}:${f.id}`}
+      onOpen={() => navigate(`/edit/${f.id}`)}
+      onMenuToggle={() => setMenuFor(menuFor === `${scope}:${f.id}` ? null : `${scope}:${f.id}`)}
+      onRenameStart={() => {
+        setRenamingId(`${scope}:${f.id}`);
+        setRenameDraft(f.title);
+        setMenuFor(null);
+      }}
+      onRenameDraft={setRenameDraft}
+      onRenameCommit={() => void commitRename(f)}
+      onRenameCancel={() => setRenamingId(null)}
+      onStar={withReload(() => (f.starred ? apiDel(`/files/${f.id}/star`) : apiPut(`/files/${f.id}/star`)))}
+      onCopy={withReload(() => apiPost(`/files/${f.id}/copy`))}
+      onShare={() => void copyShareLink(f.id)}
+      onDelete={withReload(() => apiDel(`/files/${f.id}`))}
+    />
+  );
+
   return (
     <WorkspaceShell
-      activeNav={search ? null : view}
-      topbar={
-        <>
-          <input
-            className="search-input"
-            data-testid="search-input"
-            ref={searchInputRef}
-            placeholder="搜索脑图，回车确认"
-            value={searchText}
-            onChange={(e) => setSearchText(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') void runSearch();
-            }}
-          />
-          <button className="ws-import" data-testid="import-button" onClick={() => importInputRef.current?.click()}>
-            导入
-          </button>
-          <input
-            ref={importInputRef}
-            type="file"
-            accept=".xmind"
-            data-testid="import-input"
-            style={{ display: 'none' }}
-            onChange={(e) => {
-              const file = e.target.files?.[0];
-              e.target.value = '';
-              if (file) void importXmind(file);
-            }}
-          />
-          <button className="ws-create" data-testid="new-file-btn" onClick={() => void createFile()}>
-            ＋ 新建脑图
-          </button>
-        </>
-      }
+      activeNav={search ? null : view === 'mine' ? 'home' : view === 'recent' ? null : view === 'files' ? 'files' : (view as ShellNav)}
+      search={{
+        value: searchText,
+        onChange: setSearchText,
+        onSubmit: () => void runSearch(),
+        inputRef: searchInputRef,
+      }}
+      onCreate={(k) => {
+        if (k === 'map') void createFile('map');
+        else if (k === 'table') void createFile('table');
+        else switchView('templates');
+      }}
     >
       {error && <p className="error">{error}</p>}
+      <input
+        ref={importInputRef}
+        type="file"
+        accept=".xmind"
+        data-testid="import-input"
+        style={{ display: 'none' }}
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          e.target.value = '';
+          if (file) void importXmind(file);
+        }}
+      />
 
       <main className="ws-content">
         {search ? (
           <>
             <div className="search-bar" data-testid="search-results">
               <h3>
-                「{search.q}」的搜索结果（{search.results.length}）
+                「{search.q}」的搜索结果（文件 {search.files.length} · 节点 {search.nodes.length}）
               </h3>
               <button data-testid="search-clear" onClick={() => void clearSearch()}>
                 清除搜索
               </button>
             </div>
             <CardGrid list={shownItems} empty="没有匹配的文件" renderCard={renderCard} />
+            {/* 节点内容命中（2026-10-28 P1 全文搜索）：点击直达编辑器并定位节点 */}
+            {search.nodes.length > 0 && (
+              <section className="search-nodes" data-testid="search-nodes">
+                <h4>节点内容命中（{search.nodes.length}）</h4>
+                <ul>
+                  {search.nodes.map((n) => (
+                    <li key={`${n.fileId}:${n.nodeId}`}>
+                      <button
+                        type="button"
+                        className="search-node-link"
+                        data-testid="search-node-item"
+                        onClick={() => navigate(`/edit/${n.fileId}?node=${encodeURIComponent(n.nodeId)}`)}
+                      >
+                        <span className="search-node-text">{n.text || '（未命名）'}</span>
+                        <span className="search-node-file">{n.fileTitle}</span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            )}
           </>
         ) : view === 'mine' ? (
           <>
@@ -509,41 +826,52 @@ export function WorkspacePage() {
               <h1 data-testid="ws-greeting">
                 {greeting()}，{me?.nickname ?? ''}
               </h1>
-              <p>今天也来整理一下思绪吧</p>
+              <p>本周已创建 {weekCreated} 张脑图，继续保持清晰的思路</p>
             </section>
+            {/* 快速创建四卡（2026-10-27 原型：统一白卡+彩色 icon 底，brand 渐变主卡/
+                虚线导入卡形态退役；icon 色脑图橙/表格绿/模板蓝/导入紫——原型同款） */}
             <section className="ws-quick">
-              <button className="quick-card quick-primary" data-testid="quick-create-blank" onClick={() => void createFile()}>
-                <span className="quick-icon" style={{ background: 'rgba(255,255,255,0.18)' }} aria-hidden>
-                  🧠
+              <button className="quick-card" data-testid="quick-create-blank" onClick={() => void createFile()}>
+                <span className="quick-icon" style={{ background: '#fff1e0', color: '#d25f00' }} aria-hidden>
+                  <Lucide name="Share2" size={24} />
                 </span>
                 <span className="quick-text">
                   <strong>新建脑图</strong>
                   <em>从空白画布开始</em>
                 </span>
               </button>
+              <button className="quick-card" data-testid="quick-create-table" onClick={() => void createFile('table')}>
+                <span className="quick-icon" style={{ background: '#e6f8ef', color: '#00b42a' }} aria-hidden>
+                  <Lucide name="Table2" size={24} />
+                </span>
+                <span className="quick-text">
+                  <strong>新建表格</strong>
+                  <em>用表格管理主题与任务</em>
+                </span>
+              </button>
               <button className="quick-card" data-testid="quick-create-template" onClick={() => switchView('templates')}>
-                <span className="quick-icon" style={{ background: '#e8f6ee' }} aria-hidden>
-                  📚
+                <span className="quick-icon" style={{ background: 'var(--gm-brand-soft)', color: 'var(--gm-brand)' }} aria-hidden>
+                  <Lucide name="LayoutTemplate" size={24} />
                 </span>
                 <span className="quick-text">
                   <strong>模板中心</strong>
                   <em>精选模板，快速开始</em>
                 </span>
               </button>
-              <button className="quick-card quick-dashed" data-testid="quick-create-import" onClick={() => importInputRef.current?.click()}>
-                <span className="quick-icon" style={{ background: '#f2f3f5' }} aria-hidden>
-                  📥
+              <button className="quick-card" data-testid="quick-create-import" onClick={() => importInputRef.current?.click()}>
+                <span className="quick-icon" style={{ background: '#f0e9ff', color: '#7c4dff' }} aria-hidden>
+                  <Lucide name="FileDown" size={24} />
                 </span>
                 <span className="quick-text">
                   <strong>导入文件</strong>
-                  <em>支持 XMind</em>
+                  <em>支持 XMind、Markdown</em>
                 </span>
               </button>
             </section>
             <section>
               <div className="ws-section-head">
                 <h2>最近文件</h2>
-                <button className="link" data-testid="recent-view-all" onClick={() => switchView('recent')}>
+                <button className="link" data-testid="recent-view-all" onClick={() => switchView('files')}>
                   查看全部 →
                 </button>
               </div>
@@ -560,7 +888,7 @@ export function WorkspacePage() {
                 {TEMPLATE_CATALOG.slice(0, 3).map((t) => (
                   <button key={t.id} className="tpl-mini" data-testid={`tpl-mini-${t.id}`} onClick={() => switchView('templates')}>
                     <span className="tpl-mini-thumb" aria-hidden>
-                      <Thumb seed={t.id} accent={t.accent} />
+                      <TemplateThumb spec={t.spec} kind={t.kind} accent={t.accent} />
                     </span>
                     <span className="tpl-mini-name">{t.name}</span>
                     <span className="tpl-mini-blurb">{t.blurb}</span>
@@ -568,12 +896,110 @@ export function WorkspacePage() {
                 ))}
               </div>
             </section>
-            <section>
-              <div className="ws-section-head">
-                <h2>我的文件</h2>
+          </>
+        ) : view === 'files' ? (
+          <>
+            {/* 我的文件（原型 FilesPage）：标题+副标+双新建钮；类型页签+排序。
+                2026-10-27 原型：页签加「收藏」（收藏退出侧栏后此为收藏入口）+副标
+                含收藏计数。 */}
+            <div className="ws-page-head">
+              <div>
+                <h2 className="ws-page-title">我的文件</h2>
+                <p className="ws-page-sub">
+                  共 {items.length} 个脑图与表格，含收藏 {items.filter((f) => f.starred).length} 个
+                </p>
               </div>
-              <CardGrid list={items} empty='暂无文件，点击「新建脑图」开始' testid="mine-grid" renderCard={renderCard} />
-            </section>
+              <div className="ws-page-actions">
+                <button className="ws-create ghost" data-testid="files-create-table" onClick={() => void createFile('table')}>
+                  🗂️ 新建表格
+                </button>
+                <button className="ws-create" data-testid="files-create-map" onClick={() => void createFile('map')}>
+                  ＋ 新建脑图
+                </button>
+              </div>
+            </div>
+            <div className="ws-section-head">
+              <div className="file-tabs" data-testid="file-tabs">
+                {(
+                  [
+                    ['all', '全部'],
+                    ['starred', '收藏'],
+                    ['map', '脑图'],
+                    ['table', '表格'],
+                    ['mine', '我创建的'],
+                    ['shared', '与我共享'],
+                  ] as const
+                ).map(([k, label]) => {
+                  const count =
+                    k === 'all'
+                      ? items.length
+                      : k === 'starred'
+                        ? items.filter((f) => f.starred).length
+                        : k === 'map'
+                          ? items.filter((f) => f.kind === 'map').length
+                          : k === 'table'
+                            ? items.filter((f) => f.kind === 'table').length
+                            : k === 'mine'
+                              ? items.filter((f) => !isCollab(f)).length
+                              : items.filter((f) => isCollab(f)).length;
+                  return (
+                    <button
+                      key={k}
+                      className={fileTab === k ? 'active' : ''}
+                      data-testid={`file-tab-${k}`}
+                      onClick={() => setFileTab(k)}
+                    >
+                      {label} {count}
+                    </button>
+                  );
+                })}
+              </div>
+              <select
+                className="ws-sort-select"
+                data-testid="file-sort"
+                aria-label="排序方式"
+                value={fileSort}
+                onChange={(e) => setFileSort(e.target.value as typeof fileSort)}
+              >
+                <option value="recent">最近编辑</option>
+                <option value="name">名称</option>
+                <option value="nodes">节点数</option>
+              </select>
+              {/* 布局切换（2026-10-25 原型 Files 页）：宫格/列表双 icon 钮 */}
+              <div className="file-layout-toggle" role="group" aria-label="布局切换">
+                <button
+                  type="button"
+                  className={fileLayout === 'grid' ? 'active' : ''}
+                  data-testid="file-layout-grid"
+                  aria-pressed={fileLayout === 'grid'}
+                  title="宫格视图"
+                  aria-label="宫格视图"
+                  onClick={() => setFileLayout('grid')}
+                >
+                  <Lucide name="LayoutGrid" size={15} />
+                </button>
+                <button
+                  type="button"
+                  className={fileLayout === 'list' ? 'active' : ''}
+                  data-testid="file-layout-list"
+                  aria-pressed={fileLayout === 'list'}
+                  title="列表视图"
+                  aria-label="列表视图"
+                  onClick={() => setFileLayout('list')}
+                >
+                  <Lucide name="List" size={15} />
+                </button>
+              </div>
+            </div>
+            <FileGridSorted
+              items={items}
+              fileTab={fileTab}
+              fileSort={fileSort}
+              layout={fileLayout}
+              isCollab={isCollab}
+              renderCard={renderCard}
+              renderRow={renderRow}
+            />
           </>
         ) : view === 'recent' ? (
           <>
@@ -617,17 +1043,27 @@ export function WorkspacePage() {
           </>
         ) : (
           <>
+            <div className="ws-page-head" data-testid="template-page">
+              <div>
+                <h2 className="ws-page-title">模板中心</h2>
+                <p className="ws-page-sub">精选模板，快速开始你的下一张脑图</p>
+              </div>
+            </div>
             {(() => {
               const hero = TEMPLATE_CATALOG[0];
               return hero ? (
                 <section className="tpl-hero" data-testid="template-hero">
                   <div className="tpl-hero-text">
-                    <span className="tpl-hero-badge">本周精选</span>
+                    <span className="tpl-hero-badge">
+                      <Lucide name="Flame" size={13} /> 本周精选
+                    </span>
                     <h2>{hero.name}</h2>
-                    <p>{hero.blurb}</p>
+                    <p>
+                      {hero.blurb}。内置 {specNodeCount(hero.spec)} 个节点，开箱即用，支持随时切换为表格追踪进度。
+                    </p>
                     <div className="tpl-hero-actions">
                       <button className="tpl-hero-use" data-testid="template-hero-use" onClick={() => void createFromTemplate(hero)}>
-                        使用此模板 →
+                        使用此模板 <Lucide name="ArrowRight" size={16} />
                       </button>
                       <button className="tpl-hero-preview" onClick={() => setPreviewTpl(hero)}>
                         预览
@@ -635,60 +1071,77 @@ export function WorkspacePage() {
                     </div>
                   </div>
                   <div className="tpl-hero-thumb" aria-hidden>
-                    <Thumb seed={hero.id} accent={hero.accent} />
+                    <TemplateThumb spec={hero.spec} kind={hero.kind} accent={hero.accent} />
                   </div>
                 </section>
               ) : null;
             })()}
-            <div className="tpl-cats" data-testid="template-cats">
+            <div className="tpl-tabs" data-testid="template-cats">
               {(['all', ...Array.from(new Set(TEMPLATE_CATALOG.map((t) => t.category ?? ''))).filter(Boolean)] as string[]).map((c) => (
                 <button key={c} className={tplCat === c ? 'active' : ''} data-testid={`template-cat-${c}`} onClick={() => setTplCat(c)}>
                   {c === 'all' ? '全部' : c}
                 </button>
               ))}
             </div>
-            <div className="ws-section-head">
-              <h2>模板库</h2>
-              <span className="ws-section-sub">内置精选模板，一键套用</span>
-            </div>
-            <div className="file-grid" data-testid="template-grid">
+            <div className="tpl-grid" data-testid="template-grid">
               {TEMPLATE_CATALOG.filter((t) => tplCat === 'all' || t.category === tplCat).map((t) => (
-                <button
-                  key={t.id}
-                  className="file-card template-card"
-                  data-testid={`template-card-${t.id}`}
-                  onClick={() => setPreviewTpl(t)}
-                >
-                  <div className="file-thumb">
-                    <Thumb seed={t.id} accent={t.accent} />
-                  </div>
-                  <div className="file-card-body">
-                    <div className="card-title">{t.name}</div>
-                    <div className="card-meta">
-                      {t.category && <span className="tpl-cat-tag">{t.category}</span>}
-                      {t.blurb}
+                <article key={t.id} className="tpl-card" data-testid={`template-card-${t.id}`} onClick={() => setPreviewTpl(t)}>
+                  <div className="tpl-card-thumb">
+                    <TemplateThumb spec={t.spec} kind={t.kind} accent={t.accent} />
+                    {t.tag && (
+                      <span className={t.tag === '热门' ? 'tpl-tag hot' : 'tpl-tag new'}>
+                        <Lucide name={t.tag === '热门' ? 'Flame' : 'Sparkles'} size={11} />
+                        {t.tag}
+                      </span>
+                    )}
+                    <div className="tpl-hover">
+                      <button className="tpl-hover-preview" data-testid={`template-preview-${t.id}`} onClick={(e) => { e.stopPropagation(); setPreviewTpl(t); }}>
+                        <Lucide name="Eye" size={15} />
+                        预览
+                      </button>
+                      <button className="tpl-hover-use" onClick={(e) => { e.stopPropagation(); void createFromTemplate(t); }}>
+                        使用模板
+                      </button>
                     </div>
                   </div>
-                </button>
+                  <div className="tpl-card-body">
+                    <div className="tpl-card-title-row">
+                      <h3>{t.name}</h3>
+                      <span className="tpl-card-kind">
+                        <Lucide name={t.kind === 'table' ? 'Table2' : 'Network'} size={11} />
+                        {t.category}
+                      </span>
+                    </div>
+                    <p className="tpl-card-desc">{t.blurb}</p>
+                    <p className="tpl-card-uses">{t.uses} 人使用</p>
+                  </div>
+                </article>
               ))}
             </div>
           </>
         )}
       </main>
 
-      {/* 模板预览（大缩略图 + 简介 + 使用模板） */}
+      {/* 模板预览（大缩略图 + 简介/节点数/使用人数 + 底部使用按钮，原型 Modal 同款） */}
       {previewTpl && (
         <div className="modal-mask" data-testid="template-preview" onClick={() => setPreviewTpl(null)}>
           <div className="modal template-modal" onClick={stop}>
-            <div className="template-preview-thumb">
-              <Thumb seed={previewTpl.id} accent={previewTpl.accent} />
+            <div className="template-preview-head">
+              <h3>{previewTpl.name}</h3>
+              <button className="modal-close" aria-label="关闭预览" onClick={() => setPreviewTpl(null)}>
+                ×
+              </button>
             </div>
-            <h3>{previewTpl.name}</h3>
-            <p className="template-blurb">{previewTpl.blurb}</p>
+            <p className="template-blurb">
+              {previewTpl.blurb} · {specNodeCount(previewTpl.spec)} 个节点 · {previewTpl.uses} 人使用
+            </p>
+            <div className="template-preview-thumb">
+              <TemplateThumb spec={previewTpl.spec} kind={previewTpl.kind} accent={previewTpl.accent} />
+            </div>
             <div className="modal-actions">
-              <button onClick={() => setPreviewTpl(null)}>取消</button>
+              <button onClick={() => setPreviewTpl(null)}>关闭</button>
               <button className="primary" data-testid="template-use" onClick={() => void createFromTemplate(previewTpl)}>
-                使用模板
+                使用此模板
               </button>
             </div>
           </div>

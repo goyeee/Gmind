@@ -142,7 +142,7 @@ describe('share 域', () => {
 
     const res = await request(app.getHttpServer()).get(`/api/share/${shareToken}`);
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ fileId, title: '待分享脑图', ownerName: owner.nickname, status: 'active' });
+    expect(res.body).toEqual(expect.objectContaining({ fileId, title: '待分享脑图', ownerName: owner.nickname, status: 'active', role: 'editor' }));
   });
 
   it('GET 未知/已关闭 token 统一 200 { status:"closed" }（不泄露存在性差异）', async () => {

@@ -16,7 +16,10 @@ async function bootstrap(): Promise<void> {
   // 超 Nest/Express 默认 100KB JSON 限制会 413（满额文档不可保存，perf T13 发现）。
   // 上限 2MB 远高于最大合法 docState，图片上传走 multipart（multer 10MB）不受此限。
   app.use(json({ limit: '2mb' }));
-  app.enableCors({ origin: ['http://localhost:5173'], credentials: true });
+  // CORS 走 env（2026-10-28 P0）：原硬编码 localhost:5173 会让生产域名直接被拒。
+  // WEB_ORIGIN（web 静态源）+ APP_URL（邀请/注册链接基址）均可经环境变量覆写；
+  // dev 缺省=5174/5173 双端口并存。
+  app.enableCors({ origin: [env.WEB_ORIGIN, env.APP_URL], credentials: true });
   app.useGlobalFilters(new ZodExceptionFilter(), new QuotaExceptionFilter(), new MulterExceptionFilter());
   await app.listen(env.PORT);
   // 协同网关复用同一个 HTTP server：/collab 的 WebSocket upgrade 由 Hocuspocus 处理

@@ -32,6 +32,10 @@ type EmailOptOutType = 'mention' | 'reply' | 'permission';
 
 interface NotifyPrefs {
   emailOptOut: EmailOptOutType[];
+  /** 站内通知总开关（2026-10-28 P1）：false=不生成站内通知。 */
+  notifyEnabled?: boolean;
+  /** 邮件摘要开关（2026-10-28 P1）：false=不发每日未读摘要。 */
+  digestEnabled?: boolean;
 }
 
 const PREF_ITEMS: Array<{ key: EmailOptOutType; label: string; desc: string }> = [
@@ -65,6 +69,9 @@ async function uploadAvatar(file: File): Promise<string> {
 export function SettingsPage() {
   const [me, setMe] = useState<MeIdentity | null>(null);
   const [optOut, setOptOut] = useState<ReadonlySet<EmailOptOutType>>(new Set());
+  // 总开关（2026-10-28 P1）：缺省 true；PATCH 全量替换语义——任何一次写都须带全两键
+  const [notifyEnabled, setNotifyEnabled] = useState(true);
+  const [digestEnabled, setDigestEnabled] = useState(true);
 
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -93,6 +100,8 @@ export function SettingsPage() {
     const [meData, prefs] = await Promise.all([api<MeIdentity>('/users/me'), api<NotifyPrefs>('/users/me/notify-prefs')]);
     setMe(meData);
     setOptOut(new Set(prefs.emailOptOut));
+    setNotifyEnabled(prefs.notifyEnabled !== false);
+    setDigestEnabled(prefs.digestEnabled !== false);
     // 换绑渠道缺省：空着的那一侧（手机号用户缺省换邮箱；都空（微信）缺省手机号）
     setChannel(meData.phone === null ? 'phone' : 'email');
   }, []);
@@ -141,7 +150,8 @@ export function SettingsPage() {
     }
   }
 
-  /** 开关即 PATCH（全量替换）：乐观更新，失败回滚并透出服务端原因文案。 */
+  /** 开关即 PATCH（全量替换）：乐观更新，失败回滚并透出服务端原因文案。
+   *  全量替换语义——emailOptOut 与两总开关必须同包提交（2026-10-28 P1）。 */
   async function togglePref(key: EmailOptOutType, checked: boolean): Promise<void> {
     const prev = optOut;
     const next = new Set(prev);
@@ -150,10 +160,35 @@ export function SettingsPage() {
     setOptOut(next);
     setPrefError('');
     try {
-      await apiPatch<NotifyPrefs>('/users/me/notify-prefs', { emailOptOut: [...next] });
+      await apiPatch<NotifyPrefs>('/users/me/notify-prefs', {
+        emailOptOut: [...next],
+        notifyEnabled,
+        digestEnabled,
+      });
       showToast('已完成'); // 成功提示不属失败文案，不强制两段式（NFR-USE-005 规范核对）
     } catch (e) {
       setOptOut(prev);
+      setPrefError(msgOf(e));
+    }
+  }
+
+  /** 总开关切换（2026-10-28 P1）：notifyEnabled=站内通知；digestEnabled=邮件摘要。 */
+  async function toggleMaster(key: 'notifyEnabled' | 'digestEnabled', checked: boolean): Promise<void> {
+    const prevN = notifyEnabled;
+    const prevD = digestEnabled;
+    if (key === 'notifyEnabled') setNotifyEnabled(checked);
+    else setDigestEnabled(checked);
+    setPrefError('');
+    try {
+      await apiPatch<NotifyPrefs>('/users/me/notify-prefs', {
+        emailOptOut: [...optOut],
+        notifyEnabled: key === 'notifyEnabled' ? checked : prevN,
+        digestEnabled: key === 'digestEnabled' ? checked : prevD,
+      });
+      showToast('已完成');
+    } catch (e) {
+      setNotifyEnabled(prevN);
+      setDigestEnabled(prevD);
       setPrefError(msgOf(e));
     }
   }
@@ -167,7 +202,7 @@ export function SettingsPage() {
     <WorkspaceShell activeNav={null}>
       <main className="ws-content settings-page" data-testid="settings-page">
         <div className="ws-section-head">
-          <h2>账号设置</h2>
+          <h2>设置</h2>
         </div>
         {error && <p className="error">{error}</p>}
 
@@ -297,9 +332,35 @@ export function SettingsPage() {
       </section>
 
       <section className="settings-card" data-testid="notify-section">
-        <h3>邮件通知偏好</h3>
+        <h3>通知偏好</h3>
+        {/* 总开关（2026-10-28 P1）：站内通知与邮件摘要各自独立 */}
+        <label className="pref-row">
+          <span className="pref-text">
+            <span className="pref-label">站内通知</span>
+            <span className="pref-desc">关闭后不再生成新的站内通知（历史通知保留）</span>
+          </span>
+          <input
+            type="checkbox"
+            data-testid="notify-master-enabled"
+            checked={notifyEnabled}
+            onChange={(e) => void toggleMaster('notifyEnabled', e.target.checked)}
+          />
+        </label>
+        <label className="pref-row">
+          <span className="pref-text">
+            <span className="pref-label">邮件摘要</span>
+            <span className="pref-desc">每日未读通知汇总邮件；关闭后不再发送</span>
+          </span>
+          <input
+            type="checkbox"
+            data-testid="notify-master-digest"
+            checked={digestEnabled}
+            onChange={(e) => void toggleMaster('digestEnabled', e.target.checked)}
+          />
+        </label>
+        <h4 className="settings-subhead">按事件类型关闭邮件摘要</h4>
         <p className="settings-hint">
-          关闭后对应事件不再发送邮件摘要（站内通知不受影响，不可关闭）；回收站清理提醒恒发，不在本设置范围。
+          关闭后对应事件不再发送邮件摘要；回收站清理提醒恒发，不在本设置范围。
         </p>
         {PREF_ITEMS.map((item) => (
           <label className="pref-row" key={item.key}>

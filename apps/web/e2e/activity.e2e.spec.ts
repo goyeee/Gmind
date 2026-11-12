@@ -20,6 +20,8 @@ async function registerAndLogin(page: Page): Promise<void> {
   await page.getByPlaceholder('验证码（开发环境固定 123456）').fill('123456');
   await page.getByRole('button', { name: '登录', exact: true }).click();
   await expect(page).toHaveURL(/\/workspace/);
+  await expect(page.getByTestId('quick-create-blank')).toBeVisible(); // 首页落点（换装后种子文件在「我的文件」视图）
+  await page.goto('/workspace?view=files');
   await expect(page.getByTestId('mine-grid').getByTestId('file-card')).toHaveCount(3);
 }
 
@@ -43,9 +45,10 @@ async function nicknameOf(page: Page): Promise<string> {
 }
 
 /** 选中指定文本的节点并在评论面板顶部输入框发布评论（comments.e2e 同款链路；
- *  评论右列默认不渲染（M7b-R6），2026-10-10 插入菜单删除后走工具栏 comment-toggle）。 */
+ *  评论右列默认不渲染（M7b-R6），2026-10-25 原型顶栏重组后评论入口在「更多」下拉）。 */
 async function commentOnNode(page: Page, nodeText: string, content: string): Promise<void> {
   await page.locator('.editor-canvas svg .gm-text', { hasText: nodeText }).first().click();
+  await page.getByTestId('more-toggle').click();
   await page.getByTestId('comment-toggle').click();
   await page.getByTestId('comment-input').fill(content);
   await page.getByTestId('comment-send').click();

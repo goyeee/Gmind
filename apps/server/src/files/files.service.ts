@@ -1,6 +1,6 @@
 import { BadRequestException, ConflictException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Brackets, In, IsNull, Like, Not, Repository } from 'typeorm';
+import { Brackets, DataSource, In, IsNull, Like, Not, Repository } from 'typeorm';
 import type * as Y from 'yjs';
 import {
   countAliveReachable,
@@ -20,7 +20,9 @@ import { MAX_DOC_NODES } from '@gmind/shared';
 import type { FileListItem, FileListItemDetailed, FilePatchResult } from '@gmind/shared';
 import { CollabService } from '../collab/collab.service';
 import { EventsService } from '../events/events.service';
+import { OrgService } from '../org/org.service';
 import { StorageService } from '../storage/storage.service';
+import { TaskIndexService } from '../todos/task-index.service';
 import { UserEntity } from '../users/user.entity';
 import { isDuplicateKeyError } from '../utils/duplicate-key';
 import { FileCollaboratorEntity } from './file-collaborator.entity';
@@ -70,11 +72,17 @@ export class FilesService {
     @InjectRepository(UserEntity) private readonly userRepo: Repository<UserEntity>,
     // tsx 不发射装饰器元数据，类 token 注入必须显式 @Inject（约定同 session.service.ts）
     @Inject(CollabService) private readonly collab: CollabService,
+    @Inject(TaskIndexService) private readonly taskIndex: TaskIndexService,
     // 图片对象迁移（M3b Task 1，准入 7.8）：copyForUser 需 copyImage 把源命名空间对象
     // 复制进副本命名空间；经 StorageCoreModule（叶子）注入，与 StorageModule 无环
     @Inject(StorageService) private readonly storage: StorageService,
     // EventsService（M5 Task 4）：doc_create 埋点（EventsModule 不依赖任何业务域，无环）
     @Inject(EventsService) private readonly events: EventsService,
+    // OrgService（2026-10-25 原型成员归属行）：membershipsFor/listDepartments/listGroups
+    // 只读挂靠查询——协作者与可拉取目录投影的部门·分组归属
+    @Inject(OrgService) private readonly org: OrgService,
+    // DataSource（2026-10-28 P1 全文搜索）：node_index 原生 SQL（LIKE+可见性 JOIN）
+    @Inject(DataSource) private readonly dataSource: DataSource,
   ) {}
 
   private readonly logger = new Logger(FilesService.name);
@@ -109,7 +117,7 @@ export class FilesService {
    *  docState 是否在场分 blank/import；种子文件 seed；复制走 copyForUser 自记 copy）。 */
   async createForUser(
     userId: string,
-    input: { title: string; state?: Uint8Array; folderId?: string | null; lastModifierUserId?: string },
+    input: { title: string; kind?: string; state?: Uint8Array; folderId?: string | null; lastModifierUserId?: string },
     entry: DocCreateEntry = 'blank',
   ): Promise<FileEntity> {
     const file = await this.buildForUser(userId, input);
@@ -129,7 +137,7 @@ export class FilesService {
    *  语义按 400 落——XMind 解析端已挡 20MB，超大纯文本树在此兜底）。 */
   private async buildForUser(
     userId: string,
-    input: { title: string; state?: Uint8Array; folderId?: string | null; lastModifierUserId?: string },
+    input: { title: string; kind?: string; state?: Uint8Array; folderId?: string | null; lastModifierUserId?: string },
   ): Promise<FileEntity> {
     const count = await this.repo.countBy({ ownerUserId: userId, deletedAt: IsNull() });
     if (count >= MAX_FILES_PER_USER) {
@@ -138,6 +146,7 @@ export class FilesService {
     const file = this.repo.create();
     file.ownerUserId = userId;
     file.title = input.title;
+    file.kind = input.kind === 'table' ? 'table' : 'map';
     if (input.folderId !== undefined) file.folderId = input.folderId;
     if (input.lastModifierUserId !== undefined) file.lastModifierUserId = input.lastModifierUserId;
     if (input.state) {
@@ -196,6 +205,7 @@ export class FilesService {
       id: file.id,
       title: file.title,
       structure: file.structure as FileListItem['structure'],
+      kind: (file.kind === 'table' ? 'table' : 'map') as FileListItem['kind'],
       nodeCount: file.nodeCount,
       lastOpenedAt: file.lastOpenedAt?.toISOString() ?? null,
       updatedAt: file.updatedAt.toISOString(),
@@ -292,6 +302,30 @@ export class FilesService {
     return this.mapDetailedRows(await qb.getRawMany<Record<string, unknown>>());
   }
 
+  /** 全文搜索（2026-10-28 P1）：标题命中（searchByTitle 同口径）+ 节点内容命中
+   *  （node_index.text LIKE %q%，可见文件=owner 或协作者行，删除文件排除）。
+   *  节点命中上限 20（updated_at DESC）；返回 {files, nodes}——工作台搜索框分组展示。 */
+  async searchGlobal(userId: string, q: string): Promise<{
+    files: FileListItemDetailed[];
+    nodes: Array<{ fileId: string; fileTitle: string; nodeId: string; text: string }>;
+  }> {
+    const files = await this.searchByTitle(userId, q);
+    const escaped = escapeLike(q);
+    const rows = (await this.dataSource.query(
+      `SELECT n.file_id AS fileId, n.node_id AS nodeId, n.text AS text, f.title AS fileTitle
+       FROM node_index n
+       JOIN files f ON f.id = n.file_id AND f.deleted_at IS NULL
+       WHERE n.text LIKE ?
+         AND (f.owner_user_id = ? OR EXISTS (
+           SELECT 1 FROM file_collaborators fc WHERE fc.file_id = f.id AND fc.user_id = ?
+         ))
+       ORDER BY f.updated_at DESC, n.file_id DESC
+       LIMIT 20`,
+      [`%${escaped}%`, userId, userId],
+    )) as Array<{ fileId: string; nodeId: string; text: string; fileTitle: string }>;
+    return { files, nodes: rows };
+  }
+
   /** 详细投影公共 SELECT（listByView 与 searchByTitle 共用）：各 JOIN 至多一行
    *  （users/folders 走主键，file_stars 受唯一键约束），不产生行复制。 */
   private detailedSelect(userId: string) {
@@ -305,11 +339,14 @@ export class FilesService {
       .select('f.id', 'id')
       .addSelect('f.title', 'title')
       .addSelect('f.structure', 'structure')
+      .addSelect('f.kind', 'kind')
       .addSelect('f.node_count', 'nodeCount')
       .addSelect('f.last_opened_at', 'lastOpenedAt')
       .addSelect('f.updated_at', 'updatedAt')
+      .addSelect('f.created_at', 'createdAt')
       .addSelect('f.owner_user_id', 'ownerUserId')
       .addSelect('owner_u.nickname', 'ownerName')
+      .addSelect('owner_u.avatar_url', 'ownerAvatarUrl')
       .addSelect('mod_u.nickname', 'lastModifierName')
       .addSelect('f.folder_id', 'folderId')
       .addSelect('fold.name', 'folderName')
@@ -327,11 +364,14 @@ export class FilesService {
       id: String(r.id),
       title: String(r.title),
       structure: r.structure as FileListItem['structure'],
+      kind: (r.kind ?? 'map') as FileListItem['kind'],
       nodeCount: Number(r.nodeCount),
       lastOpenedAt: toIso(r.lastOpenedAt),
       updatedAt: toIso(r.updatedAt) as string,
+      createdAt: toIso(r.createdAt) as string,
       ownerUserId: String(r.ownerUserId),
       ownerName: r.ownerName == null ? null : String(r.ownerName),
+      ownerAvatarUrl: r.ownerAvatarUrl == null ? null : String(r.ownerAvatarUrl),
       lastModifierName: r.lastModifierName == null ? null : String(r.lastModifierName),
       folderId: r.folderId == null ? null : String(r.folderId),
       folderName: r.folderName == null ? null : String(r.folderName),
@@ -349,6 +389,18 @@ export class FilesService {
     return (await this.collabRepo.countBy({ fileId: file.id, userId })) > 0;
   }
 
+  /** 写授权（2026-10-28 P0 链接权限档位）：owner 或 collaborator.role='editor'。
+   *  viewer（只读链接加入/只读协作者）读放行写拒绝——canAccess（读）与本判定分离；
+   *  saveDocState/comments/todos 等写端点共用，返回布尔由调用方自决 404（同 canAccess
+   *  口径，不泄露存在性）。 */
+  async canWrite(userId: string, fileId: string): Promise<boolean> {
+    const file = await this.repo.findOne({ where: { id: fileId, deletedAt: IsNull() } });
+    if (!file) return false;
+    if (file.ownerUserId === userId) return true;
+    const row = await this.collabRepo.findOneBy({ fileId: file.id, userId });
+    return row?.role === 'editor';
+  }
+
   /** 真实缩略图写入（2026-10-21）：编辑器 persisted ack 后上传引擎直出 SVG。
    *  canAccess 口径（owner/协作者皆可——协同双方任一端保存都可能触发）。
    *  **原生 SQL 直写**：TypeORM 的 save()/UpdateQueryBuilder 都会自动刷
@@ -363,6 +415,14 @@ export class FilesService {
     await this.repo.query('UPDATE files SET thumb_svg = ? WHERE id = ?', [svg, fileId]);
   }
 
+  /** 服务端任务直写落库（第二期批次 B）：仅在无活跃会话（collab.hasLiveDoc=false）时
+   *  被调用，不存在内存/DB 漂移；node_count 不变（任务字段不改节点数）。
+   *  repo.update（UpdateQueryBuilder 语义）会自动刷 @UpdateDateColumn——任务直写也是
+   *  一次内容写，写序照常推进（与 storeDocument/PUT 语义一致）。 */
+  async persistServerDocState(fileId: string, state: Uint8Array): Promise<void> {
+    await this.repo.update({ id: fileId, deletedAt: IsNull() }, { docState: Buffer.from(state) });
+  }
+
   /** 真实缩略图读取（canAccess 口径；无快照 → 404，卡片回退装饰性缩略图）。 */
   async getThumbSvg(userId: string, fileId: string): Promise<string> {
     if (!(await this.canAccess(userId, fileId))) throw new NotFoundException('文件不存在');
@@ -374,20 +434,61 @@ export class FilesService {
   /** 协作者候选列表（M3b Task 8，FR-CMT-005）：GET /api/files/:id/collaborators →
    *  [{userId, nickname, role, isOwner}]——owner 首位（isOwner/role 'owner'）+ 协作者行；
    *  mention 候选即本列表的 userId 集（CommentsService.filterMentions 的 allowed 同源）。
-   *  canAccess 口径（owner 或协作者可读），缺失/已删/无权限统一 404。 */
-  async listCollaborators(userId: string, fileId: string): Promise<Array<{ userId: string; nickname: string; role: string; isOwner: boolean; avatar: string | null }>> {
+   *  canAccess 口径（owner 或协作者可读），缺失/已删/无权限统一 404。
+   *  deptName/groupNames（2026-10-25 原型成员归属行）：成员面板每行的「部门 · 分组」
+   *  归属副行，无挂靠时 deptName=null/groupNames=[]（前端兜底「未归属部门」）。 */
+  async listCollaborators(userId: string, fileId: string): Promise<Array<{ userId: string; nickname: string; role: string; isOwner: boolean; avatar: string | null; deptName: string | null; groupNames: string[] }>> {
     const file = await this.findAliveOr404(userId, fileId);
     const rows = await this.collabRepo.find({ where: { fileId: file.id } });
     // avatar_url 一并下发（2026-10-11 头像功能）：成员目录数据源，编辑器全量头像位消费。
     const users = await this.userRepo.find({ where: { id: In([file.ownerUserId, ...rows.map((r) => r.userId)]) }, select: ['id', 'nickname', 'avatarUrl'] });
     const nicknames = new Map(users.map((u) => [u.id, u.nickname]));
     const avatars = new Map(users.map((u) => [u.id, u.avatarUrl]));
-    const owner = { userId: file.ownerUserId, nickname: nicknames.get(file.ownerUserId) ?? '', role: 'owner', isOwner: true, avatar: avatars.get(file.ownerUserId) ?? null };
+    const affiliations = await this.orgAffiliationOf([file.ownerUserId, ...rows.map((r) => r.userId)]);
+    const fallback = { deptName: null as string | null, groupNames: [] as string[] };
+    const owner = { userId: file.ownerUserId, nickname: nicknames.get(file.ownerUserId) ?? '', role: 'owner', isOwner: true, avatar: avatars.get(file.ownerUserId) ?? null, ...(affiliations.get(file.ownerUserId) ?? fallback) };
     // owner 拥有 file_collaborators 行的脏数据防御：去重（owner 条目已覆盖其身份）
     const collaborators = rows
       .filter((r) => r.userId !== file.ownerUserId)
-      .map((r) => ({ userId: r.userId, nickname: nicknames.get(r.userId) ?? '', role: r.role, isOwner: false, avatar: avatars.get(r.userId) ?? null }));
+      .map((r) => ({ userId: r.userId, nickname: nicknames.get(r.userId) ?? '', role: r.role, isOwner: false, avatar: avatars.get(r.userId) ?? null, ...(affiliations.get(r.userId) ?? fallback) }));
     return [owner, ...collaborators];
+  }
+
+  /** 用户集的组织归属投影（2026-10-25 原型成员归属行）：department_id → 部门名、
+   *  org_user_groups → 分组名数组（保序去重）；挂靠行缺失的部门/分组静默略过
+   *  （与 AdminUserListItem 回显同容错口径）。空集免查。 */
+  private async orgAffiliationOf(userIds: string[]): Promise<Map<string, { deptName: string | null; groupNames: string[] }>> {
+    const ids = [...new Set(userIds)];
+    const out = new Map<string, { deptName: string | null; groupNames: string[] }>();
+    if (ids.length === 0) return out;
+    const [memberships, depts, groups] = await Promise.all([
+      this.org.membershipsFor(ids),
+      this.org.listDepartments(),
+      this.org.listGroups(),
+    ]);
+    const deptNames = new Map(depts.map((d) => [d.id, d.name]));
+    const groupNames = new Map(groups.map((g) => [g.id, g.name]));
+    for (const id of ids) {
+      const m = memberships.get(id);
+      out.set(id, {
+        deptName: m?.departmentId ? (deptNames.get(m.departmentId) ?? null) : null,
+        groupNames: [...new Set((m?.groupIds ?? []).map((gid) => groupNames.get(gid)).filter((n): n is string => !!n))],
+      });
+    }
+    return out;
+  }
+
+  /**
+   * 移除协作者（2026-10-25 原型 ShareModal members tab「移除」）：owner 专属（非
+   * owner/文件缺失/已删一律 404「文件不存在」，不泄露存在性——listInvitableUsers
+   * 同口径）；删除 file_collaborators 行即收回访问权。target=owner 自然 no-op
+   * （owner 无协作者行，见 listCollaborators 的脏数据防御注释）；不存在的行删除
+   * 幂等零抛。
+   */
+  async removeCollaborator(userId: string, fileId: string, targetUserId: string): Promise<void> {
+    const file = await this.repo.findOne({ where: { id: fileId, deletedAt: IsNull() } });
+    if (!file || file.ownerUserId !== userId) throw new NotFoundException('文件不存在');
+    await this.collabRepo.delete({ fileId: file.id, userId: targetUserId });
   }
 
   /**
@@ -429,8 +530,16 @@ export class FilesService {
       take: size,
       select: ['id', 'nickname', 'phone', 'email'],
     });
+    // 归属行（2026-10-25 原型邀请选择器）：候选行/待邀请行的「部门 · 分组」副行
+    const affiliations = await this.orgAffiliationOf(rows.map((u) => u.id));
     return {
-      items: rows.map((u) => ({ userId: u.id, nickname: u.nickname, phone: u.phone, email: u.email })),
+      items: rows.map((u) => ({
+        userId: u.id,
+        nickname: u.nickname,
+        phone: u.phone,
+        email: u.email,
+        ...(affiliations.get(u.id) ?? { deptName: null as string | null, groupNames: [] as string[] }),
+      })),
       total,
       page,
       size,
@@ -499,19 +608,23 @@ export class FilesService {
   async getOwnedFileWithState(
     userId: string,
     id: string,
-  ): Promise<{ id: string; title: string; structure: string; themeId: string; nodeCount: number; ownerUserId: string; updatedAt: string; starred: boolean; docState: string }> {
+  ): Promise<{ id: string; title: string; structure: string; themeId: string; kind: string; nodeCount: number; ownerUserId: string; updatedAt: string; starred: boolean; docState: string; myRole: 'owner' | 'editor' | 'viewer' }> {
     const file = await this.findAliveOr404(userId, id);
     const starred = (await this.starRepo.countBy({ fileId: file.id, userId })) > 0;
+    // 角色（2026-10-28 P0）：编辑器只读装配依据——owner/editor 可写，viewer 只读
+    const myRole = file.ownerUserId === userId ? 'owner' : (await this.canWrite(userId, file.id)) ? 'editor' : 'viewer';
     return {
       id: file.id,
       title: file.title,
       structure: file.structure,
       themeId: file.themeId,
+      kind: file.kind,
       nodeCount: file.nodeCount,
       ownerUserId: file.ownerUserId,
       updatedAt: file.updatedAt.toISOString(),
       starred,
       docState: (file.docState ?? Buffer.alloc(0)).toString('base64'),
+      myRole,
     };
   }
 
@@ -538,6 +651,9 @@ export class FilesService {
     lastEditorUserId?: string,
   ): Promise<{ nodeCount: number }> {
     const file = await this.findAliveOr404(userId, id);
+    // viewer 只读（2026-10-28 P0）：canWrite=owner 或 editor 协作者；只读链接/协作者
+    // 写 docState 一律 404（不泄露存在性，与 canAccess 同口径）
+    if (!(await this.canWrite(userId, file.id))) throw new NotFoundException('文件不存在');
     let doc;
     try {
       doc = docFromState(state);
@@ -561,6 +677,8 @@ export class FilesService {
     file.nodeCount = nodeCount;
     if (lastEditorUserId === userId) file.lastModifierUserId = userId;
     await this.repo.save(file); // @UpdateDateColumn 自动回写 updated_at
+    // 任务索引重建（批次 B）：PUT 落库路径与 collab 防抖持久化同口径（fire-and-forget）
+    this.taskIndex.rebuildInBackground(id, doc);
     return { nodeCount };
   }
 

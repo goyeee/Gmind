@@ -79,7 +79,13 @@ describe('版本快照（collab 网关 FR-VER-001）+ 90 天清理', () => {
     const provider = new HocuspocusProvider({
       url: `ws://127.0.0.1:${port}/collab`,
       name: docId,
-      token: tk,
+      // 2026-10-28 P0：token=一次性 ticket——连接先 POST /auth/ws-ticket 换票
+      token: async () => {
+        const res = await request(`http://127.0.0.1:${port}`)
+          .post('/api/auth/ws-ticket')
+          .set('Authorization', `Bearer ${tk}`);
+        return (res.body as { ticket: string }).ticket;
+      },
       WebSocketPolyfill: WsImpl,
     } as HocuspocusProviderConfiguration);
     const client = { provider };
@@ -273,7 +279,13 @@ describe('版本恢复（REST FR-VER-004）+ events 埋点端点', () => {
     const provider = new HocuspocusProvider({
       url: `ws://127.0.0.1:${port}/collab`,
       name: docId,
-      token: tk,
+      // 2026-10-28 P0：token=一次性 ticket——连接先 POST /auth/ws-ticket 换票
+      token: async () => {
+        const res = await request(`http://127.0.0.1:${port}`)
+          .post('/api/auth/ws-ticket')
+          .set('Authorization', `Bearer ${tk}`);
+        return (res.body as { ticket: string }).ticket;
+      },
       WebSocketPolyfill: WsImpl,
     } as HocuspocusProviderConfiguration);
     const client = { provider };

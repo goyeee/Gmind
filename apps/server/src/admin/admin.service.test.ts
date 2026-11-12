@@ -4,6 +4,7 @@ import type { Repository } from 'typeorm';
 import { UserEntity } from '../users/user.entity';
 import type { FileEntity } from '../files/file.entity';
 import { AdminService } from './admin.service';
+import { OrgService } from '../org/org.service';
 
 /**
  * AdminService 单测（service 级防呆规则）：角色升降、自我保护、最后超管保护、
@@ -48,13 +49,20 @@ const makeFilesRepo = (opts: { aliveByOwner?: Record<string, number>; groupRows?
   return repo as unknown as Repository<FileEntity>;
 };
 
+/** 组织服务桩（批次 A）：updateAccount 无部门/分组入参时不触达；触达用例单独覆盖。 */
+const makeOrgStub = () =>
+  ({
+    setUserOrg: vi.fn(async () => undefined),
+    membershipsFor: vi.fn(async () => new Map()),
+  }) as unknown as OrgService;
+
 const OPERATOR = '01ADMINOPERATOR000000000';
 
 describe('AdminService.updateAccount：角色升降与防呆', () => {
   it('member 升 super_admin → 200 落库（save 携新角色）', async () => {
     const target = makeUser({ id: 'u-target', phone: '13800000001' });
     const { repo, save } = makeUsersRepo({ byId: { 'u-target': target }, activeSuperAdmins: 2 });
-    const svc = new AdminService(repo, makeFilesRepo({}));
+    const svc = new AdminService(repo, makeFilesRepo({}), makeOrgStub());
     const item = await svc.updateAccount(OPERATOR, 'u-target', { systemRole: 'super_admin' });
     expect(item.systemRole).toBe('super_admin');
     expect(save).toHaveBeenCalledTimes(1);
@@ -64,7 +72,7 @@ describe('AdminService.updateAccount：角色升降与防呆', () => {
   it('super_admin 降 member（另有启用超管）→ 落库成功', async () => {
     const target = makeUser({ id: 'u-target', systemRole: 'super_admin' });
     const { repo, save } = makeUsersRepo({ byId: { 'u-target': target }, activeSuperAdmins: 3 });
-    const svc = new AdminService(repo, makeFilesRepo({}));
+    const svc = new AdminService(repo, makeFilesRepo({}), makeOrgStub());
     const item = await svc.updateAccount(OPERATOR, 'u-target', { systemRole: 'member' });
     expect(item.systemRole).toBe('member');
     expect(save).toHaveBeenCalled();
@@ -73,7 +81,7 @@ describe('AdminService.updateAccount：角色升降与防呆', () => {
   it('最后超管防呆：唯一启用超管被降级/停用 → 409 且不落库', async () => {
     const target = makeUser({ id: 'u-target', systemRole: 'super_admin' });
     const { repo, save } = makeUsersRepo({ byId: { 'u-target': target }, activeSuperAdmins: 1 });
-    const svc = new AdminService(repo, makeFilesRepo({}));
+    const svc = new AdminService(repo, makeFilesRepo({}), makeOrgStub());
     await expect(svc.updateAccount(OPERATOR, 'u-target', { systemRole: 'member' })).rejects.toThrow(ConflictException);
     await expect(svc.updateAccount(OPERATOR, 'u-target', { status: 'disabled' })).rejects.toThrow(
       '至少需要保留一个启用状态的超级管理员',
@@ -84,7 +92,7 @@ describe('AdminService.updateAccount：角色升降与防呆', () => {
   it('自我保护：不得停用/降级自己（即便还有其他超管）→ 409', async () => {
     const me = makeUser({ id: OPERATOR, systemRole: 'super_admin' });
     const { repo, save } = makeUsersRepo({ byId: { [OPERATOR]: me }, activeSuperAdmins: 5 });
-    const svc = new AdminService(repo, makeFilesRepo({}));
+    const svc = new AdminService(repo, makeFilesRepo({}), makeOrgStub());
     await expect(svc.updateAccount(OPERATOR, OPERATOR, { status: 'disabled' })).rejects.toThrow('不能停用自己的账号');
     await expect(svc.updateAccount(OPERATOR, OPERATOR, { systemRole: 'member' })).rejects.toThrow(
       '不能取消自己的超级管理员身份',
@@ -95,7 +103,7 @@ describe('AdminService.updateAccount：角色升降与防呆', () => {
   it('目标不存在 → 404；仅改昵称 → 直落库不走防呆', async () => {
     const target = makeUser({ id: 'u-target', systemRole: 'super_admin', status: 'active' });
     const { repo, save } = makeUsersRepo({ byId: { 'u-target': target }, activeSuperAdmins: 1 });
-    const svc = new AdminService(repo, makeFilesRepo({ aliveByOwner: { 'u-target': 7 } }));
+    const svc = new AdminService(repo, makeFilesRepo({ aliveByOwner: { 'u-target': 7 } }), makeOrgStub());
     await expect(svc.updateAccount(OPERATOR, 'nope', { nickname: '乙' })).rejects.toThrow(NotFoundException);
     // 超管对自己改昵称：nextRole/nextStatus 均不变，两道防呆都不触发
     const item = await svc.updateAccount(OPERATOR, 'u-target', { nickname: '乙' });
@@ -108,14 +116,14 @@ describe('AdminService.updateAccount：角色升降与防呆', () => {
 describe('AdminService.createAccount：建号语义', () => {
   it('手机号已存在 → 409 不建号', async () => {
     const { repo, save } = makeUsersRepo({ byPhone: { '13800138000': makeUser({ id: 'u1' }) } });
-    const svc = new AdminService(repo, makeFilesRepo({}));
+    const svc = new AdminService(repo, makeFilesRepo({}), makeOrgStub());
     await expect(svc.createAccount({ phone: '13800138000', nickname: '甲' })).rejects.toThrow('该手机号已注册');
     expect(save).not.toHaveBeenCalled();
   });
 
   it('新号：active member、无密码、fileCount=0', async () => {
     const { repo, save } = makeUsersRepo({});
-    const svc = new AdminService(repo, makeFilesRepo({}));
+    const svc = new AdminService(repo, makeFilesRepo({}), makeOrgStub());
     const item = await svc.createAccount({ phone: '13800138001', nickname: '新同事' });
     expect(item.systemRole).toBe('member');
     expect(item.status).toBe('active');

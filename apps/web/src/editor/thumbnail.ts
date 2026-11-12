@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import type * as Y from 'yjs';
 import { getMeta, getNode, childrenIds, listCanvases, listSummaries } from '@gmind/core';
+import { effectiveProgress, type DeriveNode } from '@gmind/shared';
 import {
   layout,
   resolveNodeStyle,
@@ -24,6 +25,8 @@ import {
 const MAX_NODES = 500;
 const MAX_SVG_BYTES = 200_000;
 const PAD = 16;
+/** 表格缩略图（2026-10-25 原型 TableThumb）：数据行上限。 */
+const TABLE_THUMB_ROWS = 6;
 
 function esc(s: string): string {
   return s
@@ -102,6 +105,103 @@ export function buildThumbSvg(doc: Y.Doc, measure: MeasureAdapter): string | nul
     }
   }
 
+  parts.push('</svg>');
+  const svg = parts.join('');
+  return svg.length > MAX_SVG_BYTES ? null : svg;
+}
+
+/** 表格文件缩略图（2026-10-25 原型 TableThumb 现实化）：按表格形态直出 SVG——
+ *  表头（序号/主题/进度/状态）+ 最多 6 行数据（深度缩进圆点+标题截 10 字 +
+ *  进度条 + 状态色胶囊），进度取 shared effectiveProgress 同口径（父级 Σ 汇总
+ *  一致）。行遍历跳过 collapsed 子树、root 不进表（与 TaskTable 行集同源语义）。
+ *  空表（root 无子级）/超限返回 null（回退装饰图）。 */
+export function buildTableThumbSvg(doc: Y.Doc): string | null {
+  const first = listCanvases(doc)[0];
+  if (!first) return null;
+  const canvasId = first.id;
+
+  // 全量存活节点 → DeriveNode（progress 求值输入；title/order 平铺进表）
+  const derive: DeriveNode[] = [];
+  const collect = (id: string, parentId: string | null): void => {
+    const snap = getNode(doc, id, canvasId);
+    if (!snap || snap.deleted) return;
+    derive.push({
+      id,
+      parentId,
+      title: snap.text,
+      collapsed: snap.collapsed,
+      task: snap.task
+        ? { ...snap.task, progress: snap.task.progress ?? 0 }
+        : undefined,
+    });
+    for (const cid of childrenIds(doc, id, canvasId)) collect(cid, id);
+  };
+  collect(first.rootId, null);
+  if (derive.length > MAX_NODES) return null;
+
+  // 表行序（DFS 跳过 collapsed 子树；root 不进表）
+  const rows: Array<{ title: string; depth: number; progress: number }> = [];
+  const walk = (id: string, depth: number): void => {
+    for (const cid of childrenIds(doc, id, canvasId)) {
+      const snap = getNode(doc, cid, canvasId);
+      if (!snap || snap.deleted) continue;
+      rows.push({ title: snap.text, depth, progress: effectiveProgress(derive, cid) });
+      if (rows.length >= TABLE_THUMB_ROWS) return;
+      if (!snap.collapsed) walk(cid, depth + 1);
+      if (rows.length >= TABLE_THUMB_ROWS) return;
+    }
+  };
+  walk(first.rootId, 0);
+  if (rows.length === 0) return null;
+
+  // 画布：宽 360；高 = 表头 26 + 行 22×N + pad×2
+  const W = 360;
+  const HEAD_H = 26;
+  const ROW_H = 22;
+  const H = PAD * 2 + HEAD_H + rows.length * ROW_H;
+  const COL_TITLE = 46; // 序号列右缘
+  const COL_PROG = W - PAD - 108; // 进度条 x
+  const COL_STATUS = W - PAD - 52; // 状态胶囊 x
+  const parts: string[] = [
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}">`,
+    `<rect width="${W}" height="${H}" fill="#ffffff"/>`,
+    // 表头（灰底 + 三列标签）
+    `<rect x="${PAD}" y="${PAD}" width="${W - PAD * 2}" height="${HEAD_H}" rx="4" fill="#f2f3f5"/>`,
+    `<text x="${PAD + 10}" y="${PAD + 17}" font-size="11" fill="#4e5969">序号</text>`,
+    `<text x="${COL_TITLE + 8}" y="${PAD + 17}" font-size="11" fill="#4e5969">主题</text>`,
+    `<text x="${COL_PROG}" y="${PAD + 17}" font-size="11" fill="#4e5969">进度</text>`,
+    `<text x="${COL_STATUS}" y="${PAD + 17}" font-size="11" fill="#4e5969">状态</text>`,
+  ];
+  rows.forEach((r, i) => {
+    const y = PAD + HEAD_H + i * ROW_H;
+    const title = r.title.length > 10 ? r.title.slice(0, 10) + '…' : r.title;
+    // 深度缩进圆点 + 标题（父级行加粗近似：字重属性）
+    const indent = COL_TITLE + 8 + r.depth * 12;
+    parts.push(`<circle cx="${indent + 3}" cy="${y + 11}" r="3" fill="#3370ff"/>`);
+    parts.push(
+      `<text x="${indent + 10}" y="${y + 15}" font-size="11" fill="#1f2329" font-weight="${r.depth === 0 ? '600' : '400'}">${esc(title || '（未命名）')}</text>`,
+    );
+    // 序号
+    parts.push(`<text x="${PAD + 10}" y="${y + 15}" font-size="11" fill="#86909c">${i + 1}</text>`);
+    // 进度条（底槽 + 填充；0 不填充，100 绿、其余蓝）+ 百分比小字
+    parts.push(`<rect x="${COL_PROG}" y="${y + 7}" width="44" height="8" rx="4" fill="#f2f3f5"/>`);
+    if (r.progress > 0) {
+      const fillW = Math.max(4, Math.round((44 * Math.min(100, r.progress)) / 100));
+      parts.push(
+        `<rect x="${COL_PROG}" y="${y + 7}" width="${fillW}" height="8" rx="4" fill="${r.progress >= 100 ? '#00b42a' : '#3370ff'}"/>`,
+      );
+    }
+    parts.push(
+      `<text x="${COL_PROG + 50}" y="${y + 15}" font-size="10" fill="#86909c">${Math.min(100, Math.round(r.progress))}%</text>`,
+    );
+    // 状态胶囊（色底 + 白字 9px：已完成/进行中/待开始）
+    const [label, color] =
+      r.progress >= 100 ? ['已完成', '#00b42a'] : r.progress > 0 ? ['进行中', '#3370ff'] : ['待开始', '#86909c'];
+    parts.push(`<rect x="${COL_STATUS}" y="${y + 5}" width="46" height="14" rx="7" fill="${color}"/>`);
+    parts.push(
+      `<text x="${COL_STATUS + 23}" y="${y + 15.5}" font-size="9" fill="#ffffff" text-anchor="middle">${label}</text>`,
+    );
+  });
   parts.push('</svg>');
   const svg = parts.join('');
   return svg.length > MAX_SVG_BYTES ? null : svg;

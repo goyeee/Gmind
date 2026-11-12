@@ -319,7 +319,13 @@ describe('评论域（FR-CMT-001/003）', () => {
     const provider = new HocuspocusProvider({
       url: `ws://127.0.0.1:${port}/collab`,
       name: created.id,
-      token: ownerToken,
+      // 2026-10-28 P0：token=一次性 ticket——连接先 POST /auth/ws-ticket 换票
+      token: async () => {
+        const res = await request(`http://127.0.0.1:${port}`)
+          .post('/api/auth/ws-ticket')
+          .set('Authorization', `Bearer ${ownerToken}`);
+        return (res.body as { ticket: string }).ticket;
+      },
       WebSocketPolyfill: WsImpl,
     } as HocuspocusProviderConfiguration);
     const payloads: string[] = [];

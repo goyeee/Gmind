@@ -27,6 +27,8 @@ const makeService = (
     files as Repository<FileEntity>,
     {} as Repository<FileCollaboratorEntity>,
     versions as Repository<VersionEntity>,
+    // 任务索引桩（批次 B）：storeDocument 尾部的 fire-and-forget 重建在单测不触达
+    { rebuildInBackground: () => undefined } as never,
   );
 
 const makePayload = () => {

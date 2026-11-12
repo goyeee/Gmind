@@ -102,7 +102,10 @@ input:focus-visible, select:focus-visible, textarea:focus-visible { outline-offs
 .notify-bell:hover { background: #f2f3f5; color: #1f2329; }
 .notify-badge { position: absolute; top: -6px; right: -6px; min-width: 18px; height: 18px; padding: 0 4px; border-radius: 9px; background: #f53f3f; color: #fff; font-size: 11px; line-height: 18px; text-align: center; font-weight: 600; }
 .notify-dropdown { position: absolute; right: 0; top: 44px; z-index: 1200; width: 340px; max-height: 420px; overflow-y: auto; background: #fff; border: 1px solid #e5e6eb; border-radius: 10px; box-shadow: 0 8px 24px rgba(31,35,41,.16); padding: 4px; }
-.notify-head { padding: 10px 12px 6px; font-size: 13px; font-weight: 600; color: #1f2329; }
+.notify-head { padding: 10px 12px 6px; font-size: 13px; font-weight: 600; color: #1f2329; display: flex; align-items: center; justify-content: space-between; }
+/* 全部已读（2026-10-25 原型通知面板）：头行右侧文字钮 */
+.notify-read-all { border: none; background: none; color: #3370ff; font-size: 12px; font-weight: 400; cursor: pointer; padding: 2px 4px; border-radius: 4px; }
+.notify-read-all:hover { background: #e8f0ff; }
 .notify-empty { padding: 16px 12px; color: #86909c; font-size: 13px; text-align: center; }
 .notify-item { display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border-radius: 8px; cursor: pointer; font-size: 13px; }
 .notify-item:hover { background: #f2f3f5; }
@@ -221,7 +224,7 @@ img.tt-avatar-img { border-radius: 50%; object-fit: cover; display: inline-block
 .admin-users-hint { color: #86909c; font-size: 13px; }
 .admin-user-table { background: #fff; border: 1px solid var(--gm-line); border-radius: var(--gm-radius-card); overflow: hidden; box-shadow: var(--gm-shadow-card); }
 .admin-table-head { background: #fafbfc; }
-.admin-table-head, .admin-table-row { display: grid; grid-template-columns: 1.3fr 1.1fr 0.95fr 0.75fr 1.5fr 0.55fr 1.9fr; gap: 8px; align-items: center; padding: 12px 16px; }
+.admin-table-head, .admin-table-row { display: grid; grid-template-columns: 1fr 1.05fr 0.9fr 1.25fr 0.8fr 0.6fr 0.5fr 1.5fr; gap: 8px; align-items: center; padding: 12px 16px; }
 .admin-table-head { color: #86909c; font-size: 12px; border-bottom: 1px solid #e5e6eb; }
 .admin-table-row { border-bottom: 1px solid #f2f3f5; }
 .admin-table-row:last-child { border-bottom: none; }
@@ -244,3 +247,50 @@ img.tt-avatar-img { border-radius: 50%; object-fit: cover; display: inline-block
 .status-cell.on .status-dot { background: #00b42a; }
 .status-cell.off { color: #86909c; }
 .status-cell.off .status-dot { background: #c9cdd4; }
+
+/* —— 组织管理（第二期批次 A）：三页签 + 部门/分组管理 + 账号行挂靠 —— */
+.org-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--gm-line); }
+.org-tabs button {
+  padding: 9px 18px; border: none; background: none; font-size: 14px; color: var(--gm-ink-2);
+  border-bottom: 2px solid transparent; margin-bottom: -1px; cursor: pointer;
+}
+.org-tabs button:hover { color: var(--gm-ink); }
+.org-tabs button.active { color: var(--gm-brand); font-weight: 600; border-bottom-color: var(--gm-brand); }
+.org-manage { display: flex; flex-direction: column; gap: 12px; max-width: 640px; }
+.org-manage-add { display: flex; gap: 8px; }
+.org-manage-add input { flex: 1; max-width: 320px; padding: 9px 12px; border: 1px solid var(--gm-line); border-radius: var(--gm-radius-ctl); font-size: 14px; }
+.org-manage-add input:focus { border-color: var(--gm-brand); outline: none; box-shadow: 0 0 0 3px rgb(51 112 255 / 0.12); }
+.org-manage-list { display: flex; flex-direction: column; background: #fff; border: 1px solid var(--gm-line); border-radius: var(--gm-radius-card); box-shadow: var(--gm-shadow-card); overflow: hidden; }
+.org-manage-row { display: flex; align-items: center; justify-content: space-between; padding: 11px 16px; border-bottom: 1px solid #f2f3f5; font-size: 14px; }
+.org-manage-row:last-child { border-bottom: none; }
+/* 未分配部门汇总行（2026-10-25 原型）：灰底置底，成员名内联列出 */
+.org-manage-unassigned { background: #f7f8fa; border-radius: 8px; border-bottom: none; margin-top: 4px; }
+.org-manage-unassigned .org-manage-name { color: #86909c; }
+.org-manage-members { flex: 1; margin: 0 16px; color: #4e5969; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.org-manage-count { flex: none; color: #86909c; font-size: 12px; }
+/* 回收站剩余天数胶囊（2026-10-25 原型）：≤3 天红 */
+.trash-days-left { flex: none; padding: 2px 10px; border-radius: 999px; background: #f2f3f5; color: #4e5969; font-size: 12px; }
+.trash-days-left.danger { background: #feeceb; color: #f53f3f; font-weight: 600; }
+.org-manage-row:hover { background: #fafbfc; }
+.org-manage-row .danger { border: 1px solid var(--gm-line); background: #fff; border-radius: var(--gm-radius-sm); padding: 4px 12px; font-size: 12px; color: var(--gm-bad); }
+.org-manage-row .danger:hover { border-color: var(--gm-bad); }
+.dept-select { padding: 4px 6px; border: 1px solid var(--gm-line); border-radius: 4px; font-size: 12px; background: #fff; max-width: 110px; }
+.groups-cell { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; position: relative; overflow: visible; }
+.group-tag { display: inline-block; padding: 2px 8px; border-radius: 999px; color: #fff; font-size: 11px; line-height: 1.5; }
+.groups-edit-btn { border: 1px dashed var(--gm-line); background: none; border-radius: 999px; padding: 2px 10px; font-size: 11px; color: var(--gm-ink-3); cursor: pointer; }
+.groups-edit-btn:hover { color: var(--gm-brand); border-color: var(--gm-brand); }
+.popover-mask { position: fixed; inset: 0; z-index: 90; }
+.groups-popover {
+  position: absolute; left: 0; top: 26px; z-index: 95; min-width: 180px; padding: 8px;
+  background: #fff; border: 1px solid var(--gm-line); border-radius: var(--gm-radius-card);
+  box-shadow: var(--gm-shadow-pop); display: flex; flex-direction: column; gap: 6px;
+}
+.groups-popover-item { display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; }
+.groups-empty { margin: 0; color: var(--gm-ink-3); font-size: 12px; padding: 4px; }
+
+/* 通知类型筛选 chips（2026-10-28 P1） */
+.notify-filter { display: flex; gap: 4px; padding: 4px 12px 6px; }
+.notify-filter .chip { padding: 3px 10px; border: 1px solid #e5e6eb; border-radius: 999px; background: #fff; color: #4e5969; font-size: 12px; cursor: pointer; }
+.notify-filter .chip.active { background: #e8f0ff; border-color: #3370ff; color: #3370ff; }
+/* 统计面板可见范围注记（2026-10-28 P2） */
+.space-visibility-note { margin-left: 8px; color: #86909c; font-style: normal; font-size: 12px; }

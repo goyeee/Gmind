@@ -54,4 +54,26 @@ export class SessionService {
     await this.redis.del(this.sessKey(token));
     await this.redis.zrem(this.userKey(data.userId), token);
   }
+
+  private ticketKey(ticket: string): string {
+    return `ws_ticket:${ticket}`;
+  }
+
+  /** 一次性 WS/SSE 票据（2026-10-28 P0）：浏览器 WebSocket/EventSource 不允许自定义
+   *  Authorization 头，原先 URL query 直接带长效 session token——代理/访问日志即泄露。
+   *  改为 POST /auth/ws-ticket 换 60s 一次性 ticket（GETDEL 单次消费），URL 只带
+   *  ticket：泄露窗口分钟级且用后即焚。Hocuspocus token 支持 ()=>Promise<string>，
+   *  每次连接/重连换一张新票。 */
+  async issueWsTicket(userId: string): Promise<{ ticket: string }> {
+    const ticket = randomBytes(24).toString('hex');
+    await this.redis.set(this.ticketKey(ticket), userId, 'EX', 60);
+    return { ticket };
+  }
+
+  /** 消费一次性票据：GETDEL 原子取删（不存在/已用过/过期一律 null，fail-closed）。 */
+  async consumeWsTicket(ticket: string): Promise<{ userId: string } | null> {
+    if (!ticket) return null;
+    const userId = await this.redis.getdel(this.ticketKey(ticket));
+    return userId ? { userId } : null;
+  }
 }

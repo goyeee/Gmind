@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { FileCollaboratorEntity } from '../files/file-collaborator.entity';
 import { FileEntity } from '../files/file.entity';
+import { TaskIndexModule } from '../todos/task-index.module';
 import { VersionEntity } from '../versions/version.entity';
 import { CollabService } from './collab.service';
 
@@ -11,7 +12,7 @@ import { CollabService } from './collab.service';
  * SessionModule 为 @Global，SessionService 可直接注入。
  */
 @Module({
-  imports: [TypeOrmModule.forFeature([FileEntity, FileCollaboratorEntity, VersionEntity])],
+  imports: [TypeOrmModule.forFeature([FileEntity, FileCollaboratorEntity, VersionEntity]), TaskIndexModule],
   providers: [CollabService],
   exports: [CollabService],
 })

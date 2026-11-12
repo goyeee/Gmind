@@ -82,21 +82,22 @@ describe('账号设置端点（FR-ACC-002 收口）：改密 / 换绑 / 通知�
   it('通知偏好：GET 缺省 {emailOptOut: []}；PATCH 全量替换 → GET round-trip', async () => {
     const first = await authed(app, phoneToken, 'get', '/api/users/me/notify-prefs');
     expect(first.status).toBe(200);
-    expect(first.body).toEqual({ emailOptOut: [] });
+    // 2026-10-28 P1：返回扩 notifyEnabled/digestEnabled 两开关（缺省 true）——objectContaining 容忍键集演进
+    expect(first.body).toEqual(expect.objectContaining({ emailOptOut: [], notifyEnabled: true, digestEnabled: true }));
 
     const patch = await authed(app, phoneToken, 'patch', '/api/users/me/notify-prefs').send({
       emailOptOut: ['mention', 'permission'],
     });
     expect(patch.status).toBe(200);
-    expect(patch.body).toEqual({ emailOptOut: ['mention', 'permission'] });
+    expect(patch.body).toEqual(expect.objectContaining({ emailOptOut: ['mention', 'permission'] }));
 
     const again = await authed(app, phoneToken, 'get', '/api/users/me/notify-prefs');
-    expect(again.body).toEqual({ emailOptOut: ['mention', 'permission'] });
+    expect(again.body).toEqual(expect.objectContaining({ emailOptOut: ['mention', 'permission'] }));
 
     // 全量替换：再次 PATCH 可清空
     const clear = await authed(app, phoneToken, 'patch', '/api/users/me/notify-prefs').send({ emailOptOut: [] });
     expect(clear.status).toBe(200);
-    expect(clear.body).toEqual({ emailOptOut: [] });
+    expect(clear.body).toEqual(expect.objectContaining({ emailOptOut: [] }));
   });
 
   it('通知偏好：非法成员（system 等）/ 非数组 / 缺字段 → 400', async () => {

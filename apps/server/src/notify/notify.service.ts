@@ -3,6 +3,8 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { IsNull, Repository } from 'typeorm';
 import type { Response } from 'express';
 import { NotificationEntity, type NotificationType } from '../notifications/notification.entity';
+import { UserEntity } from '../users/user.entity';
+import { notifyEnabledOf } from '../users/users.service';
 
 /** SSE 推送事件（binding 形状）：payload 为已解析对象（与 GET /api/notifications 条目同形）。 */
 export interface NotifySseEvent {
@@ -40,10 +42,17 @@ export class NotifyService implements OnApplicationShutdown {
   private readonly connections = new Map<string, Set<Response>>();
   private readonly heartbeats = new WeakMap<Response, ReturnType<typeof setInterval>>();
 
-  constructor(@InjectRepository(NotificationEntity) private readonly repo: Repository<NotificationEntity>) {}
+  constructor(
+    @InjectRepository(NotificationEntity) private readonly repo: Repository<NotificationEntity>,
+    @InjectRepository(UserEntity) private readonly userRepo: Repository<UserEntity>,
+  ) {}
 
-  /** 通知写入 + 推送：INSERT notifications 行（payload 存 JSON 文本）→ SSE 推全部连接。 */
+  /** 通知写入 + 推送：INSERT notifications 行（payload 存 JSON 文本）→ SSE 推全部连接。
+   *  通知总开关（2026-10-28 P1）：notify_prefs.notifyEnabled=false 的用户不生成通知
+   *  （不插行不推——关闭=不接收，而非仅不实时推）。 */
   async notify(userId: string, type: NotificationType, payload: Record<string, unknown>): Promise<void> {
+    const user = await this.userRepo.findOneBy({ id: userId });
+    if (user && !notifyEnabledOf(user.notifyPrefs)) return;
     const row = this.repo.create();
     row.userId = userId;
     row.type = type;
@@ -92,6 +101,13 @@ export class NotifyService implements OnApplicationShutdown {
   /** POST /api/notifications/:id/read：read_at=now（仅本人行；重复已读幂等）。 */
   async markRead(userId: string, id: string): Promise<{ ok: true }> {
     await this.repo.update({ id, userId }, { readAt: new Date() });
+    return { ok: true };
+  }
+
+  /** POST /api/notifications/read-all（2026-10-25 原型通知面板「全部已读」）：
+   *  本人全部未读行 read_at=now；无未读幂等零行更新。 */
+  async markAllRead(userId: string): Promise<{ ok: true }> {
+    await this.repo.update({ userId, readAt: IsNull() }, { readAt: new Date() });
     return { ok: true };
   }
 

@@ -25,6 +25,8 @@ async function registerAndLogin(page: Page, phone?: string): Promise<string> {
   await page.getByPlaceholder('验证码（开发环境固定 123456）').fill('123456');
   await page.getByRole('button', { name: '登录', exact: true }).click();
   await expect(page).toHaveURL(/\/workspace/);
+  await expect(page.getByTestId('quick-create-blank')).toBeVisible(); // 首页落点（换装后种子文件在「我的文件」视图）
+  await page.goto('/workspace?view=files');
   await expect(page.getByTestId('mine-grid').getByTestId('file-card')).toHaveCount(3);
   return target;
 }
@@ -64,9 +66,10 @@ async function grantCollaborator(
   if (!res.ok()) throw new Error(`授予协作者失败：${res.status()}`);
 }
 
-/** 打开评论右列（M7b-R6：右列默认不渲染；2026-10-10 插入菜单删除后走工具栏
- *  comment-toggle 按钮——插入菜单「评论」项本就是冗余入口）。 */
+/** 打开评论右列（M7b-R6：右列默认不渲染；2026-10-25 原型顶栏重组后评论入口收进
+ *  「更多」下拉——先开 more-menu 再点菜单项；移动端只读分支仍为常驻钮）。 */
 async function openComments(page: Page): Promise<void> {
+  await page.getByTestId('more-toggle').click();
   await page.getByTestId('comment-toggle').click();
   await expect(page.getByTestId('comment-pane')).toBeVisible();
 }

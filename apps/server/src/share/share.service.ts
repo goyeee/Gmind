@@ -40,9 +40,10 @@ export class ShareService {
   ) {}
 
   /** owner 创建分享链接：文件须存活且归本人（404 同口径）；已有 active 链接直接返回
-   *  （每文件至多一条，binding 裁定），否则以 crypto.randomBytes(16) 生成 128bit token
-   *  （hex 32 字符，uk_share_token 兜底；随机空间下碰撞可忽略，不做重试循环）。 */
-  async createForOwner(userId: string, fileId: string): Promise<{ shareToken: string }> {
+   *  （每文件至多一条，binding 裁定；**幂等复创建不改档**——档位修改走 PATCH setRole），
+   *  否则以 crypto.randomBytes(16) 生成 128bit token（hex 32 字符，uk_share_token 兜底；
+   *  随机空间下碰撞可忽略，不做重试循环）。role（2026-10-28 P0）：editor|viewer。 */
+  async createForOwner(userId: string, fileId: string, role: 'editor' | 'viewer' = 'editor'): Promise<{ shareToken: string }> {
     const file = await this.fileRepo.findOne({ where: { id: fileId, deletedAt: IsNull() } });
     if (!file || file.ownerUserId !== userId) throw new NotFoundException('文件不存在');
     const existing = await this.shareRepo.findOneBy({ fileId: file.id, status: 'active' });
@@ -51,6 +52,7 @@ export class ShareService {
     row.fileId = file.id;
     row.token = randomBytes(16).toString('hex');
     row.createdBy = userId;
+    row.role = role;
     const saved = await this.shareRepo.save(row);
     // invite_send 埋点（M5 Task 4，PRD 6.4 邀请类型=链接）：仅真实生成新链接时落行
     // ——幂等复创建（上方 short-circuit）不重复计；尽力而为旁路，失败静默。
@@ -75,9 +77,34 @@ export class ShareService {
     return { ok: true as const };
   }
 
+  /** owner 查询分享状态（2026-10-25 原型链接分享页签）：active → {status:'active',
+   *  shareToken, role}（复用既有 token，不新建）；无 active（从未创建/已关闭）→
+   *  {status:'closed'}——与 closeForOwner 的 404 不同：这是状态查询，无行是合法态
+   *  而非错误。文件非本人/不存在 → 404（不泄露存在性）。 */
+  async describeForOwner(userId: string, fileId: string): Promise<{ status: 'active'; shareToken: string; role: 'editor' | 'viewer' } | { status: 'closed' }> {
+    const file = await this.fileRepo.findOne({ where: { id: fileId, deletedAt: IsNull() } });
+    if (!file || file.ownerUserId !== userId) throw new NotFoundException('文件不存在');
+    const active = await this.shareRepo.findOneBy({ fileId: file.id, status: 'active' });
+    if (!active) return { status: 'closed' };
+    return { status: 'active', shareToken: active.token, role: active.role };
+  }
+
+  /** owner 修改链接权限档位（2026-10-28 P0）：active 行 role=editor|viewer（token
+   *  不变——已发出的链接立即按新档位生效，不必重发）；无 active 行 → 404（同 close
+   *  口径）。 */
+  async setRoleForOwner(userId: string, fileId: string, role: 'editor' | 'viewer'): Promise<{ ok: true }> {
+    const file = await this.fileRepo.findOne({ where: { id: fileId, deletedAt: IsNull() } });
+    if (!file || file.ownerUserId !== userId) throw new NotFoundException('文件不存在');
+    const active = await this.shareRepo.findOneBy({ fileId: file.id, status: 'active' });
+    if (!active) throw new NotFoundException('分享链接不存在');
+    active.role = role;
+    await this.shareRepo.save(active);
+    return { ok: true as const };
+  }
+
   /** 落地页探测（公开，无鉴权）：active 且源文件存活 → 展示投影；
    *  其余（missing/closed/文件已删）统一 {status:'closed'}。 */
-  async describeByToken(token: string): Promise<{ fileId: string; title: string; ownerName: string; status: 'active' } | { status: 'closed' }> {
+  async describeByToken(token: string): Promise<{ fileId: string; title: string; ownerName: string; status: 'active'; role: 'editor' | 'viewer' } | { status: 'closed' }> {
     const link = await this.shareRepo.findOneBy({ token });
     if (!link || link.status !== 'active') return { status: 'closed' };
     const file = await this.fileRepo.findOne({ where: { id: link.fileId, deletedAt: IsNull() } });
@@ -88,6 +115,7 @@ export class ShareService {
       title: file.title,
       ownerName: owner?.nickname ?? '',
       status: 'active' as const,
+      role: link.role,
     };
   }
 
@@ -108,7 +136,7 @@ export class ShareService {
       const row = this.collabRepo.create();
       row.fileId = file.id;
       row.userId = userId;
-      row.role = 'editor';
+      row.role = link.role; // 2026-10-28 P0：档位随链接（viewer=只读协作者）
       let joined = false;
       try {
         await this.collabRepo.save(row);

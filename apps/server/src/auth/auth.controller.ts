@@ -1,6 +1,7 @@
 import { Body, Controller, HttpCode, Inject, Post, Req, UseGuards } from '@nestjs/common';
 import { authRequestSchema } from './auth-request.schema';
 import { AuthService } from './auth.service';
+import { SessionService } from '../session/session.service';
 import { UserGuard } from './user.guard';
 import { DevEmailProvider } from './providers/dev-email.provider';
 import { DevPhoneProvider } from './providers/dev-phone.provider';
@@ -15,6 +16,7 @@ export class AuthController {
     @Inject(DevPhoneProvider) private readonly phoneProvider: DevPhoneProvider,
     @Inject(DevEmailProvider) private readonly emailProvider: DevEmailProvider,
     @Inject(DevWechatProvider) private readonly wechatProvider: DevWechatProvider,
+    @Inject(SessionService) private readonly sessions: SessionService,
   ) {}
 
   @Post('login')
@@ -36,5 +38,14 @@ export class AuthController {
   async logout(@Req() req: { sessionToken: string }): Promise<{ ok: true }> {
     await this.authService.logout(req.sessionToken);
     return { ok: true };
+  }
+
+  /** 一次性 WS/SSE 票据（2026-10-28 P0）：浏览器 WebSocket/EventSource 不能自定义
+   *  Authorization 头，URL query 不再带长效 session token——换 60s 单次 ticket。 */
+  @Post('ws-ticket')
+  @UseGuards(UserGuard)
+  @HttpCode(200)
+  async wsTicket(@Req() req: { user: { id: string } }): Promise<{ ticket: string }> {
+    return this.sessions.issueWsTicket(req.user.id);
   }
 }

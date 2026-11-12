@@ -33,6 +33,8 @@ async function registerAndLogin(page: Page): Promise<void> {
   await page.getByPlaceholder('验证码（开发环境固定 123456）').fill('123456');
   await page.getByRole('button', { name: '登录', exact: true }).click();
   await expect(page).toHaveURL(/\/workspace/);
+  await expect(page.getByTestId('quick-create-blank')).toBeVisible(); // 首页落点（换装后种子文件在「我的文件」视图）
+  await page.goto('/workspace?view=files');
   await expect(page.getByTestId('mine-grid').getByTestId('file-card')).toHaveCount(3);
 }
 
@@ -63,7 +65,8 @@ const EDITING_TESTIDS = [
   'title-input',
   'star-toggle',
   'versions-toggle',
-  'help-toggle',
+  // 2026-10-25 原型顶栏重组：快捷键/评论收进「更多」下拉（help-toggle 移出清单）
+  'more-toggle',
   'members-btn',
   'avatar-me',
 ] as const;
@@ -206,9 +209,9 @@ test('桌面回归：默认视口编辑控件齐全，右列默认不渲染，�
     await expect(page.getByTestId(tid)).toBeVisible();
   }
   await expect(page.getByTestId('title-display')).toHaveCount(0); // 移动端标题展示不装配
-  // 评论开关桌面已装配（2026-10-10 需求方裁定：插入「评论」项随菜单删除后桌面补装，
-  // 与移动端同 testid——移动端只读本就保留评论入口，桌面对齐）
-  await expect(page.getByTestId('comment-toggle')).toBeVisible();
+  // 评论入口桌面已装配（2026-10-25 原型顶栏重组：收进「更多」下拉——移动端只读
+  // 仍保留常驻评论钮，桌面对齐为 more-toggle 菜单入口）
+  await expect(page.getByTestId('more-toggle')).toBeVisible();
   // 右列默认不渲染（M7b-R6 需求方裁定：格式按钮/评论开关开右列）
   await expect(page.getByTestId('rich-panel')).toHaveCount(0);
   await expect(page.getByTestId('comment-pane')).toHaveCount(0);

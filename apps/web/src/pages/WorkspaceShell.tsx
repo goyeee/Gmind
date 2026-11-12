@@ -1,30 +1,43 @@
-import { useCallback, useEffect, useState, type ReactElement, type ReactNode } from 'react';
+import { useCallback, useEffect, useState, type MutableRefObject, type ReactElement, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api, apiPost, clearToken } from '../api/client';
 import { onNotifyEvent, type NotifyItem } from '../notify';
+import { Lucide } from '../components/lucide-data';
 
 /**
- * 工作台外壳（2026-10-21 抽取自 WorkspacePage）：左侧栏导航 + 左下用户卡菜单 +
- * 顶栏（左扩展槽 + 通知铃 + 头像）三段式骨架，工作台首页/回收站/账号设置/账号管理
- * 共用同一外壳，保证布局与视觉语言一致（spec 2026-10-20-workspace-redesign-design
- * 延伸：子页面全部收进外壳）。
- *
- * - 侧栏导航跨页路由：文件类视图 → /workspace?view=xxx（WorkspacePage 以 URL
- *   search param 为视图唯一事实源），回收站 → /trash；
- * - 账号设置/账号管理从用户卡菜单进入（账号管理仅超管可见），不是侧栏一级项；
- * - 通知铃/用户菜单状态自包含，宿主页零接线。
+ * 工作台外壳（2026-10-21 抽取；2026-10-24 按 Figma 原型重构——spec
+ * 2026-10-24-phase2-features-design + 原型 UI 口径）：
+ * - 顶栏：logo（回首页）+ 居中大搜索槽 + 右侧（新建下拉/通知铃/头像）；
+ * - 侧栏导航按 2026-10-27 原型顺序：首页/我的文件/我的待办/统计面板/协作空间/
+ *   模板中心/组织管理（仅超管渲染），回收站沉底 + 用户卡菜单（收藏退出侧栏，
+ *   并入「我的文件」收藏页签）；
+ * - 「新建」为下拉：新建脑图/新建表格/从模板创建（原型同款）。
  */
 
-export type ShellNav = 'mine' | 'recent' | 'starred' | 'collab' | 'templates' | 'trash';
+export type ShellNav =
+  | 'home'
+  | 'todo'
+  | 'space'
+  | 'files'
+  | 'starred'
+  | 'collab'
+  | 'templates'
+  | 'org'
+  | 'trash';
 
+/** 主导航（2026-10-27 原型重排）：首页 → 我的文件 → 我的待办 → 统计面板 →
+ *  协作空间 → 模板中心；「收藏」退出侧栏（并入「我的文件」页签，?view=starred
+ *  直达路由保留）；「待办空间」更名「统计面板」。 */
 const SHELL_NAV: Array<{ key: ShellNav; label: string; icon: string; testid: string }> = [
-  { key: 'mine', label: '我的文件', icon: '📁', testid: 'nav-mine' },
-  { key: 'recent', label: '最近使用', icon: '🕘', testid: 'nav-recent' },
-  { key: 'starred', label: '星标收藏', icon: '⭐', testid: 'nav-starred' },
-  { key: 'collab', label: '协作空间', icon: '🤝', testid: 'nav-collab' },
-  { key: 'templates', label: '模板库', icon: '📚', testid: 'nav-templates' },
-  { key: 'trash', label: '回收站', icon: '🗑', testid: 'nav-trash' },
+  { key: 'home', label: '首页', icon: 'House', testid: 'nav-home' },
+  { key: 'files', label: '我的文件', icon: 'FolderOpen', testid: 'nav-files' },
+  { key: 'todo', label: '我的待办', icon: 'ListTodo', testid: 'nav-todo' },
+  { key: 'space', label: '统计面板', icon: 'ChartColumn', testid: 'nav-space' },
+  { key: 'collab', label: '协作空间', icon: 'Users', testid: 'nav-collab' },
+  { key: 'templates', label: '模板中心', icon: 'LayoutTemplate', testid: 'nav-templates' },
 ];
+const TRASH_NAV = { key: 'trash' as ShellNav, label: '回收站', icon: 'Trash2', testid: 'nav-trash' };
+const ORG_NAV = { key: 'org' as ShellNav, label: '组织管理', icon: 'Building2', testid: 'nav-org' };
 
 export interface ShellMe {
   id: string;
@@ -37,12 +50,15 @@ function fmtTime(iso: string): string {
   return new Date(iso).toLocaleString();
 }
 
-/** 通知铃 + 下拉（自包含：未读角标轮询装载 + onNotifyEvent 实时刷新 + 点开已读跳转）。 */
+/** 通知铃 + 下拉（自包含：未读角标轮询装载 + onNotifyEvent 实时刷新 + 点开已读跳转）。
+ *  类型筛选（2026-10-28 P1）：全部/提及/回复/提醒——「提醒」=催办（payload.kind=
+ *  'remind'），解决「被催的人没有查看入口」：催办提醒在通知面板可单独筛出。 */
 function NotifyBell(): ReactElement {
   const navigate = useNavigate();
   const [unread, setUnread] = useState(0);
   const [notifs, setNotifs] = useState<NotifyItem[]>([]);
   const [bellOpen, setBellOpen] = useState(false);
+  const [filter, setFilter] = useState<'all' | 'mention' | 'reply' | 'remind'>('all');
 
   const loadUnread = useCallback(async () => {
     try {
@@ -94,15 +110,19 @@ function NotifyBell(): ReactElement {
     }
   }
 
+  async function markAllRead(): Promise<void> {
+    try {
+      await apiPost('/notifications/read-all');
+    } catch {
+      /* 非关键路径：失败保持未读态，下次打开重试 */
+    }
+    await Promise.all([loadUnread(), loadNotifs()]);
+  }
+
   return (
     <div className="notify-wrap">
       <button className="notify-bell" data-testid="notify-bell" title="通知" onClick={toggleBell}>
-        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
-          <path
-            d="M12 22a2.2 2.2 0 0 0 2.2-2.2H9.8A2.2 2.2 0 0 0 12 22Zm7-5.6v-1.1l-1.8-1.8V9.8A5.2 5.2 0 0 0 13.3 4.7V4a1.3 1.3 0 1 0-2.6 0v.7A5.2 5.2 0 0 0 6.8 9.8v3.7L5 15.3v1.1Z"
-            fill="currentColor"
-          />
-        </svg>
+        <Lucide name="Bell" size={22} />
         {unread > 0 && (
           <span className="notify-badge" data-testid="notify-badge">
             {unread > 99 ? '99+' : unread}
@@ -111,9 +131,56 @@ function NotifyBell(): ReactElement {
       </button>
       {bellOpen && (
         <div className="notify-dropdown" data-testid="notify-list">
-          <div className="notify-head">通知</div>
+          <div className="notify-head">
+            通知
+            {unread > 0 && (
+              <button
+                type="button"
+                className="notify-read-all"
+                data-testid="notify-read-all"
+                onClick={() => void markAllRead()}
+              >
+                全部已读
+              </button>
+            )}
+          </div>
+          {/* 类型筛选 chips（2026-10-28 P1）：催办提醒可单独筛出 */}
+          <div className="notify-filter" data-testid="notify-filter">
+            {(
+              [
+                ['all', '全部'],
+                ['mention', '提及'],
+                ['reply', '回复'],
+                ['remind', '提醒'],
+              ] as const
+            ).map(([k, label]) => (
+              <button
+                key={k}
+                type="button"
+                className={filter === k ? 'chip active' : 'chip'}
+                data-testid={`notify-filter-${k}`}
+                onClick={() => setFilter(k)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
           {notifs.length === 0 && <div className="notify-empty">暂无通知</div>}
-          {notifs.map((n) => (
+          {notifs.length > 0 &&
+            notifs.filter((n) => {
+              if (filter === 'all') return true;
+              if (filter === 'remind') return n.payload?.kind === 'remind';
+              if (filter === 'mention') return n.type === 'mention' && n.payload?.kind !== 'remind';
+              return n.type === filter;
+            }).length === 0 && <div className="notify-empty">该类型下暂无通知</div>}
+          {notifs
+            .filter((n) => {
+              if (filter === 'all') return true;
+              if (filter === 'remind') return n.payload?.kind === 'remind';
+              if (filter === 'mention') return n.type === 'mention' && n.payload?.kind !== 'remind';
+              return n.type === filter;
+            })
+            .map((n) => (
             <div
               key={n.id}
               className={'notify-item' + (n.readAt === null ? ' unread' : '')}
@@ -122,7 +189,7 @@ function NotifyBell(): ReactElement {
             >
               <span className="notify-item-head">
                 <span className="notify-type">
-                  {n.type === 'mention' ? '提及' : n.type === 'reply' ? '回复' : '通知'}
+                  {n.payload?.kind === 'remind' ? '提醒' : n.type === 'mention' ? '提及' : n.type === 'reply' ? '回复' : '通知'}
                 </span>
                 <span className="notify-text">
                   {n.type === 'mention'
@@ -144,99 +211,200 @@ function NotifyBell(): ReactElement {
 
 export function WorkspaceShell({
   activeNav,
-  topbar,
+  search,
+  onCreate,
   children,
 }: {
-  /** 当前页对应的侧栏导航项（账号设置/账号管理等用户菜单页传 null）。 */
+  /** 当前页对应的侧栏导航项（无对应项传 null）。 */
   activeNav: ShellNav | null;
-  /** 顶栏左扩展槽（工作台首页放搜索/导入/新建；子页可空）。 */
-  topbar?: ReactNode;
+  /** 顶栏居中搜索（可选；子页可不带）。 */
+  search?: {
+    value: string;
+    onChange: (v: string) => void;
+    onSubmit: () => void;
+    placeholder?: string;
+    inputRef?: MutableRefObject<HTMLInputElement | null>;
+  };
+  /** 「新建」下拉回调（原型：新建脑图/新建表格/从模板创建）。 */
+  onCreate?: (k: 'map' | 'table' | 'template') => void;
   children: ReactNode;
 }): ReactElement {
   const navigate = useNavigate();
   const [me, setMe] = useState<ShellMe | null>(null);
-  const [userMenuOpen, setUserMenuOpen] = useState(false);
+  const [userMenuAt, setUserMenuAt] = useState<'side' | 'top' | null>(null);
+  const [createOpen, setCreateOpen] = useState(false);
 
   useEffect(() => {
-    void api<ShellMe>('/users/me')
-      .then(setMe)
-      .catch(() => undefined);
+    void api<ShellMe>('/users/me').then(setMe).catch(() => undefined);
   }, []);
+
+  function navTarget(key: ShellNav): string {
+    if (key === 'trash') return '/trash';
+    if (key === 'home') return '/workspace';
+    if (key === 'todo') return '/todos';
+    if (key === 'space') return '/todo-space';
+    if (key === 'org') return '/admin/users';
+    return `/workspace?view=${key}`;
+  }
+
+  const userMenu = userMenuAt === null ? null : (
+    <div className={'ws-user-menu' + (userMenuAt === 'top' ? ' ws-user-menu-top' : '')} data-testid="user-menu">
+      <button data-testid="settings-entry" onClick={() => navigate('/settings')}>
+        设置
+      </button>
+      <button
+        data-testid="logout-button"
+        onClick={() => {
+          void api('/auth/logout', { method: 'POST' }).catch(() => undefined);
+          clearToken();
+          navigate('/login');
+        }}
+      >
+        退出登录
+      </button>
+    </div>
+  );
+
+  const navItem = (n: { key: ShellNav; label: string; icon: string; testid: string }) => {
+    const active = activeNav === n.key;
+    return (
+      <button
+        key={n.key}
+        className={'ws-nav-item' + (active ? ' active' : '')}
+        data-testid={n.testid}
+        aria-current={active ? 'page' : undefined}
+        title={n.label}
+        onClick={() => navigate(navTarget(n.key))}
+      >
+        <Lucide name={n.icon} size={20} fill={active ? 'currentColor' : 'none'} fillOpacity={0.25} />
+        {n.label}
+      </button>
+    );
+  };
 
   return (
     <div className="ws">
-      {/* 左侧栏：导航 + 用户卡 */}
-      <aside className="ws-side">
-        <div className="ws-logo" data-testid="ws-logo" onClick={() => navigate('/workspace')} role="link" aria-label="回到工作台">
-          <span className="ws-logo-mark">G</span> Gmind
-        </div>
-        <nav className="ws-nav">
-          {SHELL_NAV.map((n) => (
-            <button
-              key={n.key}
-              className={'ws-nav-item' + (activeNav === n.key ? ' active' : '')}
-              data-testid={n.testid}
-              onClick={() => navigate(n.key === 'trash' ? '/trash' : n.key === 'mine' ? '/workspace' : `/workspace?view=${n.key}`)}
-            >
-              <span className="ws-nav-icon" aria-hidden>
-                {n.icon}
-              </span>
-              {n.label}
-            </button>
-          ))}
-        </nav>
-        <div className="ws-user">
-          <button className="ws-user-card" data-testid="user-card" onClick={() => setUserMenuOpen((v) => !v)}>
-            <span className="ws-avatar" aria-hidden>
-              {(me?.nickname ?? '…').charAt(0)}
-            </span>
-            <span className="ws-user-name" data-testid="user-nickname">
-              {me?.nickname ?? ''}
-            </span>
-          </button>
-          {userMenuOpen && (
-            <div className="ws-user-menu" data-testid="user-menu">
-              <button data-testid="settings-entry" onClick={() => navigate('/settings')}>
-                账号设置
+      {/* 通栏顶栏（原型 Shell）：logo + 分隔线 + 搜索 + 新建主钮/通知；侧栏在其下方 */}
+      <header className="ws-header">
+        <button className="ws-logo" data-testid="ws-logo" aria-label="回到工作台" onClick={() => navigate('/workspace')}>
+          <Lucide name="Share2" size={22} strokeWidth={2.6} />
+          <span className="ws-logo-text">Gmind</span>
+        </button>
+        <i className="ws-header-sep" aria-hidden />
+        {search ? (
+          <label className="ws-search">
+            <Lucide name="Search" size={18} />
+            <input
+              data-testid="search-input"
+              ref={(el) => {
+                if (search.inputRef) search.inputRef.current = el;
+              }}
+              placeholder={search.placeholder ?? '搜索文件、模板...'}
+              value={search.value}
+              onChange={(e) => search.onChange(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') search.onSubmit();
+              }}
+            />
+            {search.value !== '' && (
+              <button type="button" aria-label="清除搜索" onClick={() => search.onChange('')}>
+                <Lucide name="X" size={15} />
               </button>
-              {me?.systemRole === 'super_admin' && (
-                <button data-testid="admin-users-entry" onClick={() => navigate('/admin/users')}>
-                  账号管理
-                </button>
+            )}
+          </label>
+        ) : (
+          <span className="ws-search ws-search-empty" aria-hidden />
+        )}
+        <div className="ws-header-actions">
+          {onCreate && (
+            <div className="ws-create-wrap">
+              <button className="ws-create-primary" data-testid="new-file-btn" onClick={() => setCreateOpen((v) => !v)}>
+                <Lucide name="Plus" size={18} />
+                新建
+              </button>
+              {createOpen && (
+                <>
+                  <div className="popover-mask" onClick={() => setCreateOpen(false)} />
+                  <div className="ws-create-menu" data-testid="create-menu">
+                    <button
+                      data-testid="create-menu-map"
+                      onClick={() => {
+                        setCreateOpen(false);
+                        onCreate('map');
+                      }}
+                    >
+                      <Lucide name="Network" size={16} />
+                      新建脑图
+                    </button>
+                    <button
+                      data-testid="create-menu-table"
+                      onClick={() => {
+                        setCreateOpen(false);
+                        onCreate('table');
+                      }}
+                    >
+                      <Lucide name="Table2" size={16} />
+                      新建表格
+                    </button>
+                    <button
+                      data-testid="create-menu-template"
+                      onClick={() => {
+                        setCreateOpen(false);
+                        onCreate('template');
+                      }}
+                    >
+                      <Lucide name="LayoutTemplate" size={16} />
+                      从模板创建
+                    </button>
+                  </div>
+                </>
               )}
-              <button
-                data-testid="logout-button"
-                onClick={() => {
-                  void api('/auth/logout', { method: 'POST' }).catch(() => undefined);
-                  clearToken();
-                  navigate('/login');
-                }}
-              >
-                退出登录
-              </button>
             </div>
           )}
+          <NotifyBell />
         </div>
-      </aside>
+      </header>
 
-      {/* 顶栏 + 内容区 */}
-      <div className="ws-main">
-        <header className="ws-topbar">
-          {topbar}
-          <div className="ws-top-actions">
-            <NotifyBell />
-            <button
-              className="ws-avatar ws-avatar-top"
-              data-testid="top-avatar"
-              aria-label="用户菜单"
-              onClick={() => setUserMenuOpen((v) => !v)}
-            >
-              {(me?.nickname ?? '…').charAt(0)}
-            </button>
+      <div className="ws-body">
+        {/* 侧栏（原型 Sidebar）：导航 + 超管组织管理 + 回收站沉底 + 用户卡（名+部门+设置） */}
+        <aside className="ws-side">
+          <nav className="ws-nav" aria-label="主导航">
+            {SHELL_NAV.map(navItem)}
+            {me?.systemRole === 'super_admin' && (
+              <>
+                <div className="ws-nav-divider" aria-hidden />
+                {navItem(ORG_NAV)}
+              </>
+            )}
+          </nav>
+          <div className="ws-side-bottom">
+            <div className="ws-nav">{navItem(TRASH_NAV)}</div>
           </div>
-        </header>
-        {children}
+          <div className="ws-user">
+            <button
+              className="ws-user-card"
+              data-testid="user-card"
+              onClick={() => setUserMenuAt((v) => (v === 'side' ? null : 'side'))}
+            >
+              <span className="ws-avatar" aria-hidden>
+                {(me?.nickname ?? '…').charAt(0)}
+              </span>
+              <span className="ws-user-meta">
+                <span className="ws-user-name" data-testid="user-nickname">
+                  {me?.nickname ?? ''}
+                </span>
+                <span className="ws-user-sub">{me?.systemRole === 'super_admin' ? '管理员' : '普通成员'}</span>
+              </span>
+              <Lucide name="Settings" size={17} className="ws-user-gear" />
+            </button>
+            {userMenuAt === 'side' && userMenu}
+          </div>
+        </aside>
+
+        {/* 内容区（原型 main：弹性留白 + 纵向滚动) */}
+        <main className="ws-content">{children}</main>
       </div>
     </div>
   );
 }
+

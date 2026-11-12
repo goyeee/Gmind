@@ -257,3 +257,204 @@
   cursor: not-allowed;
   opacity: 0.6;
 }
+
+/* ── 2026-10-25 原型 ShareModal 重排：页签 / 归属行 / 在线态 / 候选下拉 / 待邀请 ── */
+
+.member-panel-sub {
+  margin-left: auto;
+  margin-right: 4px;
+  color: #8f959e;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.member-tabs {
+  display: flex;
+  gap: 4px;
+  margin: 0 12px 10px;
+  padding: 2px;
+  border-radius: 8px;
+  background: #f2f3f5;
+}
+.member-tab {
+  flex: 1;
+  height: 26px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: #646a73;
+  cursor: pointer;
+  font-size: 12px;
+}
+.member-tab.active {
+  background: #fff;
+  color: #3370ff;
+  font-weight: 600;
+  box-shadow: 0 1px 2px rgb(31 35 41 / 0.08);
+}
+
+/* 名单行改两行布局：主行（昵称+标记）+ 归属副行 */
+.member-row {
+  align-items: center;
+}
+.member-row-main {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 1px;
+}
+.member-row-sub {
+  overflow: hidden;
+  color: #8f959e;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.member-avatar {
+  position: relative;
+}
+.member-online-dot {
+  position: absolute;
+  right: -1px;
+  bottom: -1px;
+  width: 8px;
+  height: 8px;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  background: #00b42a;
+}
+.member-self-mark {
+  margin-left: 2px;
+  color: #8f959e;
+  font-size: 11px;
+  font-style: normal;
+}
+.member-editing-badge {
+  margin-left: 6px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: #e8f0ff;
+  color: #3370ff;
+  font-size: 10px;
+  line-height: 16px;
+}
+.member-remove-btn {
+  padding: 2px 8px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: #8f959e;
+  cursor: pointer;
+  font-size: 11px;
+}
+.member-remove-btn:hover {
+  background: #feeceb;
+  color: #f54a45;
+}
+
+/* 邀请候选下拉（原型 invite tab：搜索 focus 出候选，absolute 挂搜索框下） */
+.member-invite-searchwrap {
+  position: relative;
+}
+.member-invite-drop {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 30;
+  max-height: 220px;
+  margin: 0;
+  padding: 4px;
+  border: 1px solid #e5e6eb;
+  border-radius: 8px;
+  background: #fff;
+  list-style: none;
+  overflow-y: auto;
+  box-shadow: 0 8px 24px rgb(31 35 41 / 0.15);
+}
+.member-invite-drop .member-invite-row {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 6px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 12px;
+  text-align: left;
+}
+.member-invite-drop .member-invite-row:hover {
+  background: #f5f6f7;
+}
+.member-invite-affil {
+  margin-left: auto;
+  overflow: hidden;
+  color: #8f959e;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.member-invite-more {
+  padding: 4px 6px;
+  color: #8f959e;
+  font-size: 11px;
+  text-align: center;
+}
+
+/* 待邀请列表 + 底部动作行 */
+.member-invite-pending-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 12px 0 4px;
+  font-size: 12px;
+  font-weight: 600;
+}
+.member-invite-hint-line {
+  margin: 0 0 8px;
+  padding: 14px 0;
+  border-radius: 8px;
+  background: #f5f6f7;
+  color: #8f959e;
+  font-size: 12px;
+  text-align: center;
+}
+.member-invite-pending {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.member-invite-pending-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 2px;
+  border-bottom: 1px solid #f0f1f2;
+  font-size: 12px;
+}
+.member-invite-remove {
+  padding: 0 4px;
+  border: none;
+  background: transparent;
+  color: #8f959e;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+}
+.member-invite-remove:hover {
+  color: #f54a45;
+}
+.member-invite-clear {
+  padding: 5px 14px;
+  border: 1px solid #e5e6eb;
+  border-radius: 6px;
+  background: #fff;
+  color: #646a73;
+  cursor: pointer;
+  font-size: 12px;
+}
+.member-invite-clear:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}

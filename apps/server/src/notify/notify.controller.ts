@@ -1,4 +1,4 @@
-import { Controller, Get, Inject, Param, Post, Req, Res, UnauthorizedException, UseGuards } from '@nestjs/common';
+import { Controller, Get, HttpCode, Inject, Param, Post, Req, Res, UnauthorizedException, UseGuards } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { UserGuard } from '../auth/user.guard';
 import { SessionService } from '../session/session.service';
@@ -29,8 +29,9 @@ export class NotifyStreamController {
   async stream(@Req() req: Request, @Res() res: Response): Promise<void> {
     const raw = req.query['token'];
     const token = typeof raw === 'string' ? raw : '';
-    const session = token ? await this.sessions.validate(token) : null;
-    const user = session ? await this.users.findById(session.userId) : null;
+    // 2026-10-28 P0：query 传的是一次性 ticket（60s 单次，用后即焚），不再消费长效 session
+    const ticket = token ? await this.sessions.consumeWsTicket(token) : null;
+    const user = ticket ? await this.users.findById(ticket.userId) : null;
     if (!user) throw new UnauthorizedException('未登录或会话已过期');
 
     res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
@@ -66,5 +67,13 @@ export class NotificationsController {
   @Post(':id/read')
   markRead(@Req() req: { user: { id: string } }, @Param('id') id: string) {
     return this.notify.markRead(req.user.id, id);
+  }
+
+  /** 全部已读（2026-10-25 原型通知面板）：置于 :id/read 之前不冲突——Nest 路由
+   *  'read-all' 字面段优先于 ':id' 参数段匹配。 */
+  @Post('read-all')
+  @HttpCode(200) // 幂等动作而非资源创建
+  markAllRead(@Req() req: { user: { id: string } }) {
+    return this.notify.markAllRead(req.user.id);
   }
 }

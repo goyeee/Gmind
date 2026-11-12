@@ -4,7 +4,7 @@ import { In, IsNull, LessThanOrEqual, Repository } from 'typeorm';
 import { env } from '../config/env';
 import { MailService } from '../mail/mail.service';
 import { NotificationEntity } from '../notifications/notification.entity';
-import { parseEmailOptOut } from '../users/users.service';
+import { digestEnabledOf, parseEmailOptOut } from '../users/users.service';
 import { UserEntity } from '../users/user.entity';
 
 /** 摘要延迟窗（FR-CMT-006）：站内通知满 15 分钟仍未读才入摘要——给 SSE 实时推送
@@ -68,6 +68,9 @@ export class DigestService {
     const emailOf = new Map(users.map((u) => [u.id, u.email] as const));
     // 通知偏好（M5 Task 1，FR-CMT-006）：按用户解析邮件退订集合（坏列容错 → 空）
     const optOutOf = new Map(users.map((u) => [u.id, new Set(parseEmailOptOut(u.notifyPrefs))] as const));
+    // 邮件摘要总开关（2026-10-28 P1）：digestEnabled=false 的用户按「无邮箱收敛」处理
+    // （回写 emailed_at 不发，防永久滞留候选集）
+    const digestOffOf = new Map(users.map((u) => [u.id, !digestEnabledOf(u.notifyPrefs)] as const));
 
     const groups = new Map<string, DigestGroup>();
     for (const row of candidates) {
@@ -99,8 +102,8 @@ export class DigestService {
         }
       }
       const email = emailOf.get(group.userId) ?? null;
-      if (!email) {
-        console.log(`[digest] 无邮箱跳过（站内可达，回写 emailed_at 使扫描收敛）：userId=${group.userId} rows=${rows.length}`);
+      if (!email || digestOffOf.get(group.userId) === true) {
+        console.log(`[digest] 无邮箱或摘要已关闭跳过（回写 emailed_at 使扫描收敛）：userId=${group.userId} rows=${rows.length}`);
         await this.markEmailed(rows, now);
         doneUsers.add(group.userId);
         continue;

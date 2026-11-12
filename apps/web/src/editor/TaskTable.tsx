@@ -21,7 +21,6 @@ import {
   setCustomField,
   setDescription,
   setNodeTask,
-  setTableView,
   setText,
   subtreeIds,
   TABLE_BUILTIN_COLUMN_KEYS,
@@ -33,6 +32,9 @@ import {
   type TableViewMeta,
   type TableViewSort,
 } from '@gmind/core';
+import { evalCond, resolveCondVal, condFieldsOf, type FilterCond, type CondField } from './taskFilter';
+import { readTableViewPrefs, writeTableViewPrefs } from './tableViewPrefs';
+import { Lucide } from '../components/lucide-data';
 import {
   childrenOf,
   effectiveProgress,
@@ -149,20 +151,33 @@ function newColumnId(): string {
   return crypto.randomUUID();
 }
 
-interface Filters {
+/** 表格/脑图筛选态（二期对齐轮提升到 EditorPage：画布筛选栏、待办抽屉「在表格
+ *  中查看」与表格内置筛选条共用同一状态——单一事实源，切换视图不丢筛选）。 */
+export interface Filters {
   keyword: string;
   owners: Set<string>;
   statuses: Set<TaskStatus>;
   overdueOnly: boolean;
   unassignedOnly: boolean;
+  /** 字段条件（二期对齐轮，原型 conds）：求值单源 taskFilter.evalCond。 */
+  conds: FilterCond[];
+  /** 生效范围（原型 scope）：'me' = 仅本人可见（负责人含查看者）。 */
+  scope: 'all' | 'me';
+  /** 分组/部门（org directory 口径：负责人任一人的挂靠命中即算）。 */
+  grp: string;
+  dept: string;
 }
 
-const EMPTY_FILTERS: Filters = {
+export const EMPTY_FILTERS: Filters = {
   keyword: '',
   owners: new Set(),
   statuses: new Set(),
   overdueOnly: false,
   unassignedOnly: false,
+  conds: [],
+  scope: 'all',
+  grp: '',
+  dept: '',
 };
 
 /** 表格行节点：DeriveNode（shared 派生规则输入）+ 标记（标题列展示，M7b-W1 多值数组）
@@ -179,13 +194,6 @@ interface Row {
   depth: number;
   hasChildren: boolean;
   dimmed: boolean;
-}
-
-function toggleInSet<T>(set: Set<T>, v: T): Set<T> {
-  const next = new Set(set);
-  if (next.has(v)) next.delete(v);
-  else next.add(v);
-  return next;
 }
 
 function fmtUpdated(ts: number): string {
@@ -214,6 +222,13 @@ export interface TaskTableProps {
   checkQuota: () => boolean;
   /** 点击标题联动画布选中（双视图同源；切回脑图不丢上下文）。 */
   onSelectNode: (id: string) => void;
+  /** 筛选态（二期对齐轮提升到 EditorPage）：画布筛选栏/待办抽屉与本表格共用。 */
+  filters: Filters;
+  onFiltersChange: (f: Filters) => void;
+  /** 查看者 id（scope='me' 判定 + 条件里 'me' 解析）。 */
+  meId: string;
+  /** 组织挂靠索引（userId → 部门/分组；grp/dept 筛选求值用，EditorPage 拉一次目录）。 */
+  orgMembership: Map<string, { deptId: string | null; groupIds: string[] }>;
   /** 当前画布（EditorPage activeCanvasId）：表格快照/全部写路径限定当前画布子图
    *  （多画布 Task 4；缺省=core 缺省解析，单画布零差异）。 */
   canvasId?: string;
@@ -224,15 +239,12 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
   // 当前画布透传源：全部 core 读/写末位参（doc 级 meta 读——customColumns/tableView
   // ——canvasId 无语义，保持缺省）。
   const cid = canvasId;
-  const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS);
+  const { filters, onFiltersChange: setFilters } = props;
   /** 查看者本地排序态（不落盘）：编辑者的排序持久化在 meta.tableView.sort，此处
    *  仅 readOnly 分支的会话内覆盖（初始 null = 按文档既值）。 */
   const [localSort, setLocalSort] = useState<TableViewSort | null>(null);
   /** 负责人单元格弹层锚点行。 */
   const [ownerCellOpen, setOwnerCellOpen] = useState<string | null>(null);
-  /** 筛选条下拉（负责人/状态）。 */
-  const [ownerFilterOpen, setOwnerFilterOpen] = useState(false);
-  const [statusFilterOpen, setStatusFilterOpen] = useState(false);
   /** 右键行菜单。 */
   const [menu, setMenu] = useState<{ x: number; y: number; nodeId: string; field: string } | null>(null);
   /** 任务名行内编辑（isNew = 表格内新建后首编，空提交/Esc 回收节点）。 */
@@ -362,7 +374,27 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
    *  复选框后的任意先行重渲染（presence/成员候选等）会以旧值重绘受控复选框，产生
    *  「已勾选→回弹」一帧闪烁（e2e check 振荡根因）。直读开销可忽略（meta 小对象
    *  canonical），重头派生（rows）的 memo 改以标量排序键为依赖不受身份churn影响。 */
-  const tableView = getMeta(doc).tableView;
+  // 显示偏好（2026-10-28 P2 归属统一）：tableView（order/hidden/pinned/sort）归个人
+  // localStorage——本地有值覆盖文档现值，无本地回退文档（老文档 tableView 作初始默认，
+  // 各用户首次改动后独立）。customColumns（列定义）仍归文档全员共享。
+  const docTableView = getMeta(doc).tableView;
+  const localPrefs = readTableViewPrefs(fileId);
+  const tableView: TableViewMeta | undefined = localPrefs
+    ? {
+        order: localPrefs.order ?? docTableView?.order ?? [...TABLE_BUILTIN_COLUMN_KEYS, ...customColumns.map((c) => c.id)],
+        hidden: localPrefs.hidden ?? docTableView?.hidden ?? [],
+        pinned: localPrefs.pinned ?? docTableView?.pinned ?? [],
+        sort: localPrefs.sort !== undefined ? localPrefs.sort : (docTableView?.sort ?? null),
+      }
+    : docTableView;
+  // 归一补齐（2026-10-28 实证修复）：个人 order 是列集快照——文档侧后续新增的自定义
+  // 列（其他成员或本机后续添加）不在快照里会被静默隐藏，把 order 之外的列定义 id 追加
+  // 到末尾（新列自然出现在最后，与 core canonicalTableView 的补齐语义一致）。
+  if (tableView) {
+    const seen = new Set(tableView.order);
+    const missing = customColumns.map((c) => c.id).filter((id) => !seen.has(id));
+    if (missing.length > 0) tableView.order = [...tableView.order, ...missing];
+  }
 
   /** 生效排序态：编辑者 = meta.tableView.sort（持久化）；查看者 = 本地覆盖。 */
   const sort: TableViewSort | null = readOnly ? localSort : (tableView?.sort ?? null);
@@ -504,11 +536,24 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
     filters.owners.size > 0 ||
     filters.statuses.size > 0 ||
     filters.overdueOnly ||
-    filters.unassignedOnly;
+    filters.unassignedOnly ||
+    filters.conds.length > 0 ||
+    filters.scope === 'me' ||
+    filters.grp !== '' ||
+    filters.dept !== '';
 
   /** childrenOf 的本地类型收窄：shared 签名返回 DeriveNode[]，但输入即本数组（零变换），
    *  元素实为 RowNode——断言安全。 */
   const kidsOf = (parentId: string | null): RowNode[] => childrenOf(nodes, parentId) as RowNode[];
+
+  /** 条件字段查找（内置 + 自定义列；求值用 kind/custom 判别）。 */
+  const condFieldLookup = (col: string): CondField | undefined =>
+    condFieldsOf(customColumns).find((f) => f.key === col);
+  /** 人员列用户集合（assignee 值 = Record<userId, …>；求值只关心键集）。 */
+  const assigneeUsersOf = (n: RowNode, colId: string): string[] => {
+    const v = n.custom[colId];
+    return v && typeof v === 'object' ? Object.keys(v as Record<string, unknown>) : [];
+  };
 
   const matchNode = (n: RowNode): boolean => {
     const t = n.task;
@@ -519,6 +564,32 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
     if (filters.statuses.size > 0 && !filters.statuses.has(t?.status ?? 'todo')) return false;
     if (filters.overdueOnly && !isOverdue(n, nodes)) return false;
     if (filters.unassignedOnly && owners.length > 0) return false;
+    // scope/分组/部门 + 字段条件（二期对齐轮）：求值单源 taskFilter
+    if (filters.scope === 'me' && props.meId !== '' && !owners.includes(props.meId)) return false;
+    if (filters.grp !== '' || filters.dept !== '') {
+      const hit = owners.some((o) => {
+        const m = props.orgMembership.get(o);
+        if (!m) return false;
+        return (filters.grp !== '' && m.groupIds.includes(filters.grp)) || (filters.dept !== '' && m.deptId === filters.dept);
+      });
+      if (!hit) return false;
+    }
+    if (filters.conds.length > 0) {
+      const ctx = {
+        owners,
+        hasTask: !!t,
+        progress: effectiveProgress(nodes, n.id),
+        startDate: t?.startDate ?? null,
+        dueDate: t?.dueDate ?? null,
+        finishDate: t?.doneDate ?? null,
+        custom: n.custom,
+        assigneeUsers: (colId: string) => assigneeUsersOf(n, colId),
+      };
+      for (const c of filters.conds) {
+        const field = condFieldLookup(c.col);
+        if (!evalCond({ ...c, val: resolveCondVal(c.val, props.meId) }, field, ctx)) return false;
+      }
+    }
     return true;
   };
 
@@ -579,8 +650,6 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
       if (e.key !== 'Escape') return;
       setMenu(null);
       setOwnerCellOpen(null);
-      setOwnerFilterOpen(false);
-      setStatusFilterOpen(false);
       setColAddOpen(false);
       setColMenu(null);
       setCustomEdit(null);
@@ -655,8 +724,9 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
    *  docVersion 重渲染纠正（可感知回弹 / e2e check 振荡）。 */
   const [, bumpViewRev] = useState(0);
 
-  /** tableView 局部变更提交：与当前值合并成完整形状一次写入（core canonical 归一 +
-   *  同值守卫兜底；缺省字段按文档现值/缺省序补齐）。 */
+  /** tableView 局部变更提交（2026-10-28 P2）：写个人 localStorage（不再 setTableView
+   *  落文档——列序/显隐/固定/排序是个人显示偏好，不同步他人）。与当前生效值合并成
+   *  完整形状一次写入；bumpViewRev 触发行重算。 */
   const commitTableView = (change: Partial<TableViewMeta>): void => {
     const cur: TableViewMeta =
       tableView ?? {
@@ -666,7 +736,7 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
         sort: null,
       };
     try {
-      setTableView(doc, { ...cur, ...change });
+      writeTableViewPrefs(fileId, { ...cur, ...change });
       bumpViewRev((v) => v + 1);
     } catch (e) {
       showToast(e instanceof Error ? e.message : '表格视图配置保存失败，请刷新后重试');
@@ -703,6 +773,52 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
     const next = [...order];
     [next[a], next[b]] = [next[b], next[a]];
     commitTableView({ order: next });
+  };
+
+  // —— 列定义构建器（二期对齐轮 2026-10-25，原型「列设置」全量对齐）：列序 ↑↓、
+  //    改名、改类型（清值口径）、删列、显隐 集中在一个弹层；「任务」列固定最前。
+
+  const [colDefEdit, setColDefEdit] = useState<string | null>(null);
+  const [colDefName, setColDefName] = useState('');
+
+  /** 全序相邻交换（含隐藏列——弹层里看到的就是完整列序，与列头菜单的可见序
+   *  WYSIWYG 口径并存）；「任务」列恒第一位（↑ 在其上禁用）。 */
+  const moveInOrder = (key: string, delta: -1 | 1): void => {
+    const order = allColumns.map((c) => c.key);
+    const i = order.indexOf(key);
+    const j = i + delta;
+    if (i < 0 || j < 0 || j >= order.length) return;
+    if (order[j] === 'title') return; // 任务列锚定最前
+    const next = [...order];
+    [next[i], next[j]] = [next[j], next[i]];
+    commitTableView({ order: next });
+  };
+
+  /** 自定义列改名（schema 整表替换）。 */
+  const renameColumn = (col: CustomColumnDef, name: string): void => {
+    const nm = name.trim();
+    if (nm === '' || nm === col.name) return;
+    commitColumns(customColumns.map((c) => (c.id === col.id ? { ...c, name: nm } : c)));
+  };
+
+  /** 自定义列改类型（原型口径：更改后该列已填内容将清空）——同一事务先逐节点删键
+   *  （null=删键，不触发旧类型校验）再整表替换类型，撤销一体回滚。 */
+  const retypeColumn = (col: CustomColumnDef, type: CustomColumnType): void => {
+    if (col.type === type) return;
+    try {
+      withTransaction(doc, ORIGIN_USER, () => {
+        for (const n of nodes) {
+          if (n.custom[col.id] !== undefined) setCustomField(doc, n.id, col.id, null, ORIGIN_USER, cid);
+        }
+        setCustomColumns(
+          doc,
+          customColumns.map((c) => (c.id === col.id ? { ...c, type } : c)),
+        );
+      });
+      afterUserWrite();
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : '列类型保存失败，请调整后重试');
+    }
   };
 
   const toggleRow = (id: string): void => {
@@ -1333,125 +1449,6 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
           value={filters.keyword}
           onChange={(e) => setFilters({ ...filters, keyword: e.target.value })}
         />
-        <span className="tt-pop-anchor">
-          <button
-            type="button"
-            className="tt-chip"
-            data-testid="table-filter-owner"
-            aria-haspopup="true"
-            aria-expanded={ownerFilterOpen}
-            style={filters.owners.size > 0 ? chipActive('#3370ff') : undefined}
-            onClick={() => {
-              setOwnerFilterOpen((v) => !v);
-              setStatusFilterOpen(false);
-            }}
-          >
-            负责人{filters.owners.size > 0 ? ` ·${filters.owners.size}` : ''}
-          </button>
-          {ownerFilterOpen && (
-            <>
-              <div
-                className="tt-overlay"
-                onClick={() => setOwnerFilterOpen(false)}
-                onContextMenu={(e) => {
-                  e.preventDefault();
-                  setOwnerFilterOpen(false);
-                }}
-              />
-              <div className="tt-popover">
-                {[...memberIndex.values()].map((m) => {
-                  const on = filters.owners.has(m.userId);
-                  const color = colorForUser(m.userId);
-                  return (
-                    <button
-                      key={m.userId}
-                      type="button"
-                      className="tt-chip"
-                      style={on ? chipActive(color) : undefined}
-                      onClick={() => setFilters({ ...filters, owners: toggleInSet(filters.owners, m.userId) })}
-                    >
-                      <Avatar userId={m.userId} nickname={m.nickname} avatar={m.avatar} size={14} />
-                      {m.nickname}
-                    </button>
-                  );
-                })}
-                {memberIndex.size === 0 && (
-                  <span className="tt-pop-empty">暂无文档成员，邀请协作者后可按人筛选</span>
-                )}
-              </div>
-            </>
-          )}
-        </span>
-        <span className="tt-pop-anchor">
-          <button
-            type="button"
-            className="tt-chip"
-            data-testid="table-filter-status"
-            aria-haspopup="true"
-            aria-expanded={statusFilterOpen}
-            style={filters.statuses.size > 0 ? chipActive('#3370ff') : undefined}
-            onClick={() => {
-              setStatusFilterOpen((v) => !v);
-              setOwnerFilterOpen(false);
-            }}
-          >
-            状态{filters.statuses.size > 0 ? ` ·${filters.statuses.size}` : ''}
-          </button>
-          {statusFilterOpen && (
-            <>
-              <div
-                className="tt-overlay"
-                onClick={() => setStatusFilterOpen(false)}
-                onContextMenu={(e) => {
-                  e.preventDefault();
-                  setStatusFilterOpen(false);
-                }}
-              />
-              <div className="tt-popover">
-                {STATUS_KEYS.map((s) => {
-                  const on = filters.statuses.has(s);
-                  return (
-                    <button
-                      key={s}
-                      type="button"
-                      className="tt-chip"
-                      style={on ? chipActive(STATUS_META[s].color) : undefined}
-                      onClick={() => setFilters({ ...filters, statuses: toggleInSet(filters.statuses, s) })}
-                    >
-                      <span className="tt-dot" style={{ background: STATUS_META[s].color }} />
-                      {STATUS_META[s].label}
-                    </button>
-                  );
-                })}
-              </div>
-            </>
-          )}
-        </span>
-        <button
-          type="button"
-          className="tt-chip"
-          data-testid="table-filter-overdue"
-          style={filters.overdueOnly ? chipActive('#f53f3f') : undefined}
-          aria-pressed={filters.overdueOnly}
-          onClick={() => setFilters({ ...filters, overdueOnly: !filters.overdueOnly })}
-        >
-          仅逾期
-        </button>
-        <button
-          type="button"
-          className="tt-chip"
-          data-testid="table-filter-unassigned"
-          style={filters.unassignedOnly ? chipActive('#ff8800') : undefined}
-          aria-pressed={filters.unassignedOnly}
-          onClick={() => setFilters({ ...filters, unassignedOnly: !filters.unassignedOnly })}
-        >
-          仅未分配
-        </button>
-        {filtering && (
-          <button type="button" className="tt-clear" onClick={() => setFilters(EMPTY_FILTERS)}>
-            清空
-          </button>
-        )}
         {/* 列设置入口（需求方 2026-10-01 列体系升级）：全列显隐勾选清单浮层；
             非只读专属（显隐是持久化视图态，查看者不可改）。 */}
         {!readOnly && (
@@ -1477,31 +1474,145 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
                     setColSettingsOpen(false);
                   }}
                 />
-                <div className="tt-popover tt-col-settings-pop" role="group" aria-label="列显示设置">
-                  <div className="tt-col-settings-title">列显示</div>
-                  {allColumns.map((col) => {
-                    const shown = !hiddenSet.has(col.key);
-                    const locked = col.key === 'title'; // 任务名不可隐藏（core 裁定）
-                    return (
-                      <label
-                        key={col.key}
-                        className="tt-col-setting-row"
-                        data-testid={`table-col-toggle-${col.key}`}
-                        title={locked ? '任务列为行锚点，不可隐藏' : undefined}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={shown}
-                          disabled={locked}
-                          onChange={(e) => setColumnHidden(col.key, e.target.checked ? false : true)}
-                        />
-                        <span className="tt-col-setting-name" title={col.label}>
-                          {col.label}
-                        </span>
-                        {pinnedSet.has(col.key) && <span className="tt-col-setting-pin" title="已固定在左侧">固</span>}
-                      </label>
-                    );
-                  })}
+                <div className="tt-popover tt-col-def-pop" role="group" aria-label="列定义与列序" data-testid="table-col-def-pop">
+                  <div className="tt-col-def-head">列顺序与显示（「任务」列固定在最前）</div>
+                  <ul className="tt-col-def-list" data-testid="table-col-def-list">
+                    {allColumns.map((col, i) => {
+                      const custom = col.builtin ? undefined : customColumns.find((c) => c.id === col.key);
+                      const shown = !hiddenSet.has(col.key);
+                      const locked = col.key === 'title'; // 任务列=行锚点：不可隐藏/移动（core 裁定）
+                      const open = colDefEdit === col.key;
+                      return (
+                        <li key={col.key} className="tt-col-def-row" data-testid={`table-col-def-${col.key}`}>
+                          <div className="tt-col-def-line">
+                            {locked ? (
+                              <span className="tt-col-def-move" />
+                            ) : (
+                              <>
+                                <button
+                                  type="button"
+                                  aria-label="上移此列"
+                                  title="上移"
+                                  disabled={i === 0 || allColumns[i - 1]?.key === 'title'}
+                                  onClick={() => moveInOrder(col.key, -1)}
+                                >
+                                  <Lucide name="ChevronUp" size={14} />
+                                </button>
+                                <button
+                                  type="button"
+                                  aria-label="下移此列"
+                                  title="下移"
+                                  disabled={i === allColumns.length - 1}
+                                  onClick={() => moveInOrder(col.key, 1)}
+                                >
+                                  <Lucide name="ChevronDown" size={14} />
+                                </button>
+                              </>
+                            )}
+                            <span className={'tt-col-def-name' + (shown ? '' : ' tt-col-def-hidden')} title={col.label}>
+                              {col.label}
+                            </span>
+                            <em className="tt-col-def-type">{custom ? CUSTOM_TYPE_META[custom.type].label : '内置'}</em>
+                            {custom ? (
+                              <button
+                                type="button"
+                                aria-label="修改列属性"
+                                title="修改列属性"
+                                className={open ? 'tt-col-def-icon on' : 'tt-col-def-icon'}
+                                onClick={() => {
+                                  setColDefEdit(open ? null : col.key);
+                                  setColDefName(col.label);
+                                }}
+                              >
+                                <Lucide name="Pencil" size={13} />
+                              </button>
+                            ) : (
+                              <span className="tt-col-def-icon" />
+                            )}
+                            <button
+                              type="button"
+                              aria-label={shown ? '隐藏此列' : '显示此列'}
+                              title={locked ? '任务列为行锚点，不可隐藏' : shown ? '隐藏此列' : '显示此列'}
+                              disabled={locked}
+                              className="tt-col-def-icon"
+                              data-testid={`table-col-eye-${col.key}`}
+                              onClick={() => setColumnHidden(col.key, shown)}
+                            >
+                              <Lucide name={shown ? 'Eye' : 'EyeOff'} size={14} />
+                            </button>
+                          </div>
+                          {open && custom && (
+                            <div className="tt-col-def-panel" data-testid="table-col-def-panel">
+                              <label className="tt-col-def-field">
+                                列名称
+                                <input
+                                  value={colDefName}
+                                  maxLength={CUSTOM_COLUMN_NAME_MAX}
+                                  onChange={(e) => setColDefName(e.target.value)}
+                                  onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
+                                  onBlur={(e) => renameColumn(custom, e.target.value)}
+                                />
+                              </label>
+                              <div className="tt-col-def-field">列类型（更改后该列已填内容将清空）</div>
+                              <div className="tt-col-def-types">
+                                {CUSTOM_COLUMN_TYPES.map((t) => (
+                                  <button
+                                    key={t}
+                                    type="button"
+                                    className={custom.type === t ? 'on' : ''}
+                                    onClick={() => retypeColumn(custom, t)}
+                                  >
+                                    {CUSTOM_TYPE_META[t].label}
+                                  </button>
+                                ))}
+                              </div>
+                              {custom.type === 'assignee' && (
+                                <p className="tt-col-def-note">人员列对应任务里按此列分配的负责人（含进度）。</p>
+                              )}
+                              <button
+                                type="button"
+                                className="tt-col-def-del"
+                                data-testid="table-col-def-del"
+                                onClick={() => {
+                                  removeColumn(custom);
+                                  setColDefEdit(null);
+                                }}
+                              >
+                                <Lucide name="Trash2" size={12} />删除此列
+                              </button>
+                            </div>
+                          )}
+                          {open && !custom && (
+                            <div className="tt-col-def-panel">
+                              <p className="tt-col-def-note">内置列可排序与隐藏，不可改名、改类型或删除。</p>
+                            </div>
+                          )}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                  <div className="tt-col-def-footer">
+                    <div className="tt-col-def-field">新增自定义列</div>
+                    <input
+                      className="tt-col-def-addname"
+                      placeholder="列名，如 后端、评审人"
+                      aria-label="新增自定义列名称"
+                      value={addName}
+                      maxLength={CUSTOM_COLUMN_NAME_MAX}
+                      onChange={(e) => setAddName(e.target.value)}
+                      onKeyDown={(e) => e.key === 'Enter' && addColumn()}
+                    />
+                    <div className="tt-col-def-types">
+                      {CUSTOM_COLUMN_TYPES.map((t) => (
+                        <button key={t} type="button" className={addType === t ? 'on' : ''} onClick={() => setAddType(t)}>
+                          {CUSTOM_TYPE_META[t].label}
+                        </button>
+                      ))}
+                    </div>
+                    <button type="button" className="tt-col-def-addbtn" disabled={addName.trim() === ''} onClick={addColumn}>
+                      添加列
+                    </button>
+                  </div>
                 </div>
               </>
             )}

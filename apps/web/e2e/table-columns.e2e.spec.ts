@@ -24,6 +24,8 @@ async function registerAndLogin(page: Page): Promise<string> {
   await page.getByPlaceholder('验证码（开发环境固定 123456）').fill('123456');
   await page.getByRole('button', { name: '登录', exact: true }).click();
   await expect(page).toHaveURL(/\/workspace/);
+  await expect(page.getByTestId('quick-create-blank')).toBeVisible(); // 首页落点（换装后种子文件在「我的文件」视图）
+  await page.goto('/workspace?view=files');
   await expect(page.getByTestId('mine-grid').getByTestId('file-card')).toHaveCount(3);
   return phone;
 }
@@ -78,17 +80,29 @@ async function waitForDoc(page: Page, check: (doc: Y.Doc) => boolean): Promise<Y
   throw new Error('waitForDoc: 自动保存落库超时（条件未满足）');
 }
 
-/** 落库的 meta.tableView（plain 形状；无键文档 undefined）。 */
-interface DocTableView {
+/** 轮询等待个人显示偏好写入 localStorage（2026-10-28 P2：tableView 归个人，
+ *  不再落文档——列序/显隐/固定/排序的持久化断言从 waitForDoc 改为本函数）。
+ *  返回偏好对象供后续值断言。 */
+interface TablePrefsShape {
   order?: string[];
   hidden?: string[];
   pinned?: string[];
   sort?: { key: string; dir: number } | null;
 }
-
-function tableViewOf(doc: Y.Doc): DocTableView | undefined {
-  const raw = doc.getMap('meta').get('tableView');
-  return (raw ?? undefined) as DocTableView | undefined;
+async function waitForTablePrefs(
+  page: Page,
+  check: (prefs: TablePrefsShape | null) => boolean,
+): Promise<TablePrefsShape | null> {
+  const fileId = /\/edit\/([0-9A-Za-z]+)/.exec(page.url())![1]!;
+  for (let i = 0; i < 30; i += 1) {
+    const prefs = await page.evaluate((fid) => {
+      const raw = localStorage.getItem(`gmind.tableViewPrefs:${fid}`);
+      return raw ? (JSON.parse(raw) as TablePrefsShape) : null;
+    }, fileId);
+    if (check(prefs)) return prefs;
+    await page.waitForTimeout(300);
+  }
+  throw new Error('waitForTablePrefs: 个人显示偏好写入超时（条件未满足）');
 }
 
 /** 当前表格行序（标题文本数组，树序/排序态断言共用）。 */
@@ -111,8 +125,8 @@ test('表头三态排序：升→降→取消恢复树序，行序（同父分�
   expect(await rowTitles(page)).toEqual(['周三', '方案评审', '周五', '周报复盘', '周一', '周会对齐']);
 
   // 排序态落库：meta.tableView.sort = {key:'title', dir:1}
-  const asc = await waitForDoc(page, (d) => tableViewOf(d)?.sort?.key === 'title');
-  expect(tableViewOf(asc)!.sort).toEqual({ key: 'title', dir: 1 });
+  const ascPrefs = await waitForTablePrefs(page, (p) => p?.sort?.key === 'title');
+  expect(ascPrefs!.sort).toEqual({ key: 'title', dir: 1 });
 
   // 第二次点击：降序（空行恒排尾的逆序即整组反转）
   await titleHead.locator('.tt-col-name').click();
@@ -124,8 +138,8 @@ test('表头三态排序：升→降→取消恢复树序，行序（同父分�
   await expect(titleHead).not.toContainText('↑');
   await expect(titleHead).not.toContainText('↓');
   expect(await rowTitles(page)).toEqual(['周一', '周会对齐', '周三', '方案评审', '周五', '周报复盘']);
-  const neutral = await waitForDoc(page, (d) => tableViewOf(d)?.sort == null);
-  expect(tableViewOf(neutral)!.sort).toBeNull();
+  const neutralPrefs = await waitForTablePrefs(page, (p) => p?.sort == null);
+  expect(neutralPrefs!.sort).toBeNull();
 });
 
 test('自定义列左移到「状态」列前：DOM 列序与 tableView.order 双断言（统一列模型）', async ({ page }) => {
@@ -153,12 +167,12 @@ test('自定义列左移到「状态」列前：DOM 列序与 tableView.order �
   expect(headers.indexOf(colId)).toBeGreaterThan(0);
   expect(headers.indexOf(colId)).toBeLessThan(headers.indexOf('status'));
 
-  // 落库：meta.tableView.order 中 colId 位于 'status' 前（自定义列挪进内置列中间）
-  const doc = await waitForDoc(page, (d) => {
-    const order = tableViewOf(d)?.order;
+  // 个人偏好：order 中 colId 位于 'status' 前（2026-10-28 P2 归个人 localStorage）
+  const orderPrefs = await waitForTablePrefs(page, (p) => {
+    const order = p?.order;
     return Array.isArray(order) && order.indexOf(colId) >= 0 && order.indexOf(colId) < order.indexOf('status');
   });
-  const order = tableViewOf(doc)!.order!;
+  const order = orderPrefs!.order!;
   // canonical 完整排列：内置 8 列 + 1 自定义列全在序
   expect(order).toHaveLength(9);
 });
@@ -173,25 +187,24 @@ test('隐藏负责人列：列头/单元格消失 + hidden 落库 → 列设置�
   await expect(page.locator('.tt-table thead th[data-col-key="owner"]')).toHaveCount(0);
   await expect(page.locator('[data-testid$="-owners"]')).toHaveCount(0);
 
-  // 落库：meta.tableView.hidden = ['owner']
-  const doc = await waitForDoc(page, (d) => tableViewOf(d)?.hidden?.includes('owner') === true);
-  expect(tableViewOf(doc)!.hidden).toEqual(['owner']);
+  // 个人偏好：hidden = ['owner']
+  const hiddenPrefs = await waitForTablePrefs(page, (p) => p?.hidden?.includes('owner') === true);
+  expect(hiddenPrefs!.hidden).toEqual(['owner']);
 
-  // 列设置浮层：负责人复选未勾 → 勾选恢复
+  // 列设置弹层（二期对齐轮改列定义构建器）：负责人行眼睛=隐藏态 → 点眼睛恢复
   await page.getByTestId('table-col-settings').click();
-  const ownerToggle = page.getByTestId('table-col-toggle-owner').locator('input');
-  await expect(ownerToggle).not.toBeChecked();
-  // 任务名复选恒选中且禁用（不可隐藏裁定）
-  const titleToggle = page.getByTestId('table-col-toggle-title').locator('input');
-  await expect(titleToggle).toBeChecked();
-  await expect(titleToggle).toBeDisabled();
-  await ownerToggle.check();
+  const ownerEye = page.getByTestId('table-col-eye-owner');
+  await expect(ownerEye).toBeVisible();
+  // 任务名行恒显示且眼睛禁用（不可隐藏裁定）
+  const titleEye = page.getByTestId('table-col-eye-title');
+  await expect(titleEye).toBeDisabled();
+  await ownerEye.click();
   await expect(page.locator('.tt-table thead th[data-col-key="owner"]')).toBeVisible();
   await expect(page.locator('[data-testid$="-owners"]').first()).toBeVisible();
 
-  // 恢复落库：hidden 清空
-  const restored = await waitForDoc(page, (d) => (tableViewOf(d)?.hidden?.length ?? 0) === 0);
-  expect(tableViewOf(restored)!.hidden).toEqual([]);
+  // 恢复：hidden 清空
+  const restoredPrefs = await waitForTablePrefs(page, (p) => (p?.hidden?.length ?? 0) === 0);
+  expect(restoredPrefs!.hidden).toEqual([]);
 });
 
 test('固定任务名 + 多列横向滚动：sticky 列滚动后视口位置不变，未固定列左移出视口', async ({ page }) => {
@@ -235,7 +248,49 @@ test('固定任务名 + 多列横向滚动：sticky 列滚动后视口位置不�
   // 未固定列被滚出视口（x 左移）
   expect(afterUpdated!.x).toBeLessThan(beforeUpdated!.x);
 
-  // 落库：meta.tableView.pinned = ['title']
-  const doc = await waitForDoc(page, (d) => tableViewOf(d)?.pinned?.includes('title') === true);
-  expect(tableViewOf(doc)!.pinned).toEqual(['title']);
+  // 个人偏好：pinned = ['title']（2026-10-28 P2 归个人 localStorage）
+  const pinnedPrefs = await waitForTablePrefs(page, (p) => p?.pinned?.includes('title') === true);
+  expect(pinnedPrefs!.pinned).toEqual(['title']);
+});
+
+test('列定义构建器（原型列设置全量）：↑↓ 列序落库、改名、眼睛显隐、底部加列（任务列锚定最前）', async ({ page }) => {
+  test.setTimeout(90_000);
+  await openSeedDocTable(page, '本周计划');
+
+  await page.getByTestId('table-col-settings').click();
+  // 任务列锚定最前：眼睛禁用、无移动钮
+  await expect(page.getByTestId('table-col-eye-title')).toBeDisabled();
+  await expect(page.getByTestId('table-col-def-title').locator('button[aria-label="上移此列"]')).toHaveCount(0);
+
+  // 「状态」列上移一格 → 表头 DOM 序（owner 与状态互换）+ 个人偏好 order 写入
+  await page.getByTestId('table-col-def-status').locator('button[aria-label="上移此列"]').click();
+  const colOrder = await page
+    .locator('.tt-table thead th')
+    .evaluateAll((els) => els.map((e) => e.getAttribute('data-col-key')));
+  expect(colOrder.indexOf('status')).toBeLessThan(colOrder.indexOf('owner'));
+  await waitForTablePrefs(page, (p) => (p?.order ?? []).indexOf('status') < (p?.order ?? []).indexOf('owner'));
+
+  // 关弹层：点遮罩（弹层外点即收）→ 加列走表头 + 钮（既有流程）
+  await page.locator('.tt-filterbar .tt-overlay').click();
+  await addColumn(page, '后端', 'assignee');
+  await expect(page.locator('.tt-table thead th', { hasText: '后端' })).toBeVisible();
+  await page.getByTestId('table-col-settings').click(); // 重开列定义构建器
+  const backendRow = page.getByTestId('table-col-def-list').locator('li', { hasText: '后端' });
+  await backendRow.locator('button[aria-label="修改列属性"]').click();
+  const nameInput = page.getByTestId('table-col-def-panel').locator('input');
+  await nameInput.fill('服务端');
+  await nameInput.press('Enter');
+  await expect(page.locator('.tt-table thead th', { hasText: '服务端' })).toBeVisible();
+  await waitForDoc(page, (d) => {
+    const meta = d.getMap('meta').get('customColumns') as Array<{ name: string }> | undefined;
+    return (meta ?? []).some((c) => c.name === '服务端');
+  });
+
+  // 眼睛隐藏「服务端」列 → 表头消失 + 个人偏好 hidden 写入 → 再点恢复
+  const renamedRow = page.getByTestId('table-col-def-list').locator('li', { hasText: '服务端' });
+  await renamedRow.locator('button[aria-label="隐藏此列"]').click();
+  await expect(page.locator('.tt-table thead th', { hasText: '服务端' })).toHaveCount(0);
+  await waitForTablePrefs(page, (p) => (p?.hidden ?? []).length > 0);
+  await renamedRow.locator('button[aria-label="显示此列"]').click();
+  await expect(page.locator('.tt-table thead th', { hasText: '服务端' })).toBeVisible();
 });

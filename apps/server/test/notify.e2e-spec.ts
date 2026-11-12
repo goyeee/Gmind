@@ -70,23 +70,31 @@ describe('站内通知（FR-CMT-005）', () => {
     const ready = new Promise<void>((r) => {
       resolveReady = r;
     });
-    const req = http.get({ host: '127.0.0.1', port, path: `/api/notify?token=${token}` }, (res) => {
-      status = res.statusCode;
-      contentType = res.headers['content-type'];
-      res.setEncoding('utf8');
-      res.on('data', (chunk: string) => {
-        buf += chunk;
+    // 2026-10-28 P0：SSE 鉴权改一次性 ticket——先 POST /auth/ws-ticket 再连
+    let req: ReturnType<typeof http.get> | null = null;
+    void (async () => {
+      const tres = await request(`http://127.0.0.1:${port}`)
+        .post('/api/auth/ws-ticket')
+        .set('Authorization', `Bearer ${token}`);
+      const ticket = (tres.body as { ticket: string }).ticket;
+      req = http.get({ host: '127.0.0.1', port, path: `/api/notify?token=${ticket}` }, (res) => {
+        status = res.statusCode;
+        contentType = res.headers['content-type'];
+        res.setEncoding('utf8');
+        res.on('data', (chunk: string) => {
+          buf += chunk;
+        });
+        res.on('end', () => resolveReady?.());
       });
-      res.on('end', () => resolveReady?.());
-    });
-    req.on('error', () => undefined); // close 时 destroy 的正常噪音
-    req.on('response', () => resolveReady?.());
+      req.on('error', () => undefined); // close 时 destroy 的正常噪音
+      req.on('response', () => resolveReady?.());
+    })();
     return {
       status: () => status,
       contentType: () => contentType,
       text: () => buf,
       ready: ready as unknown as Promise<void>,
-      close: () => req.destroy(),
+      close: () => req?.destroy(),
     };
   }
 
@@ -139,9 +147,11 @@ describe('站内通知（FR-CMT-005）', () => {
     expect(res.status).toBe(200);
     expect(res.body).toHaveLength(2);
     expect(res.body).toEqual(
+      // 2026-10-25 归属行扩展：deptName/groupNames 追加（元素级 objectContaining
+      // 容忍后续字段，替代原严格相等——键集演进不再逐次破此断言）
       expect.arrayContaining([
-        { userId: owner.id, nickname: owner.nickname, role: 'owner', isOwner: true, avatar: null },
-        { userId: collaborator.id, nickname: collaborator.nickname, role: 'editor', isOwner: false, avatar: null },
+        expect.objectContaining({ userId: owner.id, nickname: owner.nickname, role: 'owner', isOwner: true, avatar: null }),
+        expect.objectContaining({ userId: collaborator.id, nickname: collaborator.nickname, role: 'editor', isOwner: false, avatar: null }),
       ]),
     );
     // 协作者同口径可见（canAccess）；路人 404 不泄露存在性

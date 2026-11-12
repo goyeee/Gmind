@@ -38,6 +38,10 @@ export class UserEntity {
   @Column({ type: 'varchar', length: 20, name: 'status', default: 'active' })
   status: AccountStatus = 'active';
 
+  // 所属部门（组织管理批次 A，2026-10-24）：可空；挂靠经组织管理页/账号管理行内改。
+  @Column({ type: 'char', length: 26, nullable: true, name: 'department_id' })
+  departmentId: string | null = null;
+
   // 显式 name 对齐迁移的 snake_case 列名（typeorm 默认用属性名，会生成 `createdAt` 而非 `created_at`）
   @CreateDateColumn({ type: 'datetime', precision: 3, name: 'created_at' })
   createdAt: Date = new Date();

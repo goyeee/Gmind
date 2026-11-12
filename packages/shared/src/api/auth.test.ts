@@ -38,7 +38,8 @@ describe('auth schemas', () => {
 });
 
 describe('file schemas', () => {
-  it('createFileSchema.parse({}) 默认标题为 未命名脑图', () => {
-    expect(createFileSchema.parse({})).toEqual({ title: '未命名脑图' });
+  it('createFileSchema.parse({}) 缺省 kind=map（title 缺省由服务端按 kind 兜底）', () => {
+    expect(createFileSchema.parse({})).toEqual({ kind: 'map' });
+    expect(createFileSchema.parse({ kind: 'table' })).toEqual({ kind: 'table' });
   });
 });

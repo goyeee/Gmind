@@ -22,10 +22,16 @@ export function createAdminUser(input: { phone: string; nickname: string }): Pro
   return apiPost<AdminUserListItem>('/admin/users', input);
 }
 
-/** 更新账号：三字段均可选；停用/降级自己与最后超管由服务端 409 兜底。 */
+/** 更新账号：字段均可选；停用/降级自己与最后超管由服务端 409 兜底；部门/分组挂靠走组织通道（批次 A）。 */
 export function updateAdminUser(
   id: string,
-  patch: { systemRole?: SystemRole; status?: AccountStatus; nickname?: string },
+  patch: {
+    systemRole?: SystemRole;
+    status?: AccountStatus;
+    nickname?: string;
+    departmentId?: string | null;
+    groupIds?: string[];
+  },
 ): Promise<AdminUserListItem> {
   return apiPatch<AdminUserListItem>(`/admin/users/${id}`, patch);
 }

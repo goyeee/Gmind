@@ -23,6 +23,11 @@ export class ShareLinkEntity {
   @Column({ type: 'char', length: 26, name: 'created_by' })
   createdBy: string = '';
 
+  /** 链接权限档位（2026-10-28 P0）：editor=加入即可编辑（存量默认）；viewer=仅查看
+   *  （join 的协作者行 role=viewer，编辑器只读装配）。 */
+  @Column({ type: 'enum', enum: ['editor', 'viewer'] })
+  role: 'editor' | 'viewer' = 'editor';
+
   @Column({ type: 'varchar', length: 64, nullable: true })
   password: string | null = null;
 

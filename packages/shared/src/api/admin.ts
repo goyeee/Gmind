@@ -21,6 +21,9 @@ export interface AdminUserListItem {
   status: AccountStatus;
   createdAt: string | null;
   fileCount: number;
+  /** 组织挂靠（2026-10-24 批次 A）：所属部门（null=未挂）与分组 id 集（全量回显）。 */
+  departmentId: string | null;
+  groupIds: string[];
 }
 
 /** GET /api/admin/users 分页响应（2026-10-21，需求方反馈「加载慢/无分页」——开发库

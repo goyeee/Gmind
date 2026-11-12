@@ -7,6 +7,8 @@ import { WorkspacePage } from './pages/WorkspacePage';
 import { TrashPage } from './pages/TrashPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { AdminUsersPage } from './pages/AdminUsersPage';
+import { TodosPage } from './pages/TodosPage';
+import { TodoSpacePage } from './pages/TodoSpacePage';
 import { EditorPage } from './pages/EditorPage';
 import { ShareLandingPage } from './pages/ShareLandingPage';
 
@@ -50,6 +52,23 @@ export function App() {
         element={
           <RequireAuth>
             <SettingsPage />
+          </RequireAuth>
+        }
+      />
+      {/* 我的待办 / 待办空间（第二期批次 B/C）：跨文件任务收件箱与分析仪表盘 */}
+      <Route
+        path="/todos"
+        element={
+          <RequireAuth>
+            <TodosPage />
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/todo-space"
+        element={
+          <RequireAuth>
+            <TodoSpacePage />
           </RequireAuth>
         }
       />

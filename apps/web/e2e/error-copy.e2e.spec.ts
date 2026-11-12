@@ -42,6 +42,8 @@ async function registerAndLogin(page: Page): Promise<void> {
   await page.getByPlaceholder('验证码（开发环境固定 123456）').fill('123456');
   await page.getByRole('button', { name: '登录', exact: true }).click();
   await expect(page).toHaveURL(/\/workspace/);
+  await expect(page.getByTestId('quick-create-blank')).toBeVisible(); // 首页落点（换装后种子文件在「我的文件」视图）
+  await page.goto('/workspace?view=files');
   await expect(page.getByTestId('mine-grid').getByTestId('file-card')).toHaveCount(3);
 }
 
@@ -126,7 +128,8 @@ test('⑤ 分享链接失效页：链接已失效（原因）+ 联系分享者 /
 test('⑥ 导入归因：大小超限/已损坏 toast 含原因与下一步动作', async ({ page }) => {
   await registerAndLogin(page);
   // 大小预检先于解析：21MB 恒定填充即触发
-  await page.getByTestId('import-button').click();
+  await page.goto('/workspace'); // 导入入口=首页「导入文件」卡
+  await page.getByTestId('quick-create-import').click();
   await page.getByTestId('import-input').setInputFiles({
     name: '超大.xmind',
     mimeType: 'application/octet-stream',
@@ -137,7 +140,8 @@ test('⑥ 导入归因：大小超限/已损坏 toast 含原因与下一步动�
   await expect(toast).toContainText('请压缩后重试');
 
   // 非 zip 乱字节 → 解析损坏归因
-  await page.getByTestId('import-button').click();
+  await page.goto('/workspace'); // 导入入口=首页「导入文件」卡
+  await page.getByTestId('quick-create-import').click();
   await page.getByTestId('import-input').setInputFiles({
     name: '损坏.xmind',
     mimeType: 'application/octet-stream',
@@ -162,7 +166,8 @@ test('⑦ 导出过大：拒绝文案含「文件过大」+「拆分后导出」
 // ⑧a 评论 501 字：服务端 400 message 透出——含上限数值（原因）+ 精简动作（下一步）
 test('⑧a 评论超 500 字：toast 含「500 字」上限数值与下一步动作', async ({ page }) => {
   await openSeedDoc(page, '本周计划');
-  // 评论右列默认不渲染（M7b-R6）：工具栏 comment-toggle 开启（2026-10-10 插入菜单删除后路径）
+  // 评论右列默认不渲染（M7b-R6）：评论入口在「更多」下拉（2026-10-25 原型顶栏重组）
+  await page.getByTestId('more-toggle').click();
   await page.getByTestId('comment-toggle').click();
   // 装配完成默认单选 root → 评论输入可用
   const input = page.getByTestId('comment-input');
@@ -195,6 +200,7 @@ test('⑧b 图片超 10MB：toast 含「10MB 限制」上限数值与下一步�
 test('⑨ 邀请批量非法：toast 逐条原因 + 修正提示', async ({ page }) => {
   await openSeedDoc(page, '本周计划');
   await page.getByTestId('members-btn').click();
+  await page.getByTestId('member-tab-invite').click(); // 2026-10-25 原型重排：邀请页签
   await expect(page.getByTestId('invite-section')).toBeVisible();
   await page.getByTestId('invite-contacts-toggle').click(); // 2026-10-11 起粘贴框折叠为次要入口
   await page.getByTestId('invite-input').fill('bad-email');

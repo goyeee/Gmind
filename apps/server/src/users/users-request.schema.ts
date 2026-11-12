@@ -40,11 +40,13 @@ const optOutMemberSchema = z.enum(EMAIL_OPT_OUT_TYPES, {
   message: '通知类型仅支持 mention/reply/permission，请重新选择',
 });
 
-/** 通知偏好：PATCH 同 body 全量替换。 */
+/** 通知偏好：PATCH 同 body 全量替换。两开关（2026-10-28 P1）可选，缺省 true。 */
 export const notifyPrefsSchema = z.object({
   emailOptOut: z
     .array(optOutMemberSchema)
     .max(EMAIL_OPT_OUT_TYPES.length, '通知类型仅支持 mention/reply/permission，请重新选择'),
+  notifyEnabled: z.boolean().optional(),
+  digestEnabled: z.boolean().optional(),
 });
 
 /** 头像设置（2026-10-11）：avatarUrl 为 5 个预置 SVG 路径（/avatars/preset-1..5.svg）
