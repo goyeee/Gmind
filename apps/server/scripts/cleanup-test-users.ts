@@ -1,24 +1,27 @@
 /**
- * 测试账号清理（2026-10-28 P1 开发库卫生）：
- * e2e 与开发库共用，长期累积「138 前缀 + 昵称 用户NNNN」的注册账号（曾 2.3 万+）。
+ * 测试账号清理（2026-10-28 P1 开发库卫生；2026-11-13 判据随账号邮箱化重做）：
+ * e2e 与开发库共用。旧判据「昵称 用户NNNN + 138 手机前缀」随手机注册通道删除失效
+ * （新注册无手机号、昵称注册时必填），改按 e2e 造号邮箱域识别：
+ *   - server e2e：@test.dev（test/support/auth-test.ts uniqueEmail 默认域）
+ *   - web e2e：@e2e.gmind.dev（apps/web/e2e/helpers/auth.ts E2E_DOMAIN）
  *
  * 只清同时满足以下条件的账号（**不误伤真实使用账号**）：
- *   - nickname 匹配 ^用户\d{4}$（e2e 默认昵称形态）
- *   - phone 以 '138' 开头（e2e 随机手机号前缀）
+ *   - email 后缀为上述两个 e2e 域（演示号 @gmind.dev 等不在判据内）
  *   - 名下无任何文件（owner）且无任何协作者关系（file_collaborators 行）
  *
  * 用法（在 apps/server 目录）：
- *   npx tsx scripts/cleanup-test-users.ts            # dry-run：只列出将删除的数量与样本，不写库
- *   npx tsx scripts/cleanup-test-users.ts --apply    # 实删（连带 users 行；会话 Redis 无需处理）
+ *   DB_DATABASE=gmind_test npx tsx scripts/cleanup-test-users.ts            # dry-run：只列将删的数量与样本，不写库
+ *   DB_DATABASE=gmind_test npx tsx scripts/cleanup-test-users.ts --apply    # 实删（连带 users 行；会话 Redis 无需处理）
  *
- * 环境：DB_HOST/DB_PORT/DB_USER/DB_PASSWORD/DB_DATABASE 同 server env（默认 127.0.0.1:33061）。
+ * 环境：DB_HOST/DB_PORT/DB_USER/DB_PASSWORD/DB_DATABASE 同 server env（默认
+ * 127.0.0.1:33061 / gmind；DB_DATABASE 可用环境变量覆盖，如 gmind_test）。
  */
 import mysql from 'mysql2/promise';
 
 interface TestUserRow {
   id: string;
+  email: string;
   nickname: string;
-  phone: string | null;
   createdAt: Date;
 }
 
@@ -33,17 +36,16 @@ async function main(): Promise<void> {
   });
 
   const [rows] = (await conn.query(
-    `SELECT u.id, u.nickname, u.phone, u.created_at AS createdAt
+    `SELECT u.id, u.email, u.nickname, u.created_at AS createdAt
      FROM users u
-     WHERE u.nickname REGEXP '^用户[0-9]{4}$'
-       AND u.phone LIKE '138%'
+     WHERE (u.email LIKE '%@test.dev' OR u.email LIKE '%@e2e.gmind.dev')
        AND NOT EXISTS (SELECT 1 FROM files f WHERE f.owner_user_id = u.id)
        AND NOT EXISTS (SELECT 1 FROM file_collaborators fc WHERE fc.user_id = u.id)`,
   )) as [TestUserRow[], unknown];
 
-  console.log(`[cleanup] 命中测试账号 ${rows.length} 个（昵称 用户NNNN + 138 前缀 + 无文件无协作）`);
+  console.log(`[cleanup] 命中测试账号 ${rows.length} 个（@test.dev/@e2e.gmind.dev + 无文件无协作）`);
   for (const r of rows.slice(0, 10)) {
-    console.log(`  样本：${r.id} ${r.nickname} ${r.phone} 注册于 ${r.createdAt.toISOString().slice(0, 10)}`);
+    console.log(`  样本：${r.id} ${r.email} ${r.nickname} 注册于 ${r.createdAt.toISOString().slice(0, 10)}`);
   }
   if (rows.length > 10) console.log(`  …另 ${rows.length - 10} 个未列出`);
 
