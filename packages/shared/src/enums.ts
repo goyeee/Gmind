@@ -2,5 +2,3 @@
 export type FileRole = 'owner' | 'editor' | 'commenter' | 'viewer';
 
 export type StructureType = 'mindmap' | 'logic' | 'org';
-
-export type LoginMethod = 'phone' | 'email' | 'wechat';
