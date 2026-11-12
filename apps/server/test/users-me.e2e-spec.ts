@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import request from 'supertest';
 import type { INestApplication } from '@nestjs/common';
 import { createTestApp } from './support/app-test';
+import { createAccount, type TestAccount } from './support/auth-test';
 
 describe('GET /api/users/me', () => {
   let app: INestApplication;
@@ -27,17 +28,7 @@ describe('GET /api/users/me', () => {
 
 describe('用户头像（2026-10-11 需求方裁定：上传 + 5 预置 SVG 可选）', () => {
   let app: INestApplication;
-  const tokenFor = async (userId: string): Promise<string> => {
-    const { SessionService } = await import('../src/session/session.service');
-    const redisMod = await import('ioredis');
-    const svc = new SessionService(new redisMod.default('redis://127.0.0.1:16379/1'));
-    return (await svc.create(userId, false)).token;
-  };
-  const newUser = async (phone: string): Promise<{ id: string; token: string }> => {
-    const users = app.get((await import('../src/users/users.service')).UsersService);
-    const user = await users.create({ method: 'phone', phone });
-    return { id: user.id, token: await tokenFor(user.id) };
-  };
+  const newUser = async (): Promise<TestAccount> => createAccount(app);
 
   beforeAll(async () => {
     app = await createTestApp();
@@ -91,25 +82,23 @@ describe('用户头像（2026-10-11 需求方裁定：上传 + 5 预置 SVG 可�
   });
 
   it('collaborators 响应携带 avatar 字段（成员目录数据源）', async () => {
-    // 全新手机号一次性建号（create 不查重——同号会建第二行，grant 按号查会命中旧行）
-    const u = await newUser('13800010005');
+    const u = await newUser();
     const patchRes = await request(app.getHttpServer())
       .patch('/api/users/me/avatar')
       .set('Authorization', `Bearer ${u.token}`)
       .send({ avatarUrl: '/avatars/preset-1.svg' });
     expect(patchRes.status).toBe(200);
-    const users = app.get((await import('../src/users/users.service')).UsersService);
-    const ownerUser = await users.create({ method: 'phone', phone: '13800010006' });
-    const token = await tokenFor(ownerUser.id);
+    const ownerUser = await createAccount(app);
+    const token = ownerUser.token;
     const created = await request(app.getHttpServer())
       .post('/api/files')
       .set('Authorization', `Bearer ${token}`)
       .send({ title: '头像契约' });
     const fileId = created.body.id as string;
-    // 授权 u（按手机号编排）为协作者后经 owner 视角看 collaborators
+    // 授权 u（按邮箱编排）为协作者后经 owner 视角看 collaborators
     const grant = await request(app.getHttpServer())
       .post('/api/dev-e2e/grant-collaborator')
-      .send({ fileId, phone: '13800010005' });
+      .send({ fileId, email: u.email });
     expect(grant.status).toBe(201);
     const cols = await request(app.getHttpServer())
       .get(`/api/files/${fileId}/collaborators`)

@@ -15,6 +15,7 @@ import {
   docToState,
 } from '@gmind/core';
 import { createTestApp } from './support/app-test';
+import { createAccount } from './support/auth-test';
 import { CommentEntity } from '../src/comments/comment.entity';
 import { EventEntity } from '../src/events/event.entity';
 import { FileCollaboratorEntity } from '../src/files/file-collaborator.entity';
@@ -48,13 +49,6 @@ describe('评论域（FR-CMT-001/003）', () => {
   let nodeIdB: string;
   let nodeIdC: string;
 
-  const tokenFor = async (userId: string): Promise<string> => {
-    const { SessionService } = await import('../src/session/session.service');
-    const redisMod = await import('ioredis');
-    const svc = new SessionService(new redisMod.default('redis://127.0.0.1:16379/1'));
-    return (await svc.create(userId, false)).token;
-  };
-
   type Method = 'get' | 'post' | 'put';
   const authed = (token: string, method: Method, url: string) =>
     request(app.getHttpServer())[method](url).set('Authorization', `Bearer ${token}`);
@@ -67,14 +61,15 @@ describe('评论域（FR-CMT-001/003）', () => {
     await app.listen(0);
     dataSource = app.get(DataSource);
 
-    const users = app.get((await import('../src/users/users.service')).UsersService);
     const files = app.get((await import('../src/files/files.service')).FilesService);
-    owner = await users.create({ method: 'phone', phone: '13900006001' });
-    collaborator = await users.create({ method: 'phone', phone: '13900006002' });
-    const outsider = await users.create({ method: 'phone', phone: '13900006003' });
-    ownerToken = await tokenFor(owner.id);
-    collaboratorToken = await tokenFor(collaborator.id);
-    outsiderToken = await tokenFor(outsider.id);
+    const ownerAcct = await createAccount(app, { nickname: '评论甲' });
+    const collabAcct = await createAccount(app, { nickname: '评论乙' });
+    const outsiderAcct = await createAccount(app);
+    owner = { id: ownerAcct.id, nickname: '评论甲' };
+    collaborator = { id: collabAcct.id, nickname: '评论乙' };
+    ownerToken = ownerAcct.token;
+    collaboratorToken = collabAcct.token;
+    outsiderToken = outsiderAcct.token;
 
     const created = await files.createForUser(owner.id, {
       title: '评论文件',

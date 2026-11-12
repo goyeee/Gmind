@@ -4,6 +4,7 @@ import type { INestApplication } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import { ulid } from 'ulid';
 import { createTestApp } from './support/app-test';
+import { createAccount } from './support/auth-test';
 
 /**
  * 回收站域 e2e（M3a Task 7，FR-FIL-005~007/010）：列表 / 还原 / 彻底删除 / 定时清理 / 到期提醒。
@@ -32,14 +33,7 @@ describe('回收站域（FR-FIL-005~007/010）', () => {
   let userId: string;
   let token: string;
   let otherToken: string;
-  const otherPhone = '13800060002';
-
-  const tokenFor = async (uid: string): Promise<string> => {
-    const { SessionService } = await import('../src/session/session.service');
-    const redisMod = await import('ioredis');
-    const svc = new SessionService(new redisMod.default('redis://127.0.0.1:16379/1'));
-    return (await svc.create(uid, false)).token;
-  };
+  let otherEmail: string;
 
   const authed = (method: 'get' | 'post' | 'put' | 'delete', url: string, tk = token) =>
     request(app.getHttpServer())[method](url).set('Authorization', `Bearer ${tk}`);
@@ -63,12 +57,12 @@ describe('回收站域（FR-FIL-005~007/010）', () => {
   beforeAll(async () => {
     app = await createTestApp();
     ds = app.get(DataSource);
-    const users = app.get((await import('../src/users/users.service')).UsersService);
-    const user = await users.create({ method: 'phone', phone: '13800060001', nickname: '回收站甲' });
+    const user = await createAccount(app, { nickname: '回收站甲' });
     userId = user.id;
-    token = await tokenFor(user.id);
-    const other = await users.create({ method: 'phone', phone: otherPhone, nickname: '回收站乙' });
-    otherToken = await tokenFor(other.id);
+    token = user.token;
+    const other = await createAccount(app, { nickname: '回收站乙' });
+    otherToken = other.token;
+    otherEmail = other.email;
   });
 
   afterAll(async () => {
@@ -176,7 +170,7 @@ describe('回收站域（FR-FIL-005~007/010）', () => {
     expect((await authed('put', `/api/files/${file.id}/star`)).status).toBe(200);
     const grant = await request(app.getHttpServer())
       .post('/api/dev-e2e/grant-collaborator')
-      .send({ fileId: file.id, phone: otherPhone });
+      .send({ fileId: file.id, email: otherEmail });
     expect(grant.status).toBe(201);
     // 无 API 的表（comments/versions/share_links/invites/events）直插行
     const insertRow = (table: string, cols: string, values: unknown[]): Promise<unknown> =>
@@ -345,7 +339,6 @@ describe('回收站域（FR-FIL-005~007/010）', () => {
   it('准入 7.11：回收站提醒的即时邮件不触发 15 分钟摘要重发（emailed_at 落行）', async () => {
     const cleanup = app.get((await import('../src/jobs/cleanup.service')).CleanupService);
     const digest = app.get((await import('../src/jobs/digest.service')).DigestService);
-    const users = app.get((await import('../src/users/users.service')).UsersService);
     const files = app.get((await import('../src/files/files.service')).FilesService);
     // 有邮箱的 owner：即时邮件与（修复前的）15 分钟摘要重发都经 MailService——spy 全量捕获
     // （同 notify spec 摘要组模式；e2e 无 SMTP，不 spy 则只 log 不发送、断言无从落脚）
@@ -357,7 +350,7 @@ describe('回收站域（FR-FIL-005~007/010）', () => {
         return true;
       });
 
-    const mailOwner = await users.create({ method: 'email', email: 'trash711@test.dev' });
+    const mailOwner = await createAccount(app, { email: 'trash711@test.dev' });
     const file = await files.createForUser(mailOwner.id, { title: '7.11 提醒去重文件' });
     await files.deleteOwned(mailOwner.id, file.id);
     // 触发提醒（同 7.9 用例的编排：软删 → runCleanup(+27d)）；7.9 遗留条目已有 marker 行，不会重复提醒

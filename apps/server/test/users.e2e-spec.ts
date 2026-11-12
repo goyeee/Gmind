@@ -1,33 +1,32 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
-import { compare } from 'bcryptjs';
+import { compare, hash } from 'bcryptjs';
 import type { INestApplication } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import { ulid } from 'ulid';
 import { createTestApp } from './support/app-test';
+import { TEST_CODE, createAccount, loginToken, uniqueEmail } from './support/auth-test';
 import { MailService } from '../src/mail/mail.service';
 import { UserEntity } from '../src/users/user.entity';
 import { DigestService } from '../src/jobs/digest.service';
 
 /**
- * 账号设置端点 E2E — M5 Task 1（FR-ACC-002 收口 + FR-CMT-006 通知偏好收口）。
+ * 账号设置端点 E2E — FR-ACC-002 收口 + FR-CMT-006 通知偏好收口（2026-11-12 账号
+ * 体系重做后改口径：改密恒旧密码核身，换绑拆分 me/email 与 me/phone 两端点）。
  *
- * 端点：POST /api/users/me/password（改密）、POST /api/users/me/rebind（换绑）、
- * GET/PATCH /api/users/me/notify-prefs（邮件退订偏好）。
+ * 端点：POST /api/users/me/password（改密）、POST /api/users/me/email（换绑邮箱）、
+ * POST /api/users/me/phone（换绑手机号）、GET/PATCH /api/users/me/notify-prefs（偏好）。
  *
- * 语义（binding）：
- * - 改密：有密码（邮箱注册时设置过）须 currentPassword 验证；无密码（手机号注册）须
- *   code 核身（开发环境固定 123456，与登录通道同语义）；强度 = 8~64 位（PRD 未定义
- *   强度规则，登记：仅约束长度）；成功 204，不吊销其他会话（PRD 未要求，登记）；
- * - 换绑：code 校验 → 新身份格式校验（同登录 zod 口径）→ 占用检查（被占 409
- *   「该手机号/邮箱已绑定其他账号」）→ 改绑落列；204；
+ * 语义（binding，2026-11-12 重做）：
+ * - 改密：邮箱注册制人人有密码，恒 currentPassword 核身（无密码/验证码分支已删）；
+ *   强度 = 6~64 位（PASSWORD_LENGTH_MESSAGE 单点口径）；成功 204，不吊销其他会话；
+ * - 换绑邮箱：currentPassword 核身 → email_bind 场景验证码 → 占用（他人）409 → 落列；
+ * - 换绑手机号：仅 currentPassword 核身（手机号无验证码通道）→ 占用 409 → 落列；
  * - 偏好：{emailOptOut: ('mention'|'reply'|'permission')[]} 全量替换；非法成员 400；
- *   存储 = users.notify_prefs JSON（M0 预留列）；GET 对空/坏列返回 {emailOptOut: []}；
  * - digest：分组后按用户 opt-out 过滤对应 type 的行（过滤行同样回写 emailed_at 收敛，
  *   语义同无邮箱用户）；system 行（FR-FIL-010 回收站提醒）恒发不受开关控制。
  */
 
-const phone = (): string => '136' + String(Math.floor(10000000 + Math.random() * 89999999));
 const email = (): string => `u${Date.now()}-${Math.random().toString(36).slice(2, 8)}@test.dev`;
 
 type Method = 'get' | 'post' | 'patch';
@@ -37,10 +36,9 @@ const authed = (app: INestApplication, token: string, method: Method, url: strin
 describe('账号设置端点（FR-ACC-002 收口）：改密 / 换绑 / 通知偏好', () => {
   let app: INestApplication;
   let dataSource: DataSource;
-  let phoneToken: string; // 无密码（手机号注册）
-  let emailToken: string; // 有密码（邮箱注册设置密码）
-  let otherToken: string; // 另一手机号用户（换绑占用/格式用例）
-  let emailUserEmail: string;
+  let main: { id: string; email: string; token: string }; // 主角：偏好 / 换绑手机号占用
+  let other: { id: string; email: string; token: string }; // 换绑邮箱+手机号主角 / 格式负例
+  let changer: { id: string; email: string; token: string }; // 改密主角（改密不改 main 的默认密码）
 
   const me = async (token: string): Promise<Record<string, unknown>> => {
     const res = await authed(app, token, 'get', '/api/users/me');
@@ -52,223 +50,230 @@ describe('账号设置端点（FR-ACC-002 收口）：改密 / 换绑 / 通知�
     expect(row).toBeTruthy();
     return row as UserEntity;
   };
+  /** 给指定邮箱发 email_bind 场景验证码（换绑邮箱前置，无存在性闸）。 */
+  const issueBindCode = async (target: string): Promise<void> => {
+    const res = await request(app.getHttpServer())
+      .post('/api/auth/email-code')
+      .send({ scene: 'email_bind', email: target });
+    expect(res.status).toBe(204);
+  };
 
   beforeAll(async () => {
     app = await createTestApp();
     dataSource = app.get(DataSource);
-
-    const p1 = phone();
-    phoneToken = ((await loginPhone(app, p1)).body as { token: string }).token;
-    emailUserEmail = email();
-    const res = await request(app.getHttpServer())
-      .post('/api/auth/login')
-      .send({ method: 'email', email: emailUserEmail, mode: 'code', code: '123456', password: 'oldpass66' });
-    emailToken = (res.body as { token: string }).token;
-    otherToken = ((await loginPhone(app, phone())).body as { token: string }).token;
+    main = await createAccount(app, { nickname: '设置甲' });
+    other = await createAccount(app, { nickname: '设置乙' });
+    changer = await createAccount(app, { nickname: '设置丙' });
   });
 
   afterAll(async () => {
     await app.close();
   });
 
-  it('未登录访问三个端点 → 401', async () => {
+  it('未登录访问四个端点 → 401', async () => {
     expect((await request(app.getHttpServer()).post('/api/users/me/password').send({})).status).toBe(401);
-    expect((await request(app.getHttpServer()).post('/api/users/me/rebind').send({})).status).toBe(401);
+    expect((await request(app.getHttpServer()).post('/api/users/me/email').send({})).status).toBe(401);
+    expect((await request(app.getHttpServer()).post('/api/users/me/phone').send({})).status).toBe(401);
     expect((await request(app.getHttpServer()).get('/api/users/me/notify-prefs')).status).toBe(401);
   });
 
   // ---- 通知偏好 ------------------------------------------------------------
 
   it('通知偏好：GET 缺省 {emailOptOut: []}；PATCH 全量替换 → GET round-trip', async () => {
-    const first = await authed(app, phoneToken, 'get', '/api/users/me/notify-prefs');
+    const first = await authed(app, main.token, 'get', '/api/users/me/notify-prefs');
     expect(first.status).toBe(200);
     // 2026-10-28 P1：返回扩 notifyEnabled/digestEnabled 两开关（缺省 true）——objectContaining 容忍键集演进
     expect(first.body).toEqual(expect.objectContaining({ emailOptOut: [], notifyEnabled: true, digestEnabled: true }));
 
-    const patch = await authed(app, phoneToken, 'patch', '/api/users/me/notify-prefs').send({
+    const patch = await authed(app, main.token, 'patch', '/api/users/me/notify-prefs').send({
       emailOptOut: ['mention', 'permission'],
     });
     expect(patch.status).toBe(200);
     expect(patch.body).toEqual(expect.objectContaining({ emailOptOut: ['mention', 'permission'] }));
 
-    const again = await authed(app, phoneToken, 'get', '/api/users/me/notify-prefs');
+    const again = await authed(app, main.token, 'get', '/api/users/me/notify-prefs');
     expect(again.body).toEqual(expect.objectContaining({ emailOptOut: ['mention', 'permission'] }));
 
     // 全量替换：再次 PATCH 可清空
-    const clear = await authed(app, phoneToken, 'patch', '/api/users/me/notify-prefs').send({ emailOptOut: [] });
+    const clear = await authed(app, main.token, 'patch', '/api/users/me/notify-prefs').send({ emailOptOut: [] });
     expect(clear.status).toBe(200);
     expect(clear.body).toEqual(expect.objectContaining({ emailOptOut: [] }));
   });
 
   it('通知偏好：非法成员（system 等）/ 非数组 / 缺字段 → 400', async () => {
-    const badMember = await authed(app, phoneToken, 'patch', '/api/users/me/notify-prefs').send({
+    const badMember = await authed(app, main.token, 'patch', '/api/users/me/notify-prefs').send({
       emailOptOut: ['system'],
     });
     expect(badMember.status).toBe(400); // system（FR-FIL-010 回收站提醒）不可关闭
-    const badShape = await authed(app, phoneToken, 'patch', '/api/users/me/notify-prefs').send({
+    const badShape = await authed(app, main.token, 'patch', '/api/users/me/notify-prefs').send({
       emailOptOut: 'mention',
     });
     expect(badShape.status).toBe(400);
-    const missing = await authed(app, phoneToken, 'patch', '/api/users/me/notify-prefs').send({});
+    const missing = await authed(app, main.token, 'patch', '/api/users/me/notify-prefs').send({});
     expect(missing.status).toBe(400);
   });
 
-  // ---- 改密 ----------------------------------------------------------------
+  // ---- 改密（2026-11-12 重做：恒旧密码核身，验证码分支已删） --------------------
 
-  it('改密：无密码（手机号注册）用户凭验证码设置密码 → 204 且列回写（bcrypt 可比对）', async () => {
-    const meBefore = await me(phoneToken);
-    expect(meBefore.hasPassword).toBe(false);
+  it('改密：旧密码错误 → 400「当前密码错误，请重新输入」且列未变', async () => {
+    const res = await authed(app, changer.token, 'post', '/api/users/me/password').send({
+      currentPassword: 'wrong-pass-0',
+      newPassword: 'brandnew99',
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.message).toBe('当前密码错误，请重新输入');
 
-    const res = await authed(app, phoneToken, 'post', '/api/users/me/password').send({
-      newPassword: 'newpass88',
-      code: '123456',
+    const row = await userRow(changer.id);
+    expect(await compare('pass123456', row.passwordHash as string)).toBe(true); // 原密码未动
+  });
+
+  it('改密：旧密码正确 → 204 且 hash 落库（bcrypt 比对）、新密码可登录、旧密码失效', async () => {
+    const res = await authed(app, changer.token, 'post', '/api/users/me/password').send({
+      currentPassword: 'pass123456',
+      newPassword: 'brandnew99',
     });
     expect(res.status).toBe(204);
 
-    const meId = meBefore.id as string;
-    const row = await userRow(meId);
+    const row = await userRow(changer.id);
     expect(row.passwordHash).toBeTruthy();
-    expect(await compare('newpass88', row.passwordHash as string)).toBe(true);
-
-    const meAfter = await me(phoneToken);
-    expect(meAfter.hasPassword).toBe(true);
-  });
-
-  it('改密：无密码用户验证码错误 → 400 文案含「验证码」', async () => {
-    const res = await authed(app, otherToken, 'post', '/api/users/me/password').send({
-      newPassword: 'newpass88',
-      code: '999999',
-    });
-    expect(res.status).toBe(400);
-    expect(String(res.body.message)).toContain('验证码');
-  });
-
-  it('改密：有密码用户旧密码错误 → 400「当前密码不正确」且列未变', async () => {
-    const res = await authed(app, emailToken, 'post', '/api/users/me/password').send({
-      newPassword: 'brandnew99',
-      currentPassword: 'wrong66',
-    });
-    expect(res.status).toBe(400);
-    expect(String(res.body.message)).toContain('当前密码不正确');
-
-    const meBefore = await me(emailToken);
-    const row = await userRow(meBefore.id as string);
-    expect(await compare('oldpass66', row.passwordHash as string)).toBe(true);
-  });
-
-  it('改密：有密码用户旧密码正确 → 204 且新密码可密码登录、旧密码失效', async () => {
-    const res = await authed(app, emailToken, 'post', '/api/users/me/password').send({
-      newPassword: 'brandnew99',
-      currentPassword: 'oldpass66',
-    });
-    expect(res.status).toBe(204);
-
-    const meBefore = await me(emailToken);
-    const row = await userRow(meBefore.id as string);
     expect(await compare('brandnew99', row.passwordHash as string)).toBe(true);
+
+    const meAfter = await me(changer.token);
+    expect(meAfter.hasPassword).toBe(true);
 
     const byNew = await request(app.getHttpServer())
       .post('/api/auth/login')
-      .send({ method: 'email', email: emailUserEmail, mode: 'password', password: 'brandnew99' });
+      .send({ account: changer.email, password: 'brandnew99' });
     expect(byNew.status).toBe(200);
-    expect((byNew.body as { user: { id: string } }).user.id).toBe(meBefore.id);
+    expect((byNew.body as { user: { id: string } }).user.id).toBe(changer.id);
 
     const byOld = await request(app.getHttpServer())
       .post('/api/auth/login')
-      .send({ method: 'email', email: emailUserEmail, mode: 'password', password: 'oldpass66' });
+      .send({ account: changer.email, password: 'pass123456' });
     expect(byOld.status).toBe(401);
+    expect(byOld.body.message).toBe('密码错误，请重新输入或找回密码');
   });
 
-  it('改密：新密码不足 8 位 → 400（强度 = 8~64 位，PRD 未定义规则已登记）', async () => {
-    const res = await authed(app, otherToken, 'post', '/api/users/me/password').send({
-      newPassword: 'short12',
-      code: '123456',
+  it('改密：新密码不足 6 位 / 缺当前密码 → 400（schema 单点口径 6~64）', async () => {
+    const tooShort = await authed(app, other.token, 'post', '/api/users/me/password').send({
+      currentPassword: 'pass123456',
+      newPassword: 'abc12', // 5 位
     });
-    expect(res.status).toBe(400);
+    expect(tooShort.status).toBe(400);
+    expect(tooShort.body.message).toBe('密码长度需为 6~64 位，请调整后重试');
+
+    const noCurrent = await authed(app, other.token, 'post', '/api/users/me/password').send({
+      newPassword: 'longenough88',
+    });
+    expect(noCurrent.status).toBe(400);
   });
 
-  // ---- 换绑 ----------------------------------------------------------------
+  // ---- 换绑邮箱（POST /users/me/email）---------------------------------------
 
-  it('换绑：邮箱换绑成功 → 204 且 email 列更新', async () => {
-    const meBefore = await me(otherToken);
-    const newEmail = email();
-    const res = await authed(app, otherToken, 'post', '/api/users/me/rebind').send({
-      channel: 'email',
-      newIdentity: newEmail,
-      code: '123456',
+  it('换绑邮箱：当前密码 + email_bind 验证码 → 204 且 email 列更新（me 回显）', async () => {
+    const newEmail = uniqueEmail();
+    await issueBindCode(newEmail);
+    const res = await authed(app, other.token, 'post', '/api/users/me/email').send({
+      currentPassword: 'pass123456',
+      email: newEmail,
+      code: TEST_CODE,
     });
     expect(res.status).toBe(204);
 
-    const row = await userRow(meBefore.id as string);
+    const row = await userRow(other.id);
     expect(row.email).toBe(newEmail);
-    const meAfter = await me(otherToken);
+    const meAfter = await me(other.token);
     expect(meAfter.email).toBe(newEmail);
+    // 换绑后旧密码仍可登录（改密/换绑不吊销会话，新邮箱可登录同一账号）
+    const byNewEmail = await loginToken(app, newEmail);
+    expect(byNewEmail).toBeTruthy();
   });
 
-  it('换绑：手机号换绑成功 → 204 且 phone 列更新', async () => {
-    const meBefore = await me(emailToken);
-    const newPhone = phone();
-    const res = await authed(app, emailToken, 'post', '/api/users/me/rebind').send({
-      channel: 'phone',
-      newIdentity: newPhone,
-      code: '123456',
+  it('换绑邮箱：目标已被占用 → 409「该邮箱已绑定其他账号，请换用其他邮箱」', async () => {
+    // 占用目标 = main 的注册邮箱；email_bind 无存在性闸，可对已注册邮箱发码
+    await issueBindCode(main.email);
+    const res = await authed(app, other.token, 'post', '/api/users/me/email').send({
+      currentPassword: 'pass123456',
+      email: main.email,
+      code: TEST_CODE,
     });
-    expect(res.status).toBe(204);
-
-    const row = await userRow(meBefore.id as string);
-    expect(row.phone).toBe(newPhone);
+    expect(res.status).toBe(409);
+    expect(res.body.message).toBe('该邮箱已绑定其他账号，请换用其他邮箱');
   });
 
-  it('换绑：目标已被占用 → 409「该手机号已绑定其他账号」/「该邮箱已绑定其他账号」', async () => {
-    // 占用手机号：otherToken 换绑到 phoneToken 用户的手机号（me 可见，稳定取用）
-    const mePhone = await me(phoneToken);
-    const occupiedPhone = mePhone.phone as string;
-    const phoneConflict = await authed(app, otherToken, 'post', '/api/users/me/rebind').send({
-      channel: 'phone',
-      newIdentity: occupiedPhone,
-      code: '123456',
-    });
-    expect(phoneConflict.status).toBe(409);
-    expect(phoneConflict.body.message).toBe('该手机号已绑定其他账号');
-
-    // 占用邮箱：phoneToken 换绑到 emailToken 用户的原邮箱（emailToken 只换绑过手机号）
-    const emailConflict = await authed(app, phoneToken, 'post', '/api/users/me/rebind').send({
-      channel: 'email',
-      newIdentity: emailUserEmail,
-      code: '123456',
-    });
-    expect(emailConflict.status).toBe(409);
-    expect(emailConflict.body.message).toBe('该邮箱已绑定其他账号');
-  });
-
-  it('换绑：验证码错误 → 400；新身份格式非法（同登录 zod 口径）→ 400', async () => {
-    const badCode = await authed(app, otherToken, 'post', '/api/users/me/rebind').send({
-      channel: 'phone',
-      newIdentity: phone(),
+  it('换绑邮箱：验证码错误 / 新邮箱格式非法 → 400', async () => {
+    const badCode = await authed(app, other.token, 'post', '/api/users/me/email').send({
+      currentPassword: 'pass123456',
+      email: uniqueEmail(),
       code: '999999',
     });
     expect(badCode.status).toBe(400);
-    expect(String(badCode.body.message)).toContain('验证码');
+    expect(badCode.body.message).toBe('验证码错误或已过期，请重新获取后再试');
 
-    const badPhone = await authed(app, otherToken, 'post', '/api/users/me/rebind').send({
-      channel: 'phone',
-      newIdentity: 'not-a-phone',
-      code: '123456',
-    });
-    expect(badPhone.status).toBe(400);
-
-    const badEmail = await authed(app, otherToken, 'post', '/api/users/me/rebind').send({
-      channel: 'email',
-      newIdentity: 'not-an-email',
-      code: '123456',
+    const badEmail = await authed(app, other.token, 'post', '/api/users/me/email').send({
+      currentPassword: 'pass123456',
+      email: 'not-an-email',
+      code: TEST_CODE,
     });
     expect(badEmail.status).toBe(400);
+    expect(badEmail.body.message).toBe('邮箱格式不正确，请检查后重新输入');
+  });
+
+  it('换绑邮箱：当前密码错误（顺序契约：密码先核身）→ 400「当前密码错误，请重新输入」', async () => {
+    const target = uniqueEmail();
+    await issueBindCode(target);
+    const res = await authed(app, other.token, 'post', '/api/users/me/email').send({
+      currentPassword: 'wrong-pass-0',
+      email: target,
+      code: TEST_CODE,
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.message).toBe('当前密码错误，请重新输入');
+  });
+
+  // ---- 换绑手机号（POST /users/me/phone）--------------------------------------
+
+  it('换绑手机号：仅当前密码核身（无验证码通道）→ 204 且 phone 列更新', async () => {
+    const newPhone = '136' + String(Math.floor(10000000 + Math.random() * 89999999));
+    const res = await authed(app, other.token, 'post', '/api/users/me/phone').send({
+      currentPassword: 'pass123456',
+      phone: newPhone,
+    });
+    expect(res.status).toBe(204);
+
+    const row = await userRow(other.id);
+    expect(row.phone).toBe(newPhone);
+    const meAfter = await me(other.token);
+    expect(meAfter.phone).toBe(newPhone);
+  });
+
+  it('换绑手机号：目标已被占用 → 409「该手机号已绑定其他账号，请换用其他手机号」', async () => {
+    // other 已在上例绑定手机号；main 换绑到同一号码 → 409
+    const occupied = (await me(other.token)).phone as string;
+    const res = await authed(app, main.token, 'post', '/api/users/me/phone').send({
+      currentPassword: 'pass123456',
+      phone: occupied,
+    });
+    expect(res.status).toBe(409);
+    expect(res.body.message).toBe('该手机号已绑定其他账号，请换用其他手机号');
+  });
+
+  it('换绑手机号：当前密码错误 / 格式非法 → 400', async () => {
+    const badPassword = await authed(app, main.token, 'post', '/api/users/me/phone').send({
+      currentPassword: 'wrong-pass-0',
+      phone: '137' + String(Math.floor(10000000 + Math.random() * 89999999)),
+    });
+    expect(badPassword.status).toBe(400);
+    expect(badPassword.body.message).toBe('当前密码错误，请重新输入');
+
+    const badFormat = await authed(app, main.token, 'post', '/api/users/me/phone').send({
+      currentPassword: 'pass123456',
+      phone: 'not-a-phone',
+    });
+    expect(badFormat.status).toBe(400);
+    expect(badFormat.body.message).toBe('手机号格式不正确，请检查后重试');
   });
 });
-
-/** 手机验证码登录（首登即注册），返回响应。 */
-const loginPhone = (app: INestApplication, p: string) =>
-  request(app.getHttpServer()).post('/api/auth/login').send({ method: 'phone', phone: p, code: '123456' });
 
 /**
  * digest 通知偏好过滤 E2E（FR-CMT-006 / FR-FIL-010）。
@@ -315,16 +320,16 @@ describe('digest 通知偏好过滤（FR-CMT-006）：opt-out 行不收信且回
     });
 
     const userRepo = dataSource.getRepository(UserEntity);
+    // 裸建行须带 passwordHash（重做后登录恒密码核身）：偏好 PATCH 走真实端点需先登录
     optUser = await userRepo.save(
-      userRepo.create({ phone: phone(), email: email(), nickname: '退订甲' }),
+      userRepo.create({ email: email(), nickname: '退订甲', passwordHash: await hash('pass123456', 10) }),
     );
     normalUser = await userRepo.save(
-      userRepo.create({ phone: phone(), email: email(), nickname: '普通乙' }),
+      userRepo.create({ email: email(), nickname: '普通乙', passwordHash: await hash('pass123456', 10) }),
     );
 
     // 经端点设置偏好（贯通 prefs 落列链路）：退订 mention
-    const login = await loginPhone(app, optUser.phone as string);
-    const token = (login.body as { token: string }).token;
+    const token = await loginToken(app, optUser.email as string);
     const patch = await authed(app, token, 'patch', '/api/users/me/notify-prefs').send({ emailOptOut: ['mention'] });
     expect(patch.status).toBe(200);
   });

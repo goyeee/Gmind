@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
 import type { INestApplication } from '@nestjs/common';
 import { createTestApp } from './support/app-test';
+import { createAccount, loginToken, type TestAccount } from './support/auth-test';
 import { EventEntity } from '../src/events/event.entity';
 import { FileCollaboratorEntity } from '../src/files/file-collaborator.entity';
 import { InviteEntity } from '../src/share/invite.entity';
@@ -28,7 +29,6 @@ import { ShareLinkEntity } from '../src/share/share-link.entity';
  */
 describe('share 域', () => {
   let app: INestApplication;
-  let users: import('../src/users/users.service').UsersService;
   let files: import('../src/files/files.service').FilesService;
   let collabRepo: import('typeorm').Repository<FileCollaboratorEntity>;
   let shareRepo: import('typeorm').Repository<ShareLinkEntity>;
@@ -36,17 +36,25 @@ describe('share 域', () => {
   let notifRepo: import('typeorm').Repository<NotificationEntity>;
   let eventRepo: import('typeorm').Repository<EventEntity>;
 
-  const tokenFor = async (userId: string): Promise<string> => {
-    const { SessionService } = await import('../src/session/session.service');
-    const redisMod = await import('ioredis');
-    const svc = new SessionService(new redisMod.default('redis://127.0.0.1:16379/1'));
-    return (await svc.create(userId, false)).token;
-  };
+  /** 邮箱注册建号（走真实 API，注册即登录）；需断言昵称的用例显式传 nickname。 */
+  async function newUser(
+    opts?: { nickname?: string },
+  ): Promise<{ id: string; email: string; nickname: string; token: string }> {
+    const acct = await createAccount(app, opts);
+    return { id: acct.id, email: acct.email, nickname: opts?.nickname ?? '', token: acct.token };
+  }
 
-  /** 注册用户并签发 token；返回 { user, token }。 */
-  async function newUser(phone: string): Promise<{ id: string; nickname: string; token: string }> {
-    const user = await users.create({ method: 'phone', phone });
-    return { id: user.id, nickname: user.nickname, token: await tokenFor(user.id) };
+  /** 受邀手机号回填装置（2026-11-12 重做后注册仅邮箱）：注册 → 换绑手机号（密码核身）
+   *  → 再登录一次触发回填（acceptPendingForNewUser 按 email/phone 匹配 pending 邀请）。 */
+  async function registerWithPhone(email: string, phone: string): Promise<{ id: string; token: string }> {
+    const acct = await createAccount(app, { email });
+    const rebind = await request(app.getHttpServer())
+      .post('/api/users/me/phone')
+      .set('Authorization', `Bearer ${acct.token}`)
+      .send({ currentPassword: 'pass123456', phone });
+    expect(rebind.status).toBe(204);
+    const token = await loginToken(app, email);
+    return { id: acct.id, token };
   }
 
   /** owner 建文件 → 建 active 分享链接，返回 { fileId, token, shareToken }。 */
@@ -66,7 +74,6 @@ describe('share 域', () => {
 
   beforeAll(async () => {
     app = await createTestApp();
-    users = app.get((await import('../src/users/users.service')).UsersService);
     files = app.get((await import('../src/files/files.service')).FilesService);
     collabRepo = app.get((await import('@nestjs/typeorm')).getRepositoryToken(FileCollaboratorEntity));
     shareRepo = app.get((await import('@nestjs/typeorm')).getRepositoryToken(ShareLinkEntity));
@@ -80,7 +87,7 @@ describe('share 域', () => {
   });
 
   it('owner 创建分享链接：token 为 32 位 hex，DB 落 active 行', async () => {
-    const owner = await newUser('13800110001');
+    const owner = await newUser();
     const created = await request(app.getHttpServer())
       .post('/api/files')
       .set('Authorization', `Bearer ${owner.token}`)
@@ -101,8 +108,8 @@ describe('share 域', () => {
   });
 
   it('非 owner 创建 404（协作者/陌生人与不存在同口径，不泄露文件存在性）', async () => {
-    const owner = await newUser('13800110002');
-    const outsider = await newUser('13800110003');
+    const owner = await newUser();
+    const outsider = await newUser();
     const created = await request(app.getHttpServer())
       .post('/api/files')
       .set('Authorization', `Bearer ${owner.token}`)
@@ -123,7 +130,7 @@ describe('share 域', () => {
   });
 
   it('重复创建返回同一 active token（每文件至多一条 active 链接）', async () => {
-    const owner = await newUser('13800110004');
+    const owner = await newUser();
     const { fileId, shareToken } = await makeSharedFile(owner);
 
     const again = await request(app.getHttpServer())
@@ -137,12 +144,12 @@ describe('share 域', () => {
   });
 
   it('GET /api/share/:token 公开可访问（未登录）：active 返回 fileId/title/ownerName', async () => {
-    const owner = await newUser('13800110005');
+    const owner = await newUser({ nickname: '分享链接甲' });
     const { fileId, shareToken } = await makeSharedFile(owner);
 
     const res = await request(app.getHttpServer()).get(`/api/share/${shareToken}`);
     expect(res.status).toBe(200);
-    expect(res.body).toEqual(expect.objectContaining({ fileId, title: '待分享脑图', ownerName: owner.nickname, status: 'active', role: 'editor' }));
+    expect(res.body).toEqual(expect.objectContaining({ fileId, title: '待分享脑图', ownerName: '分享链接甲', status: 'active', role: 'editor' }));
   });
 
   it('GET 未知/已关闭 token 统一 200 { status:"closed" }（不泄露存在性差异）', async () => {
@@ -150,7 +157,7 @@ describe('share 域', () => {
     expect(missing.status).toBe(200);
     expect(missing.body).toEqual({ status: 'closed' });
 
-    const owner = await newUser('13800110006');
+    const owner = await newUser();
     const { fileId, shareToken } = await makeSharedFile(owner);
     await request(app.getHttpServer())
       .delete(`/api/files/${fileId}/share`)
@@ -161,7 +168,7 @@ describe('share 域', () => {
   });
 
   it('GET 源文件已删的链接同样 closed（死链不外泄 title/owner）', async () => {
-    const owner = await newUser('13800110007');
+    const owner = await newUser();
     const { fileId, shareToken } = await makeSharedFile(owner);
     await files.deleteOwned(owner.id, fileId);
     const res = await request(app.getHttpServer()).get(`/api/share/${shareToken}`);
@@ -170,8 +177,8 @@ describe('share 域', () => {
   });
 
   it('join 写 editor 协作者行（DB 断言）；二次 join 幂等 no-op；shared 视图可见', async () => {
-    const owner = await newUser('13800110008');
-    const bob = await newUser('13800110009');
+    const owner = await newUser();
+    const bob = await newUser();
     const { fileId, shareToken } = await makeSharedFile(owner);
 
     const join = await request(app.getHttpServer())
@@ -199,7 +206,7 @@ describe('share 域', () => {
   });
 
   it('join 未知/已关闭链接 → 404「链接已失效」（closed 与 GET 语义统一）', async () => {
-    const bob = await newUser('13800110010');
+    const bob = await newUser();
 
     const missing = await request(app.getHttpServer())
       .post(`/api/share/${'cd'.repeat(16)}/join`)
@@ -207,7 +214,7 @@ describe('share 域', () => {
     expect(missing.status).toBe(404);
     expect(missing.body.message).toBe('链接已失效');
 
-    const owner = await newUser('13800110011');
+    const owner = await newUser();
     const { fileId, shareToken } = await makeSharedFile(owner);
     await request(app.getHttpServer())
       .delete(`/api/files/${fileId}/share`)
@@ -225,7 +232,7 @@ describe('share 域', () => {
   });
 
   it('owner join 自己的链接：200 no-op，不产生冗余协作者行（落地页自动 join 场景）', async () => {
-    const owner = await newUser('13800110014');
+    const owner = await newUser();
     const { fileId, shareToken } = await makeSharedFile(owner);
     const res = await request(app.getHttpServer())
       .post(`/api/share/${shareToken}/join`)
@@ -236,8 +243,8 @@ describe('share 域', () => {
   });
 
   it('DELETE 关闭链接：owner 成功、DB 置 closed+closed_at；再次 DELETE 404；非 owner 404', async () => {
-    const owner = await newUser('13800110012');
-    const outsider = await newUser('13800110013');
+    const owner = await newUser();
+    const outsider = await newUser();
     const { fileId, shareToken } = await makeSharedFile(owner);
 
     const byOutsider = await request(app.getHttpServer())
@@ -280,18 +287,14 @@ describe('share 域', () => {
       .set('Authorization', `Bearer ${owner.token}`)
       .send({ contacts });
 
-  /** 以验证码登录（未注册即注册），返回 { id, token }。 */
-  async function loginByCode(payload: { email?: string; phone?: string }): Promise<{ id: string; token: string }> {
-    const body = payload.email
-      ? { method: 'email', email: payload.email, mode: 'code', code: '123456' }
-      : { method: 'phone', phone: payload.phone, code: '123456' };
-    const res = await request(app.getHttpServer()).post('/api/auth/login').send(body);
-    expect(res.status).toBe(200);
-    return { id: res.body.user.id as string, token: res.body.token as string };
+  /** 受邀邮箱注册（走真实 register API），返回 { id, token }；注册即触发回填。 */
+  async function loginByCode(email: string): Promise<{ id: string; token: string }> {
+    const acct = await createAccount(app, { email });
+    return { id: acct.id, token: acct.token };
   }
 
   it('批量邀请 3 联系人（2 邮箱 1 手机号）：pending 行 + invited_by 正确 + 邮件含邀请人/文件名/注册链接', async () => {
-    const owner = await newUser('13800120001');
+    const owner = await newUser();
     const fileId = await makeFile(owner, '批量邀请域用例');
 
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
@@ -323,8 +326,8 @@ describe('share 域', () => {
   });
 
   it('非 owner 批量邀请 404（与不存在同口径）；空列表 400', async () => {
-    const owner = await newUser('13800120002');
-    const outsider = await newUser('13800120003');
+    const owner = await newUser();
+    const outsider = await newUser();
     const fileId = await makeFile(owner);
 
     const byOutsider = await invite(outsider, fileId, ['invite-c@test.dev']);
@@ -336,11 +339,11 @@ describe('share 域', () => {
   });
 
   it('未注册邮箱受邀后以该邮箱注册 → 邀请自动 accepted + collaborator 行 + shared 视图可见', async () => {
-    const owner = await newUser('13800120004');
+    const owner = await newUser();
     const fileId = await makeFile(owner);
     await invite(owner, fileId, ['invite-d@test.dev']);
 
-    const invitee = await loginByCode({ email: 'invite-d@test.dev' });
+    const invitee = await loginByCode('invite-d@test.dev');
 
     const row = await inviteRepo.findOneByOrFail({ fileId, contactType: 'email', contact: 'invite-d@test.dev' });
     expect(row.status).toBe('accepted');
@@ -356,12 +359,12 @@ describe('share 域', () => {
     expect(shared.body.map((f: { id: string }) => f.id)).toContain(fileId);
   });
 
-  it('手机号注册同样回填（accepted + editor 协作者行）', async () => {
-    const owner = await newUser('13800120005');
+  it('手机号受邀回填（注册后换绑手机号 → 登录触发回填）（accepted + editor 协作者行）', async () => {
+    const owner = await newUser();
     const fileId = await makeFile(owner);
     await invite(owner, fileId, ['13700020002']);
 
-    const invitee = await loginByCode({ phone: '13700020002' });
+    const invitee = await registerWithPhone('phone-rebind@test.dev', '13700020002');
 
     const row = await inviteRepo.findOneByOrFail({ fileId, contactType: 'phone', contact: '13700020002' });
     expect(row.status).toBe('accepted');
@@ -371,7 +374,7 @@ describe('share 域', () => {
   });
 
   it('重复邀请幂等：pending 重邀 no-op，invited/skipped 计数正确、行不翻倍', async () => {
-    const owner = await newUser('13800120006');
+    const owner = await newUser();
     const fileId = await makeFile(owner);
     const contacts = ['invite-e@test.dev', 'invite-f@test.dev', '13700020003'];
 
@@ -381,10 +384,10 @@ describe('share 域', () => {
   });
 
   it('已 accepted 再邀请 no-op：行不变、计 skipped（回填后重发场景）', async () => {
-    const owner = await newUser('13800120007');
+    const owner = await newUser();
     const fileId = await makeFile(owner);
     await invite(owner, fileId, ['invite-g@test.dev']);
-    await loginByCode({ email: 'invite-g@test.dev' });
+    await loginByCode('invite-g@test.dev');
 
     const res = await invite(owner, fileId, ['invite-g@test.dev']);
     expect(res.status).toBe(201);
@@ -396,7 +399,7 @@ describe('share 域', () => {
   });
 
   it('批量 >50 拒 400', async () => {
-    const owner = await newUser('13800120008');
+    const owner = await newUser();
     const fileId = await makeFile(owner);
     const contacts = Array.from({ length: 51 }, (_, i) => `invite-x${i}@test.dev`);
 
@@ -405,7 +408,7 @@ describe('share 域', () => {
   });
 
   it('非法格式 400 且逐条列出非法条目（合法条目不误伤）', async () => {
-    const owner = await newUser('13800120009');
+    const owner = await newUser();
     const fileId = await makeFile(owner);
 
     const res = await invite(owner, fileId, ['not-an-email', '13700020004', '137000', 'bad@']);
@@ -423,11 +426,11 @@ describe('share 域', () => {
     // M4 清偿包推翻 M3b「owner 零通知」口径：回填写入协作者行成功后，owner 收到
     // type='permission'、payload {fileId, title, memberName, action:'joined'} 的站内通知
     // （口径与 joinByToken 一致；通知失败静默，不波及回填主流程）。
-    const owner = await newUser('13800120010');
+    const owner = await newUser();
     const fileId = await makeFile(owner);
     await invite(owner, fileId, ['invite-h@test.dev', '13700020005']);
-    await loginByCode({ email: 'invite-h@test.dev' });
-    await loginByCode({ phone: '13700020005' });
+    await loginByCode('invite-h@test.dev');
+    await registerWithPhone('phone-rebind-m4@test.dev', '13700020005');
 
     const rows = await notifRepo.find({ where: { userId: owner.id } });
     expect(rows).toHaveLength(2); // 两位受邀者各一条（同文件不去重——不同 memberName）
@@ -444,11 +447,11 @@ describe('share 域', () => {
     // 软删文件（回收站可恢复语义）不产 owner 通知：notifyOwnersJoined 的 fileRepo.find
     // 过滤 deletedAt——通知是「成员加入了你的文件」的提醒，文件已删时提醒无意义；
     // 回填主流程（accepted + 协作者行）不受影响（授权事实与文件存活是两件事）。
-    const owner = await newUser('13800130006');
+    const owner = await newUser();
     const fileId = await makeFile(owner, '软删回填用例');
     await invite(owner, fileId, ['invite-softdel@test.dev']);
     await files.deleteOwned(owner.id, fileId); // owner 软删（trash 口径，行不消失）
-    await loginByCode({ email: 'invite-softdel@test.dev' });
+    await loginByCode('invite-softdel@test.dev');
 
     // 回填本身照常：邀请 accepted（文件恢复后授权已在）
     const row = await inviteRepo.findOneByOrFail({ fileId, contactType: 'email', contact: 'invite-softdel@test.dev' });
@@ -458,7 +461,7 @@ describe('share 域', () => {
   });
 
   it('revoked 邀请不因注册回填复活：行保持 revoked、accepted_user_id 空、无协作者行', async () => {
-    const owner = await newUser('13800120011');
+    const owner = await newUser();
     const fileId = await makeFile(owner);
     await invite(owner, fileId, ['invite-r@test.dev']);
     // 模拟撤销端点后的状态（当前无端点，直改 DB 行）
@@ -466,7 +469,7 @@ describe('share 域', () => {
     row.status = 'revoked';
     await inviteRepo.save(row);
 
-    const invitee = await loginByCode({ email: 'invite-r@test.dev' });
+    const invitee = await loginByCode('invite-r@test.dev');
 
     const after = await inviteRepo.findOneByOrFail({ fileId, contactType: 'email', contact: 'invite-r@test.dev' });
     expect(after.status).toBe('revoked');
@@ -474,8 +477,8 @@ describe('share 域', () => {
     expect(await collabRepo.countBy({ fileId, userId: invitee.id })).toBe(0);
   });
 
-  it('回填中途失败与登录隔离：登录仍 200、事务回滚（行保持 pending、无协作者行）；二次登录按 7.10 天然重试成功', async () => {
-    const owner = await newUser('13800120012');
+  it('回填中途失败与注册/登录隔离：注册仍 200、事务回滚（行保持 pending、无协作者行）；二次登录按 7.10 天然重试成功', async () => {
+    const owner = await newUser();
     const fileId = await makeFile(owner);
     await invite(owner, fileId, ['invite-x@test.dev']);
 
@@ -496,49 +499,44 @@ describe('share 域', () => {
       return originalSave.apply(this, args);
     });
 
-    let login: request.Response;
+    let acct: TestAccount;
     try {
-      login = await request(app.getHttpServer())
-        .post('/api/auth/login')
-        .send({ method: 'email', email: 'invite-x@test.dev', mode: 'code', code: '123456' });
+      // 注册即登录也触发回填（register → backfillInvites）：失败被隔离，注册主流程不波及
+      acct = await createAccount(app, { email: 'invite-x@test.dev' });
     } finally {
       spy.mockRestore();
     }
-    // 回填失败不得波及登录（best-effort 隔离，口径同邮件旁路）
-    expect(login.status).toBe(200);
+    expect(acct.id).toBeTruthy();
+    expect(acct.token).toBeTruthy();
 
     // 事务整体回滚：无「已 accepted 无协作者行」脏状态
     const row = await inviteRepo.findOneByOrFail({ fileId, contactType: 'email', contact: 'invite-x@test.dev' });
     expect(row.status).toBe('pending');
     expect(row.acceptedUserId).toBeNull();
-    const user = await users.findByIdentity({ method: 'email', email: 'invite-x@test.dev' });
-    expect(user).not.toBeNull();
-    expect(await collabRepo.countBy({ fileId, userId: user!.id })).toBe(0);
+    expect(await collabRepo.countBy({ fileId, userId: acct.id })).toBe(0);
 
     // 二次登录（准入 7.10：回填对已注册用户同样生效，每次登录尽力触发）：
-    // 首登失败的 pending 残差在本次登录天然重试并成功——行 accepted、协作者行补齐
-    const second = await request(app.getHttpServer())
-      .post('/api/auth/login')
-      .send({ method: 'email', email: 'invite-x@test.dev', mode: 'code', code: '123456' });
-    expect(second.status).toBe(200);
+    // 首次失败的 pending 残差在本次登录天然重试并成功——行 accepted、协作者行补齐
+    const second = await loginToken(app, 'invite-x@test.dev');
+    expect(second).toBeTruthy();
     const after = await inviteRepo.findOneByOrFail({ fileId, contactType: 'email', contact: 'invite-x@test.dev' });
     expect(after.status).toBe('accepted');
-    expect(after.acceptedUserId).toBe(user!.id);
-    expect(await collabRepo.countBy({ fileId, userId: user!.id })).toBe(1);
+    expect(after.acceptedUserId).toBe(acct.id);
+    expect(await collabRepo.countBy({ fileId, userId: acct.id })).toBe(1);
   });
 
   // ---------- 准入 7.10（M4 T1）：已注册受邀者登录回填 ----------
 
   it('准入 7.10：已注册用户被邀请，登录后自动获得授权（不再永久悬挂）', async () => {
     // ① 受邀者先注册（产生既有账号；此时尚无邀请，回填空跑）
-    const invitee = await loginByCode({ email: 'reg710@test.dev' });
+    const invitee = await loginByCode('reg710@test.dev');
     // ② owner 邀请该已注册邮箱 → pending 行 + 邀请邮件
-    const owner = await newUser('13800120013');
+    const owner = await newUser();
     const fileId = await makeFile(owner, '准入 7.10 用例');
     expect((await invite(owner, fileId, ['reg710@test.dev'])).status).toBe(201);
     // ③ 受邀者用同一邮箱再次登录（修复前：回填仅新用户创建路径，此处必失败）
-    const again = await loginByCode({ email: 'reg710@test.dev' });
-    expect(again.id).toBe(invitee.id); // 命中同一既有账号，非新建
+    const againToken = await loginToken(app, 'reg710@test.dev');
+    expect(againToken).toBeTruthy(); // 命中同一既有账号，非新建
     // ④ 回填生效：邀请 accepted + editor 协作者行 + shared 视图可见
     const row = await inviteRepo.findOneByOrFail({ fileId, contactType: 'email', contact: 'reg710@test.dev' });
     expect(row.status).toBe('accepted');
@@ -546,7 +544,7 @@ describe('share 域', () => {
     expect(await collabRepo.countBy({ fileId, userId: invitee.id })).toBe(1);
     const shared = await request(app.getHttpServer())
       .get('/api/files?view=shared')
-      .set('Authorization', `Bearer ${again.token}`);
+      .set('Authorization', `Bearer ${againToken}`);
     expect(shared.status).toBe(200);
     expect(shared.body.map((f: { id: string }) => f.id)).toContain(fileId);
   });
@@ -564,7 +562,7 @@ describe('share 域', () => {
     });
 
   it('埋点：创建分享链接落 invite_send {channel:"link"}；重复创建（幂等返回既有 token）不重复落', async () => {
-    const owner = await newUser('13800130001');
+    const owner = await newUser();
     const { fileId } = await makeSharedFile(owner);
 
     const rows = await eventPayloads('invite_send', fileId);
@@ -579,8 +577,8 @@ describe('share 域', () => {
   });
 
   it('埋点：join 成功落 collab_join {viaRegistration:false}；幂等/owner 自开不重复落', async () => {
-    const owner = await newUser('13800130002');
-    const bob = await newUser('13800130003');
+    const owner = await newUser();
+    const bob = await newUser();
     const { fileId, shareToken } = await makeSharedFile(owner);
 
     const join = await request(app.getHttpServer())
@@ -604,7 +602,7 @@ describe('share 域', () => {
   });
 
   it('埋点：批量邀请按批落一条 invite_send {channel:"member",count}（非逐联系人）；全跳过批次不落', async () => {
-    const owner = await newUser('13800130004');
+    const owner = await newUser();
     const fileId = await makeFile(owner, '成员邀请埋点用例');
 
     const res = await invite(owner, fileId, ['invite-m1@test.dev', 'invite-m2@test.dev', '13700030001']);
@@ -621,11 +619,11 @@ describe('share 域', () => {
   });
 
   it('埋点：注册回填落 collab_join {viaRegistration:true}（逐文件一行）', async () => {
-    const owner = await newUser('13800130005');
+    const owner = await newUser();
     const fileId = await makeFile(owner, '回填埋点用例');
     await invite(owner, fileId, ['invite-bt@test.dev']);
 
-    const invitee = await loginByCode({ email: 'invite-bt@test.dev' });
+    const invitee = await loginByCode('invite-bt@test.dev');
 
     const rows = await eventPayloads('collab_join', fileId);
     expect(rows).toHaveLength(1);

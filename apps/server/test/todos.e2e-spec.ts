@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import request from 'supertest';
 import type { INestApplication } from '@nestjs/common';
 import { createTemplateDoc, docToState, getNode, setNodeTask } from '@gmind/core';
+import { createAccount, type TestAccount } from './support/auth-test';
 
 /**
  * 跨文件待办（/api/todos，第二期批次 B）e2e：
@@ -26,21 +27,13 @@ describe('跨文件待办（/api/todos）', () => {
       [method](url)
       .set('Authorization', `Bearer ${token}`);
 
-  const login = async (phone: string): Promise<{ token: string; id: string }> => {
-    const res = await request(app.getHttpServer())
-      .post('/api/auth/login')
-      .send({ method: 'phone', phone, code: '123456' });
-    const body = res.body as { token: string; user: { id: string } };
-    return { token: body.token, id: body.user.id };
-  };
-
   beforeAll(async () => {
     const { createTestApp } = await import('./support/app-test');
     app = await createTestApp();
-    const admin = await login('13800001111');
+    const admin: TestAccount = await createAccount(app);
     adminToken = admin.token;
     adminId = admin.id;
-    const member = await login('13800002222');
+    const member: TestAccount = await createAccount(app);
     memberToken = member.token;
     memberId = member.id;
 
@@ -98,7 +91,7 @@ describe('跨文件待办（/api/todos）', () => {
     };
     expect(page.stats).toEqual({ all: 1, today: 1, overdue: 0, week: 1, done: 0 });
     // 第三人（无该文件权限）：即便把自己设为负责人也不可见——此处验证新号空表
-    const outsider = await login('13800003333');
+    const outsider = await createAccount(app);
     const page3 = (await (await authed(outsider.token, 'get', '/api/todos')).body) as { stats: { all: number } };
     expect(page3.stats.all).toBe(0);
   });

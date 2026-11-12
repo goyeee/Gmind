@@ -3,6 +3,7 @@ import request from 'supertest';
 import type { INestApplication } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import { createTestApp } from './support/app-test';
+import { createAccount } from './support/auth-test';
 
 /**
  * 文件夹域 e2e（M3a Task 5，FR-FIL-002）：CRUD / 5 级嵌套 / 移动环检测 / 整体入回收站。
@@ -18,13 +19,6 @@ describe('文件夹域（FR-FIL-002）', () => {
   let token: string;
   let otherToken: string;
 
-  const tokenFor = async (uid: string): Promise<string> => {
-    const { SessionService } = await import('../src/session/session.service');
-    const redisMod = await import('ioredis');
-    const svc = new SessionService(new redisMod.default('redis://127.0.0.1:16379/1'));
-    return (await svc.create(uid, false)).token;
-  };
-
   const authed = (method: 'get' | 'post' | 'patch' | 'delete', url: string, tk = token) =>
     request(app.getHttpServer())[method](url).set('Authorization', `Bearer ${tk}`);
 
@@ -34,12 +28,11 @@ describe('文件夹域（FR-FIL-002）', () => {
   beforeAll(async () => {
     app = await createTestApp();
     ds = app.get(DataSource);
-    const users = app.get((await import('../src/users/users.service')).UsersService);
-    const user = await users.create({ method: 'phone', phone: '13800050001', nickname: '文件夹甲' });
-    const other = await users.create({ method: 'phone', phone: '13800050002', nickname: '文件夹乙' });
+    const user = await createAccount(app);
+    const other = await createAccount(app);
     userId = user.id;
-    token = await tokenFor(user.id);
-    otherToken = await tokenFor(other.id);
+    token = user.token;
+    otherToken = other.token;
   });
 
   afterAll(async () => {

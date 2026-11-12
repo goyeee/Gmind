@@ -1,6 +1,7 @@
 import type { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { json } from 'express';
+import Redis from 'ioredis';
 import { AppModule } from '../../src/app.module';
 import { CollabService } from '../../src/collab/collab.service';
 import { QuotaExceptionFilter } from '../../src/common/quota-exception.filter';
@@ -20,6 +21,18 @@ export async function createTestApp(): Promise<INestApplication> {
     await setup.query(`DELETE FROM ${t}`);
   }
   await setup.destroy();
+
+  // Redis db1 同步清场（2026-11-12 邮箱注册制，Task 5）：email_code/email_code_wait/
+  // email_code_fail 键（60s 重发冷却）与旧会话残留在 MySQL 清库后仍存活——固定邮箱
+  // （如 trash711@test.dev）一分钟内重跑同 spec 会撞 429。串行执行下先 flush 再建号，
+  // 清掉的本文件会话在后续 beforeAll 里重建，语义安全。
+  const redis = new Redis(process.env.REDIS_URL ?? 'redis://127.0.0.1:16379/1', { lazyConnect: true });
+  try {
+    await redis.connect();
+    await redis.flushdb();
+  } finally {
+    redis.disconnect();
+  }
 
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
   const app = moduleRef.createNestApplication();

@@ -18,6 +18,7 @@ import {
   setText,
 } from '@gmind/core';
 import { createTestApp } from './support/app-test';
+import { createAccount } from './support/auth-test';
 import { CollabService } from '../src/collab/collab.service';
 import { FileCollaboratorEntity } from '../src/files/file-collaborator.entity';
 import { FileEntity } from '../src/files/file.entity';
@@ -120,14 +121,6 @@ describe('Hocuspocus 协同网关（鉴权/加载/同步/持久化/配额告警�
   let collaboratorToken: string;
   let outsiderToken: string;
 
-  /** 直接经 SessionService 签发 token（与 file-content.e2e-spec.ts 同款）。 */
-  const tokenFor = async (userId: string): Promise<string> => {
-    const { SessionService } = await import('../src/session/session.service');
-    const redisMod = await import('ioredis');
-    const svc = new SessionService(new redisMod.default('redis://127.0.0.1:16379/1'));
-    return (await svc.create(userId, false)).token;
-  };
-
   const rowOf = (id = fileId): Promise<FileEntity> =>
     dataSource.getRepository(FileEntity).findOneByOrFail({ id });
 
@@ -139,17 +132,15 @@ describe('Hocuspocus 协同网关（鉴权/加载/同步/持久化/配额告警�
     port = (app.getHttpServer().address() as AddressInfo).port;
     dataSource = app.get(DataSource);
 
-    const usersMod = await import('../src/users/users.service');
     const filesMod = await import('../src/files/files.service');
-    const users = app.get(usersMod.UsersService);
     const files = app.get(filesMod.FilesService);
 
-    const owner = await users.create({ method: 'phone', phone: '13900002001' });
-    const collaborator = await users.create({ method: 'phone', phone: '13900002002' });
-    const outsider = await users.create({ method: 'phone', phone: '13900002003' });
-    ownerToken = await tokenFor(owner.id);
-    collaboratorToken = await tokenFor(collaborator.id);
-    outsiderToken = await tokenFor(outsider.id);
+    const owner = await createAccount(app);
+    const collaborator = await createAccount(app);
+    const outsider = await createAccount(app);
+    ownerToken = owner.token;
+    collaboratorToken = collaborator.token;
+    outsiderToken = outsider.token;
 
     const created = await files.createForUser(owner.id, {
       title: '协同文件',
@@ -270,12 +261,10 @@ describe('Hocuspocus 协同网关（鉴权/加载/同步/持久化/配额告警�
   });
 
   it('case 6: 越过 500 节点配额 → 不拒绝连接/编辑，广播 quota-exceeded；持续越线不刷屏（边缘触发）', async () => {
-    const usersMod = await import('../src/users/users.service');
     const filesMod = await import('../src/files/files.service');
-    const users = app.get(usersMod.UsersService);
     const files = app.get(filesMod.FilesService);
-    const quotaOwner = await users.create({ method: 'phone', phone: '13900002004' });
-    const quotaToken = await tokenFor(quotaOwner.id);
+    const quotaOwner = await createAccount(app);
+    const quotaToken = quotaOwner.token;
     // 恰好 500 可达子节点（准入边界内，PUT/createForUser 口径）
     const big = await files.createForUser(quotaOwner.id, {
       title: '配额文件',

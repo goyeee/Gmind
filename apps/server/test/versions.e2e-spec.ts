@@ -19,6 +19,7 @@ import {
   setText,
 } from '@gmind/core';
 import { createTestApp } from './support/app-test';
+import { createAccount } from './support/auth-test';
 import { CollabService } from '../src/collab/collab.service';
 import { EventEntity } from '../src/events/event.entity';
 import { FileCollaboratorEntity } from '../src/files/file-collaborator.entity';
@@ -62,14 +63,6 @@ describe('版本快照（collab 网关 FR-VER-001）+ 90 天清理', () => {
   let nodeIdB: string;
   let nodeIdC: string;
   const openClients: { provider: HocuspocusProvider }[] = [];
-
-  /** 直接经 SessionService 签发 token（collab.e2e-spec.ts 同款）。 */
-  const tokenFor = async (uid: string): Promise<string> => {
-    const { SessionService } = await import('../src/session/session.service');
-    const redisMod = await import('ioredis');
-    const svc = new SessionService(new redisMod.default('redis://127.0.0.1:16379/1'));
-    return (await svc.create(uid, false)).token;
-  };
 
   const versionRows = (fid: string): Promise<VersionEntity[]> =>
     dataSource.getRepository(VersionEntity).find({ where: { fileId: fid }, order: { createdAt: 'ASC' } });
@@ -116,14 +109,12 @@ describe('版本快照（collab 网关 FR-VER-001）+ 90 天清理', () => {
     port = (app.getHttpServer().address() as AddressInfo).port;
     dataSource = app.get(DataSource);
 
-    const usersMod = await import('../src/users/users.service');
     const filesMod = await import('../src/files/files.service');
-    const users = app.get(usersMod.UsersService);
     const files = app.get(filesMod.FilesService);
 
-    const owner = await users.create({ method: 'phone', phone: '13900003001' });
+    const owner = await createAccount(app);
     userId = owner.id;
-    token = await tokenFor(userId);
+    token = owner.token;
 
     const mk = async (title: string): Promise<{ file: FileEntity; nodeId: string }> => {
       const created = await files.createForUser(userId, {
@@ -249,14 +240,6 @@ describe('版本恢复（REST FR-VER-004）+ events 埋点端点', () => {
   let outsider: { id: string; token: string };
   const openClients: { provider: HocuspocusProvider }[] = [];
 
-  /** 直接经 SessionService 签发 token（collab.e2e-spec.ts 同款）。 */
-  const tokenFor = async (uid: string): Promise<string> => {
-    const { SessionService } = await import('../src/session/session.service');
-    const redisMod = await import('ioredis');
-    const svc = new SessionService(new redisMod.default('redis://127.0.0.1:16379/1'));
-    return (await svc.create(uid, false)).token;
-  };
-
   /** 断言轮询：条件成立或超时（y-sync 广播/落库防抖都是异步的）。 */
   async function until(pred: () => boolean | Promise<boolean>, label: string, ms = 8000): Promise<void> {
     const deadline = Date.now() + ms;
@@ -358,16 +341,10 @@ describe('版本恢复（REST FR-VER-004）+ events 埋点端点', () => {
     port = (app.getHttpServer().address() as AddressInfo).port;
     dataSource = app.get(DataSource);
 
-    const usersMod = await import('../src/users/users.service');
-    const users = app.get(usersMod.UsersService);
-    const mk = async (phone: string): Promise<{ id: string; token: string }> => {
-      const u = await users.create({ method: 'phone', phone });
-      return { id: u.id, token: await tokenFor(u.id) };
-    };
-    owner = await mk('13900004001');
-    editor = await mk('13900004002');
-    viewer = await mk('13900004003');
-    outsider = await mk('13900004004');
+    owner = await createAccount(app);
+    editor = await createAccount(app);
+    viewer = await createAccount(app);
+    outsider = await createAccount(app);
   });
 
   afterAll(async () => {

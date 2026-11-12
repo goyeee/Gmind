@@ -3,6 +3,7 @@ import request from 'supertest';
 import type { INestApplication } from '@nestjs/common';
 import { readdirSync, rmSync } from 'node:fs';
 import { createTestApp } from './support/app-test';
+import { createAccount } from './support/auth-test';
 
 // 1×1 透明 PNG（已知良好的 base64 常量，魔数 89 50 4E 47）
 const PNG_1X1 = Buffer.from(
@@ -23,26 +24,19 @@ describe('storage 域（本地磁盘图片存储 Provider）', () => {
   let token: string;
   // 准入 7.2（M3a Task 1）装置：第二用户（非协作者）与真实文件行（属主校验按 files 表判定）
   let otherToken: string;
-  const otherPhone = '13800005556';
+  let otherEmail: string;
   let mineA: { id: string }; // owner 主上传文件（copy 源键出处，永不授权他人）
   let mineB: { id: string }; // owner copy 目标文件（后授权给协作者）
   let theirs: { id: string }; // 第二用户自己的文件（负例 copy 目的地）
-  const tokenFor = async (userId: string): Promise<string> => {
-    // 直接通过 SessionService 签发，登录接口在 Task 8 才有
-    const { SessionService } = await import('../src/session/session.service');
-    const redisMod = await import('ioredis');
-    const svc = new SessionService(new redisMod.default('redis://127.0.0.1:16379/1'));
-    return (await svc.create(userId, false)).token;
-  };
 
   beforeAll(async () => {
     rmSync(TEST_STORAGE_DIR, { recursive: true, force: true });
     app = await createTestApp();
-    const users = app.get((await import('../src/users/users.service')).UsersService);
-    const user = await users.create({ method: 'phone', phone: '13800005555' });
-    token = await tokenFor(user.id);
-    const other = await users.create({ method: 'phone', phone: otherPhone });
-    otherToken = await tokenFor(other.id);
+    const user = await createAccount(app);
+    token = user.token;
+    const other = await createAccount(app);
+    otherToken = other.token;
+    otherEmail = other.email;
     const files = app.get((await import('../src/files/files.service')).FilesService);
     mineA = await files.createForUser(user.id, { title: '存储属主-A' });
     mineB = await files.createForUser(user.id, { title: '存储属主-B' });
@@ -211,7 +205,7 @@ describe('storage 域（本地磁盘图片存储 Provider）', () => {
   it('协作者（dev-e2e grant-collaborator 授权）上传 → 201，key 落在授权文件命名空间', async () => {
     const grant = await request(app.getHttpServer())
       .post('/api/dev-e2e/grant-collaborator')
-      .send({ fileId: mineB.id, phone: otherPhone });
+      .send({ fileId: mineB.id, email: otherEmail });
     expect(grant.status).toBe(201);
 
     const upload = await request(app.getHttpServer())

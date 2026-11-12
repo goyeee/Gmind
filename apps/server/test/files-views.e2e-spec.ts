@@ -13,6 +13,7 @@ import {
   setImage,
 } from '@gmind/core';
 import { createTestApp } from './support/app-test';
+import { createAccount } from './support/auth-test';
 import { FileEntity } from '../src/files/file.entity';
 
 /**
@@ -38,14 +39,7 @@ describe('文件四视图 + 删除 + last_modifier（FR-FIL-001）', () => {
   let fShared: string; // owner 拥有，共享给 collaborator
   let fCollab: string; // collaborator 私有（owner 不可见）
   let folderId: string;
-
-  const tokenFor = async (userId: string): Promise<string> => {
-    // 直接通过 SessionService 签发（同 file-content.e2e-spec.ts 模式）
-    const { SessionService } = await import('../src/session/session.service');
-    const redisMod = await import('ioredis');
-    const svc = new SessionService(new redisMod.default('redis://127.0.0.1:16379/1'));
-    return (await svc.create(userId, false)).token;
-  };
+  let collaboratorEmail: string;
 
   type Method = 'get' | 'post' | 'put' | 'delete';
   const authed = (token: string, method: Method, url: string) =>
@@ -58,16 +52,23 @@ describe('文件四视图 + 删除 + last_modifier（FR-FIL-001）', () => {
     app = await createTestApp();
     ds = app.get(DataSource);
 
-    const users = app.get((await import('../src/users/users.service')).UsersService);
-    const owner = await users.create({ method: 'phone', phone: '13800070001', nickname: '文件甲' });
-    const collaborator = await users.create({ method: 'phone', phone: '13800070002', nickname: '协作者乙' });
-    const outsider = await users.create({ method: 'phone', phone: '13800070003', nickname: '路人丙' });
+    const owner = await createAccount(app, { nickname: '文件甲' });
+    const collaborator = await createAccount(app, { nickname: '协作者乙' });
+    const outsider = await createAccount(app, { nickname: '路人丙' });
     ownerId = owner.id;
     collaboratorId = collaborator.id;
+    collaboratorEmail = collaborator.email;
     outsiderId = outsider.id;
-    ownerToken = await tokenFor(owner.id);
-    collaboratorToken = await tokenFor(collaborator.id);
-    outsiderToken = await tokenFor(outsider.id);
+    ownerToken = owner.token;
+    collaboratorToken = collaborator.token;
+    outsiderToken = outsider.token;
+
+    // 注册种下的 3 个示例文件 updatedAt 钉到最早：否则「现在」晚于 1 月定值，
+    // 会霸占 mine 视图 updatedAt DESC 断言的首位
+    await ds.getRepository(FileEntity).update(
+      { ownerUserId: ownerId },
+      { updatedAt: new Date('2026-01-01T00:00:00Z') },
+    );
 
     const create = async (token: string, title: string): Promise<string> => {
       const res = await authed(token, 'post', '/api/files').send({ title });
@@ -81,7 +82,7 @@ describe('文件四视图 + 删除 + last_modifier（FR-FIL-001）', () => {
 
     // 授权协作者（dev-e2e 编排端点，与 storage.e2e-spec.ts 同款）
     const granted = await authed(ownerToken, 'post', '/api/dev-e2e/grant-collaborator')
-      .send({ fileId: fShared, phone: '13800070002' });
+      .send({ fileId: fShared, email: collaboratorEmail });
     expect(granted.status).toBe(201);
 
     // —— 排序与状态定值（显式列更新，见 files.service markOpened 的定点写口径） ——
@@ -302,13 +303,7 @@ describe('文件复制与星标（FR-FIL-003/004）', () => {
   let fSource: string; // 复制流主角：有内容、挂文件夹
   let fShared: string; // owner 拥有，共享给 collaborator（协作者复制/加星主角）
   let folderId: string;
-
-  const tokenFor = async (userId: string): Promise<string> => {
-    const { SessionService } = await import('../src/session/session.service');
-    const redisMod = await import('ioredis');
-    const svc = new SessionService(new redisMod.default('redis://127.0.0.1:16379/1'));
-    return (await svc.create(userId, false)).token;
-  };
+  let collaboratorEmail: string;
 
   type Method = 'get' | 'post' | 'put' | 'delete';
   const authed = (token: string, method: Method, url: string) =>
@@ -330,15 +325,15 @@ describe('文件复制与星标（FR-FIL-003/004）', () => {
     app = await createTestApp();
     ds = app.get(DataSource);
 
-    const users = app.get((await import('../src/users/users.service')).UsersService);
-    const owner = await users.create({ method: 'phone', phone: '13800080001', nickname: '复制甲' });
-    const collaborator = await users.create({ method: 'phone', phone: '13800080002', nickname: '复制乙' });
-    const outsider = await users.create({ method: 'phone', phone: '13800080003', nickname: '复制丙' });
+    const owner = await createAccount(app, { nickname: '复制甲' });
+    const collaborator = await createAccount(app, { nickname: '复制乙' });
+    const outsider = await createAccount(app, { nickname: '复制丙' });
     ownerId = owner.id;
     collaboratorId = collaborator.id;
-    ownerToken = await tokenFor(owner.id);
-    collaboratorToken = await tokenFor(collaborator.id);
-    outsiderToken = await tokenFor(outsider.id);
+    collaboratorEmail = collaborator.email;
+    ownerToken = owner.token;
+    collaboratorToken = collaborator.token;
+    outsiderToken = outsider.token;
 
     const create = async (token: string, title: string): Promise<string> => {
       const res = await authed(token, 'post', '/api/files').send({ title });
@@ -350,7 +345,7 @@ describe('文件复制与星标（FR-FIL-003/004）', () => {
 
     // 授权协作者（dev-e2e 编排端点，与上方同款）
     const granted = await authed(ownerToken, 'post', '/api/dev-e2e/grant-collaborator')
-      .send({ fileId: fShared, phone: '13800080002' });
+      .send({ fileId: fShared, email: collaboratorEmail });
     expect(granted.status).toBe(201);
 
     // fSource 写入内容并挂文件夹（PUT 走正式写路径，last_modifier=owner）
@@ -420,18 +415,18 @@ describe('文件复制与星标（FR-FIL-003/004）', () => {
   });
 
   it('配额联动：owner 已满 100 个时复制 → 403「文件数量已达上限（100 个）」（FR-ACC-003）', async () => {
-    const users = app.get((await import('../src/users/users.service')).UsersService);
-    const full = await users.create({ method: 'phone', phone: '13800080004', nickname: '满额丁' });
-    const fullToken = await tokenFor(full.id);
+    const full = await createAccount(app, { nickname: '满额丁' });
+    const fullToken = full.token;
     const filesRepo = ds.getRepository(FileEntity);
-    for (let i = 0; i < 99; i += 1) {
+    // 注册已种 3 个示例文件：直插 96 + POST 1 = 满 100
+    for (let i = 0; i < 96; i += 1) {
       const f = filesRepo.create();
       f.ownerUserId = full.id;
       f.title = `full-${i}`;
       await filesRepo.save(f);
     }
     const source = await authed(fullToken, 'post', '/api/files').send({ title: '满额的源' });
-    expect(source.status).toBe(201); // 第 100 个
+    expect(source.status).toBe(201); // 第 100 个（3 种子 + 96 直插 + 本条）
 
     const res = await authed(fullToken, 'post', `/api/files/${source.body.id}/copy`);
     expect(res.status).toBe(403);
@@ -609,13 +604,7 @@ describe('标题全局搜索（FR-FIL-008）', () => {
   let outsiderToken: string; // 丙的搜索私有：负例主角（他人私有不含）
   let fPrefix: string; // '项目规划书'：q='项目' 的前缀命中（updatedAt 定值较早）
   let fContains: string; // '我的项目规划'：q='项目' 的非前缀命中（updatedAt 定值较晚）
-
-  const tokenFor = async (userId: string): Promise<string> => {
-    const { SessionService } = await import('../src/session/session.service');
-    const redisMod = await import('ioredis');
-    const svc = new SessionService(new redisMod.default('redis://127.0.0.1:16379/1'));
-    return (await svc.create(userId, false)).token;
-  };
+  let collaboratorEmail: string;
 
   type Method = 'get' | 'post' | 'put' | 'delete';
   const authed = (token: string, method: Method, url: string) =>
@@ -628,13 +617,13 @@ describe('标题全局搜索（FR-FIL-008）', () => {
     app = await createTestApp();
     ds = app.get(DataSource);
 
-    const users = app.get((await import('../src/users/users.service')).UsersService);
-    const owner = await users.create({ method: 'phone', phone: '13800091001', nickname: '搜索甲' });
-    const collaborator = await users.create({ method: 'phone', phone: '13800091002', nickname: '搜索乙' });
-    const outsider = await users.create({ method: 'phone', phone: '13800091003', nickname: '搜索丙' });
-    ownerToken = await tokenFor(owner.id);
-    collaboratorToken = await tokenFor(collaborator.id);
-    outsiderToken = await tokenFor(outsider.id);
+    const owner = await createAccount(app, { nickname: '搜索甲' });
+    const collaborator = await createAccount(app, { nickname: '搜索乙' });
+    const outsider = await createAccount(app, { nickname: '搜索丙' });
+    collaboratorEmail = collaborator.email;
+    ownerToken = owner.token;
+    collaboratorToken = collaborator.token;
+    outsiderToken = outsider.token;
 
     const create = async (token: string, title: string): Promise<string> => {
       const res = await authed(token, 'post', '/api/files').send({ title });
@@ -651,7 +640,7 @@ describe('标题全局搜索（FR-FIL-008）', () => {
 
     // 授权协作者（dev-e2e 编排端点，同上两组 fixtures）
     const granted = await authed(ownerToken, 'post', '/api/dev-e2e/grant-collaborator')
-      .send({ fileId: fShared, phone: '13800091002' });
+      .send({ fileId: fShared, email: collaboratorEmail });
     expect(granted.status).toBe(201);
 
     // 排序定值：非前缀命中 updatedAt 更晚——若相关度排序失效，updatedAt DESC 会把它排前

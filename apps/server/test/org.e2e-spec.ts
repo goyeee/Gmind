@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import request from 'supertest';
 import type { INestApplication } from '@nestjs/common';
+import { createAccount } from './support/auth-test';
 
 /**
  * 组织管理（/api/org，第二期批次 A）e2e：
@@ -21,22 +22,14 @@ describe('组织管理（/api/org）：部门/分组/挂靠', () => {
       [method](url)
       .set('Authorization', `Bearer ${token}`);
 
-  const login = async (phone: string): Promise<{ token: string; id: string }> => {
-    const res = await request(app.getHttpServer())
-      .post('/api/auth/login')
-      .send({ method: 'phone', phone, code: '123456' });
-    const body = res.body as { token: string; user: { id: string } };
-    return { token: body.token, id: body.user.id };
-  };
-
   beforeAll(async () => {
     const { createTestApp } = await import('./support/app-test');
     app = await createTestApp();
-    // 首个登录建号 = 空库第一人 → super_admin
-    const admin = await login('13800001111');
+    // 首个注册建号 = 空库第一人 → super_admin
+    const admin = await createAccount(app);
     adminToken = admin.token;
     adminId = admin.id;
-    const member = await login('13800002222');
+    const member = await createAccount(app);
     memberToken = member.token;
     memberId = member.id;
   });

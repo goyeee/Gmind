@@ -4,17 +4,11 @@ import type { INestApplication } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import { createTemplateDoc, docFromState, docToState, getNode, ROOT_NODE_ID } from '@gmind/core';
 import { createTestApp } from './support/app-test';
+import { createAccount } from './support/auth-test';
 import { EventEntity } from '../src/events/event.entity';
 
 describe('files 域', () => {
   let app: INestApplication;
-  const tokenFor = async (userId: string): Promise<string> => {
-    // 直接通过 SessionService 签发，登录接口在 Task 8 才有
-    const { SessionService } = await import('../src/session/session.service');
-    const redisMod = await import('ioredis');
-    const svc = new SessionService(new redisMod.default('redis://127.0.0.1:16379/1'));
-    return (await svc.create(userId, false)).token;
-  };
 
   beforeAll(async () => {
     app = await createTestApp();
@@ -24,13 +18,9 @@ describe('files 域', () => {
     await app.close();
   });
 
-  it('createSeedFiles 后列表返回 3 个示例文件（FR-ACC-001）', async () => {
-    const users = app.get((await import('../src/users/users.service')).UsersService);
-    const user = await users.create({ method: 'phone', phone: '13800001111' });
-    const files = app.get((await import('../src/files/files.service')).FilesService);
-    await files.createSeedFiles(user.id);
+  it('注册种 3 个示例文件后列表返回（FR-ACC-001：org 结构/ nodeCount 投影）', async () => {
+    const { token } = await createAccount(app);
 
-    const token = await tokenFor(user.id);
     const res = await request(app.getHttpServer()).get('/api/files').set('Authorization', `Bearer ${token}`);
     expect(res.status).toBe(200);
     expect(res.body).toHaveLength(3);
@@ -43,9 +33,7 @@ describe('files 域', () => {
   });
 
   it('POST /api/files 新建并出现在列表首位', async () => {
-    const users = app.get((await import('../src/users/users.service')).UsersService);
-    const user = await users.create({ method: 'phone', phone: '13800002222' });
-    const token = await tokenFor(user.id);
+    const { token } = await createAccount(app);
     const created = await request(app.getHttpServer())
       .post('/api/files')
       .set('Authorization', `Bearer ${token}`)
@@ -64,9 +52,7 @@ describe('files 域', () => {
   });
 
   it('表格文件（批次 D）：kind=table 创建 + title 缺省「未命名表格」+ 列表回显 kind；缺省 map', async () => {
-    const users = app.get((await import('../src/users/users.service')).UsersService);
-    const user = await users.create({ method: 'phone', phone: '13800007777' });
-    const token = await tokenFor(user.id);
+    const { token } = await createAccount(app);
     const created = await request(app.getHttpServer())
       .post('/api/files')
       .set('Authorization', `Bearer ${token}`)
@@ -87,9 +73,7 @@ describe('files 域', () => {
   });
 
   it('标题缺省时默认「未命名脑图」', async () => {
-    const users = app.get((await import('../src/users/users.service')).UsersService);
-    const user = await users.create({ method: 'phone', phone: '13800003333' });
-    const token = await tokenFor(user.id);
+    const { token } = await createAccount(app);
     const created = await request(app.getHttpServer())
       .post('/api/files')
       .set('Authorization', `Bearer ${token}`)
@@ -101,9 +85,7 @@ describe('files 域', () => {
   // 空白新建的中心节点文本裁定（需求方 2026-10-09）：root=「中心主题」而非文件标题，
   // meta.title 仍为文件标题——文件标题与中心节点文本解耦。
   it('空白新建的文档中心节点文本为「中心主题」，meta.title 仍为文件标题', async () => {
-    const users = app.get((await import('../src/users/users.service')).UsersService);
-    const user = await users.create({ method: 'phone', phone: '13800006666' });
-    const token = await tokenFor(user.id);
+    const { token } = await createAccount(app);
     const created = await request(app.getHttpServer())
       .post('/api/files')
       .set('Authorization', `Bearer ${token}`)
@@ -118,9 +100,7 @@ describe('files 域', () => {
     expect(doc.getMap('meta').get('title')).toBe('我的新图');
   });
   it('title 为空字符串时返回 400（Zod 校验）', async () => {
-    const users = app.get((await import('../src/users/users.service')).UsersService);
-    const user = await users.create({ method: 'phone', phone: '13800005555' });
-    const token = await tokenFor(user.id);
+    const { token } = await createAccount(app);
     const res = await request(app.getHttpServer())
       .post('/api/files')
       .set('Authorization', `Bearer ${token}`)
@@ -133,10 +113,8 @@ describe('files 域', () => {
 
   it('埋点：新建文件落 doc_create 行，entry 按入口区分（blank/import/copy/seed）', async () => {
     const eventsRepo = app.get(DataSource).getRepository(EventEntity);
-    const users = app.get((await import('../src/users/users.service')).UsersService);
-    const files = app.get((await import('../src/files/files.service')).FilesService);
-    const user = await users.create({ method: 'phone', phone: '13800008888' });
-    const token = await tokenFor(user.id);
+    const user = await createAccount(app);
+    const token = user.token;
 
     /** 该文件是否恰好有一条 doc_create 行且 payload.entry 匹配。 */
     const docCreateEntry = async (fileId: string, entry: string): Promise<void> => {
@@ -172,9 +150,8 @@ describe('files 域', () => {
     expect(copied.status).toBe(201);
     await docCreateEntry(copied.body.id as string, 'copy');
 
-    // 注册种子文件（createSeedFiles 直调路径）→ 每个种子一行 seed
-    const seeded = await users.create({ method: 'phone', phone: '13800005556' });
-    await files.createSeedFiles(seeded.id);
+    // 注册种子文件（register → createSeedFiles 路径）→ 每个种子一行 seed
+    const seeded = await createAccount(app);
     const seedRows = await eventsRepo.find({ where: { type: 'doc_create', userId: seeded.id } });
     expect(seedRows).toHaveLength(3);
     expect(seedRows.every((r) => JSON.parse(r.payload ?? '{}').entry === 'seed')).toBe(true);
@@ -183,11 +160,10 @@ describe('files 域', () => {
   // ── 一键拉取站内用户（2026-10-11 需求方裁定：成员面板 picker 数据源 + 直接添加）──
   describe('站内用户拉取（invitable-users + collaborators POST）', () => {
     it('移除协作者（DELETE collaborators，2026-10-25 原型 members tab「移除」）：owner 删行收回访问权；非 owner 404；幂等', async () => {
-      const users = app.get((await import('../src/users/users.service')).UsersService);
-      const owner = await users.create({ method: 'phone', phone: '13811110101' });
-      const member = await users.create({ method: 'phone', phone: '13811110102' });
-      const token = await tokenFor(owner.id);
-      const memberToken = await tokenFor(member.id);
+      const owner = await createAccount(app);
+      const member = await createAccount(app);
+      const token = owner.token;
+      const memberToken = member.token;
       const created = await request(app.getHttpServer())
         .post('/api/files')
         .set('Authorization', `Bearer ${token}`)
@@ -225,12 +201,12 @@ describe('files 域', () => {
     });
 
     it('owner 可查目录（排除 owner/既有协作者、q 模糊搜索、分页）；非 owner 404', async () => {
-      const users = app.get((await import('../src/users/users.service')).UsersService);
       const filesSvc = app.get((await import('../src/files/files.service')).FilesService);
-      const owner = await users.create({ method: 'phone', phone: '13811110001' });
-      const collab = await users.create({ method: 'phone', phone: '13811110002' });
-      const other = await users.create({ method: 'phone', phone: '13811110003' });
-      const token = await tokenFor(owner.id);
+      const owner = await createAccount(app);
+      const collab = await createAccount(app);
+      // other 用显式邮箱：q 模糊搜索按邮箱片段命中（2026-11-12 重做后无手机号）
+      const other = await createAccount(app, { email: 'q-search-target@test.dev' });
+      const token = owner.token;
       const created = await request(app.getHttpServer())
         .post('/api/files')
         .set('Authorization', `Bearer ${token}`)
@@ -251,9 +227,9 @@ describe('files 域', () => {
       expect(list.body.page).toBe(1);
       expect(list.body.size).toBe(20);
 
-      // q 模糊搜索（手机号片段）
+      // q 模糊搜索（邮箱片段）
       const searched = await request(app.getHttpServer())
-        .get(`/api/files/${fileId}/invitable-users?q=13811110003`)
+        .get(`/api/files/${fileId}/invitable-users?q=q-search-target`)
         .set('Authorization', `Bearer ${token}`);
       expect(searched.status).toBe(200);
       expect((searched.body.items as Array<{ userId: string }>).map((i) => i.userId)).toEqual([other.id]);
@@ -270,19 +246,17 @@ describe('files 域', () => {
       expect(p1.body.items[0].userId).not.toBe(p2.body.items[0].userId);
 
       // 非 owner（协作者/路人）一律 404（不泄露文件存在性）
-      const collabToken = await tokenFor(collab.id);
       const denied = await request(app.getHttpServer())
         .get(`/api/files/${fileId}/invitable-users`)
-        .set('Authorization', `Bearer ${collabToken}`);
+        .set('Authorization', `Bearer ${collab.token}`);
       expect(denied.status).toBe(404);
     });
 
     it('一键拉取直接加成 editor 协作者（幂等：重拉/owner 自身/无效 id 计 skipped）；非 owner 404', async () => {
-      const users = app.get((await import('../src/users/users.service')).UsersService);
-      const owner = await users.create({ method: 'phone', phone: '13822220001' });
-      const a = await users.create({ method: 'phone', phone: '13822220002' });
-      const b = await users.create({ method: 'phone', phone: '13822220003' });
-      const token = await tokenFor(owner.id);
+      const owner = await createAccount(app);
+      const a = await createAccount(app);
+      const b = await createAccount(app);
+      const token = owner.token;
       const created = await request(app.getHttpServer())
         .post('/api/files')
         .set('Authorization', `Bearer ${token}`)
@@ -322,10 +296,9 @@ describe('files 域', () => {
       expect(dirIds).not.toContain(a.id);
 
       // 非 owner 拉取 → 404；空数组 → 400
-      const otherToken = await tokenFor(a.id);
       const denied = await request(app.getHttpServer())
         .post(`/api/files/${fileId}/collaborators`)
-        .set('Authorization', `Bearer ${otherToken}`)
+        .set('Authorization', `Bearer ${a.token}`)
         .send({ userIds: [b.id] });
       expect(denied.status).toBe(404);
       const bad = await request(app.getHttpServer())
@@ -339,11 +312,10 @@ describe('files 域', () => {
   // ── 真实缩略图（2026-10-21 需求方裁定真实内容快照）：POST 写 / GET 读 ──
   describe('真实缩略图（/api/files/:id/thumbnail）', () => {
     it('写读闭环：无快照 404 → POST 存 → GET 读回同 SVG（image/svg+xml）；写不翻 updatedAt；越权/非法体拦', async () => {
-      const users = app.get((await import('../src/users/users.service')).UsersService);
-      const owner = await users.create({ method: 'phone', phone: '13833330001' });
-      const outsider = await users.create({ method: 'phone', phone: '13833330002' });
-      const token = await tokenFor(owner.id);
-      const outsiderToken = await tokenFor(outsider.id);
+      const owner = await createAccount(app);
+      const outsider = await createAccount(app);
+      const token = owner.token;
+      const outsiderToken = outsider.token;
       const created = await request(app.getHttpServer())
         .post('/api/files')
         .set('Authorization', `Bearer ${token}`)

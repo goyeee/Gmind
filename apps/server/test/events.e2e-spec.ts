@@ -4,6 +4,7 @@ import type { INestApplication } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import { ROOT_NODE_ID, childrenIds, createTemplateDoc, docFromState, docToState } from '@gmind/core';
 import { createTestApp } from './support/app-test';
+import { createAccount } from './support/auth-test';
 import { FileCollaboratorEntity } from '../src/files/file-collaborator.entity';
 
 /**
@@ -31,13 +32,6 @@ describe('文档动态端点（M6 Task 8，FR-COL-007 提前）', () => {
   let fileId: string;
   let nodeId: string;
 
-  const tokenFor = async (userId: string): Promise<string> => {
-    const { SessionService } = await import('../src/session/session.service');
-    const redisMod = await import('ioredis');
-    const svc = new SessionService(new redisMod.default('redis://127.0.0.1:16379/1'));
-    return (await svc.create(userId, false)).token;
-  };
-
   const authedGet = (token: string, url: string) =>
     request(app.getHttpServer()).get(url).set('Authorization', `Bearer ${token}`);
 
@@ -48,14 +42,15 @@ describe('文档动态端点（M6 Task 8，FR-COL-007 提前）', () => {
     await app.listen(0);
     dataSource = app.get(DataSource);
 
-    const users = app.get((await import('../src/users/users.service')).UsersService);
     const files = app.get((await import('../src/files/files.service')).FilesService);
-    owner = await users.create({ method: 'phone', phone: '13900008001' });
-    collaborator = await users.create({ method: 'phone', phone: '13900008002' });
-    const outsider = await users.create({ method: 'phone', phone: '13900008003' });
-    ownerToken = await tokenFor(owner.id);
-    collaboratorToken = await tokenFor(collaborator.id);
-    outsiderToken = await tokenFor(outsider.id);
+    const ownerAcct = await createAccount(app, { nickname: '动态甲' });
+    const collabAcct = await createAccount(app, { nickname: '动态乙' });
+    const outsiderAcct = await createAccount(app);
+    owner = { id: ownerAcct.id, nickname: '动态甲' };
+    collaborator = { id: collabAcct.id, nickname: '动态乙' };
+    ownerToken = ownerAcct.token;
+    collaboratorToken = collabAcct.token;
+    outsiderToken = outsiderAcct.token;
 
     const created = await files.createForUser(owner.id, {
       title: '动态文件',

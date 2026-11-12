@@ -27,6 +27,7 @@ import {
   setText,
 } from '@gmind/core';
 import { createTestApp } from './support/app-test';
+import { createAccount } from './support/auth-test';
 import { CollabService } from '../src/collab/collab.service';
 import { FileCollaboratorEntity } from '../src/files/file-collaborator.entity';
 import { FileEntity } from '../src/files/file.entity';
@@ -57,16 +58,9 @@ describe('文件内容端点（读取/回写/改名/打开）', () => {
   let dataSource: DataSource;
   let ownerToken: string;
   let otherToken: string;
+  let otherUserId: string;
   let ownerUserId: string;
   let fileId: string;
-
-  const tokenFor = async (userId: string): Promise<string> => {
-    // 直接通过 SessionService 签发，登录接口在 Task 8 才有
-    const { SessionService } = await import('../src/session/session.service');
-    const redisMod = await import('ioredis');
-    const svc = new SessionService(new redisMod.default('redis://127.0.0.1:16379/1'));
-    return (await svc.create(userId, false)).token;
-  };
 
   type Method = 'get' | 'post' | 'put' | 'patch';
   const authed = (token: string, method: Method, url: string) =>
@@ -76,12 +70,12 @@ describe('文件内容端点（读取/回写/改名/打开）', () => {
     app = await createTestApp();
     dataSource = app.get(DataSource);
 
-    const users = app.get((await import('../src/users/users.service')).UsersService);
-    const owner = await users.create({ method: 'phone', phone: '13900001001' });
-    const other = await users.create({ method: 'phone', phone: '13900001002' });
+    const owner = await createAccount(app);
+    const other = await createAccount(app);
     ownerUserId = owner.id;
-    ownerToken = await tokenFor(owner.id);
-    otherToken = await tokenFor(other.id);
+    ownerToken = owner.token;
+    otherUserId = other.id;
+    otherToken = other.token;
 
     const files = app.get((await import('../src/files/files.service')).FilesService);
     const created = await files.createForUser(owner.id, {
@@ -126,10 +120,9 @@ describe('文件内容端点（读取/回写/改名/打开）', () => {
   });
 
   it('collaborator 行存在即可读写（一期协作者即可编辑，spec §7.2）', async () => {
-    const otherRow = await dataSource.getRepository('users').findOneByOrFail({ phone: '13900001002' });
     const collab = dataSource.getRepository(FileCollaboratorEntity).create();
     collab.fileId = fileId;
-    collab.userId = (otherRow as { id: string }).id;
+    collab.userId = otherUserId;
     collab.role = 'editor';
     await dataSource.getRepository(FileCollaboratorEntity).save(collab);
 
@@ -320,13 +313,6 @@ describe('PUT 陈旧快照写序守卫（准入 7.1）', () => {
   }
   const openClients: TrackedClient[] = [];
 
-  const tokenFor = async (userId: string): Promise<string> => {
-    const { SessionService } = await import('../src/session/session.service');
-    const redisMod = await import('ioredis');
-    const svc = new SessionService(new redisMod.default('redis://127.0.0.1:16379/1'));
-    return (await svc.create(userId, false)).token;
-  };
-
   type Method = 'get' | 'post' | 'put' | 'patch';
   const authed = (token: string, method: Method, url: string) =>
     request(app.getHttpServer())[method](url).set('Authorization', `Bearer ${token}`);
@@ -379,15 +365,13 @@ describe('PUT 陈旧快照写序守卫（准入 7.1）', () => {
     port = (app.getHttpServer().address() as AddressInfo).port;
     dataSource = app.get(DataSource);
 
-    const usersMod = await import('../src/users/users.service');
     const filesMod = await import('../src/files/files.service');
-    const users = app.get(usersMod.UsersService);
     const files = app.get(filesMod.FilesService);
 
-    const owner = await users.create({ method: 'phone', phone: '13900003001' });
-    const collaborator = await users.create({ method: 'phone', phone: '13900003002' });
-    ownerToken = await tokenFor(owner.id);
-    collaboratorToken = await tokenFor(collaborator.id);
+    const owner = await createAccount(app);
+    const collaborator = await createAccount(app);
+    ownerToken = owner.token;
+    collaboratorToken = collaborator.token;
 
     const guard = await files.createForUser(owner.id, {
       title: '守卫文件',
@@ -518,13 +502,6 @@ describe('POST /api/files 携带 docState（XMind 导入）', () => {
   let app: INestApplication;
   let ownerToken: string;
 
-  const tokenFor = async (userId: string): Promise<string> => {
-    const { SessionService } = await import('../src/session/session.service');
-    const redisMod = await import('ioredis');
-    const svc = new SessionService(new redisMod.default('redis://127.0.0.1:16379/1'));
-    return (await svc.create(userId, false)).token;
-  };
-
   type Method = 'get' | 'post' | 'put' | 'patch';
   const authed = (token: string, method: Method, url: string) =>
     request(app.getHttpServer())[method](url).set('Authorization', `Bearer ${token}`);
@@ -540,9 +517,8 @@ describe('POST /api/files 携带 docState（XMind 导入）', () => {
 
   beforeAll(async () => {
     app = await createTestApp();
-    const users = app.get((await import('../src/users/users.service')).UsersService);
-    const owner = await users.create({ method: 'phone', phone: '13900004001' });
-    ownerToken = await tokenFor(owner.id);
+    const owner = await createAccount(app);
+    ownerToken = owner.token;
   });
 
   afterAll(async () => {

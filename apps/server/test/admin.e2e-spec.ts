@@ -2,26 +2,24 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import request from 'supertest';
 import type { INestApplication } from '@nestjs/common';
 import { createTestApp } from './support/app-test';
+import { createAccount, loginToken, uniqueEmail } from './support/auth-test';
 
 /**
- * 账号管理端点 E2E（移植 mindgrid 账号体系）：
- * - 首注册者=super_admin（登录建号路径按空库判定；存量库由迁移升最早用户）；
+ * 账号管理端点 E2E（移植 mindgrid 账号体系；2026-11-12 重做邮箱化口径）：
+ * - 首注册者=super_admin（createByEmail 按空库判定；存量库由迁移升最早用户）；
  * - GET / POST / PATCH /api/admin/users 全挂 AdminGuard：未登录 401、member 403；
- * - 添加账号：手机号去重 409、格式 400、建号即 active member 无密码、不种示例文件；
+ * - 添加账号：{email, nickname} 建号即 active member、无密码、不种示例文件；
+ *   邮箱去重 409（前置检查 + uk_users_email 兜底同文案）、非法邮箱/昵称超长 400；
  * - PATCH：角色升降（多超管在场可降）、自我保护 409（不停用/降级自己）、
  *   空字段 400、目标不存在 404、昵称可改；
  * - 停用踢号：停用后该号登录 401（两段式文案）、既有 token 请求 401（UserGuard 查库拒绝）、
  *   恢复后可再登录且角色不变（登录不改动 role/status）。
+ * - 无密码账号（admin 建号）密码登录死路 → 401，见 auth.e2e-spec.ts。
  */
-
-const phone = (): string => '137' + String(Math.floor(10000000 + Math.random() * 89999999));
 
 type Method = 'get' | 'post' | 'patch';
 const authed = (app: INestApplication, token: string, method: Method, url: string) =>
   request(app.getHttpServer())[method](url).set('Authorization', `Bearer ${token}`);
-
-const loginPhone = (app: INestApplication, p: string) =>
-  request(app.getHttpServer()).post('/api/auth/login').send({ method: 'phone', phone: p, code: '123456' });
 
 interface AdminItem {
   id: string;
@@ -39,7 +37,7 @@ describe('账号管理（/api/admin/users）：角色/状态/防呆/停用踢号
   let adminToken: string; // 首注册者 → super_admin
   let adminId: string;
   let memberToken: string;
-  let memberPhone: string;
+  let memberEmail: string; // 显式邮箱：q 搜索用例的确定性命中目标
 
   const list = async (): Promise<AdminItem[]> => {
     const res = await authed(app, adminToken, 'get', '/api/admin/users');
@@ -52,14 +50,14 @@ describe('账号管理（/api/admin/users）：角色/状态/防呆/停用踢号
 
   beforeAll(async () => {
     app = await createTestApp();
-    // 首个登录建号 = 空库第一人 → super_admin（策略：首注册者=超管）
-    const adminLogin = await loginPhone(app, phone());
-    adminToken = (adminLogin.body as { token: string }).token;
-    adminId = (adminLogin.body as { user: { id: string } }).user.id;
+    // 首个注册建号 = 空库第一人 → super_admin（策略：首注册者=超管）
+    const admin = await createAccount(app, { nickname: '管理员甲' });
+    adminToken = admin.token;
+    adminId = admin.id;
 
-    memberPhone = phone();
-    const memberLogin = await loginPhone(app, memberPhone);
-    memberToken = (memberLogin.body as { token: string }).token;
+    memberEmail = `searchable-${Date.now()}@test.dev`;
+    const member = await createAccount(app, { email: memberEmail, nickname: '成员乙' });
+    memberToken = member.token;
   });
 
   afterAll(async () => {
@@ -74,15 +72,14 @@ describe('账号管理（/api/admin/users）：角色/状态/防呆/停用踢号
     expect(byMember.status).toBe(403);
     expect(String(byMember.body.message)).toContain('仅超级管理员');
 
-    const memberLogin = await loginPhone(app, memberPhone);
-    const memberId = (memberLogin.body as { user: { id: string } }).user.id;
+    const memberId = (await list()).find((u) => u.email === memberEmail)?.id as string;
     const patchByMember = await authed(app, memberToken, 'patch', `/api/admin/users/${memberId}`).send({
       systemRole: 'super_admin',
     });
     expect(patchByMember.status).toBe(403);
   });
 
-  it('分页与搜索（2026-10-21 契约）：size=1 分页 total 守恒；q 命中手机号；page 越界空页', async () => {
+  it('分页与搜索（2026-10-21 契约）：size=1 分页 total 守恒；q 命中邮箱；page 越界空页', async () => {
     const p1 = await authed(app, adminToken, 'get', '/api/admin/users?page=1&size=1');
     expect(p1.status).toBe(200);
     const body1 = p1.body as { items: AdminItem[]; total: number; page: number; size: number };
@@ -94,11 +91,11 @@ describe('账号管理（/api/admin/users）：角色/状态/防呆/停用踢号
     const body2 = p2.body as { items: AdminItem[]; total: number };
     expect(body2.items).toHaveLength(1);
     expect(body2.items[0]?.id).not.toBe(body1.items[0]?.id); // 两页不重叠
-    // q 命中手机号（模糊）
-    const q = await authed(app, adminToken, 'get', `/api/admin/users?q=${memberPhone.slice(0, 7)}`);
+    // q 命中邮箱（模糊；2026-11-12 重做后无手机号，email 可作搜索键）
+    const q = await authed(app, adminToken, 'get', `/api/admin/users?q=${memberEmail}`);
     const qb = q.body as { items: AdminItem[]; total: number };
     expect(qb.total).toBe(1);
-    expect(qb.items[0]?.phone).toBe(memberPhone);
+    expect(qb.items[0]?.email).toBe(memberEmail);
     // q 无命中 → 空页
     const miss = await authed(app, adminToken, 'get', '/api/admin/users?q=zzz-no-such-user');
     expect((miss.body as { total: number }).total).toBe(0);
@@ -109,14 +106,14 @@ describe('账号管理（/api/admin/users）：角色/状态/防呆/停用踢号
     expect(bb.total).toBe(2);
   });
 
-  it('GET 列表：首号 super_admin、次号 member；fileCount=3（登录建号种 3 个示例文件）；createdAt 为 ISO', async () => {
+  it('GET 列表：首号 super_admin、次号 member；注册号 fileCount=3（种 3 个示例文件）；createdAt 为 ISO', async () => {
     const items = await list();
     expect(items).toHaveLength(2);
     const admin = items.find((u) => u.id === adminId);
     const member = items.find((u) => u.id !== adminId);
     expect(admin?.systemRole).toBe('super_admin');
     expect(admin?.status).toBe('active');
-    expect(admin?.fileCount).toBe(3); // SEED_TEMPLATES 3 个模板
+    expect(admin?.fileCount).toBe(3); // SEED_TEMPLATES 3 个模板（register 路径）
     expect(member?.systemRole).toBe('member');
     expect(member?.fileCount).toBe(3);
     for (const u of items) expect(Number.isNaN(Date.parse(u.createdAt))).toBe(false);
@@ -124,10 +121,10 @@ describe('账号管理（/api/admin/users）：角色/状态/防呆/停用踢号
     expect(items[0]?.id).toBe(adminId);
   });
 
-  it('POST 添加账号：201 member/active/无密码/不种示例文件；重复 409；非法手机号 400；昵称超长 400', async () => {
-    const addedPhone = phone();
+  it('POST 添加账号：201 member/active/无密码/不种示例文件；重复 409；非法邮箱 400；昵称超长 400', async () => {
+    const addedEmail = uniqueEmail();
     const created = await authed(app, adminToken, 'post', '/api/admin/users').send({
-      phone: addedPhone,
+      email: addedEmail,
       nickname: '新同事',
     });
     expect(created.status).toBe(201);
@@ -135,26 +132,26 @@ describe('账号管理（/api/admin/users）：角色/状态/防呆/停用踢号
     expect(item.systemRole).toBe('member');
     expect(item.status).toBe('active');
     expect(item.nickname).toBe('新同事');
-    expect(item.phone).toBe(addedPhone);
-    expect(item.fileCount).toBe(0); // 管理端建号不种示例文件（种子只在登录首建号路径）
+    expect(item.email).toBe(addedEmail);
+    expect(item.fileCount).toBe(0); // 管理端建号不种示例文件（种子只在邮箱注册路径）
     expect(Number.isNaN(Date.parse(item.createdAt))).toBe(false);
 
-    // 该号可凭验证码登录（无密码形态）且 /me 显示 hasPassword=false
-    const login = await loginPhone(app, addedPhone);
-    expect(login.status).toBe(200);
-    const token = (login.body as { token: string }).token;
-    const me = await authed(app, token, 'get', '/api/users/me');
-    expect(me.status).toBe(200);
-    expect((me.body as { hasPassword: boolean }).hasPassword).toBe(false);
-
-    const dup = await authed(app, adminToken, 'post', '/api/admin/users').send({ phone: addedPhone, nickname: '又一人' });
+    // 重复邮箱：前置检查与 uk 兜底同文案（该号已占）
+    const dup = await authed(app, adminToken, 'post', '/api/admin/users').send({ email: addedEmail, nickname: '又一人' });
     expect(dup.status).toBe(409);
-    expect(String(dup.body.message)).toContain('该手机号已注册');
+    expect(String(dup.body.message)).toBe('该邮箱已绑定其他账号，请换用其他邮箱');
 
-    const badPhone = await authed(app, adminToken, 'post', '/api/admin/users').send({ phone: 'not-a-phone', nickname: '甲' });
-    expect(badPhone.status).toBe(400);
+    // 重复邮箱命中注册号同样 409
+    const dupMember = await authed(app, adminToken, 'post', '/api/admin/users').send({
+      email: memberEmail,
+      nickname: '撞名者',
+    });
+    expect(dupMember.status).toBe(409);
+
+    const badEmail = await authed(app, adminToken, 'post', '/api/admin/users').send({ email: 'not-an-email', nickname: '甲' });
+    expect(badEmail.status).toBe(400);
     const badNickname = await authed(app, adminToken, 'post', '/api/admin/users').send({
-      phone: phone(),
+      email: uniqueEmail(),
       nickname: '长'.repeat(33),
     });
     expect(badNickname.status).toBe(400);
@@ -181,7 +178,7 @@ describe('账号管理（/api/admin/users）：角色/状态/防呆/停用踢号
 
   it('PATCH 角色升降：member 升超管 → 200；多超管在场时可降回 member → 200', async () => {
     const items = await list();
-    const member = items.find((u) => u.id !== adminId) as AdminItem;
+    const member = items.find((u) => u.email === memberEmail) as AdminItem;
 
     const promoted = await authed(app, adminToken, 'patch', `/api/admin/users/${member.id}`).send({
       systemRole: 'super_admin',
@@ -189,9 +186,9 @@ describe('账号管理（/api/admin/users）：角色/状态/防呆/停用踢号
     expect(promoted.status).toBe(200);
     expect((promoted.body as AdminItem).systemRole).toBe('super_admin');
 
-    // 降级后旧超管角色即时生效：此时用 member 的旧 token 也无法进管理端（member token 本来就是它，改用其升超管后验证）
+    // 升权即时生效：member 旧 token 立即可进管理端（角色每请求查库）
     const nowAdmin = await authed(app, memberToken, 'get', '/api/admin/users');
-    expect(nowAdmin.status).toBe(200); // 角色每请求查库，升权即时生效
+    expect(nowAdmin.status).toBe(200);
 
     const demoted = await authed(app, adminToken, 'patch', `/api/admin/users/${member.id}`).send({
       systemRole: 'member',
@@ -220,36 +217,33 @@ describe('账号管理（/api/admin/users）：角色/状态/防呆/停用踢号
   });
 
   it('停用踢号：停用后既有 token 401、登录 401（两段式文案）；恢复后再登录 200 且角色不变', async () => {
-    const victimPhone = phone();
-    const created = await authed(app, adminToken, 'post', '/api/admin/users').send({ phone: victimPhone, nickname: '待停用' });
-    expect(created.status).toBe(201);
-    const victimId = (created.body as AdminItem).id;
-
-    const login1 = await loginPhone(app, victimPhone);
-    expect(login1.status).toBe(200);
-    const victimToken = (login1.body as { token: string }).token;
-    expect((await authed(app, victimToken, 'get', '/api/users/me')).status).toBe(200);
+    // 受害者用注册号（token 来自注册即登录；admin 建号无密码无法登录取 token）
+    const victim = await createAccount(app, { nickname: '待停用' });
+    const victimId = victim.id;
+    expect((await authed(app, victim.token, 'get', '/api/users/me')).status).toBe(200);
 
     const disabled = await authed(app, adminToken, 'patch', `/api/admin/users/${victimId}`).send({ status: 'disabled' });
     expect(disabled.status).toBe(200);
     expect((disabled.body as AdminItem).status).toBe('disabled');
 
     // 既有会话即刻失效：Redis 会话仍在，但 UserGuard 查库见 disabled → 401
-    const oldToken = await authed(app, victimToken, 'get', '/api/users/me');
+    const oldToken = await authed(app, victim.token, 'get', '/api/users/me');
     expect(oldToken.status).toBe(401);
     expect(String(oldToken.body.message)).toBe('账号已被停用，请联系管理员');
 
     // 再登录也被拒（登录闸）
-    const login2 = await loginPhone(app, victimPhone);
+    const login2 = await request(app.getHttpServer())
+      .post('/api/auth/login')
+      .send({ account: victim.email, password: 'pass123456' });
     expect(login2.status).toBe(401);
     expect(String((login2.body as { message: string }).message)).toBe('账号已被停用，请联系管理员');
 
     // 恢复启用：原 token 复通、可再登录，且角色/状态未被登录路径改动
     const reactivated = await authed(app, adminToken, 'patch', `/api/admin/users/${victimId}`).send({ status: 'active' });
     expect(reactivated.status).toBe(200);
-    expect((await authed(app, victimToken, 'get', '/api/users/me')).status).toBe(200);
-    const login3 = await loginPhone(app, victimPhone);
-    expect(login3.status).toBe(200);
+    expect((await authed(app, victim.token, 'get', '/api/users/me')).status).toBe(200);
+    const relogin = await loginToken(app, victim.email);
+    expect(relogin).toBeTruthy();
     const after = await findItem(victimId);
     expect(after?.systemRole).toBe('member');
     expect(after?.status).toBe('active');

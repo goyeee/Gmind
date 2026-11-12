@@ -7,6 +7,7 @@ import { DataSource } from 'typeorm';
 import { ulid } from 'ulid';
 import { docFromState, docToState, createTemplateDoc, childrenIds, ROOT_NODE_ID } from '@gmind/core';
 import { createTestApp } from './support/app-test';
+import { createAccount } from './support/auth-test';
 import { FileCollaboratorEntity } from '../src/files/file-collaborator.entity';
 import { MailService } from '../src/mail/mail.service';
 import { NotificationEntity } from '../src/notifications/notification.entity';
@@ -42,13 +43,6 @@ describe('站内通知（FR-CMT-005）', () => {
   let outsider: { id: string; nickname: string };
   let fileId: string;
   let nodeIdA: string;
-
-  const tokenFor = async (userId: string): Promise<string> => {
-    const { SessionService } = await import('../src/session/session.service');
-    const redisMod = await import('ioredis');
-    const svc = new SessionService(new redisMod.default('redis://127.0.0.1:16379/1'));
-    return (await svc.create(userId, false)).token;
-  };
 
   type Method = 'get' | 'post' | 'put';
   const authed = (token: string, method: Method, url: string) =>
@@ -114,14 +108,16 @@ describe('站内通知（FR-CMT-005）', () => {
     dataSource = app.get(DataSource);
     port = (app.getHttpServer().address() as AddressInfo).port;
 
-    const users = app.get((await import('../src/users/users.service')).UsersService);
     const files = app.get((await import('../src/files/files.service')).FilesService);
-    owner = await users.create({ method: 'phone', phone: '13900007001' });
-    collaborator = await users.create({ method: 'phone', phone: '13900007002' });
-    outsider = await users.create({ method: 'phone', phone: '13900007003' });
-    ownerToken = await tokenFor(owner.id);
-    collaboratorToken = await tokenFor(collaborator.id);
-    outsiderToken = await tokenFor(outsider.id);
+    const ownerAcct = await createAccount(app, { nickname: '通知甲' });
+    const collabAcct = await createAccount(app, { nickname: '通知乙' });
+    const outsiderAcct = await createAccount(app, { nickname: '通知丙' });
+    owner = { id: ownerAcct.id, nickname: '通知甲' };
+    collaborator = { id: collabAcct.id, nickname: '通知乙' };
+    outsider = { id: outsiderAcct.id, nickname: '通知丙' };
+    ownerToken = ownerAcct.token;
+    collaboratorToken = collabAcct.token;
+    outsiderToken = outsiderAcct.token;
 
     const created = await files.createForUser(owner.id, {
       title: '通知文件',
@@ -399,9 +395,11 @@ describe('邮件摘要（FR-CMT-006，15 分钟未读合并单封）', () => {
     });
 
     const userRepo = dataSource.getRepository(UserEntity);
-    userA = await userRepo.save(userRepo.create({ phone: '13900008001', email: 'a-digest@example.com', nickname: '阿甲' }));
-    userB = await userRepo.save(userRepo.create({ phone: '13900008002', email: 'b-digest@example.com', nickname: '阿乙' }));
-    userC = await userRepo.save(userRepo.create({ phone: null, email: null, wechatOpenid: 'wx-digest-0001', nickname: '阿丙' }));
+    userA = await userRepo.save(userRepo.create({ email: 'a-digest@example.com', nickname: '阿甲' }));
+    userB = await userRepo.save(userRepo.create({ email: 'b-digest@example.com', nickname: '阿乙' }));
+    // 无邮箱形态（2026-11-12 重做后 email 列 NOT NULL，历史无邮箱账号迁移为空串；
+    // digest 对 !email 走「不发信但回写 emailed_at」收敛分支）
+    userC = await userRepo.save(userRepo.create({ email: '', nickname: '阿丙' }));
   });
 
   afterAll(async () => {
