@@ -10,11 +10,17 @@ export class UserEntity {
   @Column({ type: 'varchar', length: 20, nullable: true })
   phone: string | null = null;
 
-  @Column({ type: 'varchar', length: 191, nullable: true })
-  email: string | null = null;
+  // 邮箱注册制（2026-11-12 重做）：唯一身份键，列 NOT NULL（迁移 AuthEmailFoundation）；
+  // TS 初值 '' 仅满足建空实体（admin/旧通道），注册路径必显式赋邮箱
+  @Column({ type: 'varchar', length: 191 })
+  email: string = '';
 
   @Column({ type: 'varchar', length: 64, nullable: true, name: 'wechat_openid' })
   wechatOpenid: string | null = null;
+
+  // 微信扫码登录预留（2026-11-12 重做 spec §3-11）：真实绑定/扫码待公众号与开放平台就绪
+  @Column({ type: 'varchar', length: 64, nullable: true, name: 'wechat_unionid' })
+  wechatUnionid: string | null = null;
 
   @Column({ type: 'varchar', length: 100, nullable: true, name: 'password_hash' })
   passwordHash: string | null = null;

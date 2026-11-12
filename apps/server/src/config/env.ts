@@ -20,6 +20,15 @@ const envSchema = z.object({
   // 兜底口径，调用方照常落 notifications）；MailHog 就绪后补 env 即接通。
   SMTP_HOST: z.string().optional(),
   SMTP_PORT: z.coerce.number().optional(),
+  // SMTP 认证与发件人（2026-11-12 账号体系重做）：USER/PASS 未配 → 匿名连接（本地
+  // MailHog 同款）；production 四项必配（下方守卫 fail-closed）。from 默认维持一期占位值。
+  SMTP_USER: z.string().optional(),
+  SMTP_PASS: z.string().optional(),
+  SMTP_FROM: z.string().default('Gmind <noreply@gmind.local>'),
+  // 邮箱验证码开发固定码（2026-11-12 账号体系重做）：dev/test 恒用该值（e2e/本地联调可
+  // 预判）；production 恒随机 6 位数字——EmailCodeService 的 production 分支不读本值，
+  // 即使设置了也忽略。
+  DEV_MAIL_CODE: z.string().default('123456'),
   // 邀请邮件（M3b Task 5，FR-SHR-004）注册链接基址：web dev 默认 5173，部署侧覆写。
   APP_URL: z.string().default('http://localhost:5173'),
   // 站内跳转基址（M4 清偿包）：摘要邮件条目的文档深链（${WEB_ORIGIN}/edit/:fileId）与
@@ -36,5 +45,17 @@ export const env = envSchema.parse(process.env);
 if (env.NODE_ENV === 'production' && !process.env.DEV_SMS_CODE) {
   throw new Error(
     '[gmind] NODE_ENV=production 时必须显式配置 DEV_SMS_CODE（随机长串过渡；真实短信通道接好后移除），拒绝以开发固定验证码启动',
+  );
+}
+
+// 生产安全门禁（2026-11-12 账号体系重做）：邮箱验证码在 production 经真实 SMTP 发信
+// （注册/找回密码的唯一通道），缺任一配置 = 该流程全不可用——fail-closed 拒绝启动，
+// 与上方 DEV_SMS_CODE 同款「缺省不放行」纪律。
+if (
+  env.NODE_ENV === 'production' &&
+  (!env.SMTP_HOST || !env.SMTP_PORT || !env.SMTP_USER || !env.SMTP_PASS)
+) {
+  throw new Error(
+    '[gmind] NODE_ENV=production 时必须配置 SMTP_HOST/SMTP_PORT/SMTP_USER/SMTP_PASS（邮箱验证码经真实 SMTP 发信），拒绝启动',
   );
 }

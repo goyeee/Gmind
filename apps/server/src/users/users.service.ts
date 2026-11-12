@@ -95,7 +95,8 @@ export class UsersService {
   async create(identity: LoginIdentity): Promise<UserEntity> {
     const user = this.repo.create();
     if (identity.method === 'phone') user.phone = identity.phone ?? null;
-    if (identity.method === 'email') user.email = identity.email ?? null;
+    // email 列已 NOT NULL（2026-11-12 重做）：schema 已保证 email 分支 identity.email 存在
+    if (identity.method === 'email') user.email = identity.email ?? '';
     if (identity.method === 'wechat') user.wechatOpenid = identity.wechatOpenid ?? null;
     user.nickname = identity.nickname ?? this.defaultNickname(identity);
     // 首注册者=super_admin（对齐 mindgrid 语义）：空库建号（count=0）即超管，其余 member。

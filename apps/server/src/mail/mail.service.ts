@@ -3,9 +3,6 @@ import nodemailer from 'nodemailer';
 import type { Transporter } from 'nodemailer';
 import { env } from '../config/env';
 
-/** 默认发件人（一期占位；MailHog/生产就绪后可经 SMTP_FROM env 覆写）。 */
-const MAIL_FROM = 'Gmind <noreply@gmind.local>';
-
 /**
  * 邮件发送服务（M3a Task 7 裁定，FR-FIL-010）：SMTP 经 env 可配（SMTP_HOST/SMTP_PORT）。
  *
@@ -13,9 +10,12 @@ const MAIL_FROM = 'Gmind <noreply@gmind.local>';
  * 调用方（CleanupService、InviteService 等）照常走主流程（「无 SMTP 仅通知不 crash」）。
  * M3b Task 5 接通传输层：SMTP_HOST 缺省 → transport null → 仅 log；配置后经 nodemailer
  * 明文 SMTP（本地无 TLS，secure:false），调用方零改动。
+ * 2026-11-12 账号体系重做：transport 增 SMTP 认证（SMTP_USER/SMTP_PASS，未配 → 匿名连接），
+ * 发件人改取 SMTP_FROM（默认维持一期占位值）。
  *
  * sendMail 永不抛错：邮件是尽力而为的旁路，投递失败只影响送达与否，不得波及
  * 通知落库/邀请落库/定时清理主流程；返回布尔供调用方（将来）回写 notifications.emailed_at。
+ * （例外见 EmailCodeService：验证码是唯一把 false 当失败的调用方。）
  */
 @Injectable()
 export class MailService {
@@ -24,7 +24,12 @@ export class MailService {
   constructor() {
     this.transport =
       env.SMTP_HOST && env.SMTP_PORT
-        ? nodemailer.createTransport({ host: env.SMTP_HOST, port: env.SMTP_PORT, secure: false })
+        ? nodemailer.createTransport({
+            host: env.SMTP_HOST,
+            port: env.SMTP_PORT,
+            secure: false,
+            auth: env.SMTP_USER && env.SMTP_PASS ? { user: env.SMTP_USER, pass: env.SMTP_PASS } : undefined,
+          })
         : null;
   }
 
@@ -34,7 +39,7 @@ export class MailService {
       return false;
     }
     try {
-      await this.transport.sendMail({ from: MAIL_FROM, to, subject, text: body });
+      await this.transport.sendMail({ from: env.SMTP_FROM, to, subject, text: body });
       return true;
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
