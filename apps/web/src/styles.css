@@ -63,17 +63,26 @@ input:focus-visible, select:focus-visible, textarea:focus-visible { outline-offs
 .login-page { width: 360px; padding: 24px; }
 .login-page h1 { margin: 0; text-align: center; font-size: 26px; letter-spacing: 1px; }
 .subtitle { text-align: center; color: var(--gm-ink-3); font-size: 13px; }
-.tabs { display: flex; gap: 8px; margin: 24px 0 16px; }
-.tabs button { flex: 1; padding: 9px; border: 1px solid var(--gm-line); background: #fff; border-radius: var(--gm-radius-ctl); color: var(--gm-ink-2); font-size: 14px; transition: border-color 0.15s, color 0.15s; }
-.tabs button.active { border-color: var(--gm-brand); color: var(--gm-brand); background: var(--gm-brand-soft); border-radius: var(--gm-radius-ctl); font-weight: 600; }
 .form { display: flex; flex-direction: column; gap: 12px; }
 .form input { padding: 11px 12px; border: 1px solid var(--gm-line); border-radius: var(--gm-radius-ctl); font-size: 14px; }
 .form input:focus { border-color: var(--gm-brand); outline: none; box-shadow: 0 0 0 3px rgb(51 112 255 / 0.12); }
 .form button { padding: 11px; border: none; background: var(--gm-brand); color: #fff; border-radius: var(--gm-radius-ctl); font-size: 14px; font-weight: 600; transition: background 0.15s; }
 .form button:hover { background: #2b5fd9; }
-.mode-switch { display: flex; gap: 8px; }
-.mode-switch button { flex: 1; padding: 7px; border: 1px solid var(--gm-line); background: #fff; border-radius: var(--gm-radius-sm); color: var(--gm-ink-2); font-size: 13px; }
-.mode-switch button.active { border-color: var(--gm-brand); color: var(--gm-brand); }
+/* 验证码行（2026-11-12 三视图）：输入框 + 获取验证码按钮（次级样式，倒计时禁用）。
+   覆盖 .form button 的主按钮蓝底——置于其后保证同优先级下生效。 */
+.code-row { display: flex; gap: 8px; }
+.code-row input { flex: 1; min-width: 0; }
+.code-row button { flex-shrink: 0; padding: 11px 14px; border: 1px solid var(--gm-line); background: #fff; color: var(--gm-brand); font-size: 13px; font-weight: 500; white-space: nowrap; cursor: pointer; }
+.code-row button:hover { background: var(--gm-brand-soft); }
+.code-row button:disabled { color: var(--gm-ink-3); background: #fff; cursor: not-allowed; }
+/* 视图间链接行（注册新账号/忘记密码/返回登录）与「记住我」行 */
+.login-links { display: flex; justify-content: space-between; }
+.login-links button { padding: 0; border: none; background: none; color: var(--gm-brand); font-size: 13px; cursor: pointer; }
+.login-links button:hover { background: none; text-decoration: underline; }
+.login-links button:only-child { margin-left: auto; }
+.login-remember { display: flex; align-items: center; gap: 6px; color: var(--gm-ink-2); font-size: 13px; cursor: pointer; }
+/* 重置成功等视图级提示（区别于 .error 的失败红） */
+.login-notice { margin: 0; color: var(--gm-ok); font-size: 13px; }
 .error { color: var(--gm-bad); font-size: 13px; }
 @media (max-width: 900px) {
   .login-hero { display: none; }
@@ -191,6 +200,20 @@ input:focus-visible, select:focus-visible, textarea:focus-visible { outline-offs
 .settings-card input:focus { border-color: var(--gm-brand); outline: none; box-shadow: 0 0 0 3px rgb(51 112 255 / 0.12); }
 .settings-card button.primary { align-self: flex-start; padding: 9px 16px; border: none; background: var(--gm-brand); color: #fff; border-radius: var(--gm-radius-ctl); font-weight: 600; cursor: pointer; }
 .settings-card button.primary:hover { background: #2b5fd9; }
+/* 换绑手机号「未验证」灰徽标（2026-11-12 账号重做：手机号仅作标识不再核验） */
+.badge-unverified { display: inline-block; margin-left: 6px; font-size: 11px; color: #86909c; background: #f2f3f5; border: 1px solid #e5e6eb; border-radius: 4px; padding: 0 6px; vertical-align: 1px; }
+/* 换绑卡两区（2026-11-12：邮箱区=验证码+密码核身，手机号区=仅密码核身） */
+.rebind-block { display: flex; flex-direction: column; gap: 10px; }
+.rebind-block + .rebind-block { border-top: 1px dashed #f0f1f2; padding-top: 14px; }
+.rebind-block .code-row { max-width: 320px; }
+.rebind-block .code-row button { padding: 9px 12px; border: 1px solid var(--gm-line); background: #fff; color: var(--gm-brand); border-radius: var(--gm-radius-sm); font-size: 13px; white-space: nowrap; cursor: pointer; }
+.rebind-block .code-row button:hover { background: var(--gm-brand-soft); }
+.rebind-block .code-row button:disabled { color: #86909c; cursor: not-allowed; }
+/* 账号资料卡昵称行内编辑（2026-11-12：自助改昵称 PATCH /users/me） */
+.profile-row { display: flex; align-items: center; gap: 10px; }
+.profile-row .profile-value { font-size: 14px; color: var(--gm-ink); }
+.profile-row button { padding: 5px 12px; border: 1px solid var(--gm-line); background: #fff; border-radius: var(--gm-radius-sm); color: var(--gm-ink-2); font-size: 13px; cursor: pointer; }
+.profile-row button:hover { border-color: var(--gm-brand); color: var(--gm-brand); }
 /* 头像区（2026-10-11）：当前头像 + 预置库横排 + 上传钮 */
 .avatar-section-row { display: flex; align-items: center; gap: 16px; }
 .avatar-presets { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }

@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { apiRegister, injectToken } from './helpers/auth';
 
 /**
  * 账号管理 UI E2E（移植 mindgrid 账号体系）：超管入口门 + 成员表 + 添加账号 + 停用踢号 +
@@ -9,8 +10,8 @@ import { expect, test, type Page } from '@playwright/test';
  * skip（环境缺超管，非产品缺陷，计划内中间态）。
  * 固定成员号 member0002@gmind.dev：首跑经 UI 添加创建；重跑已存在则接受 409 幂等，
  * 各用例自行为其铺「存在且启用」前置（API ensureMember），互不依赖执行顺序。
- * 注：本文件仍走 UI 登录/旧管理页契约（add-user 手机号表单等），任务 7 重做
- * LoginPage/AdminUsersPage 时一并改造。
+ * 2026-11-12 UI 改造（任务 7）：登录走新 LoginPage 邮箱+密码表单（testid 驱动），
+ * 添加账号表单改邮箱（add-user-email），成员标识列改 user-email。
  */
 
 // 2026-10-21 起列表分页化（页 20 行 + q 搜索），用例一律搜索定位目标行；
@@ -84,14 +85,14 @@ async function ensureMember(page: Page): Promise<void> {
 }
 
 /** UI 登录（先清旧 token，避免上一用例会话串扰）；不落 URL 断言，由调用方按预期裁剪。
- *  2026-11-12 中间态占位：按新邮箱+密码表单编写，Task 7 重做 LoginPage 前表单不存在
- *  （superAdmin 探测失败先行 skip，本函数实际不会执行）。 */
+ *  2026-11-12 任务 7：驱动重做后的 LoginPage（login-account/login-password/login-submit
+ *  testid，邮箱+密码表单）。 */
 async function uiLogin(page: Page, account: string, password = ADMIN_PASSWORD): Promise<void> {
   await page.goto('/login');
   await page.evaluate(() => localStorage.removeItem('gmind.token'));
-  await page.getByPlaceholder('邮箱').fill(account);
-  await page.getByPlaceholder('密码').fill(password);
-  await page.getByRole('button', { name: '登录', exact: true }).click();
+  await page.getByTestId('login-account').fill(account);
+  await page.getByTestId('login-password').fill(password);
+  await page.getByTestId('login-submit').click();
 }
 
 /** 按邮箱定位成员行（邮箱列唯一，不会误中昵称/时间列）。 */
@@ -144,16 +145,16 @@ test('添加账号 member0002（邮箱） → 列表出现（重跑幂等：已�
 
   await page.getByTestId('add-user-btn').click();
   await expect(page.getByTestId('add-user-modal')).toBeVisible();
-  await page.getByTestId('add-user-phone').fill(MEMBER_EMAIL);
+  await page.getByTestId('add-user-email').fill(MEMBER_EMAIL);
   await page.getByTestId('add-user-nickname').fill('成员二号');
   await page.getByTestId('add-user-confirm').click();
 
-  // 首跑 201 →「已添加」；重跑 409 →「已注册」（服务端两段式文案），两者都算通过
-  await expect(page.getByTestId('toast')).toContainText(/已添加|已注册/);
+  // 首跑 201 →「已添加」；重跑 409 →「已绑定」（服务端两段式文案），两者都算通过
+  await expect(page.getByTestId('toast')).toContainText(/已添加|已绑定/);
   await page.getByTestId('admin-user-search').fill(MEMBER_EMAIL); // 分页后搜索定位
   const row = rowOf(page, MEMBER_EMAIL);
   await expect(row).toBeVisible();
-  await expect(row.getByTestId('user-phone')).toHaveText(MEMBER_EMAIL);
+  await expect(row.getByTestId('user-email')).toHaveText(MEMBER_EMAIL);
   await expect(row.getByTestId('user-status')).toContainText('启用');
   await expect(row.getByTestId('user-role')).toHaveText('成员');
 });
@@ -175,15 +176,20 @@ test('停用 member0002（confirm）→ 状态即时变停用，该号登录被�
   await expect(row.getByTestId('user-status')).toContainText('停用');
   await expect(row.getByTestId('toggle-status-btn')).toHaveText('启用'); // 操作后控件随状态翻转
 
-  // 停用踢号：该号登录被拒（401 文案两段式），停留登录页
+  // 停用踢号：该号登录被拒，停留登录页。新契约（2026-11-12）：member0002 系管理员
+  // 建号=无密码，登录时密码闸（401「密码错误…」）先于停用闸命中——这里钉的是 UI
+  // 死路文案；停用闸本体（有密码+停用→「账号已被停用」）由 server auth e2e 覆盖。
   await uiLogin(page, MEMBER_EMAIL);
-  await expect(page.locator('.error')).toContainText('账号已被停用');
+  await expect(page.locator('.error')).toContainText('密码错误');
   await expect(page).toHaveURL(/\/login/);
 });
 
-test('member（member0002 启用后）：工作台无「账号管理」入口', async ({ page }) => {
-  await ensureMember(page);
-  await uiLogin(page, MEMBER_EMAIL);
+test('member（邮箱注册）：工作台无「账号管理」入口', async ({ page }) => {
+  // member 视角改经 helper 邮箱造号（apiRegister 即有密码可登录；member0002 无密码
+  // 无法走 UI 登录——管理员建号的登录死路已在上用例钉死）
+  const member = await apiRegister(page.request);
+  await injectToken(page, member.token);
+  await page.goto('/workspace');
   await expect(page).toHaveURL(/\/workspace/);
 
   // 对照组：member 侧栏无「组织管理」入口（原型口径：仅管理员可见）

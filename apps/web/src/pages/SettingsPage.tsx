@@ -1,20 +1,24 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { api, apiPatch, apiPost, ApiError } from '../api/client';
+import { api, apiPatch, apiPost } from '../api/client';
+import { codeSchema, emailSchema, NICKNAME_LENGTH_MESSAGE, PASSWORD_LENGTH_MESSAGE } from '@gmind/shared';
 import { Avatar, PRESET_AVATAR_COUNT } from '../editor/TaskFields';
 import { WorkspaceShell } from './WorkspaceShell';
+import { useCodeCountdown } from './useCodeCountdown';
 
 /**
- * 账号设置页（M5 Task 1，FR-ACC-002 收口 + FR-CMT-006 通知偏好收口）：三区卡片。
+ * 账号设置页（M5 Task 1 三区 → 2026-11-12 账号体系重做邮箱化）：六卡。
  * 2026-10-21 收进 WorkspaceShell 外壳（用户菜单页，侧栏无高亮项），样式对齐工作台重设计。
  *
- * - 登录密码：按身份形态渲染（FR-ACC-002）——有密码（邮箱注册设置过）= 旧密码验证；
- *   无密码（手机号注册）= 验证码核身（开发环境固定 123456，与登录通道同语义）；
- *   强度 = 8~64 位（PRD 未定义强度规则，登记）。
- * - 换绑账号：channel + 新身份 + 验证码 → POST /api/users/me/rebind；被占 409 文案
- *   服务端透出（「该手机号/邮箱已绑定其他账号」）。
- * - 邮件通知偏好：开关即 PATCH（全量替换 emailOptOut）；FR-CMT-006「用户可在设置中
- *   按事件类型关闭邮件通知，站内通知不可关闭」；FR-FIL-010 回收站邮件提醒恒发
- *   不受开关控制（system 类型不在可关闭之列）。
+ * - 账号资料（2026-11-12 新增）：昵称行内编辑 → PATCH /api/users/me（自助改昵称）。
+ * - 登录密码（2026-11-12 重做）：恒「当前密码+新密码」核身（强度 6~64，文案单点
+ *   PASSWORD_LENGTH_MESSAGE）；无密码账号（管理员建号形态）hasPassword=false →
+ *   引导文案+禁用表单（登录页「忘记密码」是唯一设密通道）。
+ * - 换绑账号（2026-11-12 重做，/users/me/rebind 已拆两端点）：邮箱区=新邮箱+
+ *   email_bind 验证码+当前密码 → POST /users/me/email；手机号区=新手机号+当前密码
+ *   （无验证码，短信未就绪）→ POST /users/me/phone；被占 409 服务端文案两段式
+ *   原文透出。
+ * - 绑定微信（2026-11-12 占位）：扫码登录/绑定未开通，点击 toast 说明。
+ * - 头像 / 通知偏好：原样（FR-CMT-006；FR-FIL-010 回收站提醒恒发）。
  */
 
 /** 身份形态（GET /api/users/me，UserGuard 装配 phone/email/hasPassword/avatarUrl）。 */
@@ -43,6 +47,20 @@ const PREF_ITEMS: Array<{ key: EmailOptOutType; label: string; desc: string }> =
   { key: 'reply', label: '回复', desc: '有人回复我的评论时发邮件提醒' },
   { key: 'permission', label: '权限', desc: '文件协作权限变动时发邮件提醒' },
 ];
+
+/** 改密/换绑/改昵称的客户端预检（2026-11-12）：文案与 server 端单点同源（shared 导出
+ *  常量与 schema）；邮箱与验证码直接复用 shared schema 对象 safeParse（zod 不进 web
+ *  依赖），密码长度/昵称长度/手机号格式为轻量手写，格式错误提交前即拦截。 */
+
+/** shared schema safeParse 的首个 issue message（文案在 shared 单点维护）。 */
+function checkSchema(result: { success: true } | { success: false; error: { issues: Array<{ message: string }> } }): string | null {
+  return result.success ? null : result.error.issues[0]?.message ?? '输入有误，请检查后重试';
+}
+
+/** 手机号口径与 server rebindPhoneSchema 同源（/^1\d{10}$/；文案与 server 端一致，
+ *  shared 未导出 phone schema，本地留一份同源拷贝——Task 3 minor ④ 的已知取舍）。 */
+const PHONE_RE = /^1\d{10}$/;
+const PHONE_FORMAT_MESSAGE = '手机号格式不正确，请检查后重试';
 
 function msgOf(e: unknown): string {
   return e instanceof Error ? e.message : '操作未完成：网络异常或服务暂不可用，请稍后重试';
@@ -73,15 +91,27 @@ export function SettingsPage() {
   const [notifyEnabled, setNotifyEnabled] = useState(true);
   const [digestEnabled, setDigestEnabled] = useState(true);
 
+  // 登录密码卡：恒「当前密码+新密码」（hasPassword=false 时整体禁用）
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
-  const [code, setCode] = useState('');
   const [passwordError, setPasswordError] = useState('');
 
-  const [channel, setChannel] = useState<'phone' | 'email'>('phone');
-  const [newIdentity, setNewIdentity] = useState('');
-  const [rebindCode, setRebindCode] = useState('');
-  const [rebindError, setRebindError] = useState('');
+  // 换绑卡·邮箱区：新邮箱 + email_bind 验证码 + 当前密码
+  const [newEmail, setNewEmail] = useState('');
+  const [emailCode, setEmailCode] = useState('');
+  const [emailPassword, setEmailPassword] = useState('');
+  const [emailError, setEmailError] = useState('');
+  const emailCountdown = useCodeCountdown();
+
+  // 换绑卡·手机号区：新手机号 + 当前密码（无验证码，短信未就绪）
+  const [newPhone, setNewPhone] = useState('');
+  const [phonePassword, setPhonePassword] = useState('');
+  const [phoneError, setPhoneError] = useState('');
+
+  // 账号资料卡：昵称行内编辑
+  const [nicknameEditing, setNicknameEditing] = useState(false);
+  const [nicknameValue, setNicknameValue] = useState('');
+  const [profileError, setProfileError] = useState('');
 
   const [prefError, setPrefError] = useState('');
   const [error, setError] = useState('');
@@ -102,51 +132,95 @@ export function SettingsPage() {
     setOptOut(new Set(prefs.emailOptOut));
     setNotifyEnabled(prefs.notifyEnabled !== false);
     setDigestEnabled(prefs.digestEnabled !== false);
-    // 换绑渠道缺省：空着的那一侧（手机号用户缺省换邮箱；都空（微信）缺省手机号）
-    setChannel(meData.phone === null ? 'phone' : 'email');
   }, []);
 
   useEffect(() => {
     void reload().catch((e) => setError(msgOf(e)));
   }, [reload]);
 
-  /** 改密：成功后 hasPassword 即为真——本地同步，密码区切到旧密码形态。 */
+  /** 改密：预检 → 当前密码核身；成功后 hasPassword 即为真——本地同步。 */
   async function changePassword(): Promise<void> {
     if (!me) return;
     setPasswordError('');
+    if (!currentPassword) return setPasswordError('请输入当前密码');
+    if (newPassword.length < 6 || newPassword.length > 64) return setPasswordError(PASSWORD_LENGTH_MESSAGE);
     try {
-      if (me.hasPassword) {
-        await apiPost('/users/me/password', { newPassword, currentPassword });
-      } else {
-        await apiPost('/users/me/password', { newPassword, code });
-      }
+      await apiPost('/users/me/password', { currentPassword, newPassword });
       setMe({ ...me, hasPassword: true });
       setCurrentPassword('');
       setNewPassword('');
-      setCode('');
       showToast('密码已修改，请牢记新密码');
     } catch (e) {
       setPasswordError(msgOf(e));
     }
   }
 
-  /** 换绑：成功后回载身份（当前绑定展示随列更新）。 */
-  async function rebind(): Promise<void> {
-    setRebindError('');
+  /** 换绑邮箱：email_bind 验证码 + 当前密码核身 → POST /users/me/email；
+   *  被占 409 服务端两段式文案原文透出（「该邮箱已绑定其他账号，请换用其他邮箱」）。 */
+  async function rebindEmail(): Promise<void> {
+    setEmailError('');
+    const emailProblem = checkSchema(emailSchema.safeParse(newEmail));
+    if (emailProblem) return setEmailError(emailProblem);
+    const codeProblem = checkSchema(codeSchema.safeParse(emailCode));
+    if (codeProblem) return setEmailError(codeProblem);
+    if (!emailPassword) return setEmailError('请输入当前密码');
     try {
-      await apiPost('/users/me/rebind', { channel, newIdentity, code: rebindCode });
-      setNewIdentity('');
-      setRebindCode('');
-      showToast(channel === 'phone' ? '换绑已完成，下次可使用新手机号登录' : '换绑已完成，下次可使用新邮箱登录');
+      await apiPost('/users/me/email', { email: newEmail, code: emailCode, currentPassword: emailPassword });
+      setNewEmail('');
+      setEmailCode('');
+      setEmailPassword('');
+      showToast('邮箱已换绑，请使用新邮箱登录');
       await reload();
     } catch (e) {
-      // NFR-USE-005：被占 409（服务端「该手机号/邮箱已绑定其他账号」只给原因）补
-      // 「换用其他手机号/邮箱」动作半；其余失败维持服务端 message 原样
-      setRebindError(
-        e instanceof ApiError && e.status === 409
-          ? `${msgOf(e)}，请换用其他${channel === 'phone' ? '手机号' : '邮箱'}`
-          : msgOf(e),
-      );
+      setEmailError(msgOf(e));
+    }
+  }
+
+  /** 换绑手机号：仅当前密码核身（无验证码，短信未就绪）→ POST /users/me/phone。 */
+  async function rebindPhone(): Promise<void> {
+    setPhoneError('');
+    if (!PHONE_RE.test(newPhone)) return setPhoneError(PHONE_FORMAT_MESSAGE);
+    if (!phonePassword) return setPhoneError('请输入当前密码');
+    try {
+      await apiPost('/users/me/phone', { phone: newPhone, currentPassword: phonePassword });
+      setNewPhone('');
+      setPhonePassword('');
+      showToast('手机号已更新');
+      await reload();
+    } catch (e) {
+      setPhoneError(msgOf(e));
+    }
+  }
+
+  /** 换绑邮箱发码（scene=email_bind）：邮箱先过 shared emailSchema 归一+格式预检，
+   *  成功才起 60s 倒计时（失败可直接重试）。 */
+  async function sendRebindCode(): Promise<void> {
+    setEmailError('');
+    const parsed = emailSchema.safeParse(newEmail);
+    if (!parsed.success) {
+      setEmailError(parsed.error.issues[0]?.message ?? '邮箱格式不正确，请检查后重新输入');
+      return;
+    }
+    try {
+      await apiPost('/auth/email-code', { scene: 'email_bind', email: parsed.data });
+      emailCountdown.start();
+    } catch (e) {
+      setEmailError(msgOf(e));
+    }
+  }
+
+  /** 昵称行内编辑保存：预检 → PATCH /users/me（返回设置后的账号视图，一次刷新）。 */
+  async function saveNickname(): Promise<void> {
+    setProfileError('');
+    const nickname = nicknameValue.trim();
+    if (nickname.length < 1 || nickname.length > 32) return setProfileError(NICKNAME_LENGTH_MESSAGE);
+    try {
+      const user = await apiPatch<MeIdentity>('/users/me', { nickname });
+      setMe(user);
+      setNicknameEditing(false);
+      showToast('昵称已更新');
+    } catch (e) {
+      setProfileError(msgOf(e));
     }
   }
 
@@ -193,10 +267,8 @@ export function SettingsPage() {
     }
   }
 
-  const currentBinding = me
-    ? [me.phone ? `手机号 ${me.phone}` : null, me.email ? `邮箱 ${me.email}` : null].filter(Boolean).join('、') ||
-      '微信账号'
-    : '加载中…';
+  // hasPassword 仅在 me 装载完成后放行表单（防装载竞态下误渲染/误提交）
+  const passwordReady = me !== null && me.hasPassword;
 
   return (
     <WorkspaceShell activeNav={null}>
@@ -266,68 +338,166 @@ export function SettingsPage() {
         </div>
       </section>
 
+      {/* 账号资料（2026-11-12 新增）：昵称行内编辑 → PATCH /users/me */}
+      <section className="settings-card" data-testid="profile-section">
+        <h3>账号资料</h3>
+        <div className="profile-row">
+          <span className="settings-hint">昵称</span>
+          {nicknameEditing ? (
+            <>
+              <input
+                data-testid="profile-nickname-input"
+                maxLength={32}
+                value={nicknameValue}
+                autoFocus
+                onChange={(e) => setNicknameValue(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') void saveNickname();
+                  if (e.key === 'Escape') setNicknameEditing(false);
+                }}
+              />
+              <button data-testid="profile-nickname-save" onClick={() => void saveNickname()}>
+                保存
+              </button>
+              <button data-testid="profile-nickname-cancel" onClick={() => setNicknameEditing(false)}>
+                取消
+              </button>
+            </>
+          ) : (
+            <>
+              <span className="profile-value" data-testid="profile-nickname">
+                {me?.nickname ?? '加载中…'}
+              </span>
+              <button
+                data-testid="profile-nickname-edit"
+                onClick={() => {
+                  setNicknameValue(me?.nickname ?? '');
+                  setNicknameEditing(true);
+                }}
+              >
+                修改
+              </button>
+            </>
+          )}
+        </div>
+        {profileError && <p className="error">{profileError}</p>}
+      </section>
+
+      {/* 登录密码（2026-11-12 重做）：恒密码核身；无密码账号引导走登录页「忘记密码」 */}
       <section className="settings-card" data-testid="password-section">
         <h3>登录密码</h3>
-        <p className="settings-hint">
-          {me?.hasPassword ? '修改密码需先验证当前密码' : '当前账号未设置密码，凭验证码即可设置（开发环境固定 123456）'}
-        </p>
-        {me?.hasPassword ? (
-          <input
-            type="password"
-            data-testid="password-current"
-            placeholder="当前密码"
-            value={currentPassword}
-            onChange={(e) => setCurrentPassword(e.target.value)}
-          />
-        ) : (
-          <input
-            data-testid="password-code"
-            placeholder="验证码（开发环境固定 123456）"
-            value={code}
-            onChange={(e) => setCode(e.target.value)}
-          />
+        {me !== null && !me.hasPassword && (
+          <p className="settings-hint" data-testid="password-guide">
+            尚未设置密码，请通过登录页"忘记密码"用邮箱验证码设置
+          </p>
         )}
+        {me?.hasPassword && <p className="settings-hint">修改密码需先验证当前密码</p>}
+        <input
+          type="password"
+          data-testid="password-current"
+          placeholder="当前密码"
+          value={currentPassword}
+          disabled={!passwordReady}
+          onChange={(e) => setCurrentPassword(e.target.value)}
+        />
         <input
           type="password"
           data-testid="password-new"
-          placeholder="新密码（8~64 位）"
+          placeholder="新密码（6~64 位）"
           value={newPassword}
+          disabled={!passwordReady}
           onChange={(e) => setNewPassword(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === 'Enter') void changePassword();
+            if (e.key === 'Enter' && passwordReady) void changePassword();
           }}
         />
         {passwordError && <p className="error">{passwordError}</p>}
-        <button className="primary" data-testid="settings-save" onClick={() => void changePassword()}>
-          {me?.hasPassword ? '修改密码' : '设置密码'}
+        <button className="primary" data-testid="settings-save" disabled={!passwordReady} onClick={() => void changePassword()}>
+          修改密码
         </button>
       </section>
 
+      {/* 换绑账号（2026-11-12 重做）：邮箱区=验证码+密码核身；手机号区=仅密码核身 */}
       <section className="settings-card" data-testid="rebind-section">
         <h3>换绑账号</h3>
-        <p className="settings-hint">当前绑定：{currentBinding}</p>
-        <select data-testid="rebind-channel" value={channel} onChange={(e) => setChannel(e.target.value as 'phone' | 'email')}>
-          <option value="phone">手机号</option>
-          <option value="email">邮箱</option>
-        </select>
-        <input
-          data-testid="rebind-identity"
-          placeholder={channel === 'phone' ? '新手机号' : '新邮箱'}
-          value={newIdentity}
-          onChange={(e) => setNewIdentity(e.target.value)}
-        />
-        <input
-          data-testid="rebind-code"
-          placeholder="验证码（开发环境固定 123456）"
-          value={rebindCode}
-          onChange={(e) => setRebindCode(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') void rebind();
-          }}
-        />
-        {rebindError && <p className="error">{rebindError}</p>}
-        <button className="primary" data-testid="rebind-save" onClick={() => void rebind()}>
-          提交换绑
+        <div className="rebind-block" data-testid="rebind-email-block">
+          <h4 className="settings-subhead">邮箱（登录身份）</h4>
+          <p className="settings-hint">当前绑定：{me?.email ?? '未绑定'}</p>
+          <input
+            data-testid="rebind-email"
+            placeholder="新邮箱"
+            value={newEmail}
+            onChange={(e) => setNewEmail(e.target.value)}
+          />
+          <div className="code-row">
+            <input
+              data-testid="rebind-email-code"
+              placeholder="邮箱验证码"
+              value={emailCode}
+              onChange={(e) => setEmailCode(e.target.value)}
+            />
+            <button
+              data-testid="rebind-email-code-send"
+              disabled={emailCountdown.left > 0}
+              onClick={() => void sendRebindCode()}
+            >
+              {emailCountdown.left > 0 ? `${emailCountdown.left}s 后重发` : '获取验证码'}
+            </button>
+          </div>
+          <input
+            type="password"
+            data-testid="rebind-email-password"
+            placeholder="当前密码"
+            value={emailPassword}
+            onChange={(e) => setEmailPassword(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') void rebindEmail();
+            }}
+          />
+          {emailError && <p className="error">{emailError}</p>}
+          <button className="primary" data-testid="rebind-email-save" onClick={() => void rebindEmail()}>
+            提交换绑
+          </button>
+        </div>
+        <div className="rebind-block" data-testid="rebind-phone-block">
+          <h4 className="settings-subhead">手机号（协作标识，暂不可用于登录）</h4>
+          <p className="settings-hint">
+            当前绑定：{me?.phone ?? '未绑定'}
+            {me?.phone && (
+              <span className="badge-unverified" data-testid="phone-unverified-badge">
+                未验证
+              </span>
+            )}
+          </p>
+          <input
+            data-testid="rebind-phone"
+            placeholder="新手机号"
+            value={newPhone}
+            onChange={(e) => setNewPhone(e.target.value)}
+          />
+          <input
+            type="password"
+            data-testid="rebind-phone-password"
+            placeholder="当前密码"
+            value={phonePassword}
+            onChange={(e) => setPhonePassword(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') void rebindPhone();
+            }}
+          />
+          {phoneError && <p className="error">{phoneError}</p>}
+          <button className="primary" data-testid="rebind-phone-save" onClick={() => void rebindPhone()}>
+            提交
+          </button>
+        </div>
+      </section>
+
+      {/* 绑定微信（2026-11-12 占位）：登录通道已随重做移除，绑定能力待开通 */}
+      <section className="settings-card" data-testid="wechat-section">
+        <h3>绑定微信</h3>
+        <p className="settings-hint">绑定后可使用微信扫码登录（暂未开通）</p>
+        <button className="primary" data-testid="wechat-bind-btn" onClick={() => showToast('微信绑定暂未开通，敬请期待')}>
+          绑定微信
         </button>
       </section>
 

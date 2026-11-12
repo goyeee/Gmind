@@ -438,9 +438,10 @@ export function EditorPage() {
   // 定位管线暂无 UI 触发入口，保留为面板能力。
   const [membersFocus, setMembersFocus] = useState<string | null>(null);
   // 个人中心（2026-10-11 需求方裁定：顶栏最右 = [成员钮][本人头像]）：本人身份
-  // 经 GET /users/me 拉取（昵称/手机号，presence 自有身份仅用于首字符兜底）；
+  // 经 GET /users/me 拉取（昵称/账号标识，presence 自有身份仅用于首字符兜底）；
   // 下拉含返回工作台/退出登录（复用工作台 logout 范式）。
-  const [me, setMe] = useState<{ id: string; nickname: string; phone: string | null } | null>(null);
+  // 账号标识 2026-11-12 邮箱化：邮箱优先，旧手机号账号回落 phone（清库后 email 恒有）。
+  const [me, setMe] = useState<{ id: string; nickname: string; phone: string | null; email: string | null } | null>(null);
   const [personalOpen, setPersonalOpen] = useState(false);
   // 版本历史面板开合（M4 Task 8，FR-VER-004 UI）：装配模式同成员面板 open/onClose
   const [versionsOpen, setVersionsOpen] = useState(false);
@@ -3261,10 +3262,10 @@ export function EditorPage() {
     navigate('/login');
   };
 
-  // 本人身份（个人中心，2026-10-11）：进编辑器拉一次 GET /users/me（昵称/手机号
+  // 本人身份（个人中心，2026-10-11）：进编辑器拉一次 GET /users/me（昵称/账号标识
   // 展示 + 头像首字符）；失败静默（下拉头部降级「我」，菜单项仍可用）。
   useEffect(() => {
-    void api<{ id: string; nickname: string; phone: string | null }>('/users/me')
+    void api<{ id: string; nickname: string; phone: string | null; email: string | null }>('/users/me')
       .then(setMe)
       .catch(() => undefined);
   }, []);
@@ -4606,8 +4607,8 @@ export function EditorPage() {
                 <span className="personal-nickname" data-testid="personal-nickname">
                   {me?.nickname ?? '我'}
                 </span>
-                <span className="personal-phone" data-testid="personal-phone">
-                  {me?.phone ?? ''}
+                <span className="personal-email" data-testid="personal-email">
+                  {me?.email ?? me?.phone ?? ''}
                 </span>
               </div>
             </div>

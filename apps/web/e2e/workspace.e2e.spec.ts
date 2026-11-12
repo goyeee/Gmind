@@ -52,8 +52,6 @@ async function renameCard(page: Page, from: string, to: string): Promise<void> {
   await expect(cardOf(page, to)).toBeVisible();
 }
 
-/** 经 API 注册第二个用户（邮箱注册即登录，helpers/auth 同款）——直接复用 apiRegister。 */
-
 test('新建脑图即建即开，行内重命名落库', async ({ page }) => {
   page.on('framenavigated', (f) => console.log('[NAV]', f.url()));
   await registerAndLogin(page);

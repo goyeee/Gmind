@@ -5,9 +5,10 @@ import { apiRegister, injectToken, registerAndLogin } from './helpers/auth';
  * 分享链接与落地页 E2E — M3b Task 4（FR-SHR-001）。
  *
  * 全链路：A（owner）工作台行菜单「复制分享链接」（剪贴板 toast）→ B（新账号、未登录）
- * 打开 /s/:token → 跳 /login?redirect= → 登录回跳落地页 → 自动 join → /edit/:fileId
- * 画布渲染（可编辑入口）→ A 经 API 关闭链接（DELETE /api/files/:id/share，产品暂无
- * 关闭入口 UI）→ B 再开落地 URL → 失效页（「链接已失效」+ 返回工作台）。
+ * 打开 /s/:token → 跳 /login?redirect= → 造号注入后回落地页 → 自动 join → /edit/:fileId
+ * 画布渲染（可编辑入口；登录表单提交腿在 login-page.e2e.spec.ts）→ A 经 API 关闭链接
+ * （DELETE /api/files/:id/share，产品暂无关闭入口 UI）→ B 再开落地 URL → 失效页
+ * （「链接已失效」+ 返回工作台）。
  *
  * 辅助用例：已登录用户直达 active 链接自动加入；closed/未知 token 未登录访客直达
  * 失效页（服务端统一 closed 响应，前端不走登录跳转、不泄露存在性）。
@@ -29,7 +30,7 @@ async function apiCreateSharedFile(
   return { fileId, shareToken: ((await share.json()) as { shareToken: string }).shareToken };
 }
 
-test('全链路：A 复制分享链接 → B 登录回跳自动加入 → 编辑器；关闭后失效页', async ({ browser, request }) => {
+test('全链路：A 复制分享链接 → B（helper 造号注入）回落地页自动加入 → 编辑器；关闭后失效页', async ({ browser, request }) => {
   // —— A：注册登录；文件经 API 创建（中心节点文本自 2026-10-09 裁定起固定「中心主题」，
   //    与文件标题解耦——画布断言按中心主题；工作台行内重命名只改 title 列不回写 doc），
   //    随后刷新列表走 UI 分享入口 ——
@@ -56,7 +57,7 @@ test('全链路：A 复制分享链接 → B 登录回跳自动加入 → 编辑
   await expect(pageB).toHaveURL(/\/login\?redirect=\/s\//);
 
   // —— B 造号注入 → 落地页自动 join → /edit/:fileId，画布渲染 ——
-  // （2026-11-12 中间态：旧 UI 登录端点已删，「登录表单提交→回跳」一腿归 Task 7 login-page spec）
+  // （「登录表单提交→回跳」一腿在 login-page.e2e.spec.ts，任务 7 归位）
   const userB = await apiRegister(pageB.request);
   await injectToken(pageB, userB.token);
   await pageB.goto(shareUrl);

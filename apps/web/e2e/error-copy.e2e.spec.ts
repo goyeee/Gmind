@@ -28,7 +28,7 @@ import { apiRegister, registerAndLogin } from './helpers/auth';
  * ⑧ 评论 501 字 / 图片超限——e2e（评论面板 400 透出服务端 message；图片前置
  *   拦截 toast）；
  * ⑨ 邀请批量非法——e2e 轻重断言（主覆盖 member-invite.e2e.spec.ts 用例 1）；
- * ⑩ 改绑被占 409——e2e（B 账号先占用手机号 → A 改绑 → SettingsPage 错误条）。
+ * ⑩ 换绑邮箱被占 409——e2e（B 账号先占用目标邮箱 → A 换绑 → SettingsPage 错误条）。
  */
 
 /** collab.ts 的 dev-only 断连钩子（collab.e2e.spec.ts 同款声明）。 */
@@ -191,28 +191,22 @@ test('⑨ 邀请批量非法：toast 逐条原因 + 修正提示', async ({ page
   await expect(toast).toContainText('请修正后重新发送');
 });
 
-// ⑩ 改绑被占 409：服务端「已绑定其他账号」（原因）+ 换用其他邮箱（下一步）。
-//    B 账号先占用目标邮箱（API 注册）→ A 改绑必 409。
-//    （2026-11-12 中间态：本用例走旧 UI 换绑表单/契约，Task 7 重做 SettingsPage 时重写。）
-test('⑩ 改绑被占 409：错误文案含「已绑定其他账号」+ 换用其他手机号', async ({ page, request }) => {
-  const occupied = await apiRegister(request); // B：占用该邮箱
-  await registerAndLogin(page); // A：另一新账号
+// ⑩ 换绑邮箱被占 409（2026-11-12 新契约）：服务端「该邮箱已绑定其他账号」（原因）
+//    + 「请换用其他邮箱」（下一步），原文两段齐透出。B 账号先占用目标邮箱（API 注册）
+//    → A 换绑到 B 的邮箱必 409（核身顺序 密码→码→占用，A 的验证码合法）。
+test('⑩ 换绑邮箱被占 409：错误文案含「已绑定其他账号」+ 换用其他邮箱', async ({ page, request }) => {
+  const occupied = await apiRegister(request); // B：目标邮箱归属者
+  await registerAndLogin(page); // A：另一新账号（密码 pass123456）
   await page.getByTestId('user-card').click();
   await page.getByTestId('settings-entry').click();
   await expect(page.getByTestId('settings-page')).toBeVisible();
-  // dev StrictMode 下 reload 会跑两遍；等网络静默，避免第二次 me 响应把渠道重置回 email
-  await page.waitForLoadState('networkidle');
-  // 等 me 身份装载完成再操作：reload() 异步到达时的 setChannel 会重置渠道选择
-  // （手机号注册用户缺省换邮箱），先于装载的 selectOption 会被覆盖回 email
-  await expect(page.getByTestId('rebind-section').locator('.settings-hint')).toContainText('当前绑定：手机号');
-  await page.getByTestId('rebind-channel').selectOption('phone');
-  // React 受控 select 的 state 提交是异步的：等 placeholder 反射 phone 分支再填/提交，
-  // 否则紧接着的 click 可能读到旧 channel='email'（机器负载下稳定复现的测试竞态）。
-  await expect(page.getByTestId('rebind-identity')).toHaveAttribute('placeholder', '新手机号');
-  await page.getByTestId('rebind-identity').fill(occupied.email);
-  await page.getByTestId('rebind-code').fill('123456');
-  await page.getByTestId('rebind-save').click();
-  const err = page.getByTestId('rebind-section').locator('.error');
-  await expect(err).toContainText('该手机号已绑定其他账号');
-  await expect(err).toContainText('请换用其他手机号');
+
+  await page.getByTestId('rebind-email').fill(occupied.email);
+  await page.getByTestId('rebind-email-code-send').click();
+  await page.getByTestId('rebind-email-code').fill('123456'); // dev 固定码（email_bind 场景）
+  await page.getByTestId('rebind-email-password').fill('pass123456');
+  await page.getByTestId('rebind-email-save').click();
+  const err = page.getByTestId('rebind-email-block').locator('.error');
+  await expect(err).toContainText('该邮箱已绑定其他账号');
+  await expect(err).toContainText('请换用其他邮箱');
 });

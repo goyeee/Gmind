@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { AdminUserListItem, OrgDepartment, OrgGroup, SystemRole } from '@gmind/shared';
+import { emailSchema, type AdminUserListItem, type OrgDepartment, type OrgGroup, type SystemRole } from '@gmind/shared';
 import { createAdminUser, fetchAdminUsers, updateAdminUser } from '../api/admin';
 import { api } from '../api/client';
 import { createOrgDepartment, createOrgGroup, deleteOrgDepartment, deleteOrgGroup, fetchOrgDirectory } from '../api/org';
@@ -11,11 +11,10 @@ import { WorkspaceShell } from './WorkspaceShell';
  *
  * - 权限形态：入口只对 super_admin 渲染；member 直敲 URL 时列表加载 403 进错误条（后端兜底）；
  * - 自己那行：停用/降级控件禁用 + title 提示（后端 409 防呆双保险）；
- * - 只停用不删除：停用走 confirm；全部动作错误服务端 message 两段式直接 toast，成功即时回刷。
+ * - 只停用不删除：停用走 confirm；全部动作错误服务端 message 两段式直接 toast，成功即时回刷；
+ * - 添加账号（2026-11-12 邮箱化）：{email, nickname} 建号即启用成员、无密码——首次登录
+ *   前先走登录页「忘记密码」邮箱验证码设密。
  */
-
-/** 手机号口径与 server createAdminAccountSchema 同源（/^1\d{10}$/）。 */
-const PHONE_RE = /^1\d{10}$/;
 
 const ROLE_LABEL: Record<SystemRole, string> = { super_admin: '超级管理员', member: '成员' };
 
@@ -66,7 +65,7 @@ export function AdminUsersPage() {
 
   // 添加账号对话框；失败保持弹窗开、文案走 toast
   const [addOpen, setAddOpen] = useState(false);
-  const [addPhone, setAddPhone] = useState('');
+  const [addEmail, setAddEmail] = useState('');
   const [addNickname, setAddNickname] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
@@ -125,18 +124,20 @@ export function AdminUsersPage() {
   }
 
   function openAdd(): void {
-    setAddPhone('');
+    setAddEmail('');
     setAddNickname('');
     setAddOpen(true);
   }
 
   async function submitAdd(): Promise<void> {
-    if (!PHONE_RE.test(addPhone)) return showToast('手机号格式不正确，请检查后重试');
+    // 邮箱预检走 shared emailSchema（trim+lowercase+格式，文案与 server 端单点一致）
+    const parsedEmail = emailSchema.safeParse(addEmail);
+    if (!parsedEmail.success) return showToast(parsedEmail.error.issues[0]?.message ?? '邮箱格式不正确，请检查后重试');
     const nickname = addNickname.trim();
     if (!nickname) return showToast('昵称不能为空，请填写后重试');
     setSubmitting(true);
     try {
-      await createAdminUser({ phone: addPhone, nickname });
+      await createAdminUser({ email: parsedEmail.data, nickname });
       setAddOpen(false);
       // 升序列表新增在末页——跳过去让新行立刻可见（无搜索词时；有搜索词则命中即现）
       if (q === '') {
@@ -149,7 +150,7 @@ export function AdminUsersPage() {
       } else {
         await reload();
       }
-      showToast('已添加，该成员可用手机号+验证码登录');
+      showToast('已添加，该成员尚未设密码，首次登录请走「忘记密码」设置');
     } catch (e) {
       showToast(msgOf(e));
     } finally {
@@ -278,7 +279,7 @@ export function AdminUsersPage() {
                 <div className="admin-user-table" data-testid="admin-user-table">
                   <div className="admin-table-head">
                     <span>昵称</span>
-                    <span>手机号</span>
+                    <span>邮箱</span>
                     <span>所属部门</span>
                     <span>分组</span>
                     <span>角色</span>
@@ -291,8 +292,8 @@ export function AdminUsersPage() {
                     return (
                       <div key={u.id} className="admin-table-row" data-testid="admin-user-row" data-self={self || undefined}>
                         <span className="cell nickname">{u.nickname}</span>
-                        <span className="cell" data-testid="user-phone">
-                          {u.phone ?? '—'}
+                        <span className="cell" data-testid="user-email">
+                          {u.email ?? '—'}
                         </span>
                         <span className="cell">
                           <select
@@ -511,10 +512,10 @@ export function AdminUsersPage() {
               <h3>添加账号</h3>
               <input
                 autoFocus
-                data-testid="add-user-phone"
-                placeholder="手机号（11 位，登录时用）"
-                value={addPhone}
-                onChange={(e) => setAddPhone(e.target.value)}
+                data-testid="add-user-email"
+                placeholder="邮箱（登录身份标识）"
+                value={addEmail}
+                onChange={(e) => setAddEmail(e.target.value)}
               />
               <input
                 data-testid="add-user-nickname"

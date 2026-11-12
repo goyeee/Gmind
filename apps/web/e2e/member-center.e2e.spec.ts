@@ -12,9 +12,9 @@ import { apiRegister, injectToken, registerAndLogin } from './helpers/auth';
  * 个人中心下拉（最小版）：本人昵称 + 账号标识（GET /users/me）、返回工作台、
  * 退出登录（POST /auth/logout + 清 token 回 /login，复用工作台范式）；Esc/外点关闭。
  *
- * 登录走公共 helper（API 邮箱注册即登录 + 注 token，见 helpers/auth.ts）。中间态
- * 注记（2026-11-12 账号重做）：分享链接 B 的「登录页回跳后走 UI 登录」一腿改经
- * helper 造号注入（旧 UI 登录端点已删，UI 登录旅程归 Task 7 的 login-page spec）。
+ * 登录走公共 helper（API 邮箱注册即登录 + 注 token，见 helpers/auth.ts）。注记
+ * （2026-11-12 账号重做）：分享链接 B 的「登录表单提交→回跳」一腿由任务 7 的
+ * login-page.e2e.spec.ts 覆盖，本文件的 B 腿经 helper 造号注入直达。
  *
  * 覆盖面：
  * - 单上下文：成员钮角标=1、accessible name「在线成员」；点成员钮开成员面板；
@@ -70,13 +70,13 @@ test('顶栏右缘：成员钮角标与可访问名，点成员钮开成员面�
   await membersBtn.click();
   await expect(page.getByTestId('member-panel')).toBeVisible();
   await page.getByTestId('member-panel-close').click();
-  // 点本人头像 = 个人中心下拉：昵称/手机号 + 两菜单项；Esc 关闭
+  // 点本人头像 = 个人中心下拉：昵称/账号标识 + 两菜单项；Esc 关闭
   await avatar.click();
   const menu = page.getByTestId('personal-menu');
   await expect(menu).toBeVisible();
   await expect(menu.getByTestId('personal-nickname')).not.toHaveText('');
-  // 账号标识展示（旧 UI 渲染 me.phone，邮箱账号下为空——Task 7 重做个人中心时改邮箱展示）
-  await expect(menu.getByTestId('personal-phone')).toHaveText(email);
+  // 账号标识展示（2026-11-12 邮箱化：渲染 me.email，邮箱账号恒有值）
+  await expect(menu.getByTestId('personal-email')).toHaveText(email);
   await expect(menu.getByTestId('personal-workspace')).toBeVisible();
   await expect(menu.getByTestId('personal-logout')).toBeVisible();
   await page.keyboard.press('Escape');
@@ -119,8 +119,8 @@ test('双上下文：B 加入 → 角标 1→2 且成员面板见 B 行；B 关�
   const pageB = await contextB.newPage();
   await pageB.goto(`/s/${shareToken}`);
   await expect(pageB).toHaveURL(/\/login\?redirect=\/s\//);
-  // 旧 UI 登录端点已删（账号重做中间态）：B 经 helper 造号注入后回落地页完成加入；
-  // 「登录表单提交→回跳」一腿归 Task 7 的 login-page spec
+  // B 经 helper 造号注入后回落地页完成加入；「登录表单提交→回跳」一腿在
+  // login-page.e2e.spec.ts（任务 7 归位）
   const userB = await apiRegister(pageB.request);
   await injectToken(pageB, userB.token);
   await pageB.goto(`/s/${shareToken}`);
