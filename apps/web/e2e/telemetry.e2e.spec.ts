@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { registerAndLogin } from './helpers/auth';
 
 /**
  * 前端埋点 E2E — M5 Task 4（PRD 6.4：node_add/node_delete/perf_metric/error_occur）。
@@ -47,18 +48,6 @@ async function expectCommonParams(page: Page, body: EventBody): Promise<void> {
     .toBe(body.payload.sessionId);
 }
 
-async function registerAndLogin(page: Page): Promise<string> {
-  await page.goto('/login');
-  const phone = '138' + String(Math.floor(10000000 + Math.random() * 89999999));
-  await page.getByPlaceholder('手机号').fill(phone);
-  await page.getByPlaceholder('验证码（开发环境固定 123456）').fill('123456');
-  await page.getByRole('button', { name: '登录', exact: true }).click();
-  await expect(page).toHaveURL(/\/workspace/);
-  await expect(page.getByTestId('quick-create-blank')).toBeVisible(); // 首页落点（换装后种子文件在「我的文件」视图）
-  await page.goto('/workspace?view=files');
-  await expect(page.getByTestId('mine-grid').getByTestId('file-card')).toHaveCount(3);
-  return phone;
-}
 
 /** 打开种子文件进入编辑器，返回 fileId（URL 尾段）。 */
 async function openSeedDoc(page: Page, title: string): Promise<string> {

@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import * as Y from 'yjs';
+import { registerAndLogin } from './helpers/auth';
 
 /**
  * 表格列体系升级 E2E（需求方 2026-10-01「排序/自定义列挪进固定列中间/隐藏列/固定列」）。
@@ -17,18 +18,6 @@ import * as Y from 'yjs';
  * docState 断言模式沿用 custom-columns.e2e.spec.ts（GET /api/files/:id 反解 + 轮询）。
  */
 
-async function registerAndLogin(page: Page): Promise<string> {
-  await page.goto('/login');
-  const phone = '138' + String(Math.floor(10000000 + Math.random() * 89999999));
-  await page.getByPlaceholder('手机号').fill(phone);
-  await page.getByPlaceholder('验证码（开发环境固定 123456）').fill('123456');
-  await page.getByRole('button', { name: '登录', exact: true }).click();
-  await expect(page).toHaveURL(/\/workspace/);
-  await expect(page.getByTestId('quick-create-blank')).toBeVisible(); // 首页落点（换装后种子文件在「我的文件」视图）
-  await page.goto('/workspace?view=files');
-  await expect(page.getByTestId('mine-grid').getByTestId('file-card')).toHaveCount(3);
-  return phone;
-}
 
 /** 打开种子文件并切到表格视图。 */
 async function openSeedDocTable(page: Page, title: string): Promise<void> {

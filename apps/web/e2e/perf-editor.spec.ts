@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { registerAndLogin } from './helpers/auth';
 
 /**
  * 500 节点编辑器性能压测（NFR-PERF-001/003）— M1b Task 13。
@@ -76,16 +77,6 @@ interface PerfMetrics {
   aliveAfter: number;
 }
 
-/** 登录 helper（内联自 editor.e2e.spec.ts 同款模式）。 */
-async function registerAndLogin(page: Page): Promise<void> {
-  await page.goto('/login');
-  const phone = '138' + String(Math.floor(10000000 + Math.random() * 89999999));
-  await page.getByPlaceholder('手机号').fill(phone);
-  await page.getByPlaceholder('验证码（开发环境固定 123456）').fill('123456');
-  await page.getByRole('button', { name: '登录', exact: true }).click();
-  await expect(page).toHaveURL(/\/workspace/);
-  await expect(page.getByTestId('mine-grid').getByTestId('file-card')).toHaveCount(3);
-}
 
 /** 页面上下文内建空白文件（Bearer 取自 localStorage，同 api client 口径）。 */
 async function createFileViaApi(page: Page, title: string): Promise<string> {

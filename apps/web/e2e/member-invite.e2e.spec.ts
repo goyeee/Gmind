@@ -1,9 +1,11 @@
-import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
+import { apiRegister, registerAndLogin } from './helpers/auth';
 
 /**
  * 成员面板邀请对话框 E2E — M4 Task 2（M3b 缺口收口，FR-SHR-004 的 UI 面）。
  *
- * 复用 rich-content/share spec 的登录模式（新手机号注册即赠 3 个种子文件）。覆盖：
+ * 登录走公共 helper（API 邮箱注册即登录 + 注 token，见 helpers/auth.ts；注册即赠
+ * 3 个种子文件）。覆盖：
  * - owner 粘贴多地址批量邀请成功（toast 计数）+ 非法地址整批拒绝且逐条列出
  *   （服务端 400 message 原样透出，非法条目全列）；
  * - 仅 owner 可见邀请区：协作者（经分享链接加入）打开成员面板无 invite-section。
@@ -11,18 +13,6 @@ import { expect, test, type APIRequestContext, type Page } from '@playwright/tes
  * API 口径以 M3b 已交付实现为准：200 {invited, skipped}（skipped = 重邀 no-op 计数）、
  * 400 {message}（message 已含全部非法条目）、非 owner 404。
  */
-
-async function registerAndLogin(page: Page): Promise<void> {
-  await page.goto('/login');
-  const phone = '138' + String(Math.floor(10000000 + Math.random() * 89999999));
-  await page.getByPlaceholder('手机号').fill(phone);
-  await page.getByPlaceholder('验证码（开发环境固定 123456）').fill('123456');
-  await page.getByRole('button', { name: '登录', exact: true }).click();
-  await expect(page).toHaveURL(/\/workspace/);
-  await expect(page.getByTestId('quick-create-blank')).toBeVisible(); // 首页落点（换装后种子文件在「我的文件」视图）
-  await page.goto('/workspace?view=files');
-  await expect(page.getByTestId('mine-grid').getByTestId('file-card')).toHaveCount(3);
-}
 
 /** 打开种子文件进入编辑器，等待 root 文本渲染（rich-content spec 同款 helper）。 */
 async function openSeedDoc(page: Page, title: string): Promise<void> {
@@ -32,17 +22,7 @@ async function openSeedDoc(page: Page, title: string): Promise<void> {
   await expect(page.locator('.editor-canvas svg .gm-text', { hasText: title })).toBeVisible();
 }
 
-/** 经 API 注册/登录（手机验证码首登即注册）并返回 token（share spec 同款 helper）。 */
-async function apiLogin(request: APIRequestContext, phone: string): Promise<string> {
-  const res = await request.post('/api/auth/login', { data: { method: 'phone', phone, code: '123456' } });
-  expect(res.ok()).toBeTruthy();
-  return ((await res.json()) as { token: string }).token;
-}
-
 const authHeader = (token: string) => ({ Authorization: `Bearer ${token}` });
-
-/** 随机手机号（share spec 同款 helper）。 */
-const randomPhone = () => '138' + String(Math.floor(10000000 + Math.random() * 89999999));
 
 // 用例 1：owner 批量邀请成功 toast 计数；非法地址整批拒绝且逐条列出
 // （2026-10-11 起粘贴框折叠为次要入口：先点 invite-contacts-toggle 展开；
@@ -69,7 +49,8 @@ test('成员面板邀请：粘贴多个地址批量邀请成功；非法地址�
 // 用例 2（仅 owner 显示）：协作者（分享链接加入）打开成员面板无邀请区
 test('成员面板邀请区仅 owner 可见：协作者不显示', async ({ browser, request }) => {
   // A（owner）经 API 建文件 + 建 active 分享链接（share spec 同款编排）
-  const aToken = await apiLogin(request, randomPhone());
+  const userA = await apiRegister(request);
+  const aToken = userA.token;
   const created = await request.post('/api/files', {
     data: { title: '协作者视图文档' },
     headers: authHeader(aToken),
@@ -125,12 +106,11 @@ test('成员面板邀请：混合批次 toast 分计数；M=0 保持旧文案；
 
 // 用例 4（2026-10-11 需求方裁定；2026-10-25 原型 invite tab 形态）：搜索候选
 // 下拉 → 点击加入「待邀请」→「确定」批量拉取为协作者（无需对方接受）→ 回协作
-// 成员 tab 名单含新协作者；重进邀请页签目录已排除。B 经 API 注册（登录即注册）。
+// 成员 tab 名单含新协作者；重进邀请页签目录已排除。B 经 API 注册（邮箱注册即登录）。
 test('成员面板拉取站内用户：搜索候选 → 待邀请 → 确定拉取为协作者', async ({ page, request }) => {
-  // B：站内用户（API 注册即建号），昵称 = 用户 + 手机号后 4 位
-  const bPhone = randomPhone();
-  await apiLogin(request, bPhone);
-  const bNick = `用户${bPhone.slice(-4)}`;
+  // B：站内用户（API 邮箱注册即建号，默认昵称「用户」+随机 4 位）
+  const userB = await apiRegister(request);
+  const bNick = userB.nickname;
 
   await openSeedDoc(page, '本周计划');
   await page.getByTestId('members-btn').click();
@@ -140,8 +120,8 @@ test('成员面板拉取站内用户：搜索候选 → 待邀请 → 确定拉�
   await expect(panel.getByTestId('invite-section')).toBeVisible();
   await expect(panel.getByTestId('invite-pull-submit')).toBeDisabled(); // 空 pending 不可确定
 
-  // 搜索（手机号）→ 候选下拉只剩 B → 点击加入待邀请（已选计数 + 行渲染）
-  await panel.getByTestId('invite-user-search').fill(bPhone);
+  // 搜索（邮箱，全局唯一防误中）→ 候选下拉只剩 B → 点击加入待邀请（已选计数 + 行渲染）
+  await panel.getByTestId('invite-user-search').fill(userB.email);
   const row = panel.getByTestId('invite-user-row').filter({ hasText: bNick });
   await expect(row).toHaveCount(1);
   await row.click();
@@ -157,6 +137,6 @@ test('成员面板拉取站内用户：搜索候选 → 待邀请 → 确定拉�
 
   // 重进邀请页签：目录已排除 B（同搜索词无候选行）
   await panel.getByTestId('member-tab-invite').click();
-  await panel.getByTestId('invite-user-search').fill(bPhone);
+  await panel.getByTestId('invite-user-search').fill(userB.email);
   await expect(panel.getByTestId('invite-user-row').filter({ hasText: bNick })).toHaveCount(0);
 });

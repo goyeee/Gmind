@@ -1,4 +1,5 @@
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
+import { registerAndLogin } from './helpers/auth';
 
 /**
  * 评论 UI 与双向定位 E2E — M3b Task 7（FR-CMT-002）。
@@ -17,19 +18,6 @@ import { expect, test, type APIRequestContext, type Page } from '@playwright/tes
  * 时序纪律：节点删除的 nodeDeleted 由服务端按 docState 判定——删除后等「已保存」
  * + onStoreDocument 防抖余量（3s）再刷新，避免 GET /comments 读到旧快照。
  */
-
-async function registerAndLogin(page: Page, phone?: string): Promise<string> {
-  await page.goto('/login');
-  const target = phone ?? '138' + String(Math.floor(10000000 + Math.random() * 89999999));
-  await page.getByPlaceholder('手机号').fill(target);
-  await page.getByPlaceholder('验证码（开发环境固定 123456）').fill('123456');
-  await page.getByRole('button', { name: '登录', exact: true }).click();
-  await expect(page).toHaveURL(/\/workspace/);
-  await expect(page.getByTestId('quick-create-blank')).toBeVisible(); // 首页落点（换装后种子文件在「我的文件」视图）
-  await page.goto('/workspace?view=files');
-  await expect(page.getByTestId('mine-grid').getByTestId('file-card')).toHaveCount(3);
-  return target;
-}
 
 /** 打开种子文件进入编辑器，等待 root 文本渲染。 */
 async function openSeedDoc(page: Page, title: string): Promise<void> {
@@ -60,9 +48,9 @@ async function nicknameOf(page: Page): Promise<string> {
 async function grantCollaborator(
   request: APIRequestContext,
   fileId: string,
-  phone: string,
+  email: string,
 ): Promise<void> {
-  const res = await request.post('/api/dev-e2e/grant-collaborator', { data: { fileId, phone } });
+  const res = await request.post('/api/dev-e2e/grant-collaborator', { data: { fileId, email } });
   if (!res.ok()) throw new Error(`授予协作者失败：${res.status()}`);
 }
 
@@ -107,8 +95,8 @@ test('A 评论 → B 角标出现并回复 → A 面板见回复（comment-updat
 
   const ctxB = await browser.newContext();
   const pageB = await ctxB.newPage();
-  const phoneB = await registerAndLogin(pageB);
-  await grantCollaborator(request, fileId, phoneB);
+  const { email: emailB } = await registerAndLogin(pageB);
+  await grantCollaborator(request, fileId, emailB);
   await pageB.goto(`/edit/${fileId}`);
   await expect(pageB.locator('.editor-canvas svg .gm-text', { hasText: '本周计划' })).toBeVisible({
     timeout: 15_000,

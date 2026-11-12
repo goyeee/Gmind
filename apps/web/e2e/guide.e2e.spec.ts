@@ -1,9 +1,10 @@
 import { expect, test, type Page } from '@playwright/test';
+import { registerAndLogin } from './helpers/auth';
 
 /**
  * 三步新手引导 E2E — M5 Task 3（NFR-USE-001）。
  *
- * 复用 workspace.e2e.spec.ts 的注册登录模式（新手机号注册即赠 3 个种子文件，每用例
+ * 登录走公共 helper（helpers/auth；邮箱注册即赠 3 个种子文件，每用例
  * 独立用户、互不共享状态）。触发口径（M5 登记）：localStorage 缺 gmind.guide.done
  * 即触发（浏览器本地口径，跨设备不重复引导）。覆盖：三步走完（stepsDone=3，
  * skipped=false）/ 中途跳过（stepsDone=当前步，skipped=true）→ 均写 localStorage
@@ -19,19 +20,6 @@ type GuideEventBody = { type: string; payload: { stepsDone: number; skipped: boo
 // 刷新不再出现可如实断言）。
 test.use({ storageState: { cookies: [], origins: [] } });
 
-/** 注册并登录（UI 全流程），返回所用手机号。 */
-async function registerAndLogin(page: Page): Promise<string> {
-  await page.goto('/login');
-  const phone = '138' + String(Math.floor(10000000 + Math.random() * 89999999));
-  await page.getByPlaceholder('手机号').fill(phone);
-  await page.getByPlaceholder('验证码（开发环境固定 123456）').fill('123456');
-  await page.getByRole('button', { name: '登录', exact: true }).click();
-  await expect(page).toHaveURL(/\/workspace/);
-  await expect(page.getByTestId('quick-create-blank')).toBeVisible(); // 首页落点（换装后首页=问候+快速创建）
-  await page.goto('/workspace?view=files');
-  await expect(page.getByTestId('mine-grid').getByTestId('file-card')).toHaveCount(3);
-  return phone;
-}
 
 /** 拦截 /api/events：收集 POST body 后放行（fire-and-forget，真实端点 204 即成功）。 */
 async function collectEvents(page: Page): Promise<GuideEventBody[]> {

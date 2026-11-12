@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { registerAndLogin } from './helpers/auth';
 
 /**
  * 移动端只读 + 评论 E2E — M5 Task 5（OPEN-T-005）。
@@ -26,17 +27,6 @@ import { expect, test, type Page } from '@playwright/test';
  * - 桌面回归：默认视口全部编辑控件可见、评论面板常驻右列、Tab 键盘写路径仍装配。
  */
 
-async function registerAndLogin(page: Page): Promise<void> {
-  await page.goto('/login');
-  const phone = '138' + String(Math.floor(10000000 + Math.random() * 89999999));
-  await page.getByPlaceholder('手机号').fill(phone);
-  await page.getByPlaceholder('验证码（开发环境固定 123456）').fill('123456');
-  await page.getByRole('button', { name: '登录', exact: true }).click();
-  await expect(page).toHaveURL(/\/workspace/);
-  await expect(page.getByTestId('quick-create-blank')).toBeVisible(); // 首页落点（换装后种子文件在「我的文件」视图）
-  await page.goto('/workspace?view=files');
-  await expect(page.getByTestId('mine-grid').getByTestId('file-card')).toHaveCount(3);
-}
 
 /** 打开种子文件进入编辑器，等待 root 文本渲染。 */
 async function openSeedDoc(page: Page, title: string): Promise<void> {

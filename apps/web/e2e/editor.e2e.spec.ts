@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import * as Y from 'yjs';
 import { canvasNodesMap } from '@gmind/core';
+import { registerAndLogin } from './helpers/auth';
 
 /** 多画布读取路径：经 core 画布访问器取节点子图——单画布文档与旧顶层 nodes 完全等价。 */
 function nodesMapOf(doc: Y.Doc): Y.Map<Y.Map<unknown>> {
@@ -10,23 +11,11 @@ function nodesMapOf(doc: Y.Doc): Y.Map<Y.Map<unknown>> {
 /**
  * 编辑器页面（/edit/:fileId）E2E — M1b Task 11。
  *
- * 复用 M0 登录模式：新手机号注册即赠 3 个种子文件（登录 helper 内联自
- * m0-acceptance.e2e.spec.ts）；用例直接打开种子文件「本周计划」。
+ * 登录走公共 helper（helpers/auth）：邮箱注册即登录并赠 3 个种子文件；用例直接打开种子文件「本周计划」。
  * 用例 2/3/4 各自自足（先按用例 2 的流程创建「新节点」再断言各自关注点），
  * 互不共享状态、可并行。
  */
 
-async function registerAndLogin(page: Page): Promise<void> {
-  await page.goto('/login');
-  const phone = '138' + String(Math.floor(10000000 + Math.random() * 89999999));
-  await page.getByPlaceholder('手机号').fill(phone);
-  await page.getByPlaceholder('验证码（开发环境固定 123456）').fill('123456');
-  await page.getByRole('button', { name: '登录', exact: true }).click();
-  await expect(page).toHaveURL(/\/workspace/);
-  await expect(page.getByTestId('quick-create-blank')).toBeVisible(); // 首页落点（换装后种子文件在「我的文件」视图）
-  await page.goto('/workspace?view=files');
-  await expect(page.getByTestId('mine-grid').getByTestId('file-card')).toHaveCount(3);
-}
 
 /** 打开种子文件进入编辑器，等待 root 文本渲染。 */
 async function openSeedDoc(page: Page, title: string): Promise<void> {

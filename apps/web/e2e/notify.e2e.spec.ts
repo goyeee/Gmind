@@ -1,4 +1,5 @@
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
+import { registerAndLogin } from './helpers/auth';
 
 /**
  * 站内通知 UI E2E — M3b Task 8（FR-CMT-005）。
@@ -18,21 +19,8 @@ import { expect, test, type APIRequestContext, type Page } from '@playwright/tes
  * （notify.ts 在 onopen 置位），避免 B 连接建立前触发推送漏收。
  */
 
-async function registerAndLogin(page: Page, phone?: string): Promise<string> {
-  await page.goto('/login');
-  const target = phone ?? '137' + String(Math.floor(10000000 + Math.random() * 89999999));
-  await page.getByPlaceholder('手机号').fill(target);
-  await page.getByPlaceholder('验证码（开发环境固定 123456）').fill('123456');
-  await page.getByRole('button', { name: '登录', exact: true }).click();
-  await expect(page).toHaveURL(/\/workspace/);
-  await expect(page.getByTestId('quick-create-blank')).toBeVisible(); // 首页落点（换装后种子文件在「我的文件」视图）
-  await page.goto('/workspace?view=files');
-  await expect(page.getByTestId('mine-grid').getByTestId('file-card')).toHaveCount(3);
-  return target;
-}
-
-async function grantCollaborator(request: APIRequestContext, fileId: string, phone: string): Promise<void> {
-  const res = await request.post('/api/dev-e2e/grant-collaborator', { data: { fileId, phone } });
+async function grantCollaborator(request: APIRequestContext, fileId: string, email: string): Promise<void> {
+  const res = await request.post('/api/dev-e2e/grant-collaborator', { data: { fileId, email } });
   if (!res.ok()) throw new Error(`授予协作者失败：${res.status()}`);
 }
 
@@ -60,13 +48,13 @@ test('A @B → B 铃铛 +1 → 下拉显示 → 点击已读 → badge 清零并
   const pageB = await ctxB.newPage();
 
   await registerAndLogin(pageA);
-  const phoneB = await registerAndLogin(pageB);
+  const { email: emailB } = await registerAndLogin(pageB);
 
   // B 的 userId（mention 用）与 A 的种子文件（fileId / ownerId 用）
   const meB = await apiInPage<{ id: string; nickname: string }>(pageB, '/api/users/me');
   const filesA = await apiInPage<Array<{ id: string; title: string; ownerUserId: string }>>(pageA, '/api/files?view=mine');
   const fileId = filesA[0]!.id;
-  await grantCollaborator(request, fileId, phoneB);
+  await grantCollaborator(request, fileId, emailB);
 
   // B 的 SSE 连接建立（onopen 置位）后才触发，保证事件不漏收
   await expect
@@ -117,14 +105,14 @@ test('M4 清偿：通知点击深链 ?node= → 装载后定位对应节点并�
   const pageB = await ctxB.newPage();
 
   await registerAndLogin(pageA);
-  const phoneB = await registerAndLogin(pageB);
+  const { email: emailB } = await registerAndLogin(pageB);
 
   const meB = await apiInPage<{ id: string; nickname: string }>(pageB, '/api/users/me');
   const filesA = await apiInPage<Array<{ id: string; title: string }>>(pageA, '/api/files?view=mine');
   // 深链要锚定一个**非 root** 节点（root 是装配默认选中，断言会假阳性）：
   // 用种子文件「欢迎使用 Gmind」的「基本操作」子节点
   const fileId = filesA.find((f) => f.title === '欢迎使用 Gmind')!.id;
-  await grantCollaborator(request, fileId, phoneB);
+  await grantCollaborator(request, fileId, emailB);
 
   // A 打开文件取子节点 id（模板生成的 ULID 不可预知；dev-only __gmind 钩子口径同 collab e2e）
   await pageA.goto(`/edit/${fileId}`);

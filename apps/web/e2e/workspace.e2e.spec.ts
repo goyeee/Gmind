@@ -1,29 +1,17 @@
-import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
+import { apiRegister, registerAndLogin } from './helpers/auth';
 
 /**
  * 工作台 UI E2E —— 2026-10-20 整体重设计（spec 2026-10-20-workspace-redesign-design）
  * 随新信息架构全量重写：左侧栏导航（nav-*）+ 顶栏（搜索/导入/新建/通知铃/头像）+
  * 卡片流（file-card）。旧 .file-list/view-tabs/row-menu/文件夹树契约全部退役。
  *
- * 复用 M0 登录模式（新手机号注册即赠 3 个种子文件，每用例独立用户）。覆盖：
+ * 登录走公共 helper（API 邮箱注册即登录 + 注 token，见 helpers/auth.ts；注册即赠
+ * 3 个种子文件，每用例独立用户）。覆盖：
  * 新建即开 + 行内重命名、星标切换、删除→回收站→还原、彻底删除二次确认、搜索命中
  * 与清除、Ctrl+Shift+F 聚焦、协作空间（grant-collaborator 编排）+ 最近使用筛选、
  * 模板库画廊/预览/一键套用、用户菜单（账号设置/退出登录）。
  */
-
-/** 注册并登录（UI 全流程），返回所用手机号。 */
-async function registerAndLogin(page: Page): Promise<string> {
-  await page.goto('/login');
-  const phone = '138' + String(Math.floor(10000000 + Math.random() * 89999999));
-  await page.getByPlaceholder('手机号').fill(phone);
-  await page.getByPlaceholder('验证码（开发环境固定 123456）').fill('123456');
-  await page.getByRole('button', { name: '登录', exact: true }).click();
-  await expect(page).toHaveURL(/\/workspace/);
-  await expect(page.getByTestId('quick-create-blank')).toBeVisible(); // 首页落点（换装后首页=问候+快速创建+最近文件）
-  await page.goto('/workspace?view=files');
-  await expect(page.getByTestId('mine-grid').getByTestId('file-card')).toHaveCount(3); // 3 个种子
-  return phone;
-}
 
 /** 新建一个脑图（即建即开编辑器）后返回工作台。 */
 async function createFileNamed(page: Page, title: string): Promise<void> {
@@ -64,14 +52,7 @@ async function renameCard(page: Page, from: string, to: string): Promise<void> {
   await expect(cardOf(page, to)).toBeVisible();
 }
 
-/** 经 API 注册/登录第二个用户（手机验证码首登即注册）并返回 token。 */
-async function apiLogin(request: APIRequestContext, phone: string): Promise<string> {
-  const res = await request.post('/api/auth/login', { data: { method: 'phone', phone, code: '123456' } });
-  expect(res.ok()).toBeTruthy();
-  return ((await res.json()) as { token: string }).token;
-}
-
-const randomPhone = () => '138' + String(Math.floor(10000000 + Math.random() * 89999999));
+/** 经 API 注册第二个用户（邮箱注册即登录，helpers/auth 同款）——直接复用 apiRegister。 */
 
 test('新建脑图即建即开，行内重命名落库', async ({ page }) => {
   page.on('framenavigated', (f) => console.log('[NAV]', f.url()));
@@ -206,17 +187,16 @@ test('Ctrl/Cmd+Shift+F 聚焦搜索框（FR-FIL-008 收口）', async ({ page })
 });
 
 test('协作空间与最近使用筛选：协作文件带图标、筛选器按归属过滤（2026-10-20 裁定 3）', async ({ page, request }) => {
-  const phoneA = await registerAndLogin(page);
+  const userA = await registerAndLogin(page);
   // B 经 API 注册并新建文件，把 A 加为协作者（dev-e2e 编排端点）
-  const phoneB = randomPhone();
-  const tokenB = await apiLogin(request, phoneB);
+  const userB = await apiRegister(request);
   const created = await request.post('/api/files', {
-    headers: { Authorization: `Bearer ${tokenB}` },
+    headers: { Authorization: `Bearer ${userB.token}` },
     data: { title: '乙的协作文件' },
   });
   expect(created.ok()).toBeTruthy();
   const fileId = ((await created.json()) as { id: string }).id;
-  const granted = await request.post('/api/dev-e2e/grant-collaborator', { data: { fileId, phone: phoneA } });
+  const granted = await request.post('/api/dev-e2e/grant-collaborator', { data: { fileId, email: userA.email } });
   expect(granted.ok()).toBeTruthy();
 
   // 协作空间（侧栏一级入口）= 协作文件集合
@@ -247,15 +227,14 @@ test('协作空间与最近使用筛选：协作文件带图标、筛选器按�
 });
 
 test('协作文件的卡片菜单收敛：无删除（owner-only），重命名/复制保留', async ({ page, request }) => {
-  const phoneA = await registerAndLogin(page);
-  const phoneB = randomPhone();
-  const tokenB = await apiLogin(request, phoneB);
+  const userA = await registerAndLogin(page);
+  const userB = await apiRegister(request);
   const created = await request.post('/api/files', {
-    headers: { Authorization: `Bearer ${tokenB}` },
+    headers: { Authorization: `Bearer ${userB.token}` },
     data: { title: '乙的共享件' },
   });
   const fileId = ((await created.json()) as { id: string }).id;
-  await request.post('/api/dev-e2e/grant-collaborator', { data: { fileId, phone: phoneA } });
+  await request.post('/api/dev-e2e/grant-collaborator', { data: { fileId, email: userA.email } });
 
   await page.getByTestId('nav-collab').click();
   const card = cardOf(page, '乙的共享件');

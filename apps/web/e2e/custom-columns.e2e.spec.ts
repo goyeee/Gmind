@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import * as Y from 'yjs';
 import { canvasNodesMap } from '@gmind/core';
+import { registerAndLogin } from './helpers/auth';
 
 /**
  * 表格自定义列 E2E（M7c 消费侧：TaskTable 动态列 + 表头管理 + 任务面板自定义属性）。
@@ -18,28 +19,15 @@ import { canvasNodesMap } from '@gmind/core';
  * 以轮询等待自动保存落库（避免依赖「已保存」指示的时序竞态）。
  */
 
-async function registerAndLogin(page: Page): Promise<string> {
-  await page.goto('/login');
-  const phone = '138' + String(Math.floor(10000000 + Math.random() * 89999999));
-  await page.getByPlaceholder('手机号').fill(phone);
-  await page.getByPlaceholder('验证码（开发环境固定 123456）').fill('123456');
-  await page.getByRole('button', { name: '登录', exact: true }).click();
-  await expect(page).toHaveURL(/\/workspace/);
-  await expect(page.getByTestId('quick-create-blank')).toBeVisible(); // 首页落点（换装后种子文件在「我的文件」视图）
-  await page.goto('/workspace?view=files');
-  await expect(page.getByTestId('mine-grid').getByTestId('file-card')).toHaveCount(3);
-  return phone; // 手机号回传：注册用户昵称 = `用户${phone 后 4 位}`（人员列断言用）
-}
-
-/** 打开种子文件并切到表格视图；返回注册手机号。 */
+/** 打开种子文件并切到表格视图；返回注册账号昵称（默认「用户」+随机 4 位，人员列断言用）。 */
 async function openSeedDocTable(page: Page, title: string): Promise<string> {
-  const phone = await registerAndLogin(page);
+  const { nickname } = await registerAndLogin(page);
   await page.getByTestId('file-card').filter({ hasText: title }).first().click();
   await expect(page).toHaveURL(/\/edit\//);
   await expect(page.locator('.editor-canvas svg .gm-text', { hasText: title })).toBeVisible();
   await page.getByTestId('view-tab-table').click();
   await expect(page.locator('.task-table-root')).toBeVisible();
-  return phone;
+  return nickname;
 }
 
 /** 加列全流程：+ 钮 → 浮层填名选类型 → 添加 → 新列头可见（提交后浮层自动收起）。 */
@@ -148,7 +136,7 @@ test('加文本列 → 表头出现新列，单元格填写后 docState 落库 s
 
 test('加人员列+日期列 → 弹层选成员、日期格填值，docState 落库', async ({ page }) => {
   test.setTimeout(90_000);
-  const phone = await openSeedDocTable(page, '本周计划');
+  const nickname = await openSeedDocTable(page, '本周计划');
 
   await addColumn(page, '复核人', 'assignee');
   await addColumn(page, '截止', 'date');
@@ -169,7 +157,7 @@ test('加人员列+日期列 → 弹层选成员、日期格填值，docState �
   await chip.click();
   await page.locator('.tt-overlay').click(); // 弹层遮罩即「外点收起」的命中层（盖住整表）
   await expect(page.locator('.tt-overlay')).toHaveCount(0);
-  await expect(cells.nth(0)).toContainText(`用户${phone.slice(-4)} 0%`);
+  await expect(cells.nth(0)).toContainText(`${nickname} 0%`);
 
   // 日期格（第 2 自定义列）：SmartDateInput 直接填值即提交
   const dateInput = cells.nth(1).locator('input[data-smart-date]');
@@ -333,7 +321,7 @@ test('人员进度列：分配成员/更新进度/合成显示/done 门禁拦截
 // 节点分配成员 30% → 切回脑图 → 任务行出现圆形文字头像（data 锚点）+ 弧形进度环
 // → 点击头像弹 9 档选盘 → 选 100% → docState 写回、头像环变整圆。
 test('人员进度头像：节点展示圆形头像+进度环，点击弹选盘快速更新', async ({ page }) => {
-  const phone = await openSeedDocTable(page, '本周计划');
+  const nickname = await openSeedDocTable(page, '本周计划');
   await addColumn(page, '测试', 'assignee');
   // 表格侧给「方案评审」（叶子）分配成员并设 30%（复用用例 5 的弹层操作）
   const row = page.locator('tr', { hasText: '方案评审' }).first();
@@ -382,7 +370,7 @@ test('人员进度头像：节点展示圆形头像+进度环，点击弹选盘�
     /\/avatars\/preset-\d\.svg/,
   );
   await expect(who.locator('.marker-picker-label')).toHaveText('测试'); // 人员列名
-  await expect(who).toContainText(`用户${phone.slice(-4)}`);
+  await expect(who).toContainText(nickname);
   // 30% 不落任何档位（选盘高亮仅精确在档时）——先验失焦关闭，再重开选 done
   await page.locator('.editor-canvas svg').click({ position: { x: 8, y: 8 } }); // 盘外 pointerdown
   await expect(picker).toHaveCount(0); // 失焦即消失（原版选盘同机制）
@@ -412,7 +400,7 @@ test('人员进度头像：节点展示圆形头像+进度环，点击弹选盘�
   await expect(picker).toBeVisible();
   const whoOwner = page.getByTestId('assignee-picker-who');
   await expect(whoOwner.locator('.marker-picker-label')).toHaveText('负责人'); // 列名位显示「负责人」
-  await expect(whoOwner).toContainText(`用户${phone.slice(-4)}`);
+  await expect(whoOwner).toContainText(nickname);
   await page.getByTestId('assignee-picker-value-p75').click();
   await expect(picker).toHaveCount(0);
   // owner 环变 75% 弧；docState task.progress=75（写回经 setNodeTask）

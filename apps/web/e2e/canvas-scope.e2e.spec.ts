@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { registerAndLogin } from './helpers/auth';
 
 /**
  * 当前画布口径 E2E — 多画布 web 计划三 Task 4（12 点位 EditorPage 侧验收）。
@@ -11,21 +12,9 @@ import { expect, test, type Page } from '@playwright/test';
  * - PNG 导出文件名多画布 = 文件标题＋画布名（「本周计划-画布B.png」）；
  * - XMind 导出文件名保持「本周计划.xmind」（中间态只改范围不改文件名）。
  *
- * 前置编排复用 canvas-tabs.e2e.spec.ts（页签条 UI 新建画布）；登录 helper 内联
- * 自 editor.e2e.spec.ts（新手机号注册即赠 3 个种子文件）。
+ * 前置编排复用 canvas-tabs.e2e.spec.ts（页签条 UI 新建画布）；登录走公共 helper helpers/auth（邮箱注册即赠 3 个种子文件）。
  */
 
-async function registerAndLogin(page: Page): Promise<void> {
-  await page.goto('/login');
-  const phone = '138' + String(Math.floor(10000000 + Math.random() * 89999999));
-  await page.getByPlaceholder('手机号').fill(phone);
-  await page.getByPlaceholder('验证码（开发环境固定 123456）').fill('123456');
-  await page.getByRole('button', { name: '登录', exact: true }).click();
-  await expect(page).toHaveURL(/\/workspace/);
-  await expect(page.getByTestId('quick-create-blank')).toBeVisible(); // 首页落点（换装后种子文件在「我的文件」视图）
-  await page.goto('/workspace?view=files');
-  await expect(page.getByTestId('mine-grid').getByTestId('file-card')).toHaveCount(3);
-}
 
 async function openSeedDoc(page: Page, title: string): Promise<void> {
   await registerAndLogin(page);

@@ -1,4 +1,5 @@
 import { expect, test, type APIRequestContext, type BrowserContext, type Page } from '@playwright/test';
+import { registerAndLogin } from './helpers/auth';
 
 /**
  * 客户端协同接入与三态/离线 E2E — M2 Task 3（FR-EDT-034/035）。
@@ -55,19 +56,6 @@ async function goOnlineStaged(page: Page, context: BrowserContext): Promise<void
   await context.setOffline(false); // REST 先行：兜底 PUT 可达（WS 仍断开、base 未变 → 必成功）
   await expect(page.getByTestId('save-status')).toHaveText(/已保存/, { timeout: 20_000 });
   await goOnline(page, context); // WS 重连收尾（无未同步变更，不再有持久化竞速窗口）
-}
-
-async function registerAndLogin(page: Page, phone?: string): Promise<string> {
-  await page.goto('/login');
-  const target = phone ?? '138' + String(Math.floor(10000000 + Math.random() * 89999999));
-  await page.getByPlaceholder('手机号').fill(target);
-  await page.getByPlaceholder('验证码（开发环境固定 123456）').fill('123456');
-  await page.getByRole('button', { name: '登录', exact: true }).click();
-  await expect(page).toHaveURL(/\/workspace/);
-  await expect(page.getByTestId('quick-create-blank')).toBeVisible(); // 首页落点（换装后种子文件在「我的文件」视图）
-  await page.goto('/workspace?view=files');
-  await expect(page.getByTestId('mine-grid').getByTestId('file-card')).toHaveCount(3);
-  return target;
 }
 
 /** 打开种子文件进入编辑器，等待 root 文本渲染。 */
@@ -245,9 +233,9 @@ async function nicknameOf(page: Page): Promise<string> {
 async function grantCollaborator(
   request: APIRequestContext,
   fileId: string,
-  phone: string,
+  email: string,
 ): Promise<void> {
-  const res = await request.post('/api/dev-e2e/grant-collaborator', { data: { fileId, phone } });
+  const res = await request.post('/api/dev-e2e/grant-collaborator', { data: { fileId, email } });
   if (!res.ok()) throw new Error(`授予协作者失败：${res.status()}`);
 }
 
@@ -263,8 +251,8 @@ test('双上下文远端光标：互见昵称标签与选区框，页面关闭�
 
   const ctxB = await browser.newContext();
   const pageB = await ctxB.newPage();
-  const phoneB = await registerAndLogin(pageB);
-  await grantCollaborator(request, fileId, phoneB);
+  const { email: emailB } = await registerAndLogin(pageB);
+  await grantCollaborator(request, fileId, emailB);
   await pageB.goto(`/edit/${fileId}`);
   await expect(pageB.locator('.editor-canvas svg .gm-text', { hasText: '本周计划' })).toBeVisible({
     timeout: 15_000,
@@ -310,8 +298,8 @@ test('成员面板：编辑/查看分组、创建者标识与离线即时移除'
 
   const ctxB = await browser.newContext();
   const pageB = await ctxB.newPage();
-  const phoneB = await registerAndLogin(pageB);
-  await grantCollaborator(request, fileId, phoneB);
+  const { email: emailB } = await registerAndLogin(pageB);
+  await grantCollaborator(request, fileId, emailB);
   await pageB.goto(`/edit/${fileId}`);
   await expect(pageB.locator('.editor-canvas svg .gm-text', { hasText: '本周计划' })).toBeVisible({
     timeout: 15_000,
@@ -321,8 +309,8 @@ test('成员面板：编辑/查看分组、创建者标识与离线即时移除'
 
   const ctxC = await browser.newContext();
   const pageC = await ctxC.newPage();
-  const phoneC = await registerAndLogin(pageC);
-  await grantCollaborator(request, fileId, phoneC);
+  const { email: emailC } = await registerAndLogin(pageC);
+  await grantCollaborator(request, fileId, emailC);
   await pageC.goto(`/edit/${fileId}`);
   await expect(pageC.locator('.editor-canvas svg .gm-text', { hasText: '本周计划' })).toBeVisible({
     timeout: 15_000,
@@ -402,8 +390,8 @@ test('裁定4 光标跨画布隐藏：B 在画布 2 选中，A 画布 1 不出�
   // 在哪张画布不确定，统一经页签条切到画布 2 再选中其 root「中心主题」。
   const ctxB = await browser.newContext();
   const pageB = await ctxB.newPage();
-  const phoneB = await registerAndLogin(pageB);
-  await grantCollaborator(request, fileId, phoneB);
+  const { email: emailB } = await registerAndLogin(pageB);
+  await grantCollaborator(request, fileId, emailB);
   await pageB.goto(`/edit/${fileId}`);
   await expect(pageB.getByTestId('canvas-tabbar')).toBeVisible({ timeout: 15_000 });
   const nickB = await nicknameOf(pageB);
@@ -590,8 +578,8 @@ test('双页并发结构操作收敛：move vs delete 删除胜，reload 后结�
 
   const ctxB = await browser.newContext();
   const pageB = await ctxB.newPage();
-  const phoneB = await registerAndLogin(pageB);
-  await grantCollaborator(request, fileId, phoneB);
+  const { email: emailB } = await registerAndLogin(pageB);
+  await grantCollaborator(request, fileId, emailB);
   await pageB.goto(`/edit/${fileId}`);
   await expect(pageB.locator('.editor-canvas svg .gm-text', { hasText: '本周计划' })).toBeVisible({
     timeout: 15_000,

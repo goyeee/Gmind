@@ -1,8 +1,9 @@
-import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 import { MAX_DOC_NODES } from '@gmind/shared';
 import { addChild, createTemplateDoc, ROOT_NODE_ID } from '@gmind/core';
 import { exportImage } from '../src/editor/image-export';
 import { QUOTA_ADD_BLOCKED, QUOTA_STATUS } from '../src/editor/saveLoop';
+import { apiRegister, registerAndLogin } from './helpers/auth';
 
 /**
  * NFR-USE-005 错误文案走查（M5 Task 7）——逐分支断言「失败原因 + 用户可执行的
@@ -35,18 +36,6 @@ interface CollabHooks {
   setReachable(reachable: boolean): void;
 }
 
-async function registerAndLogin(page: Page): Promise<void> {
-  await page.goto('/login');
-  const phone = '138' + String(Math.floor(10000000 + Math.random() * 89999999));
-  await page.getByPlaceholder('手机号').fill(phone);
-  await page.getByPlaceholder('验证码（开发环境固定 123456）').fill('123456');
-  await page.getByRole('button', { name: '登录', exact: true }).click();
-  await expect(page).toHaveURL(/\/workspace/);
-  await expect(page.getByTestId('quick-create-blank')).toBeVisible(); // 首页落点（换装后种子文件在「我的文件」视图）
-  await page.goto('/workspace?view=files');
-  await expect(page.getByTestId('mine-grid').getByTestId('file-card')).toHaveCount(3);
-}
-
 /** 打开种子文件进入编辑器，等待 root 文本渲染（editor spec 既定模式）。 */
 async function openSeedDoc(page: Page, title: string): Promise<void> {
   await registerAndLogin(page);
@@ -54,15 +43,6 @@ async function openSeedDoc(page: Page, title: string): Promise<void> {
   await expect(page).toHaveURL(/\/edit\//);
   await expect(page.locator('.editor-canvas svg .gm-text', { hasText: title })).toBeVisible();
 }
-
-/** 经 API 注册/登录并返回 token（share spec 同款 helper）。 */
-async function apiLogin(request: APIRequestContext, phone: string): Promise<string> {
-  const res = await request.post('/api/auth/login', { data: { method: 'phone', phone, code: '123456' } });
-  expect(res.ok()).toBeTruthy();
-  return ((await res.json()) as { token: string }).token;
-}
-
-const randomPhone = () => '138' + String(Math.floor(10000000 + Math.random() * 89999999));
 
 // ① 离线提示：原因「离线编辑中」+ 下一步「恢复联网后自动同步」（M2 交付文案，
 //    EditorPage OFFLINE_STATUS 单一渲染源）
@@ -211,11 +191,11 @@ test('⑨ 邀请批量非法：toast 逐条原因 + 修正提示', async ({ page
   await expect(toast).toContainText('请修正后重新发送');
 });
 
-// ⑩ 改绑被占 409：服务端「已绑定其他账号」（原因）+ 换用其他手机号（下一步）。
-//    B 账号先占用目标手机号（API 注册）→ A（UI 登录）改绑必 409。
+// ⑩ 改绑被占 409：服务端「已绑定其他账号」（原因）+ 换用其他邮箱（下一步）。
+//    B 账号先占用目标邮箱（API 注册）→ A 改绑必 409。
+//    （2026-11-12 中间态：本用例走旧 UI 换绑表单/契约，Task 7 重做 SettingsPage 时重写。）
 test('⑩ 改绑被占 409：错误文案含「已绑定其他账号」+ 换用其他手机号', async ({ page, request }) => {
-  const occupiedPhone = randomPhone();
-  await apiLogin(request, occupiedPhone); // B：占用该手机号
+  const occupied = await apiRegister(request); // B：占用该邮箱
   await registerAndLogin(page); // A：另一新账号
   await page.getByTestId('user-card').click();
   await page.getByTestId('settings-entry').click();
@@ -229,7 +209,7 @@ test('⑩ 改绑被占 409：错误文案含「已绑定其他账号」+ 换用�
   // React 受控 select 的 state 提交是异步的：等 placeholder 反射 phone 分支再填/提交，
   // 否则紧接着的 click 可能读到旧 channel='email'（机器负载下稳定复现的测试竞态）。
   await expect(page.getByTestId('rebind-identity')).toHaveAttribute('placeholder', '新手机号');
-  await page.getByTestId('rebind-identity').fill(occupiedPhone);
+  await page.getByTestId('rebind-identity').fill(occupied.email);
   await page.getByTestId('rebind-code').fill('123456');
   await page.getByTestId('rebind-save').click();
   const err = page.getByTestId('rebind-section').locator('.error');

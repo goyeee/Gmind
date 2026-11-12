@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { registerAndLogin } from './helpers/auth';
 
 /**
  * 简洁模式（M7b 补课，mindgrid 账号级显示偏好「脑图简洁模式」移植）E2E。
@@ -9,21 +10,10 @@ import { expect, test, type Page } from '@playwright/test';
  * 已退役——紧凑盒 = 纯标题 + 标记）→ 再点恢复 → 断言回来、盒高还原；刷新后偏好
  * 保持（localStorage `gmind.compact`，账号级显示偏好、不入文档数据）。
  *
- * 复用 M0 登录模式：新手机号注册即赠 3 个种子文件（helper 内联自 editor.e2e.spec.ts），
+ * 登录走公共 helper（helpers/auth）：邮箱注册即赠 3 个种子文件（helpers/auth），
  * 用例打开种子文件「本周计划」。
  */
 
-async function registerAndLogin(page: Page): Promise<void> {
-  await page.goto('/login');
-  const phone = '138' + String(Math.floor(10000000 + Math.random() * 89999999));
-  await page.getByPlaceholder('手机号').fill(phone);
-  await page.getByPlaceholder('验证码（开发环境固定 123456）').fill('123456');
-  await page.getByRole('button', { name: '登录', exact: true }).click();
-  await expect(page).toHaveURL(/\/workspace/);
-  await expect(page.getByTestId('quick-create-blank')).toBeVisible(); // 首页落点（换装后种子文件在「我的文件」视图）
-  await page.goto('/workspace?view=files');
-  await expect(page.getByTestId('mine-grid').getByTestId('file-card')).toHaveCount(3);
-}
 
 /** 打开种子文件进入编辑器，等待 root 文本渲染。 */
 async function openSeedDoc(page: Page, title: string): Promise<void> {

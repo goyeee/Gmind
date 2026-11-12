@@ -1,27 +1,17 @@
 import { expect, test, type Page } from '@playwright/test';
+import { registerAndLogin } from './helpers/auth';
 
 /**
  * emoji 表情区 E2E — M6 Task 5（企微对标）；2026-10-10 标记内嵌化起表情区为
  * 任务面板「优先级 / 标记」区块的「表情」折叠组（testid 契约：
  * task-panel-marker-group-emoji / marker-emoji-{char}，单页 28 枚）。
  *
- * 复用 rich-content 的登录/种子文件模式（新手机号注册即赠 3 个种子文件）。
+ * 复用 rich-content 的登录/种子文件模式（邮箱注册即赠 3 个种子文件）。
  * 面板语义（M7b-W1/W3 冻结）：emoji 为独立 multi 组——点 emoji = core toggle
  * （再点同 emoji = 取消），与 flag 等组并存互不影响；画布渲染层为
  * .gm-markers 容器内逐值 g.gm-marker-badge[data-marker-value]（组序 emoji 在末位）。
  */
 
-async function registerAndLogin(page: Page): Promise<void> {
-  await page.goto('/login');
-  const phone = '138' + String(Math.floor(10000000 + Math.random() * 89999999));
-  await page.getByPlaceholder('手机号').fill(phone);
-  await page.getByPlaceholder('验证码（开发环境固定 123456）').fill('123456');
-  await page.getByRole('button', { name: '登录', exact: true }).click();
-  await expect(page).toHaveURL(/\/workspace/);
-  await expect(page.getByTestId('quick-create-blank')).toBeVisible(); // 首页落点（换装后种子文件在「我的文件」视图）
-  await page.goto('/workspace?view=files');
-  await expect(page.getByTestId('mine-grid').getByTestId('file-card')).toHaveCount(3);
-}
 
 async function openSeedDoc(page: Page, title: string): Promise<void> {
   await registerAndLogin(page);

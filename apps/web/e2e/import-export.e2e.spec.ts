@@ -1,12 +1,13 @@
 import * as fs from 'node:fs';
 import { expect, test, type Page } from '@playwright/test';
 import { buildXmind, parseXmind, type XmindNode } from '@gmind/xmind-io';
+import { registerAndLogin } from './helpers/auth';
 
 /**
  * XMind 导入端到端（M4 Task 4，FR-IO-001/002）——工作台导入入口。
  *
  * 夹具在测试内用 @gmind/xmind-io 的 buildXmind 构造 .xmind bytes（web 测试进程能
- * import workspace 包，同 e2e 直接 import 依赖的先例）。复用 M0 登录模式：新手机号
+ * import workspace 包，同 e2e 直接 import 依赖的先例）。登录走公共 helper（helpers/auth）：新手机号
  * 注册即赠 3 个种子文件，每用例独立用户、互不共享状态。
  * 覆盖：正常导入（新文件出现 + 层级/备注渲染）、25MB 超限（大小文案）、损坏文件（已损坏文案）、
  * 导出往返（M4 Task 5：导出菜单下载 .xmind → xmind-io 解析断言 → 下载产物回灌导入）。
@@ -22,17 +23,6 @@ const FIXTURE_TREE = {
   ],
 };
 
-async function registerAndLogin(page: Page): Promise<void> {
-  await page.goto('/login');
-  const phone = '138' + String(Math.floor(10000000 + Math.random() * 89999999));
-  await page.getByPlaceholder('手机号').fill(phone);
-  await page.getByPlaceholder('验证码（开发环境固定 123456）').fill('123456');
-  await page.getByRole('button', { name: '登录', exact: true }).click();
-  await expect(page).toHaveURL(/\/workspace/);
-  await expect(page.getByTestId('quick-create-blank')).toBeVisible(); // 首页落点（换装后种子文件在「我的文件」视图）
-  await page.goto('/workspace?view=files');
-  await expect(page.getByTestId('mine-grid').getByTestId('file-card')).toHaveCount(3);
-}
 
 /** 打开种子文件进入编辑器，等待 root 文本渲染（同 editor.e2e.spec.ts 的既定模式）。 */
 async function openSeedDoc(page: Page, title: string): Promise<void> {

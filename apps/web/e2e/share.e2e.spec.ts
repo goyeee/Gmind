@@ -1,4 +1,5 @@
-import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
+import { expect, test, type APIRequestContext } from '@playwright/test';
+import { apiRegister, injectToken, registerAndLogin } from './helpers/auth';
 
 /**
  * 分享链接与落地页 E2E — M3b Task 4（FR-SHR-001）。
@@ -11,27 +12,6 @@ import { expect, test, type APIRequestContext, type Page } from '@playwright/tes
  * 辅助用例：已登录用户直达 active 链接自动加入；closed/未知 token 未登录访客直达
  * 失效页（服务端统一 closed 响应，前端不走登录跳转、不泄露存在性）。
  */
-
-/** 注册并登录（UI 全流程），返回所用手机号。 */
-async function registerAndLogin(page: Page): Promise<string> {
-  await page.goto('/login');
-  const phone = '138' + String(Math.floor(10000000 + Math.random() * 89999999));
-  await page.getByPlaceholder('手机号').fill(phone);
-  await page.getByPlaceholder('验证码（开发环境固定 123456）').fill('123456');
-  await page.getByRole('button', { name: '登录', exact: true }).click();
-  await expect(page).toHaveURL(/\/workspace/);
-  await expect(page.getByTestId('quick-create-blank')).toBeVisible(); // 首页落点（换装后种子文件在「我的文件」视图）
-  await page.goto('/workspace?view=files');
-  await expect(page.getByTestId('mine-grid').getByTestId('file-card')).toHaveCount(3);
-  return phone;
-}
-
-/** 经 API 注册/登录（手机验证码首登即注册）并返回 token。 */
-async function apiLogin(request: APIRequestContext, phone: string): Promise<string> {
-  const res = await request.post('/api/auth/login', { data: { method: 'phone', phone, code: '123456' } });
-  expect(res.ok()).toBeTruthy();
-  return ((await res.json()) as { token: string }).token;
-}
 
 const authHeader = (token: string) => ({ Authorization: `Bearer ${token}` });
 
@@ -49,17 +29,14 @@ async function apiCreateSharedFile(
   return { fileId, shareToken: ((await share.json()) as { shareToken: string }).shareToken };
 }
 
-/** 随机手机号。 */
-const randomPhone = () => '138' + String(Math.floor(10000000 + Math.random() * 89999999));
-
 test('全链路：A 复制分享链接 → B 登录回跳自动加入 → 编辑器；关闭后失效页', async ({ browser, request }) => {
   // —— A：注册登录；文件经 API 创建（中心节点文本自 2026-10-09 裁定起固定「中心主题」，
   //    与文件标题解耦——画布断言按中心主题；工作台行内重命名只改 title 列不回写 doc），
   //    随后刷新列表走 UI 分享入口 ——
   const contextA = await browser.newContext({ permissions: ['clipboard-read', 'clipboard-write'] });
   const pageA = await contextA.newPage();
-  const aPhone = await registerAndLogin(pageA);
-  const aToken = await apiLogin(request, aPhone);
+  const userA = await registerAndLogin(pageA);
+  const aToken = userA.token;
   const { fileId, shareToken } = await apiCreateSharedFile(request, aToken, '分享目标文档');
   await pageA.reload();
   const row = pageA.getByTestId('file-card').filter({ hasText: '分享目标文档' }).first();
@@ -78,10 +55,11 @@ test('全链路：A 复制分享链接 → B 登录回跳自动加入 → 编辑
   await pageB.goto(shareUrl);
   await expect(pageB).toHaveURL(/\/login\?redirect=\/s\//);
 
-  // —— B 登录 → 回跳落地页 → 自动 join → /edit/:fileId，画布渲染 ——
-  await pageB.getByPlaceholder('手机号').fill(randomPhone());
-  await pageB.getByPlaceholder('验证码（开发环境固定 123456）').fill('123456');
-  await pageB.getByRole('button', { name: '登录', exact: true }).click();
+  // —— B 造号注入 → 落地页自动 join → /edit/:fileId，画布渲染 ——
+  // （2026-11-12 中间态：旧 UI 登录端点已删，「登录表单提交→回跳」一腿归 Task 7 login-page spec）
+  const userB = await apiRegister(pageB.request);
+  await injectToken(pageB, userB.token);
+  await pageB.goto(shareUrl);
   await expect(pageB).toHaveURL(new RegExp(`/edit/${fileId}`));
   await expect(pageB.locator('.editor-canvas svg .gm-text', { hasText: '中心主题' })).toBeVisible();
 
@@ -102,7 +80,7 @@ test('全链路：A 复制分享链接 → B 登录回跳自动加入 → 编辑
 });
 
 test('已登录用户打开 active 链接：自动加入并进入编辑器（画布渲染）', async ({ browser, request }) => {
-  const aToken = await apiLogin(request, randomPhone());
+  const aToken = (await apiRegister(request)).token;
   const { fileId, shareToken } = await apiCreateSharedFile(request, aToken, '登录态直达文档');
 
   const context = await browser.newContext();
@@ -115,7 +93,7 @@ test('已登录用户打开 active 链接：自动加入并进入编辑器（画
 });
 
 test('closed/未知 token：未登录访客直达失效页（不走登录跳转）', async ({ browser, request }) => {
-  const aToken = await apiLogin(request, randomPhone());
+  const aToken = (await apiRegister(request)).token;
   const { fileId, shareToken } = await apiCreateSharedFile(request, aToken, '已关闭文档');
   const closed = await request.delete(`/api/files/${fileId}/share`, { headers: authHeader(aToken) });
   expect(closed.ok()).toBeTruthy();

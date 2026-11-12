@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { registerAndLogin } from './helpers/auth';
 
 /**
  * 节点属性快捷面板 E2E（2026-10-10 需求方裁定，mindgrid「单击选中 · 再击开属性」
@@ -11,20 +12,9 @@ import { expect, test, type Page } from '@playwright/test';
  * - 点**空白**画布：面板关闭（同裁定改判 10-09「点空白转空态不关闭」——格式/
  *   任务面板恢复外点即关；格式面板侧断言在 format-panel.e2e.spec.ts 用例 1）。
  *
- * 复用 M0 登录模式：新手机号注册即赠 3 个种子文件。
+ * 登录走公共 helper（helpers/auth）：邮箱注册即赠 3 个种子文件。
  */
 
-async function registerAndLogin(page: Page): Promise<void> {
-  await page.goto('/login');
-  const phone = '138' + String(Math.floor(10000000 + Math.random() * 89999999));
-  await page.getByPlaceholder('手机号').fill(phone);
-  await page.getByPlaceholder('验证码（开发环境固定 123456）').fill('123456');
-  await page.getByRole('button', { name: '登录', exact: true }).click();
-  await expect(page).toHaveURL(/\/workspace/);
-  await expect(page.getByTestId('quick-create-blank')).toBeVisible(); // 首页落点（换装后种子文件在「我的文件」视图）
-  await page.goto('/workspace?view=files');
-  await expect(page.getByTestId('mine-grid').getByTestId('file-card')).toHaveCount(3);
-}
 
 async function openSeedDoc(page: Page, title: string): Promise<void> {
   await registerAndLogin(page);

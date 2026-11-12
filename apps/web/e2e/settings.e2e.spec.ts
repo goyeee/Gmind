@@ -1,31 +1,27 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test } from '@playwright/test';
+import { apiRegister, injectToken, registerAndLogin } from './helpers/auth';
 
 /**
  * 账号设置页 UI E2E — M5 Task 1（FR-ACC-002 收口 + FR-CMT-006 通知偏好收口）。
  *
- * 复用 M0 登录模式（新手机号注册即赠 3 个种子文件；手机号注册用户 password_hash
- * 为空 → 改密区=验证码形态）。覆盖：
+ * 登录走公共 helper（API 邮箱注册即登录 + 注 token，见 helpers/auth.ts；注册即赠
+ * 3 个种子文件）。注意（2026-11-12 账号重做中间态）：新契约下注册必有密码，且
+ * 换绑/验证码改密的旧 UI 通道（POST /users/me/rebind 等）已随服务端重做删除，
+ * 「无密码=验证码形态」与「换绑成功 toast」两用例在 Task 7 重做 SettingsPage 前
+ * 预期红。覆盖：
  * - 工作台头部「账号设置」入口（data-testid="settings-entry"）→ /settings 渲染
  *   （data-testid="settings-page"），三区卡片与开关 testid 齐备；
- * - 密码区按身份形态渲染：无密码=验证码输入（password-code），有密码=旧密码输入
- *   （password-current，邮箱注册用户经 API 造号 + token 注入直达）；
- * - 换绑表单提交成功 toast（含「已完成」）；
+ * - 密码区按身份形态渲染：有密码=旧密码输入（password-current，API 造号 + token 注入直达）；
+ * - 换绑表单提交成功 toast（含「已完成」，旧通道，预期红）；
  * - 偏好开关切换（开关即 PATCH）→ 刷新仍保持。
  */
 
-async function registerAndLogin(page: Page): Promise<void> {
-  await page.goto('/login');
-  const phone = '138' + String(Math.floor(10000000 + Math.random() * 89999999));
-  await page.getByPlaceholder('手机号').fill(phone);
-  await page.getByPlaceholder('验证码（开发环境固定 123456）').fill('123456');
-  await page.getByRole('button', { name: '登录', exact: true }).click();
-  await expect(page).toHaveURL(/\/workspace/);
-  await expect(page.getByTestId('quick-create-blank')).toBeVisible(); // 首页落点（换装后种子文件在「我的文件」视图）
-  await page.goto('/workspace?view=files');
-  await expect(page.getByTestId('mine-grid').getByTestId('file-card')).toHaveCount(3);
-}
-
 test('工作台「账号设置」入口 → /settings 三区渲染（无密码=验证码形态）', async ({ page }) => {
+  // 2026-11-12 账号重做中间态：邮箱注册必有密码，「无密码=验证码形态」造号通道只剩
+  // 管理员建号（需超管，任务 8 seed-demo 后可恢复）；且 me 未装载时页面先渲染验证码
+  // 分支（me?.hasPassword 为 undefined 走 falsy），断言会落在竞态窗口上假绿——故显式
+  // skip，待 Task 7 重做 SettingsPage 后按新契约重写。
+  test.skip(true, '无密码形态造号通道已随注册必有密码删除（中间态，Task 7 重写）');
   await registerAndLogin(page);
   await page.getByTestId('user-card').click();
   await page.getByTestId('settings-entry').click();
@@ -70,15 +66,9 @@ test('头像区：当前头像与预置库渲染，选预置后当前头像与 m
 });
 
 test('有密码（邮箱注册）用户：密码区渲染旧密码形态', async ({ page }) => {
-  // 邮箱验证码注册并设置密码（UI 不提供该组合，经 API 造号）→ 注入 token 直达 /settings
-  const email = `u${Date.now()}@test.dev`;
-  const res = await page.request.post('/api/auth/login', {
-    data: { method: 'email', email, mode: 'code', code: '123456', password: 'oldpass66' },
-  });
-  expect(res.ok()).toBeTruthy();
-  const { token } = (await res.json()) as { token: string };
-  await page.addInitScript((t) => localStorage.setItem('gmind.token', t), token);
-
+  // 邮箱注册即设密码（helpers/auth API 造号）→ 注入 token 直达 /settings
+  const account = await apiRegister(page.request);
+  await injectToken(page, account.token);
   await page.goto('/settings');
   await expect(page.getByTestId('settings-page')).toBeVisible();
   await expect(page.getByTestId('password-current')).toBeVisible();

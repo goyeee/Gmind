@@ -1,5 +1,6 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test } from '@playwright/test';
 import { createTemplateDoc, docToState, getNode, setNodeTask } from '@gmind/core';
+import { registerAndLogin } from './helpers/auth';
 
 /**
  * 我的待办 / 待办空间 UI e2e（第二期批次 B/C）：
@@ -10,22 +11,10 @@ import { createTemplateDoc, docToState, getNode, setNodeTask } from '@gmind/core
 
 const auth = (token: string) => ({ Authorization: `Bearer ${token}` });
 
-async function registerAndLogin(page: Page): Promise<string> {
-  await page.goto('/login');
-  const phone = '138' + String(Math.floor(10000000 + Math.random() * 89999999));
-  await page.getByPlaceholder('手机号').fill(phone);
-  await page.getByPlaceholder('验证码（开发环境固定 123456）').fill('123456');
-  await page.getByRole('button', { name: '登录', exact: true }).click();
-  await expect(page).toHaveURL(/\/workspace/);
-  return phone;
-}
-
 test.use({ permissions: ['clipboard-read', 'clipboard-write'] });
 
 test('我的待办：跨文件任务汇总 → 行内进度直改 → 勾选完成 → 生成日报（MD 剪贴板）', async ({ page }) => {
-  const phone = await registerAndLogin(page);
-  const login = await page.request.post('/api/auth/login', { data: { method: 'phone', phone, code: '123456' } });
-  const token = ((await login.json()) as { token: string }).token;
+  const { token } = await registerAndLogin(page);
   const me = (await (await page.request.get('/api/users/me', { headers: auth(token) })).json()) as { id: string };
 
   // 造带任务的文件（PUT doc-state 触发索引抽取，异步——页面断言自带重试窗口）
@@ -73,9 +62,7 @@ test('我的待办：跨文件任务汇总 → 行内进度直改 → 勾选完�
 });
 
 test('统计面板：统计卡 + 人员聚合 + 生成完成报告', async ({ page }) => {
-  const phone = await registerAndLogin(page);
-  const login = await page.request.post('/api/auth/login', { data: { method: 'phone', phone, code: '123456' } });
-  const token = ((await login.json()) as { token: string }).token;
+  const { token } = await registerAndLogin(page);
   const me = (await (await page.request.get('/api/users/me', { headers: auth(token) })).json()) as { id: string };
 
   const created = await page.request.post('/api/files', { headers: auth(token), data: { title: '空间验证' } });

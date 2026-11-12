@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { registerAndLogin } from './helpers/auth';
 
 /**
  * 查找替换 E2E — M6 Task 3（企微对标）。
@@ -23,20 +24,9 @@ import { expect, test, type Page } from '@playwright/test';
  * - 标题输入框内 Ctrl+F 不劫持（isEditableTarget 让路）；find-toggle 点击打开；
  * - 定位复用 locateNode：折叠 root 后 next 定位到深层节点时自动展开祖先。
  *
- * 登录 helper 内联自 editor.e2e.spec.ts（新手机号注册即赠 3 个种子文件）。
+ * 登录走公共 helper helpers/auth（邮箱注册即赠 3 个种子文件）。
  */
 
-async function registerAndLogin(page: Page): Promise<void> {
-  await page.goto('/login');
-  const phone = '138' + String(Math.floor(10000000 + Math.random() * 89999999));
-  await page.getByPlaceholder('手机号').fill(phone);
-  await page.getByPlaceholder('验证码（开发环境固定 123456）').fill('123456');
-  await page.getByRole('button', { name: '登录', exact: true }).click();
-  await expect(page).toHaveURL(/\/workspace/);
-  await expect(page.getByTestId('quick-create-blank')).toBeVisible(); // 首页落点（换装后种子文件在「我的文件」视图）
-  await page.goto('/workspace?view=files');
-  await expect(page.getByTestId('mine-grid').getByTestId('file-card')).toHaveCount(3);
-}
 
 async function openSeedDoc(page: Page, title: string): Promise<void> {
   await registerAndLogin(page);

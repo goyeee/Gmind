@@ -1,4 +1,5 @@
-import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
+import { apiRegister, injectToken, registerAndLogin } from './helpers/auth';
 
 /**
  * 顶栏成员入口与个人中心 E2E —— 2026-10-11 需求方裁定：协作者头像栏（M6 Task 9，
@@ -8,40 +9,22 @@ import { expect, test, type APIRequestContext, type Page } from '@playwright/tes
  * 工具栏协作组的旧 members-btn 删除（testid 随按钮迁移，既有用例零改动）；
  * membersFocus 定位管线保留但暂无头像触发入口。
  *
- * 个人中心下拉（最小版）：本人昵称 + 手机号（GET /users/me）、返回工作台、
+ * 个人中心下拉（最小版）：本人昵称 + 账号标识（GET /users/me）、返回工作台、
  * 退出登录（POST /auth/logout + 清 token 回 /login，复用工作台范式）；Esc/外点关闭。
+ *
+ * 登录走公共 helper（API 邮箱注册即登录 + 注 token，见 helpers/auth.ts）。中间态
+ * 注记（2026-11-12 账号重做）：分享链接 B 的「登录页回跳后走 UI 登录」一腿改经
+ * helper 造号注入（旧 UI 登录端点已删，UI 登录旅程归 Task 7 的 login-page spec）。
  *
  * 覆盖面：
  * - 单上下文：成员钮角标=1、accessible name「在线成员」；点成员钮开成员面板；
- *   本人头像可见（首字符）；点本人头像开个人中心（昵称/手机号/两菜单项）；Esc 关闭；
+ *   本人头像可见（首字符）；点本人头像开个人中心（昵称/账号标识/两菜单项）；Esc 关闭；
  * - 个人中心：返回工作台 → /workspace；退出登录 → token 清除 + /login；
  * - 双上下文：B 经分享链接加入 → A 角标 1→2、成员面板可见 B 行；B 关闭 → 角标回 1；
  * - 多人在线：6 人 → 角标 6 + 成员面板 6 行（头像栏的 ≤5+溢出语义随退役移除）。
  */
 
-/** 注册并登录（UI 全流程），返回所用手机号。 */
-async function registerAndLogin(page: Page): Promise<string> {
-  await page.goto('/login');
-  const phone = '138' + String(Math.floor(10000000 + Math.random() * 89999999));
-  await page.getByPlaceholder('手机号').fill(phone);
-  await page.getByPlaceholder('验证码（开发环境固定 123456）').fill('123456');
-  await page.getByRole('button', { name: '登录', exact: true }).click();
-  await expect(page).toHaveURL(/\/workspace/);
-  await expect(page.getByTestId('quick-create-blank')).toBeVisible(); // 首页落点（换装后种子文件在「我的文件」视图）
-  await page.goto('/workspace?view=files');
-  await expect(page.getByTestId('mine-grid').getByTestId('file-card')).toHaveCount(3);
-  return phone;
-}
-
-/** 经 API 注册/登录（手机验证码首登即注册）并返回 token。 */
-async function apiLogin(request: APIRequestContext, phone: string): Promise<string> {
-  const res = await request.post('/api/auth/login', { data: { method: 'phone', phone, code: '123456' } });
-  expect(res.ok()).toBeTruthy();
-  return ((await res.json()) as { token: string }).token;
-}
-
 const authHeader = (token: string) => ({ Authorization: `Bearer ${token}` });
-const randomPhone = () => '138' + String(Math.floor(10000000 + Math.random() * 89999999));
 
 /** 打开种子文件进入编辑器，等待 root 文本渲染，返回 fileId。 */
 async function openSeedDoc(page: Page, title: string): Promise<string> {
@@ -68,7 +51,7 @@ async function userIdOf(page: Page): Promise<string> {
 
 test('顶栏右缘：成员钮角标与可访问名，点成员钮开成员面板；本人头像开个人中心', async ({ page }) => {
   test.setTimeout(90_000);
-  const phone = await registerAndLogin(page);
+  const { email } = await registerAndLogin(page);
   await page.getByTestId('file-card').filter({ hasText: '本周计划' }).first().click();
   await expect(page).toHaveURL(/\/edit\//);
   await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '本周计划' })).toBeVisible();
@@ -92,7 +75,8 @@ test('顶栏右缘：成员钮角标与可访问名，点成员钮开成员面�
   const menu = page.getByTestId('personal-menu');
   await expect(menu).toBeVisible();
   await expect(menu.getByTestId('personal-nickname')).not.toHaveText('');
-  await expect(menu.getByTestId('personal-phone')).toHaveText(phone);
+  // 账号标识展示（旧 UI 渲染 me.phone，邮箱账号下为空——Task 7 重做个人中心时改邮箱展示）
+  await expect(menu.getByTestId('personal-phone')).toHaveText(email);
   await expect(menu.getByTestId('personal-workspace')).toBeVisible();
   await expect(menu.getByTestId('personal-logout')).toBeVisible();
   await page.keyboard.press('Escape');
@@ -135,9 +119,11 @@ test('双上下文：B 加入 → 角标 1→2 且成员面板见 B 行；B 关�
   const pageB = await contextB.newPage();
   await pageB.goto(`/s/${shareToken}`);
   await expect(pageB).toHaveURL(/\/login\?redirect=\/s\//);
-  await pageB.getByPlaceholder('手机号').fill(randomPhone());
-  await pageB.getByPlaceholder('验证码（开发环境固定 123456）').fill('123456');
-  await pageB.getByRole('button', { name: '登录', exact: true }).click();
+  // 旧 UI 登录端点已删（账号重做中间态）：B 经 helper 造号注入后回落地页完成加入；
+  // 「登录表单提交→回跳」一腿归 Task 7 的 login-page spec
+  const userB = await apiRegister(pageB.request);
+  await injectToken(pageB, userB.token);
+  await pageB.goto(`/s/${shareToken}`);
   await expect(pageB).toHaveURL(new RegExp(`/edit/${fileId}`));
   const bId = await userIdOf(pageB);
 
@@ -158,8 +144,8 @@ test('双上下文：B 加入 → 角标 1→2 且成员面板见 B 行；B 关�
 
 test('多人在线：6 人角标 6，成员面板 6 行', async ({ browser, request }) => {
   test.setTimeout(150_000);
-  const aToken = await apiLogin(request, randomPhone());
-  const created = await request.post('/api/files', { data: { title: '成员角标' }, headers: authHeader(aToken) });
+  const userA = await apiRegister(request);
+  const created = await request.post('/api/files', { data: { title: '成员角标' }, headers: authHeader(userA.token) });
   expect(created.status()).toBe(201);
   const fileId = ((await created.json()) as { id: string }).id;
   const openWithToken = async (token: string): Promise<Page> => {
@@ -172,13 +158,12 @@ test('多人在线：6 人角标 6，成员面板 6 行', async ({ browser, requ
     });
     return p;
   };
-  const pageA = await openWithToken(aToken);
+  const pageA = await openWithToken(userA.token);
   for (let i = 0; i < 5; i++) {
-    const phone = randomPhone();
-    const token = await apiLogin(request, phone);
-    const granted = await request.post('/api/dev-e2e/grant-collaborator', { data: { fileId, phone } });
+    const collaborator = await apiRegister(request);
+    const granted = await request.post('/api/dev-e2e/grant-collaborator', { data: { fileId, email: collaborator.email } });
     expect(granted.ok()).toBeTruthy();
-    await openWithToken(token);
+    await openWithToken(collaborator.token);
   }
   // 角标=6（presence 收敛 15s 容忍）；面板 6 行
   await expect(pageA.getByTestId('members-count')).toHaveText('6', { timeout: 15_000 });

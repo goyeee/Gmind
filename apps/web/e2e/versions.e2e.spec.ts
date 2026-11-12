@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { registerAndLogin } from './helpers/auth';
 
 /**
  * 版本面板 E2E — M4 Task 8（FR-VER-004 UI：时间轴/只读预览/一键恢复）。
@@ -18,17 +19,6 @@ import { expect, test, type Page } from '@playwright/test';
  * 按内容判定（「第二次修改前的快照」），与 controller 指令的括号说明一致。
  */
 
-async function registerAndLogin(page: Page): Promise<void> {
-  await page.goto('/login');
-  const phone = '138' + String(Math.floor(10000000 + Math.random() * 89999999));
-  await page.getByPlaceholder('手机号').fill(phone);
-  await page.getByPlaceholder('验证码（开发环境固定 123456）').fill('123456');
-  await page.getByRole('button', { name: '登录', exact: true }).click();
-  await expect(page).toHaveURL(/\/workspace/);
-  await expect(page.getByTestId('quick-create-blank')).toBeVisible(); // 首页落点（换装后种子文件在「我的文件」视图）
-  await page.goto('/workspace?view=files');
-  await expect(page.getByTestId('mine-grid').getByTestId('file-card')).toHaveCount(3);
-}
 
 /** 双击节点进编辑态 → 覆盖键入 → 双框 Enter×2 提交，等待「已保存」（WS persisted ack）。 */
 async function renameNode(page: Page, from: string, to: string): Promise<void> {

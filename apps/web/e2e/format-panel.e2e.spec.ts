@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { registerAndLogin } from './helpers/auth';
 
 /**
  * 格式面板随选中联动 E2E — M6 Task 2（企微对标）。
@@ -7,23 +8,12 @@ import { expect, test, type Page } from '@playwright/test';
  * 字号/作用域 select 回显当前值；清空选择（点空白画布）→ 样式区 fieldset 置灰
  * （disabled）+ 提示「选中节点后设置样式」；切换选中节点即时刷新。
  *
- * 复用 rich-content.e2e 的登录/种子文档模式（新手机号注册即赠 3 个种子文件；
+ * 复用 rich-content.e2e 的登录/种子文档模式（邮箱注册即赠 3 个种子文件；
  * 「本周计划」树：root 下有 周一~周五，周三 有子节点 方案评审）。
  */
 
 const RED = '#f53f3f';
 
-async function registerAndLogin(page: Page): Promise<void> {
-  await page.goto('/login');
-  const phone = '138' + String(Math.floor(10000000 + Math.random() * 89999999));
-  await page.getByPlaceholder('手机号').fill(phone);
-  await page.getByPlaceholder('验证码（开发环境固定 123456）').fill('123456');
-  await page.getByRole('button', { name: '登录', exact: true }).click();
-  await expect(page).toHaveURL(/\/workspace/);
-  await expect(page.getByTestId('quick-create-blank')).toBeVisible(); // 首页落点（换装后种子文件在「我的文件」视图）
-  await page.goto('/workspace?view=files');
-  await expect(page.getByTestId('mine-grid').getByTestId('file-card')).toHaveCount(3);
-}
 
 async function openSeedDoc(page: Page, title: string): Promise<void> {
   await registerAndLogin(page);

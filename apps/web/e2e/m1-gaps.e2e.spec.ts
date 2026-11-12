@@ -1,11 +1,12 @@
 import { expect, test, type Page } from '@playwright/test';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { registerAndLogin } from './helpers/auth';
 
 /**
  * M1 验收缺口补线 E2E — M1b Task 15（FR-EDT-008/010/015/027/028）。
  *
- * 复用 Task 11 登录模式（新手机号注册即赠 3 个种子文件）；各用例独立注册、互不共享
+ * 登录走公共 helper（helpers/auth，邮箱注册即赠 3 个种子文件）；各用例独立注册、互不共享
  * 状态、可并行：
  * - ① 框选：空白左键拖拽（M7b-W3 改道：需求方裁定「按住滑动直接框选」，原
  *   Shift+左键改无修饰左拖；平移改道空格+左拖/中键）→
@@ -19,17 +20,6 @@ import { fileURLToPath } from 'node:url';
 const FIXTURE_PNG = join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'pixel.png');
 const RED = '#f53f3f';
 
-async function registerAndLogin(page: Page): Promise<void> {
-  await page.goto('/login');
-  const phone = '138' + String(Math.floor(10000000 + Math.random() * 89999999));
-  await page.getByPlaceholder('手机号').fill(phone);
-  await page.getByPlaceholder('验证码（开发环境固定 123456）').fill('123456');
-  await page.getByRole('button', { name: '登录', exact: true }).click();
-  await expect(page).toHaveURL(/\/workspace/);
-  await expect(page.getByTestId('quick-create-blank')).toBeVisible(); // 首页落点（换装后种子文件在「我的文件」视图）
-  await page.goto('/workspace?view=files');
-  await expect(page.getByTestId('mine-grid').getByTestId('file-card')).toHaveCount(3);
-}
 
 /** 打开种子文件进入编辑器，等待 root 文本渲染。 */
 async function openSeedDoc(page: Page, title: string): Promise<void> {

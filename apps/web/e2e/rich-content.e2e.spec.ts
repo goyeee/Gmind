@@ -2,11 +2,12 @@ import { expect, test, type Page } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { registerAndLogin } from './helpers/auth';
 
 /**
  * 富内容面板（备注/链接/图片/图标）+ 右键菜单 E2E — M1b Task 12（FR-EDT-018~021）。
  *
- * 复用 Task 11 登录模式（新手机号注册即赠 3 个种子文件）；各用例独立注册、互不共享
+ * 登录走公共 helper（helpers/auth，邮箱注册即赠 3 个种子文件）；各用例独立注册、互不共享
  * 状态、可并行。图片布局钉死（T6 carry-in 裁决）：夹具 pixel.png 为 16×64（高大于
  * 任何文本行高），断言 image 元素 y+h ≤ 节点 rect y+h —— 修复前盒高只含文本（≈20px）
  * 必失败。
@@ -14,17 +15,6 @@ import { fileURLToPath } from 'node:url';
 
 const FIXTURE_PNG = join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'pixel.png');
 
-async function registerAndLogin(page: Page): Promise<void> {
-  await page.goto('/login');
-  const phone = '138' + String(Math.floor(10000000 + Math.random() * 89999999));
-  await page.getByPlaceholder('手机号').fill(phone);
-  await page.getByPlaceholder('验证码（开发环境固定 123456）').fill('123456');
-  await page.getByRole('button', { name: '登录', exact: true }).click();
-  await expect(page).toHaveURL(/\/workspace/);
-  await expect(page.getByTestId('quick-create-blank')).toBeVisible(); // 首页落点（换装后种子文件在「我的文件」视图）
-  await page.goto('/workspace?view=files');
-  await expect(page.getByTestId('mine-grid').getByTestId('file-card')).toHaveCount(3);
-}
 
 /** 打开种子文件进入编辑器，等待 root 文本渲染。 */
 async function openSeedDoc(page: Page, title: string): Promise<void> {
