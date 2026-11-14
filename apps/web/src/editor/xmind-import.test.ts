@@ -208,18 +208,27 @@ describe('importXmindFile（FR-IO-001；2026-11-14 v2 两段式）', () => {
     expect(result.title).toBe('备选根标题');
   });
 
-  it('左右均衡定侧（2026-11-14 需求方不满右配额 3）：mindmap 画布按子树规模贪心均衡，同侧保持原有顺序', async () => {
-    // 权重：A=3（A+A1+A2）、B=C=D=1、E=2。贪心（两侧并列取右）：A→右(3,0)、B→左(3,1)、
-    // C→左(3,2)、D→左(3,3)、E→并列取右(5,3) → 右侧 A/E（权重 5）、左侧 B/C/D（权重 3），
-    // 5 个分支 3/2 分侧不再受右配额 3 限制。
+  it('左右均衡定侧（2026-11-15 按需求方源文件校准）：最大分支锚左，其前分支居右、其后分支随左', async () => {
+    // 权重模式复刻需求方复测文件（Gmind问题汇总.xmind，业务标题不入库）：10 支
+    // [4,2,2,4,3,3,2,4,16,1]，最大为分支九(16) → 左={九,十}（其后随左）、右=一~八，
+    // 与 XMind 思维导图的真实分侧逐支一致（引擎左列文档序倒排，视觉序同源文件）。
+    const branch = (title: string, extra: number): XmindNode => ({
+      title,
+      children: Array.from({ length: extra }, (_, i) => ({ title: `${title}子${i + 1}`, children: [] })),
+    });
     const tree: XmindNode = {
       title: '根',
       children: [
-        { title: 'A', children: [{ title: 'A1', children: [] }, { title: 'A2', children: [] }] },
-        { title: 'B', children: [] },
-        { title: 'C', children: [] },
-        { title: 'D', children: [] },
-        { title: 'E', children: [{ title: 'E1', children: [] }] },
+        branch('分支一', 3), // 4
+        branch('分支二', 1), // 2
+        branch('分支三', 1), // 2
+        branch('分支四', 3), // 4
+        branch('分支五', 2), // 3
+        branch('分支六', 2), // 3
+        branch('分支七', 1), // 2
+        branch('分支八', 3), // 4
+        branch('分支九', 15), // 16
+        branch('分支十', 0), // 1
       ],
     };
     const result = await importXmindFile(
@@ -228,12 +237,10 @@ describe('importXmindFile（FR-IO-001；2026-11-14 v2 两段式）', () => {
     );
     const doc = docOf(result.state);
     const kids = childrenIds(doc, ROOT_NODE_ID);
-    expect(kids).toHaveLength(5);
-    expect(kids.map((id) => getNode(doc, id)?.side)).toEqual(['right', 'left', 'left', 'left', 'right']);
-    // 同侧保持原有先后顺序
-    expect(
-      kids.filter((id) => getNode(doc, id)?.side === 'right').map((id) => getNode(doc, id)?.text),
-    ).toEqual(['A', 'E']);
+    expect(kids).toHaveLength(10);
+    expect(kids.map((id) => getNode(doc, id)?.side)).toEqual([
+      'right', 'right', 'right', 'right', 'right', 'right', 'right', 'right', 'left', 'left',
+    ]);
   });
 
   it('logic 画布不做均衡定侧（侧别无语义，保持 addChild 右配额既有值）', async () => {

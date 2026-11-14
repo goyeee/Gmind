@@ -227,20 +227,19 @@ export async function importXmindFile(file: File, deps: ImportDeps): Promise<Imp
     }
   };
 
-  /** 子树规模贪心均衡（2026-11-14 需求方拍板，替换 addChild 的右配额 3）：顺序遍历
-   *  根分支并入当前累计权重较轻的一侧（并列取右），同侧保持原有先后。XMind「思维导图」
-   *  即子树自动平衡且不落盘分侧——此为尽力复原，非逐字保真。 */
+  /** 分侧规则（2026-11-15 按需求方源文件 Gmind问题汇总.xmind 校准）：子树权重最大的
+   *  分支**锚定左侧**，文档序在它之前的分支全部居右（保持文档序），它之后的分支随它
+   *  居左（引擎左列文档序倒排，视觉顺序即与 XMind 一致）。上一版「轻侧贪心」会把靠前
+   *  的小分支甩去左边、打乱读序，被打回；XMind 平衡算法无文档，此为按复测文件校准的
+   *  规则，诚实边界见 features 文档④。 */
   const balancedSides = (children: XmindNode[]): Array<'left' | 'right'> => {
     const weight = (n: XmindNode): number => 1 + n.children.reduce((sum, c) => sum + weight(c), 0);
-    let right = 0;
-    let left = 0;
-    return children.map((child) => {
-      const w = weight(child);
-      const side: 'left' | 'right' = left < right ? 'left' : 'right';
-      if (side === 'right') right += w;
-      else left += w;
-      return side;
+    const weights = children.map(weight);
+    let maxIdx = 0;
+    weights.forEach((w, i) => {
+      if ((w as number) > (weights[maxIdx] as number)) maxIdx = i;
     });
+    return children.map((_, i) => (i >= maxIdx ? 'left' : 'right'));
   };
 
   /** 先序组装（walk 携带节点 id）：本节点字段 → 子节点 addChild 收集 id → 概要 → 递归；

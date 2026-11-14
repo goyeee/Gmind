@@ -160,3 +160,6 @@ emoji(28)/数字(10) 组往返仍丢（无 XMind 原生源）；颜色/形状信
 
 跟进批验证：lint/typecheck 0、全包单测绿（shared 43/xmind-io 69/core 375/engine 428/server 77/web 163）、import-export+canvas-scope e2e 10/10。
 
+### 校准更正（2026-11-15，需求方复测 Gmind问题汇总.xmind 打回上一批「左右均衡」）
+
+上一批的「按子树规模轻侧贪心」是自拟规则、与 XMind 思维导图真实平衡不符（10 支文件导入后右侧 5 支且读序变化 vs 源文件右侧 8 支）。按源文件截图逐支校准为新规则：**子树权重最大的分支锚定左侧，其前分支居右（文档序）、其后分支随左**——源文件（右=场景/首页/harness/Ai/筛选/任务看板/协作/设置，左=文件/分支主题 6）逐支吻合。自动化背书：`apps/web/src/editor/xmind-import.test.ts:211`「左右均衡定侧」（权重模式 [4,2,2,4,3,3,2,4,16,1] 合成树，断言右=前 8、左=9/10）、`:239`（logic 画布不均衡）；web 单测 163/163、import-export e2e 9/9、全量 web e2e 215+1skip+0 failed。XMind 平衡算法无文档，该规则按此文件校准，诚实边界登记 features 文档④10。

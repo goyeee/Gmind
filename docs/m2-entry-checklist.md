@@ -41,6 +41,7 @@
 - 验收文档 13 项「待手动核验」步骤（docs/m1-acceptance.md）逐项人工执行并签注。
 - engine/core 剪贴板镜像 parity 测试；链接/图片/图标刷新持久化 e2e；T8 navigate 真金样集成测试；框选用例 getAttribute 竞态改 poll。
 - 遗留 minor 全量清单见 git 历史的 SDD 台账（各里程碑 progress.md 已按流程清理，结论沉淀于各任务提交信息与本文件）。
+- **e2e 抖动观察项（2026-11-15）**：`canvas-tabs.e2e.spec.ts:46`（新建画布页签）在全量并发下偶发超时失败、隔离重跑稳定 2/2 过（3.5s）——负载型抖动，与 workers:4 调优残留同族；再现频次升高时按 systematic-debugging 处理（参考 m0:28 竞态先例）。
 
 ## 6. 已知语义决定（M2 不要「顺手改掉」）
 
