@@ -115,6 +115,11 @@ PDF/SVG 导出、FreeMind/Markdown/OPML/TXT 导入（二期）；版本对比/�
   - **微信删登录通道+预留扫码路线**：三 Provider 下线；设置页留「绑定微信」占位入口（提示暂未开通）；`users.wechat_unionid` 列已预留（唯一键同建）——微信扫码登录需开放平台账号，列后续路线，挂账见 `docs/m2-entry-checklist.md` §11。
   - **存量数据清库重来**：开发/演示数据清库后走增量新迁移（不改历史迁移文件）；演示数据 seed-demo 邮箱化（demo@gmind.dev 超管+4 同事，密码统一 demo123456）。
   - **管理员邮箱建号无密码**：admin 建出的账号不能密码登录（无密码死路 e2e 钉死），本人经「忘记密码」用邮箱验证码设密后方可登录。
+- **XMind 导入保真度升级（进度/表情/图标/图片/概要/超链接/样式全接入，2026-11-14 立项当日交付）**：spec `docs/superpowers/specs/2026-11-14-xmind-import-fidelity-design.md`；验收补记见 `docs/m4-acceptance.md` 末节「2026-11-14 导入保真度升级补记」，功能文档 `docs/features/import-export.md`。**同日推翻两条旧裁定**（推翻动作本身经需求方 2026-11-14 拍板，见 spec §一）：
+  - **推翻 M4「.xmind 内嵌图片不提取、按 media 降级计数」**（旧裁定出处：docs/m4-acceptance.md FR-IO-002 行备注③、诚实登记节第 1 条、里程碑边界段「导入图片对象提取不做」）→ **图片提取上传入库**：两段式导入（建文件→逐图 uploadImage→setImage→回写 doc-state），200px 等比钳制与手动传图同规则；
+  - **推翻 M7b「emoji 组不从 XMind 导入」**（旧裁定出处：packages/xmind-io/src/markers.ts v2 前头注，git 历史）→ **smiley 族映射 mood 组入内**（smiley-smile/sad/cry 同名＋smiley-laugh 实测形近→mood.smile）；emoji unicode 组（28 字符）仍无 XMind 原生源，导入恒不产出、导出不写回。
+  - 附带（T7 真实文件冒烟暴露并同日修复的两个解析缺陷，归因分列，均裁定接受、具名风险进终审，见 m4-acceptance 补记）：XMind 8 根元素 `<xmap-content>` 曾被误判「已损坏」【HEAD 存量：旧检查只认 `<map>` 合成形状】；概要标签桶真实形状 `<topics type="summary">` 曾查不到致标签全空【T2/spec 缺陷被冒烟暴露：spec §二写错形状、夹具同形致盲】。
+- **XMind 导入同日跟进（2026-11-14 下午，需求方复测 Gmind问题汇总.xmind 后拍板三项）**：①导入文件名=原文件名去后缀（画布中心主题保持 XMind 根主题原文）；②思维导图画布根分支分侧规则（替换 addChild「右侧最多 3 个」配额，logic/org 不受影响；**2026-11-15 校准更正**：首版「轻侧贪心」与 XMind 真实平衡不符被需求方复测打回，改为「最大分支锚定左侧、其前分支居右、其后分支随左」，按源文件逐支校准，见 m4-acceptance「校准更正」节）；③**画布主题移出降级目录**（推翻 v2 目录 15 类含「画布主题」的口径 → 14 类：主题由 Gmind 自有主题替换呈现属有意替换非内容丢失，不再计入「未导入」提示）。自动化背书与落点见 `docs/m4-acceptance.md`「同日跟进」「校准更正」节与 `docs/features/import-export.md` 规则 4/13/14/19。
 
 ### 待人工/待环境（非代码项）
 - m1-acceptance 13 项人工签注（§7.5，验收文档原样转需求方）

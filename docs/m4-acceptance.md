@@ -108,3 +108,55 @@
   5. **真实 .xmind 文件导入**：用 XMind 客户端（**XMind 8 与 2020+ 各导一份**）导出含样式/图片/备注的真实文件，经工作台导入——验证双路径解析、降级 toast 弹出（可与 FR-IO-002 手动项合并）、节点文本层级完整。e2e 夹具为程序化 zip，真实文件兼容性属人工项。
   6. **dev 环境迁移齐平（流程项）**：dev 库长驻环境验收前 `pnpm --filter @gmind/server migration:run` 确认 restored_from 迁移已应用（T8 曾实测漂移一次，模式会重演）。
 - 口径边界（同 M1~M3b 纪律）：以上自动化断言均为本机 dev 实测（单次全量连跑全绿，无重跑挑数）；「待手动核验」各项背后均有当日通过的自动化覆盖同链路（JPG 像素视觉除外——冒烟自动化在位，视觉待手动，已按「部分达成」如实分级），人工步骤为跨机网络/视觉/体感/环境/真实文件补充。已登记缺口（FR-IO-002 toast 组装、FR-IO-003 JPG 视觉、导入图片不入库、permission 通用标签、恢复×评论新 ULID 裁定等）均为「未实现/待环境/待手动、如实列出」，后续排期由需求方裁定。
+
+## 十、2026-11-14 导入保真度升级补记（进度/表情/图标/图片/概要/超链接/样式全接入＋导出对称写回）
+
+核验日期：2026-11-14。需求方立项起因：真实文件 `吾盛待办10.27.xmind` 导入后图片/表情/图标/进度全没进；探查证明进度九档与 XMind 八档设计上同构、纯映射缺失。设计与裁定记录：`docs/superpowers/specs/2026-11-14-xmind-import-fidelity-design.md`（当日拍板 4 条：①范围=导入修全＋样式映射＋导出对称；②对不上的图标丢弃＋如实计数；③降级提示改逐项点名、toast 恒弹；④**推翻两条旧裁定**——指针见下文「裁定推翻」）。功能逻辑文档（AGENTS.md §四 五栏目）：`docs/features/import-export.md`（同日新建）。里程碑边界段（本文头部）「导入图片对象提取不做」与第二/三节 FR-IO-002 行备注③、诚实登记节第 1 条的「图片不提取」口径**自本日起作废**，以本补记为准（原文保留不覆写）。
+
+### 自动化用例背书（用例名+行号为 2026-11-14 当日 grep，非转抄）
+
+- **@gmind/xmind-io 单测 69/69 全绿**（4 文件）：
+  - `src/markers.test.ts` 17 例（13 个 it 块，其一是 spec §3.1 逐行循环生成 5 例）：导入表逐行（`:57` describe「markersToIcons v2」循环——进度九档/smiley 族/people 六色/symbol 族+c_symbol_like/arrow 四向）、`:66` 既有族不回归、`:78` 未映射丢弃（arrow-refresh/symbol-minus/week-*/month-*/c_number_*）、`:85` 单选组 first-wins、`:98` other 组 multi 并存与同值重复、导出方向 `:112` progress 八档→task-*（none 不写）、`:124` mood 仅 smile、`:129` other 六值+person+important、`:141` arrow 四向、`:149` emoji/number 零虚增、`:155` 既有导出不回归、往返 `:167` smiley-laugh/c_symbol_like 形近恒稳、`:172` 原生族往返值级恒等；
+  - `src/parse.test.ts` 38 例：JSON 侧 v2 专项 `:192` 概要两段式、`:228` 图片（剥 xap:/魔数白名单/float 取整/align 白名单）、`:260` 超链接、`:282` 样式四键、`:317` 结构三映射+theme+legend 忽略、`:369` 标注/外框/任务信息/标签/附件/备注图片逐类计数、`:421` 多画布计数；XML 侧 `:545` **根元素 xmap-content 同样解析（T7 冒烟暴露新增）**、`:560` **概要标签桶 topics type="summary"（T7 冒烟暴露新增）**、`:598` markers 双形状、`:619` 概要+detached 豁免、`:655` 图片属性真值、`:674` href、`:689` styles.xml 间接表、`:724` 结构+theme 属性；resources 表与错误契约组 `:500`/`:804`；
+  - `src/build.test.ts` 8 例：v2 导出写回 `:88` href 产键、`:107` style 四键产 style.properties（fontSize 产 "<n>px"）、`:143` extra 第二参夹具开口、`:164` 不传 extra 产物与 v2 前逐字节一致（字节金样）；
+  - `src/roundtrip.test.ts` 6 例：`:77` v2 原生族导入→导出→再导入 Gmind icons 值级集合稳定（含样式/href，形近三档钉死）、`:143` emoji/number 零虚增。
+- **web 单测 161/161 全绿**：`apps/web/src/editor/xmind-import.test.ts` 23 例（`:150` describe v2——`:238` 无图快路径不调 deps、`:251` 两段式时序 createFile→uploadImage→setImage→putDocState、`:303` 上传拒绝计图片继续、`:331` **putDocState 拒绝：整体 reject、文件已建、该图不进降级计数（终审 Important#2 新增）**、`:357` 单图 10MB 预检、`:390` 同图多节点逐节点上传、`:424` 混合态部分成功、`:470` 落盘 v2（description/href/style 四键/folded/setIcon 进度联动）、`:501` 概要 setSummary、`:533` SUMMARY_INVALID 计概要零残缺、`:556` structureType 首 setDocMeta 次 addCanvas、`:586` origin=system 修正；`:664` describe degradedSummary v2——全零「已完整导入」/单项/目录序/未知 key 容错）；`apps/web/src/editor/xmind-export.test.ts` 9 例（`:97` describe 导出对称 v2——`:98` http(s) href 产键、`:109` 非 http(s) 不产键、`:124` style 四键非空才产、`:141` icons 全组透传树层不过滤）。
+- **web e2e 全绿（import-export 9/9、error-copy 11/11）**：`apps/web/e2e/import-export.e2e.spec.ts`——`:271` 全保真合成夹具（标记四族/图片两段式/概要/超链接/样式/结构类）导入 toast 逐项点名「未导入：图标 1」精确全文＋画布落位逐项断言、`:321` 纯净水树恒弹「已完整导入」、`:330` 导出往返 marker 集合值级稳定＋href/style 写回断言；既有导入/超限/损坏/往返/PNG/JPG 用例 `:36`/`:57`/`:131`/`:184`/`:210`/`:235` 不回归。`apps/web/e2e/error-copy.e2e.spec.ts` `:108` 导入归因两段式文案、`:163` 图片 10MB 上限文案不回归。
+
+### 门禁五件套（2026-11-14 当日全量连跑，含一次发现→判定→裁定→修复闭环）
+
+最终口径：`pnpm lint` 0 / `pnpm typecheck` 0 / `pnpm test` 全绿（server 77＋web **161**＋xmind-io 69＋shared 43＋engine/core 等；web 第 161 例＝终审修复波新增「putDocState 拒绝」用例，随修复波独立复跑全绿）/ `pnpm --filter @gmind/server test:e2e` **217/217** / web e2e **215 passed + 1 skipped, 0 failed**——**全绿**。
+
+过程如实登记：前两轮全量 web e2e 为 **213 passed + 1 skipped + 2 failed**（`m0-acceptance` :19「注册后见 3 示例文件」/:28「新建脑图在列表首位」，隔离重跑必现非偶发）。判定与本计划改动无关：①错误快照败因「验证码错误或已过期」——`uiRegister` 点发码后不等发码请求返回就提交注册（先在竞态），而需求方当日 13:05 起在本机 `scripts/dev-local.env` 配置了真实 SMTP（服务端 454 限流拒信使每次发码请求耗时秒级，`.data/dev-server.log` 多条「454 too frequently sending」），注册请求先于存量码落库到达 → 万能码校验失败；②同链路 `login-page.e2e.spec.ts:31`（提交前先等发码钮进入倒计时）两轮均过，证明链路健康、差异只在等待；③本计划 T1-T7 未触碰 auth/login/email-code/server 任何文件（且 T6 报告 :59 已预告「T7 门禁全量 web e2e 会再次撞上」）。**2026-11-14 需求方裁定修测试侧**：与 error-copy ⑩ 修正后同款——发码 click 前注册 `waitForResponse`（谓词 url 结尾 `/api/auth/email-code`＋POST＋**204**：204 恒在 issue() 写码键之后返回，谓词真 ⟺ 码已落；非加重 timeout）await 后再提交（`apps/web/e2e/m0-acceptance.e2e.spec.ts:14-20`）。修复后 m0 spec 3/3 绿，全量 web e2e **215 passed + 1 skipped（0 failed，2.1m）**，lint/typecheck 复跑 0。
+
+### 真实文件人工冒烟（需求方本机文件，只读使用，未入库未复制进仓库；临时 Playwright spec 跑完即删）
+
+文件：`吾盛待办10.27.xmind`（XMind 8 XML；2 画布）。导入方式：工作台首页「导入文件」卡→选文件（公共 helper `helpers/auth.ts` API 造号+注 token，注册即登录）。
+
+- **toast 实际全文：「未导入：图标 2、画布主题 2、结构覆盖 1」**（目录序=DEGRADED_LABELS 序；与简报预期三项一致、无多余项；计数正当性核对：图标 2=arrow-refresh 1+symbol-minus 1 丢弃、画布主题 2=两 sheet theme 属性、结构覆盖 1=「商城端」子树非根 structure-class）。
+- **页面上下文内 parseXmind 交叉核对**（同一解析器跑真实字节）：sheets 2；degraded 恰 {icon:2, theme:2, structureOverride:1}；概要 38；图片 1；标记映射 progress.done 36/p75 5/p12 4/p87 1、other.like 28/plus 1/question 2/cancel 1/done 2、mood.smile 1、other.person 1、other.important 1、arrow.up 1；双画布 structures [logic, logic]。
+- **画布落位断言全过**：画布页签 2 张，树节点 **161**（画布1=101、画布2「PDA 优化」=60），另有概要标签 topic 38＋图例 legend 2（XML topic 元素合计 201；简报「201 节点」口径按此更正）；结构面板双画布均「逻辑图（向右）」高亮；图片恰 1 张渲染、`data-image-placement="bottom"`（挂节点下方）、渲染尺寸 108×200（源 188×348 → 200px 钳制）；概要 25+13=38 条全落位（标签文本可见）；画布徽章 38 枚=非进度标记全量（like 28/smile 1/up 1/person 1/important 1/plus 1/question 2/cancel 1/done 2；进度组画布不渲染系 2026-10-12 裁定）；徽章 title 抽点「点赞」「心情 微笑」「箭头 向上」；任务行进度 100%×36/75%×5/13%×4/88%×1=46 与解析一致；任务面板 marker-progress-done aria-pressed=true、aria-label「进度 完成」。冒烟后导入件已从工作台删除（网格回到 3 种子文件），无残留。
+- **截图与计数记录**（git 忽略目录）：`.superpowers/sdd/2026-11-14-xmind-import-fidelity/smoke/`——`toast.txt`、`parse-cross-check.json`、`smoke-summary.json`、`smoke-1-canvas1.png`、`smoke-2-structure-canvas1.png`、`smoke-3-canvas2.png`、`smoke-4-task-panel-done.png`、`smoke-5-image-bottom.png`。
+
+### T7 冒烟暴露并同日修复的两个解析缺陷（修复经需求方裁定接受不回退、具名风险进全分支终审；归因如实分列）
+
+1. **真实 XMind 8 文件曾被整份误判「已损坏」**【归因：HEAD 存量缺陷——修复前 parse-xml.ts 第 99 行根检查只认 `<map>`（M4 合成夹具自造形状），content.xml 根元素实际是 `<xmap-content>`（urn:xmind:xmap:xmlns:content:2.0）→ 真实文件全部 CORRUPTED】。修复：双根形状都接受（`packages/xmind-io/src/parse-xml.ts:283-289`），用例 `parse.test.ts:545`。这也意味着 M4 手动清单第 5 项「真实 XMind 8 文件导入」当日首次真正走通。
+2. **概要标签曾全部落空串**【归因：T2/spec 缺陷被冒烟暴露——设计 spec §二把标签桶形状写成 detached topic，T2 实现照 spec 落地、单测夹具同形致盲区；真实 XMind 8 的概要标签 topic 在 `<topics type="summary">` 桶（与 attached 平级），旧实现只查 detached → 真实文件 38 条概要可见但标签全空】。修复：标签桶=detached+summary 双桶查找（`packages/xmind-io/src/parse-xml.ts:158-181`，detached 在前兼容既有用例），用例 `parse.test.ts:560`。
+
+### 残余损失清单（如实登记，候选后续任务）
+
+emoji(28)/数字(10) 组往返仍丢（无 XMind 原生源）；颜色/形状信息有损（旗帜恒红、人员恒蓝、箭头恒蓝、星标恒橙）；心情仅 smile 可导出（smiley-laugh 形近）；进度「未开始」不导出（task-start 未实测）；**图片/概要/折叠态导出不写回**（XMind 里打开无图无概要括号）；每节点 1 图、多图取首张；图片 200px 钳制缩放；字体/线宽/行高/对齐不映射（计样式属性）；非 http(s) 链接丢弃；legend 忽略；同一图片多节点引用逐节点重复上传（去重候选后续任务）；setDescription 超 200 字整单拒绝、概要标签超 200 字计概要降级；**putDocState 失败：文件停留无图初态、丢失图片不进计数（行为待需求方裁定是否回收，终审 Important#2 补钉：`apps/web/src/editor/xmind-import.test.ts`「putDocState 拒绝」用例）**。
+
+### 裁定推翻（2026-11-14，指针）
+
+1. **M4「内嵌图片不提取只计数」→ 推翻，图片提取上传入库**：原文出处=本文档头部里程碑边界段「导入图片对象提取不做」、第二节 FR-IO-002 行备注③、诚实登记节第 1 条；新裁定与落地形态见上文与 `docs/project-status.md` §三「已裁定并交付」2026-11-14 条目。
+2. **M7b「emoji 组不从 XMind 导入」→ 推翻，smiley 族映射 mood 组入内**：原文出处=packages/xmind-io/src/markers.ts v2 之前头注（git 历史）；emoji unicode 组（28 字符）仍无 XMind 原生源，导入恒不产出、导出不写回（落地形态）。
+
+### 同日跟进（2026-11-14 下午，需求方复测 Gmind问题汇总.xmind 反馈三项，已修）
+
+1. **文件名改按原文件**：导入文件名=原文件名去 .xmind 后缀（原为中心主题文字，如「Gmind问题汇总.xmind」会被命名为中心主题「Gmind」）；画布中心主题文本保持 XMind 根主题原文不变。自动化背书：`apps/web/src/editor/xmind-import.test.ts:152`（title=原文件名优先）、`:203`（文件名仅剩后缀回落根主题）、`:615-643`（setDocMeta 文件名覆写断言）。
+2. **思维导图根分支左右均衡定侧**：原 addChild 固定「右侧最多 3 个」配额导致 10 分支文件右侧仅 3 个；现 mindmap 画布导入按分支子树规模贪心均衡（并列取右、同侧保序），logic/org 不受影响。自动化背书：`xmind-import.test.ts:211`（均衡定侧断言）、`:239`（logic 画布不均衡）。
+3. **画布主题不再计入「未导入」提示**（需求方拍板：主题由 Gmind 自有主题替换呈现，属有意替换非内容丢失）：降级目录 14 类（原 15 类含「画布主题」）。自动化背书：`packages/xmind-io/src/parse.test.ts:317`、`:342`、`:724`（JSON/XML 两路径 theme 均不计数）。**此文件若今日重导，预期提示为「已完整导入」**；吾盛待办10.27.xmind 新预期提示为「未导入：图标 2、结构覆盖 1」（原冒烟记录「未导入：图标 2、画布主题 2、结构覆盖 1」为修复前口径，原文保留）。
+
+跟进批验证：lint/typecheck 0、全包单测绿（shared 43/xmind-io 69/core 375/engine 428/server 77/web 163）、import-export+canvas-scope e2e 10/10。
+

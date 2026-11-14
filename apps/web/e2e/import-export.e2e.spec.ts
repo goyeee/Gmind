@@ -2,6 +2,7 @@ import * as fs from 'node:fs';
 import { expect, test, type Page } from '@playwright/test';
 import { buildXmind, parseXmind, type XmindNode } from '@gmind/xmind-io';
 import { registerAndLogin } from './helpers/auth';
+import { buildCleanXmind, buildFixtureXmind } from './helpers/xmind-fixture';
 
 /**
  * XMind 导入端到端（M4 Task 4，FR-IO-001/002）——工作台导入入口。
@@ -242,4 +243,120 @@ test('导出 JPG 1x：下载产物为 JPEG 魔数（FF D8 FF）且 .jpg 命名',
   const jpg = await fs.promises.readFile(await download.path());
   expect(jpg.length).toBeGreaterThan(0);
   expect(jpg.subarray(0, 3).toString('hex')).toBe('ffd8ff');
+});
+
+// ─────────── 2026-11-14 导入保真 Task 6：合成夹具（helpers/xmind-fixture） ───────────
+
+/** 画布节点组（task-panel-markers.e2e.spec.ts 同款锚点：g[data-node-id] 平级不嵌套）。 */
+function nodeGroup(page: Page, text: string) {
+  return page.locator('.editor-canvas svg g[data-node-id]').filter({ hasText: text });
+}
+
+/** 画布标记徽章（按值定位，data-marker-value 与任务面板 chip 同名契约）。 */
+function markerBadge(page: Page, text: string, value: string) {
+  return nodeGroup(page, text).locator(`.gm-markers .gm-marker-badge[data-marker-value="${value}"]`);
+}
+
+/** 经工作台导入入口导入 buffer 并等 toast 出现（恒弹，裁定 3）。 */
+async function importFromWorkspace(page: Page, name: string, buffer: Buffer, toast: string): Promise<void> {
+  await page.goto('/workspace'); // 导入入口=首页「导入文件」卡
+  await page.getByTestId('quick-create-import').click();
+  await page.getByTestId('import-input').setInputFiles({ name, mimeType: 'application/octet-stream', buffer });
+  await expect(page.getByTestId('toast')).toHaveText(toast);
+}
+
+// 用例 7：全保真夹具（标记四族/图片/概要/超链接/样式/结构类，helpers/xmind-fixture
+// 文件头注）导入 → toast 逐项点名（唯一降级源=陌生标记 arrow-refresh，精确全文同时
+// 证明两段式图片导入零额外降级）→ 画布落位逐项断言。
+test('导入合成夹具：标记/图片/概要/超链接/样式/结构落位，toast 逐项点名', async ({ page }) => {
+  await registerAndLogin(page);
+  await importFromWorkspace(page, '示例.xmind', buildFixtureXmind(), '未导入：图标 1');
+  // 文件卡按原文件名（2026-11-14 拍板：导入文件名=原文件名去后缀；画布中心主题仍是「根节点」）
+  await page.getByTestId('file-card').filter({ hasText: '示例' }).first().click();
+  await expect(page).toHaveURL(/\/edit\//);
+  await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '根节点' })).toBeVisible();
+
+  // 标记族（画布 .gm-markers + 逐值徽章；progress 族画布不渲染——2026-10-12 退役，
+  // 落任务行「%」与任务面板档位，见下方两处断言）：mood.smile / arrow.up / other 组并存
+  await expect(markerBadge(page, '分支一', 'smile')).toHaveCount(1);
+  await expect(markerBadge(page, '分支一', 'smile').locator('title')).toHaveText('心情 微笑');
+  await expect(markerBadge(page, '分支二', 'up')).toHaveCount(1);
+  await expect(markerBadge(page, '分支二', 'up').locator('title')).toHaveText('箭头 向上');
+  await expect(markerBadge(page, '分支二', 'like')).toHaveCount(1);
+  await expect(markerBadge(page, '分支二', 'person')).toHaveCount(1);
+  await expect(page.locator('.editor-canvas svg .gm-marker-badge')).toHaveCount(4); // 恰四枚（陌生标记不落画布）
+
+  // 进度落位（task-done→100%、task-half→50%：setIcon 联动任务行有效进度右栏）
+  await expect(nodeGroup(page, '分支一').locator('text.gm-task-progress')).toHaveText('100%');
+  await expect(nodeGroup(page, '待办二').locator('text.gm-task-progress')).toHaveText('50%');
+
+  // 图片：4×4 PNG 经两段式上传回挂（.gm-image + placement 属性，image-placement 同款锚点）
+  const image = nodeGroup(page, '待办一').locator('image.gm-image');
+  await expect(image).toBeVisible();
+  await expect(image).toHaveAttribute('data-image-placement', 'bottom');
+
+  // 超链接角标 + 概要（标签文本随两段式引用进画布）
+  await expect(nodeGroup(page, '待办一').locator('.gm-link-badge')).toBeVisible();
+  await expect(page.locator('.editor-canvas svg [data-summary-id]')).toHaveCount(1);
+  await expect(page.locator('.editor-canvas svg .gm-summary-label')).toHaveText('示例概要');
+
+  // 样式抽查：svg:fill 落节点主 rect（entry 首个子 rect，render.ts applyNode）
+  await expect(nodeGroup(page, '待办二').locator('rect').first()).toHaveAttribute('fill', '#e8f0fe');
+
+  // 结构类：根 structureClass=logic.right → 画布结构面板 logic 卡片高亮（editor 用例 5b 同款）
+  await page.getByTestId('structure-toggle').click();
+  await expect(page.getByTestId('structure-item-logic')).toHaveAttribute('aria-pressed', 'true');
+  await page.keyboard.press('Escape'); // Esc 关闭，不留浮层
+
+  // 进度档位目录 label（任务面板 chip：marker-progress-done 高亮 + aria-label「进度 完成」）
+  await page.locator('.editor-canvas svg .gm-text', { hasText: '分支一' }).click();
+  await page.getByTestId('task-toggle').click();
+  const panel = page.getByTestId('task-panel');
+  await expect(panel).toBeVisible();
+  await expect(panel.getByTestId('marker-progress-done')).toHaveAttribute('aria-pressed', 'true');
+  await expect(panel.getByTestId('marker-progress-done')).toHaveAttribute('aria-label', '进度 完成');
+  await panel.getByTestId('task-panel-close').click();
+});
+
+// 用例 8：纯净水树（buildXmind 直出，零降级源）→ 恒弹 toast「已完整导入」（裁定 3）。
+test('导入纯净水树：toast「已完整导入」且新文件出现', async ({ page }) => {
+  await registerAndLogin(page);
+  await importFromWorkspace(page, '示例树.xmind', buildCleanXmind(), '已完整导入');
+  await expect(page.getByTestId('file-card').filter({ hasText: '示例树' }).first()).toBeVisible();
+});
+
+// 用例 9：导出往返（spec §3.2 roundtrip 口径）——夹具导入产物经导出菜单下载，node 端
+// parseXmind 断言 marker 集合 Gmind 值级稳定（导入的 icons == 导出再解析的 icons）；
+// 陌生标记 arrow-refresh 导入即弃，往返不复活；href/style 随导出写回（spec §六）。
+test('往返：夹具导入→导出→parse，marker 集合 Gmind 值级稳定', async ({ page }) => {
+  await registerAndLogin(page);
+  await importFromWorkspace(page, '示例.xmind', buildFixtureXmind(), '未导入：图标 1');
+  // 文件卡按原文件名（2026-11-14 拍板：导入文件名=原文件名去后缀；画布中心主题仍是「根节点」）
+  await page.getByTestId('file-card').filter({ hasText: '示例' }).first().click();
+  await expect(page).toHaveURL(/\/edit\//);
+  await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '根节点' })).toBeVisible();
+  await page.getByTestId('export-menu').click();
+  const [download] = await Promise.all([
+    page.waitForEvent('download'),
+    page.getByTestId('export-xmind').click(),
+  ]);
+  expect(download.suggestedFilename()).toBe('示例.xmind'); // 导出文件名=编辑器标题（2026-11-14 拍板：导入文件名=原文件名）
+  const bytes = new Uint8Array(await fs.promises.readFile(await download.path()));
+  const parsed = parseXmind(bytes);
+  expect(parsed.degraded).toEqual([]);
+  expect(parsed.sheets).toHaveLength(1);
+  const root = parsed.sheets[0].root;
+  expect(root.title).toBe('根节点');
+  expect(root.children.map((c) => c.title)).toEqual(['分支一', '分支二']);
+  // 值级稳定（marker-id 层对实测 id 恒同形）：progress/mood/arrow/other 四组逐一比对
+  const branchA = findTitle(root, '分支一');
+  expect(branchA?.icons).toEqual({ progress: ['done'], mood: ['smile'] });
+  const branchB = findTitle(root, '分支二');
+  expect(branchB?.icons).toEqual({ arrow: ['up'], other: ['like', 'person'] });
+  expect(findTitle(root, '待办二')?.icons).toEqual({ progress: ['p50'] });
+  expect(findTitle(root, '待办一')?.icons).toBeUndefined();
+  expect(findTitle(root, '待办三')?.icons).toBeUndefined(); // arrow-refresh 不复活
+  // 导出写回 v2（spec §六）：href 原值、style 四键逆映射（fontSize 产 "14px"）
+  expect(findTitle(root, '待办一')?.href).toBe('https://example.com/gmind-e2e');
+  expect(findTitle(root, '待办二')?.style).toEqual({ fill: '#e8f0fe', color: '#1a73e8', fontSize: '14' });
 });

@@ -5,6 +5,7 @@ import { createTemplateDoc, docToState } from '@gmind/core';
 import { api, apiDel, apiPatch, apiPost, apiPut } from '../api/client';
 import { GUIDE_DONE_KEY, GuideOverlay, type GuideStep } from './GuideOverlay';
 import { degradedSummary, importXmindFile } from '../editor/xmind-import';
+import { uploadImage } from '../editor/imageUpload';
 import { TEMPLATE_CATALOG, type WorkspaceTemplate } from '../editor/templates';
 import { TemplateThumb, specNodeCount } from '../editor/TemplateThumb';
 import { useRealThumb } from '../editor/thumbnail';
@@ -651,14 +652,23 @@ export function WorkspacePage() {
     }
   }
 
-  /** XMind 导入（M4 Task 4 保留）：入口收进顶栏「导入」文字钮。 */
+  /** XMind 导入（M4 Task 4 保留；2026-11-14 v2 两段式）：入口收进顶栏「导入」文字钮。
+   *  无图快路径 fileId=null → 照旧 POST /files（时序与旧版一致）；有图两段式由
+   *  importXmindFile 内建文件/传图/回写 doc-state，跳过 POST。toast 恒弹
+   *  （2026-11-14 裁定 3：全零「已完整导入」，降级逐项点名）。 */
   async function importXmind(file: File): Promise<void> {
     try {
-      const { title, state, degraded } = await importXmindFile(file);
-      await apiPost('/files', { title, docState: state });
+      const { title, fileId, state, degraded } = await importXmindFile(file, {
+        createFile: (t, docState) => apiPost<{ id: string }>('/files', { title: t, docState }),
+        uploadImage,
+        putDocState: async (id, docState) => {
+          await apiPut(`/files/${id}/doc-state`, { docState });
+        },
+      });
+      if (fileId === null) await apiPost('/files', { title, docState: state }); // 快路径：现状单段
       switchView('files'); // 导入完成落在「我的文件」视图（批次 D 拆分后文件网格所在）
       await loadFiles('files'); // 已在 files 时 URL 不变、视图 effect 不触发——手动补装
-      if (degraded.length > 0) showToast(degradedSummary(degraded));
+      showToast(degradedSummary(degraded));
     } catch (e) {
       showToast(msgOf(e));
     }

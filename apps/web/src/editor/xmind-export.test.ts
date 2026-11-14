@@ -12,7 +12,11 @@ import {
   rootIdOf,
   setActiveCanvas,
   setDescription,
+  setHref,
+  setIcon,
+  setStyle,
 } from '@gmind/core';
+import type { XmindNode } from '@gmind/xmind-io';
 import { docToXmindTree } from './xmind-export';
 
 /** docToXmindTree 环防护（M4 挂账清偿）：walk 的 visited 集合——childIds 环
@@ -86,6 +90,65 @@ describe('docToXmindTree（当前画布口径，Task 4 item 12 中间态）', ()
   it('缺省 canvasId = core 缺省解析（meta.activeCanvasId 回退链，现状回归护栏）', () => {
     const doc = createTemplateDoc({ title: '本周计划', children: [{ text: '甲' }] });
     expect(docToXmindTree(doc).title).toBe('本周计划');
+    doc.destroy();
+  });
+});
+
+describe('docToXmindTree（导出对称 v2：href/style，2026-11-14 spec §六）', () => {
+  it('setHref 写入的 http(s) 链接随节点携带；未写链接的节点不产键', () => {
+    const doc = createTemplateDoc({ title: '根', children: [] });
+    const a = addChild(doc, ROOT_NODE_ID, { text: 'a' });
+    setHref(doc, a, 'https://example.com/page');
+
+    const tree = docToXmindTree(doc);
+    expect('href' in tree).toBe(false); // root 未写链接：不产 href 键
+    expect(tree.children[0]?.href).toBe('https://example.com/page');
+    doc.destroy();
+  });
+
+  it('非 http(s) href（crafted 裸写，setHref 会拒）不产键——与导入口径对称', () => {
+    const doc = createTemplateDoc({ title: '根', children: [] });
+    const a = addChild(doc, ROOT_NODE_ID, { text: 'a' });
+    // 直接 Y 变更（刻意绕开 core 写入口）：setHref 只收 http/https，非 http(s) 值
+    // 只能来自 crafted doc_state / 外部裸写——导出与导入解析同口径不携带（计超链接降级）。
+    doc.transact(() => {
+      const node = canvasNodesMap(doc).get(a) as Y.Map<unknown>;
+      node.set('href', 'xapp:attachment/1');
+    });
+
+    const child = docToXmindTree(doc).children[0] as XmindNode;
+    expect('href' in child).toBe(false);
+    doc.destroy();
+  });
+
+  it('style 四键非空才产、值透传字符串：fontSize 数值 patch 落字符串形态；空串/表外键不携带', () => {
+    const doc = createTemplateDoc({ title: '根', children: [] });
+    const a = addChild(doc, ROOT_NODE_ID, { text: 'a' });
+    setStyle(doc, a, { fill: '#FFEEEE', color: '#1F1F1F', fontSize: 16 });
+
+    const child = docToXmindTree(doc).children[0] as XmindNode;
+    // border 未写过：不产键；fontSize 数值 16 → 快照字符串 '16'（writeStylePatch 归一），
+    // px 形状（'16px'）与非法过滤在 build 层 stylePropertiesOf，树层只透传。
+    expect(child.style).toEqual({ fill: '#FFEEEE', color: '#1F1F1F', fontSize: '16' });
+
+    // 空串（清除语义存值）与表外键（fontFamily——引擎不支持节点级覆盖，spec 裁定不映射）不携带
+    setStyle(doc, a, { border: '', fontFamily: 'Georgia' });
+    const after = docToXmindTree(doc).children[0] as XmindNode;
+    expect(after.style).toEqual({ fill: '#FFEEEE', color: '#1F1F1F', fontSize: '16' });
+    doc.destroy();
+  });
+
+  it('icons 全组透传：emoji/number 组树层不过滤（过滤职责在 build 层 iconsToMarkerIds）', () => {
+    const doc = createTemplateDoc({ title: '根', children: [] });
+    const a = addChild(doc, ROOT_NODE_ID, { text: 'a' });
+    setIcon(doc, a, 'priority', 'p1');
+    setIcon(doc, a, 'number', '1');
+    setIcon(doc, a, 'emoji', '😀');
+
+    const child = docToXmindTree(doc).children[0] as XmindNode;
+    // emoji/number 无 XMind 原生 marker-id（v2 登记不写回），但不导出的过滤在
+    // iconsToMarkerIds——树层全组原样携带，不做预滤。
+    expect(child.icons).toEqual({ priority: ['p1'], number: ['1'], emoji: ['😀'] });
     doc.destroy();
   });
 });

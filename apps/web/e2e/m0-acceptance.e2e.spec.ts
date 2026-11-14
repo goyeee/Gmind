@@ -8,7 +8,16 @@ async function uiRegister(page: Page): Promise<string> {
   await page.goto('/login');
   await page.getByTestId('link-register').click();
   await page.getByTestId('reg-email').fill(email);
+  // 发码 POST await 到响应再提交：UI 发码按钮不 await 网络，若注册先于服务端写码键
+  // （issue() 完成后才 204）到达，verify 会误报「验证码错误或已过期」——先在竞态，
+  // 开发机配真发信 SMTP（454 限流拒信）把发码拖到秒级后由偶发变必现（2026-11-14 T7
+  // 冒烟轮裁定修测试侧，与 error-copy ⑩ 修正后同款，非加重 timeout）。谓词 POST+204：
+  // 204 恒在 issue() 写码键之后返回，谓词真 ⟺ 码已落。
+  const codeSent = page.waitForResponse(
+    (r) => r.url().endsWith('/api/auth/email-code') && r.request().method() === 'POST' && r.status() === 204,
+  );
   await page.getByTestId('reg-code-send').click();
+  await codeSent;
   await page.getByTestId('reg-code').fill('123456'); // dev/test 验证码恒 DEV_MAIL_CODE（默认 123456）
   await page.getByTestId('reg-password').fill('pass123456');
   await page.getByTestId('reg-nickname').fill('验收用户');

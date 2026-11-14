@@ -202,7 +202,15 @@ test('⑩ 换绑邮箱被占 409：错误文案含「已绑定其他账号」+ �
   await expect(page.getByTestId('settings-page')).toBeVisible();
 
   await page.getByTestId('rebind-email').fill(occupied.email);
+  // 发码 POST await 到响应再继续：UI 发码按钮不 await 网络，若保存先于服务端写码键
+  // （issue() 完成后才 204）到达，verify 会误报「验证码错误或已过期」——先在竞态，
+  // 2026-11-14 Task 6 fix round 1 裁定②修测试侧（非加重 timeout）。等待谓词收紧到
+  // POST + 204（评审 Minor#2）：204 恒在 issue() 写码键之后返回，谓词真 ⟺ 码已落。
+  const codeSent = page.waitForResponse(
+    (r) => r.url().endsWith('/api/auth/email-code') && r.request().method() === 'POST' && r.status() === 204,
+  );
   await page.getByTestId('rebind-email-code-send').click();
+  await codeSent;
   await page.getByTestId('rebind-email-code').fill('123456'); // dev 固定码（email_bind 场景）
   await page.getByTestId('rebind-email-password').fill('pass123456');
   await page.getByTestId('rebind-email-save').click();
