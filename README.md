@@ -16,7 +16,7 @@ pnpm db:migrate          # 建表（gmind 库）
 pnpm dev                 # server :3000 + web :5173
 ```
 
-打开 http://localhost:5173 ，用邮箱验证码注册、邮箱+密码登录（开发环境验证码固定 `123456`，不发真实邮件）。需要演示数据时空库跑一次 `pnpm --filter @gmind/server exec tsx scripts/seed-demo.ts`（server 运行中；演示超管 demo@gmind.dev / demo123456）。
+打开 http://localhost:5173 ，用邮箱验证码注册、邮箱+密码登录。开发环境万能验证码 `123456` 始终可用；想在开发机也收到**真实验证码邮件**，把 SMTP 参数填进 `scripts/dev-local.env`（git 已忽略，模板在该文件内），跑 `scripts/dev-restart.sh` 生效。需要演示数据时空库跑一次 `pnpm --filter @gmind/server exec tsx scripts/seed-demo.ts`（server 运行中；演示超管 demo@gmind.dev / demo123456）。
 
 > **生产部署必读**：必须显式设置 `NODE_ENV=production`，并配置 `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASS`（缺一服务拒绝启动）；漏设 `NODE_ENV` 会以开发语义运行（邮箱验证码固定 `123456` 且不发信，可被用来重置任意账号密码），属严重配置错误。
 

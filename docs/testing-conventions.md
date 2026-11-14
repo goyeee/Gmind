@@ -34,3 +34,7 @@
 ## 六、web e2e 并行度（2026-11-13 裁定）
 
 - `apps/web/playwright.config.ts:36-37`：`workers: 4` + `retries: 1`。教训一句话：默认 workers=cpu/2（本机 14 核=7）时 ~28 路并发打满 dev API 的 DB 连接池（TypeORM 默认 10）+ 单实例 MySQL 5.6 + 单 vite，断言默认 5s 窗口随机饿死——失败集合逐轮漂移（两轮 193/9、195/5 仅 3 例重合）、隔离重跑全过的负载相关偶发失败；降并行+失败重试后全量稳定。
+
+## 本机私密配置 dev-local.env（2026-11-14）
+
+`scripts/dev-local.env`（git 忽略，模板见文件内注释）由 `scripts/dev-common.sh` 自动加载，放 SMTP 等不想进 git 的变量；填完 `scripts/dev-restart.sh` 生效。**对 e2e 无影响**：e2e 进程不加载该文件（无 SMTP），发码邮件走"仅记录不发送"分支，注册/换绑用万能码 123456 经 email-code 的 dev 万能码分支通过。dev 真发信语义变更见 `docs/features/login.md` 规则 9。

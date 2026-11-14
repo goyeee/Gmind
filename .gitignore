@@ -11,3 +11,6 @@ test-results/
 
 # 本地走查证据截图（会话产物，不入库）
 gui-test-screenshots/
+
+# 本机私密配置（SMTP 等不想进 git 的环境变量；由 scripts/dev-common.sh 加载）
+scripts/dev-local.env

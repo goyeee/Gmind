@@ -18,7 +18,7 @@
 6. **密码 6~64 位**：注册、登录、重置密码三处同一口径（`packages/shared/src/api/auth.ts:50`、`:57`、`:65`）。
 7. **验证码三条规则**：10 分钟内有效（`apps/server/src/auth/email-code.service.ts:9`）；60 秒内不能重发（`apps/server/src/auth/email-code.service.ts:11`，服务端在 `:58-61` 强制；前端发码成功才起倒计时，`apps/web/src/pages/useCodeCountdown.ts:8-17`、`apps/web/src/pages/LoginPage.tsx:88`）；**连续输错 5 次作废**，须重新获取（`apps/server/src/auth/email-code.service.ts:13`、`:79-89`）。
 8. **发码前先查场景**：注册场景邮箱已被注册 → 直接 409「该邮箱已注册，请直接登录或换用其他邮箱」；忘记密码场景邮箱未注册 → 404「该邮箱尚未注册，请确认后重试或先注册」（`apps/server/src/auth/auth.controller.ts:38-43`）。
-9. **开发/测试环境验证码固定 123456** 且不发真实邮件（`apps/server/src/auth/email-code.service.ts:50-53`，默认值在 `apps/server/src/config/env.ts:31`）；生产环境恒为随机 6 位数字并经真实 SMTP 发信，配置了 `DEV_MAIL_CODE` 也会被忽略（`apps/server/src/auth/email-code.service.ts:51`、`:63-73`）。
+9. **验证码全环境恒为随机 6 位数字并尝试真实发信**（`apps/server/src/auth/email-code.service.ts:50-52`、`:63-72`）。开发/测试环境**万能码 `123456` 并存**：只要系统给这个邮箱发过码（存在存量码），输入 123456 也算通过（`email-code.service.ts` verify 的 masterOk 分支、默认值在 `apps/server/src/config/env.ts:31`）——没发过码时 123456 无效；生产环境不认万能码，只认真实验证码。开发环境没配 SMTP 时发信静默跳过（不影响用万能码），配了就真发信（本机配置方法：`scripts/dev-local.env`，git 已忽略，填完跑 `scripts/dev-restart.sh`）。
 10. **手机号只是资料**：可以在设置页补填/换绑手机号（需当前密码核身，`apps/server/test/users.e2e-spec.ts:236`），页面标「未验证」（`apps/web/src/pages/SettingsPage.tsx:468`）；**手机号本期不能用来登录**（登录 schema 只收邮箱，`packages/shared/src/api/auth.ts:55-59`）。
 
 ## ③ 特殊情况

@@ -9,6 +9,11 @@ export WEB_PORT="${WEB_PORT:-5174}"
 export REDIS_URL="${REDIS_URL:-redis://127.0.0.1:16379/0}"
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# 本机私密配置（2026-11-14）：scripts/dev-local.env（git 忽略）存在则全部导出给子进程——
+# 放 SMTP 等不想进 git 的变量；填完跑 `scripts/dev-restart.sh` 生效。
+if [ -f "$REPO_ROOT/scripts/dev-local.env" ]; then set -a; . "$REPO_ROOT/scripts/dev-local.env"; set +a; fi
+
 DATA_DIR="$REPO_ROOT/.data"
 LOG_FILE="$DATA_DIR/dev-server.log"
 PID_FILE="$DATA_DIR/dev-server.pids"

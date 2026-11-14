@@ -5,8 +5,14 @@ import type { MailService } from '../mail/mail.service';
 import { EmailCodeService } from './email-code.service';
 
 /**
- * EmailCodeService 单测（2026-11-12 账号体系重做）：发码/验码全走 Redis（键与 TTL 逐字
- * 对齐简报），MailService 以假 sendMail 注入。ioredis-mock 用法镜像 session.service.test.ts。
+ * EmailCodeService 单测（2026-11-12 账号体系重做；2026-11-14 需求方：dev 真发信+万能码并存）：
+ * 发码/验码全走 Redis（键与 TTL 逐字对齐简报），MailService 以假 sendMail 注入。
+ * ioredis-mock 用法镜像 session.service.test.ts。
+ *
+ * 2026-11-14 语义：全环境恒随机 6 位码并尝试真实发信；production 发信失败 → 500+解锁，
+ * dev/test 发信失败（含未配 SMTP）→ 容错成功；dev/test 万能码 env.DEV_MAIL_CODE（默认
+ * '123456'）在**存在存量码**时可作为通行证（production 不认万能码）；无存量码时万能码
+ * 无效（防未发码直通）。
  */
 
 const codeKey = (scene: string, email: string) => `email_code:${scene}:${email}`;
@@ -19,6 +25,15 @@ async function makeService(sendMail: (...args: unknown[]) => Promise<boolean> = 
   await redis.flushall();
   const mail = { sendMail: vi.fn(sendMail) } as unknown as MailService;
   return { svc: new EmailCodeService(redis, mail), redis, mail };
+}
+
+/** 从 sendMail mock 的调用参数（to, subject, text）里提取 6 位验证码。 */
+function lastCode(mail: MailService): string {
+  const calls = (mail.sendMail as ReturnType<typeof vi.fn>).mock.calls as unknown as string[][];
+  const body = calls.at(-1)![2] ?? '';
+  const m = body.match(/\d{6}/);
+  if (!m) throw new Error(`sendMail 正文里没有 6 位验证码：${body}`);
+  return m[0];
 }
 
 /** 断言 rejects 的异常体：文案逐字 + HTTP 状态码。 */
@@ -39,11 +54,13 @@ beforeEach(() => {
 });
 
 describe('EmailCodeService.issue（发码）', () => {
-  it('issue 后 Redis 写入码（EX 600）与 60s 重发锁，且不同场景/邮箱互不可见', async () => {
-    const { svc, redis } = await makeService();
+  it('issue 后 Redis 写入随机码（EX 600）与 60s 重发锁，不同场景/邮箱互不可见，且真实发信', async () => {
+    const { svc, redis, mail } = await makeService();
     await svc.issue('register', 'a@b.dev');
-    // dev（NODE_ENV 默认 development）恒用 DEV_MAIL_CODE 默认值 '123456'
-    expect(await redis.get(codeKey('register', 'a@b.dev'))).toBe('123456');
+    // 2026-11-14：dev 也恒随机码（不再是 '123456'），真实码经 sendMail 发出
+    expect(await redis.get(codeKey('register', 'a@b.dev'))).toMatch(/^\d{6}$/);
+    expect(mail.sendMail).toHaveBeenCalledTimes(1);
+    expect(lastCode(mail)).toBe(await redis.get(codeKey('register', 'a@b.dev')));
     expect(await redis.ttl(codeKey('register', 'a@b.dev'))).toBeLessThanOrEqual(600);
     expect(await redis.ttl(codeKey('register', 'a@b.dev'))).toBeGreaterThan(0);
     expect(await redis.ttl(waitKey('register', 'a@b.dev'))).toBeLessThanOrEqual(60);
@@ -52,12 +69,11 @@ describe('EmailCodeService.issue（发码）', () => {
     expect(await redis.get(codeKey('register', 'other@b.dev'))).toBeNull();
   });
 
-  it('dev/test 不发真实邮件（Ruling A）：无 SMTP 配置 issue() 成功，sendMail 未被调用', async () => {
-    // sendMail mock 直接返回 false（= transport null 的语义），issue 仍须成功且不碰发信
+  it('dev 未配 SMTP（sendMail false）→ 容错成功，码照常写入（Ruling A 语义收窄为生产限定）', async () => {
     const { svc, redis, mail } = await makeService(async () => false);
     await svc.issue('register', 'a@b.dev');
-    expect(await redis.get(codeKey('register', 'a@b.dev'))).toBe('123456');
-    expect(mail.sendMail).not.toHaveBeenCalled();
+    expect(await redis.get(codeKey('register', 'a@b.dev'))).toMatch(/^\d{6}$/);
+    expect(mail.sendMail).toHaveBeenCalledTimes(1); // 尝试了发信，但失败不致命
   });
 
   it('60s 内二次 issue → 429「验证码发送过于频繁，请 60 秒后再试」', async () => {
@@ -88,42 +104,58 @@ describe('EmailCodeService.issue（发码）', () => {
       process.env = real;
     }
   });
+});
 
-  it('production 忽略 DEV_MAIL_CODE，恒发随机 6 位数字码', async () => {
+describe('EmailCodeService.verify（验码）', () => {
+  it('真实收到的码通过，且码与失败计数一并删除', async () => {
+    const { svc, redis, mail } = await makeService();
+    await svc.issue('register', 'a@b.dev');
+    const real = lastCode(mail);
+    // 先错一次留下计数，验证成功路径连计数一起清
+    await expect(svc.verify('register', 'a@b.dev', '000000')).rejects.toThrow();
+    await svc.verify('register', 'a@b.dev', real);
+    expect(await redis.get(codeKey('register', 'a@b.dev'))).toBeNull();
+    expect(await redis.get(failKey('register', 'a@b.dev'))).toBeNull();
+  });
+
+  it('dev 万能码 DEV_MAIL_CODE 在存在存量码时通过（并存语义），码一并删除', async () => {
+    const { svc, redis } = await makeService();
+    await svc.issue('register', 'a@b.dev'); // 存量=随机码
+    const stored = await redis.get(codeKey('register', 'a@b.dev'));
+    await svc.verify('register', 'a@b.dev', '123456'); // DEV_MAIL_CODE 默认值
+    expect(await redis.get(codeKey('register', 'a@b.dev'))).toBeNull();
+    expect(stored).not.toBe('123456'); // 确证走的是万能码分支而非巧合命中
+  });
+
+  it('dev 无存量码时万能码无效（防未发码直通）', async () => {
+    const { svc, redis } = await makeService();
+    await redis.set(codeKey('register', 'a@b.dev'), ''); // 模拟键不存在（显式清空）
+    await redis.del(codeKey('register', 'a@b.dev'));
+    await expectStatus(svc.verify('register', 'a@b.dev', '123456'), 400, '验证码错误或已过期，请重新获取后再试');
+  });
+
+  it('production 万能码不被接受：输入 DEV_MAIL_CODE → 400，真实码才通过', async () => {
     vi.resetModules();
     const real = { ...process.env };
     try {
-      // 满足 production 既有守卫（DEV_SMS_CODE + SMTP 四项），再设 DEV_MAIL_CODE 验证忽略
       process.env.NODE_ENV = 'production';
       process.env.DEV_SMS_CODE = 'prod-sms-placeholder';
       process.env.SMTP_HOST = 'smtp.gmind.dev';
       process.env.SMTP_PORT = '25';
       process.env.SMTP_USER = 'u';
       process.env.SMTP_PASS = 'p';
-      process.env.DEV_MAIL_CODE = '999999';
       const { EmailCodeService: Prod } = await import('./email-code.service');
       const redis = new RedisMock() as unknown as Redis;
       await redis.flushall();
       const svc = new Prod(redis, { sendMail: vi.fn(async () => true) } as unknown as MailService);
       await svc.issue('register', 'p@b.dev');
-      const code = await redis.get(codeKey('register', 'p@b.dev'));
-      expect(code).toMatch(/^\d{6}$/);
-      expect(code).not.toBe('999999');
+      await expectStatus(svc.verify('register', 'p@b.dev', '123456'), 400, '验证码错误或已过期，请重新获取后再试');
+      const realCode = await redis.get(codeKey('register', 'p@b.dev'));
+      expect(realCode).toMatch(/^\d{6}$/);
+      await svc.verify('register', 'p@b.dev', realCode!);
     } finally {
       process.env = real;
     }
-  });
-});
-
-describe('EmailCodeService.verify（验码）', () => {
-  it('正确码通过，且码与失败计数一并删除', async () => {
-    const { svc, redis } = await makeService();
-    await svc.issue('register', 'a@b.dev');
-    // 先错一次留下计数，验证成功路径连计数一起清
-    await expect(svc.verify('register', 'a@b.dev', '000000')).rejects.toThrow();
-    await svc.verify('register', 'a@b.dev', '123456');
-    expect(await redis.get(codeKey('register', 'a@b.dev'))).toBeNull();
-    expect(await redis.get(failKey('register', 'a@b.dev'))).toBeNull();
   });
 
   it('错码 → 400「验证码错误或已过期…」，失败计数 INCR（EX 600）', async () => {
@@ -134,7 +166,7 @@ describe('EmailCodeService.verify（验码）', () => {
     expect(await redis.ttl(failKey('register', 'a@b.dev'))).toBeGreaterThan(0);
   });
 
-  it('重发新码清空失败计数（Ruling B）：错码后重发，计数归零且新码可用', async () => {
+  it('重发新码清空失败计数（Ruling B）：错码后重发，计数归零且万能码可用', async () => {
     const { svc, redis } = await makeService();
     await svc.issue('register', 'a@b.dev');
     await expect(svc.verify('register', 'a@b.dev', '000000')).rejects.toThrow();
@@ -142,10 +174,10 @@ describe('EmailCodeService.verify（验码）', () => {
     await redis.del(waitKey('register', 'a@b.dev')); // 模拟 60s 重发冷却已过
     await svc.issue('register', 'a@b.dev');
     expect(await redis.get(failKey('register', 'a@b.dev'))).toBeNull();
-    await svc.verify('register', 'a@b.dev', '123456');
+    await svc.verify('register', 'a@b.dev', '123456'); // 万能码走 dev 分支
   });
 
-  it('连错 5 次后码被删，之后正确码也 400（防爆破）', async () => {
+  it('连错 5 次后码被删，之后真实码与万能码都 400（防爆破；万能码须有存量码）', async () => {
     const { svc, redis } = await makeService();
     await svc.issue('register', 'a@b.dev');
     for (let i = 0; i < 5; i++) {
@@ -153,5 +185,6 @@ describe('EmailCodeService.verify（验码）', () => {
     }
     expect(await redis.get(codeKey('register', 'a@b.dev'))).toBeNull();
     await expectStatus(svc.verify('register', 'a@b.dev', '123456'), 400, '验证码错误或已过期，请重新获取后再试');
+    expect(await redis.get(codeKey('register', 'a@b.dev'))).toBeNull();
   });
 });

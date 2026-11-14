@@ -340,7 +340,9 @@ describe('回收站域（FR-FIL-005~007/010）', () => {
     const cleanup = app.get((await import('../src/jobs/cleanup.service')).CleanupService);
     const digest = app.get((await import('../src/jobs/digest.service')).DigestService);
     const files = app.get((await import('../src/files/files.service')).FilesService);
-    // 有邮箱的 owner：即时邮件与（修复前的）15 分钟摘要重发都经 MailService——spy 全量捕获
+    const mailOwner = await createAccount(app, { email: 'trash711@test.dev' });
+    // spy 安装在注册造号之后（2026-11-14 起 dev 注册发码也尝试发信，避免污染计数）：
+    // 即时提醒邮件与（修复前的）15 分钟摘要重发都经 MailService——全量捕获
     // （同 notify spec 摘要组模式；e2e 无 SMTP，不 spy 则只 log 不发送、断言无从落脚）
     const mails: string[] = [];
     const spy = vi
@@ -350,7 +352,6 @@ describe('回收站域（FR-FIL-005~007/010）', () => {
         return true;
       });
 
-    const mailOwner = await createAccount(app, { email: 'trash711@test.dev' });
     const file = await files.createForUser(mailOwner.id, { title: '7.11 提醒去重文件' });
     await files.deleteOwned(mailOwner.id, file.id);
     // 触发提醒（同 7.9 用例的编排：软删 → runCleanup(+27d)）；7.9 遗留条目已有 marker 行，不会重复提醒
