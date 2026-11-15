@@ -163,3 +163,145 @@ emoji(28)/数字(10) 组往返仍丢（无 XMind 原生源）；颜色/形状信
 ### 校准更正（2026-11-15，需求方复测 Gmind问题汇总.xmind 打回上一批「左右均衡」）
 
 上一批的「按子树规模轻侧贪心」是自拟规则、与 XMind 思维导图真实平衡不符（10 支文件导入后右侧 5 支且读序变化 vs 源文件右侧 8 支）。按源文件截图逐支校准为新规则：**子树权重最大的分支锚定左侧，其前分支居右（文档序）、其后分支随左**——源文件（右=场景/首页/harness/Ai/筛选/任务看板/协作/设置，左=文件/分支主题 6）逐支吻合。自动化背书：`apps/web/src/editor/xmind-import.test.ts:211`「左右均衡定侧」（权重模式 [4,2,2,4,3,3,2,4,16,1] 合成树，断言右=前 8、左=9/10）、`:239`（logic 画布不均衡）；web 单测 163/163、import-export e2e 9/9、全量 web e2e 215+1skip+0 failed。XMind 平衡算法无文档，该规则按此文件校准，诚实边界登记 features 文档④10。
+
+## 十一、2026-11-15 轮 1 分享导出改版补记（分享弹框导出五项＋PNG 退役＋Excel 新增）
+
+核验日期：2026-11-15。起因与依据：需求方 2026-11-15 口径「我要白底的 jpg」——**PNG 透明档退役**，图片导出统一 JPG 白底；分享弹框「导出」页签收敛为五项（XMind/JPG/Markdown/CSV/Excel），新增 Excel 任务表导出。计划与任务台账：`docs/superpowers/plans/2026-11-15-share-export-revamp.md`（轮 1 任务 1-3 落码、任务 4=e2e 新建＋文档三件套收官）；功能文档同步 `docs/features/import-export.md`（标题/①/规则 17/20 改口径、④11/④12 新增）。任务 1-3 落码内容（行号 2026-11-15 当日 grep）：
+
+### 改动清单
+
+1. **分享弹框导出页签五项**（`apps/web/src/editor/ShareDialog.tsx:126-132`）：XMind/JPG 转发既有导出通道（`onExport('xmind'|'jpg', scale?)` `:35`；EditorPage 接线 `apps/web/src/pages/EditorPage.tsx:5147-5158`），MD/CSV/XLSX 弹框内真实下载（`apps/web/src/editor/docExport.ts:54/:69/:131`）；单项点击 1800ms「已导出 ✓」回落（`ShareDialog.tsx:134-143`、`:242`）；说明行「导出…包含已折叠的节点」（`:230`）。
+2. **PNG 退役**（依据=需求方 2026-11-15 口径「我要白底的 jpg」）：工具栏导出菜单=XMind＋JPG 1x/2x/3x 三档（`EditorPage.tsx:4396`、`:4413-4422`），分享弹框图片项固定 JPG 白底 2×（`ShareDialog.tsx:128`）；`apps/web/src/editor/image-export.ts` 收敛为仅 'jpg' 一档（`:29` 类型、`:92` 下载 `.jpg`），PNG 双格式实现留 git 历史。
+3. **Excel 任务表导出**（`apps/web/src/editor/docExport.ts:131` exportXlsx、`:115` buildXlsxBytes）：**零依赖手写最小 OOXML**——五标准部件 zip 经 xmind-io zipEntries=fflate（`:92`），选型理由=任务表只有文本/数字两种单元格，引专门 xlsx 库（数百 KB 依赖）不划算；列口径=CSV 7 列（2026-11-15 需求方拍板），序号/进度为数字单元格 `t="n"`、其余 inlineStr 文本（`:108-111`）；**公式/样式/多 Sheet 不支持**（诚实登记，候选引库重做）。
+
+### 自动化背书（用例名+行号为 2026-11-15 当日 grep，非转抄）
+
+- **新建 `apps/web/e2e/share-export.e2e.spec.ts` 6/6**（种子文档「本周计划」口径，与工具栏导出用例同源；下载断言沿用 import-export 既有模式）：`:39` 五项齐全+「包含已折叠的节点」说明行、`:52` XMind 下载产物 parseXmind 单 Sheet/root 本周计划/三分支、`:69` JPG 下载 FFD8FF 魔数（弹框固定 2×）、`:83` Markdown `# 本周计划` 开头+「- 周一」、`:98` CSV BOM+7 列表头、`:114` Excel PK 魔数+按钮变「已导出 ✓」（反馈断言在含下载的 Promise.all 之后，不做 1800ms 回落时序断言）。
+- **unit：`apps/web/src/editor/docExport.test.ts` 4 例**（zip 五部件/表头 7 列与 CSV 同序/XML 实体转义/数字单元格 t="n"）。
+- **不回归**：import-export e2e 9/9（含工具栏 JPG 三例与 XMind 往返）。
+
+### 门禁五件套（2026-11-15 当日全量连跑，收官）
+
+`pnpm lint` 0 / `pnpm typecheck` 0 / `pnpm test` **1160 passed, 0 failed**（shared 43＋xmind-io 70＋gmind-core 375＋engine 428＋server 77＋web 167）/ `pnpm --filter @gmind/server test:e2e` **217/217**（19 文件）/ web e2e **220 passed＋1 flaky＋1 skipped，0 failed（2.2m，222 用例 4 workers）**。全量跑读完整输出核对：flaky=`collab.e2e.spec.ts:566`「双页并发结构操作收敛：move vs delete」（首轮 node-count 断言 10s 窗内得「6 节点」非「4 节点」，重试即过；**隔离重跑 2/2 绿**）——双页协同负载抖动，与本轮改动无关（本轮任务 1-4 未触碰协同/结构操作链路）；skipped=`perf-editor.spec.ts:126`（perf 合法跳过，存量口径）。新 spec 六例隔离跑与全量跑各 6/6 绿。
+
+### 诚实登记（挂账三条）
+
+1. **xlsx 的 escXml 未过滤 XML 1.0 非法控制字符**（`docExport.ts:107` 只转义 &/</>）：节点文本若含 U+0000–U+0008 等非法控制字符（外部来源粘贴场景理论上可达），产出的 xlsx 会被 Excel 判「损坏」拒开；触发概率趋近零，候选后续补字符过滤。
+2. **转发通道「已导出 ✓」语义=点击已受理而非导出成功**：xmind/jpg 导出失败或折叠确认取消时按钮仍亮成功态 1.8s（`ShareDialog.tsx:134-143` runExport 同步 setExported；`onExport` void 契约固有不感知结果）——改动需把 onExport 契约 Promise 化，波及既有调用点，属后续裁定；features 文档④12 同口径登记。
+3. **`apps/web/src/pages/editor.css:970/:981` `.export-option` 死 CSS**：PNG 勾选行退役后遗留的无引用样式（当日 grep 全仓 src/e2e 零引用），收口清理待做。
+
+## 十二、2026-11-15 导出返工批补记（验收反馈三条：XMind 8 打不开／图片折叠态／Excel 列宽）
+
+核验日期：2026-11-15。起因与依据：轮 1 交付后需求方验收实开反馈三条——①图片导出不要折叠按钮、要展示展开按钮和数量、按现有折叠状态导出不自动展开；②CSV/Excel 列宽适应内容（原文注「不好做可不做」）；③导出 .xmind 在 XMind 8 报 `SheetDeserializer.parseTopic null argument` 打不开。计划与任务台账：`docs/superpowers/plans/2026-11-15-export-rework.md`（任务 1-3 落码、任务 4=e2e 用例 5 重写＋文档三件套＋收官门禁，本节即任务 4 产物）；功能文档 `docs/features/import-export.md`（①/规则 15/17/20/④12-16 当日改写并当日 grep）。
+
+### 三条反馈与修复（行号 2026-11-15 当日 grep）
+
+1. **XMind 导出补四样必需键**（`packages/xmind-io/src/build.ts`，头注 v2.1 段 `:12-17`）：每个 sheet 与每层 topic 逐个产非空 `id`（缺省 `crypto.randomUUID()`，第三参 idFactory 供测试注入确定性工厂，`:70-88`）；根 topic 产 `structureClass` 三值反向映射（mindmap→`org.xmind.ui.map.unbalanced`、logic→`org.xmind.ui.logic.right`、org→`org.xmind.ui.org-chart.balanced`，仅根携带、子 topic 恒不产，`:30-38` 映射表＋`:93` 落键）；zip 补 `manifest.json`（file-entries 登记 content.json/metadata.json，`:100`）；metadata creator 改对象形式 `{"name":"Gmind","version":"1.0"}`（`:101`）。自动化背书：`build.test.ts` v2.1 三组新用例（id 全树非空唯一＋缺省 UUID 形状／三映射＋缺省不产键＋仅根携带／manifest＋metadata 容器）＋`roundtrip.test.ts` 四画布 build→parseXmind 往返（structureType 经 structureClass 还原、零降级）；xmind-io 单测 74/74。
+2. **图片按当前折叠态导出**（`apps/web/src/editor/image-export.ts`＋`apps/web/src/pages/EditorPage.tsx`）：快照克隆改走 docToState→docFromState 装载通道，collapsed 原样保留（`image-export.ts:84`）；新增命名导出 `stripCollapseToggles`（`:136-143`）——删所有 `g.gm-collapse-toggle` 交互折叠钮整组、「+N」徽标 `g.gm-collapse-badge` 保留（N=被隐藏存活后代数，engine `layout.ts:158-161` 计数、`render.ts:973-1002` 画徽标）；EditorPage 删「检测到 N 处折叠，将自动展开后导出」确认框分支（`EditorPage.tsx:1290` runImageExport 只剩下载链路）。自动化背书：`image-export.test.ts` 新增 stripCollapseToggles 2 例（toggle 整组剥离且 badge 与其余节点原样／多组全剥＋幂等）。
+3. **Excel 列宽自适应**（`apps/web/src/editor/docExport.ts`）：sheet1.xml 在 `<sheetData>` 前注入 `<cols>`（`:137`、`:143`），列宽=列内最大显示宽+2、钳制 [8,60]（`:134-136`），显示宽 CJK/全角记 2、数字按字符串化长度（`displayWidth` `:116`）。自动化背书：`docExport.test.ts` 新增 5 例（中文长标题列宽 10／全短列 7×宽 8／超长钳 60／cols 在 sheetData 前且 7 col 逐列 min=max=i+1／数字按字符串化长度）。**CSV 不做**：纯文本格式无列宽概念，如实说明非遗漏。
+
+### 根因诊断过程（反馈③ XMind 8 打不开）
+
+需求方提供报错栈：Zen 解析器 `SheetDeserializer.parseTopic:231 null argument`——解析器对 topic id 断言非空，而旧产物 sheet/topic 全无 `id`。诊断方法=与本机真实 XMind Zen 导出金样逐项对照：**张智建总结计划 2025-08-01.xmind**（creator Vana 24.01，115 个 topic 全部带 id、structureClass 只出现在根 topic、zip 带 manifest.json、metadata 的 creator 是对象形式）——旧产物四项全缺：topic/sheet id（直接死因）、manifest.json、creator 对象形状、根结构串；按金样四项全补（即修复清单第 1 条）。**旁证顺带登记**：需求方另一真实文件（王春龙 20261023）content.json 存在 CRC 损坏，但因同包还带 content.xml，XMind 仍能打开——说明 XMind 的打开链路对包内条目有多路兜底，也反向印证自产 zip 各部件齐整、形状贴近真实导出件的必要性。修复止于产物形状（engine/core 未动）；**XMind 8 实开冒烟待需求方执行**（已登 project-status 待人工清单）。
+
+### 用例 5 重写（任务 4，口径经评审钉死）
+
+`apps/web/e2e/import-export.e2e.spec.ts:222`「折叠态导出：不弹确认框直接导出（画布折叠态不变）」：折叠 root（Ctrl+/，徽标 +1）→ export-jpg-1x → `dialogCount === 0`（确认框已删，替换原「检测到 1 处折叠」断言——该断言随确认框一并移除）→ 下载名「本周计划.jpg」＋JPEG 魔数 FFD8FF → 画布徽标仍在（count 1）＋孙节点「周会对齐」仍隐藏（count 0）。用例 4（无折叠 JPG 3x）不变。图内「+N 在图／无交互钮」的图像内容语义由 image-export 单测＋engine render 单测钉住（JPEG 像素层 e2e 无法检视，不假装能）。
+
+### 门禁五件套（返工批收官 2026-11-15 当日全量连跑）
+
+`pnpm lint` 0（exit 0 无输出）/ `pnpm typecheck` 0（六包 Done）/ `pnpm test` **1171 passed, 0 failed**（shared 43＋xmind-io 74＋gmind-core 375＋engine 428＋server 77＋web 174）/ `pnpm --filter @gmind/server test:e2e` **217 passed (19 文件)，0 failed（29.8s）** / web e2e 全量 **220 passed＋1 flaky＋1 skipped，0 failed（2.2m，exit 0）**。全量输出读完整核对：flaky=`collab.e2e.spec.ts:566`「双页并发结构操作收敛：move vs delete」（首轮 node-count 断言 10s 窗内得「6 节点」非「4 节点」，套件内重试即过；**隔离重跑 2/2 绿**（9.2s/8.9s）——双页协同负载抖动，与本批无关：本批改动面=xmind-io build/web 导出胶水/导出 e2e/文档，未触碰协同与结构操作链路；与轮 1 为同一条已知观察项）；skipped=perf-editor（PERF=1 门，存量合法跳过）。受影响 e2e 三 spec 先行 **18/18 passed（18.0s）**（import-export 9＋share-export 6＋canvas-scope 3），全量中同批用例无回归。
+
+### 诚实登记（返工批挂账四条，features 文档 ④13-16 同口径登记）
+
+1. **engine/core 两处头注已与本批行为相反**：`packages/engine/src/export.ts:9-10`（「传入的 reader 应是已展开克隆……导出恒为完整层级」）与 `packages/gmind-core/src/read.ts:443`（「cloneExpanded 只展开可达集」）描述返工批前旧行为——engine/core 只增不改，注释不动，**读码以代码为准绳，勿信旧注**。
+2. **core `cloneExpanded`（export.ts:27）与 `countCollapsedWithChildren`（read.ts:445）成无生产调用方的导出 API**：web 侧分别改走 docToState→docFromState 克隆与删除确认框计数；两者去留待需求方裁定（core 只增不改，本轮未动）。
+3. **xlsx 半角片假名（U+FF61–FF9F）按全角记 2**：显示宽区间 U+FF00–U+FFEF 整段记宽，半角片假名实为窄字符，日文名列会偏宽——只宽不窄、不截断，细分待需求方点头。
+4. **XMind manifest 不登记 buildXmind 第三参 extra 注入条目**：extra 仅 e2e 夹具开口、生产导出恒不传（生产不可达），manifest 恒登记 content.json/metadata.json 两个核心条目；XMind 8 实开验证时天然覆盖。
+
+另注：轮 1 补记「诚实登记（挂账三条）」第 2 条所述「折叠确认取消时按钮仍亮成功态」场景随本批确认框删除不复存在，该条收窄为「导出失败时按钮仍亮成功态 1.8s」（features 文档 ④12 已同步改口径）。
+
+## 十三、2026-11-15 导出保真第三波补记（验收反馈两条：图片没导出来／连接线直愣愣）
+
+核验日期：2026-11-15。起因与依据：返工批交付后需求方验收实开反馈两条——①「新导出的 Gmind问题汇总 (2).xmind 可以打开（XMind 8 修复验证通过），但图片没导出来」；②「样式有点丑……分支的连接线都是直愣愣的，和 xmind 软件创建的不一样」。计划与任务台账：`docs/superpowers/plans/2026-11-15-export-polish.md`（任务 1=build 层、任务 2=web 导出链、任务 3=本节 e2e＋文档＋收官门禁；台账 `.superpowers/sdd/2026-11-15-export-polish/progress.md`）；功能文档 `docs/features/import-export.md`（①/规则 15/16/20/④5/④12/④16 当日改写并当日 grep）。
+
+### 两条反馈与修复（行号 2026-11-15 当日 grep）
+
+1. **图片没导出来＝M4 挂账「导出图片不写回」清偿**（`packages/xmind-io/src/build.ts`＋`apps/web/src/editor/xmind-export.ts`）：build 层 topic 级产 `image {src:'xap:<path>',width,height,align}`（`build.ts:286-297`；w/h/align 缺省不产键、path 空串视同无图）；web 链路四步=walk 读节点图片快照收任务（`xmind-export.ts:104-116`）→ 按唯一存储键并行 fetch `/api/images/{键}`（公开读取端点，同 JPG 导出内联图片先例；同图多节点只抓一次）→ 字节以 `resources/{键尾段}` 入 zip（`resourceNameOf` `:139-143`）并回填节点 → build 组包（`buildXmindBytes` `:152-190`）。**缺图不阻断**：单张抓取失败（网络错/非 200）只跳过那张，失败的不同图片张数经 toast 点名「N 张图片未能包含在导出中，可重试导出」（`EditorPage.tsx:1307-1316` runXmindExport，工具栏/分享弹框两入口同一闭包）。顺带清偿轮 1 ④16「manifest 不登记 extra」：`file-entries` 逐键登记注入条目（`build.ts:319-328`）。
+2. **连接线直愣愣＝导出件缺 theme 的根因**（`packages/xmind-io/src/build.ts` DEFAULT_THEME）：每个 sheet 末位产 `theme` 键（`build.ts:312-313`），值**逐字借自本机真实 XMind（Zen/Vana 24.01）导出金样「张智建总结计划 2025-08-01.xmind」的软件默认主题 15 键全文**（十二层＋expiredTopic/skeletonThemeId/colorThemeId；含 map 层 multi-line-colors 六色与字体栈原文）——零自造样式值，需求方诉求即「和 xmind 软件创建的一样」。**根因诊断**：XMind 对缺 theme 的文件按默认直线渲染分支连线；金样 mainTopic/subTopic 的 `line-class: org.xmind.branchConnection.roundedElbow`（圆角肘形连接线）即软件曲线质感的来源。theme 是主题定义非内容，解析侧不计降级（2026-11-14 拍板口径一致）。
+
+### e2e 与自动化背书（任务 3）
+
+- `apps/web/e2e/share-export.e2e.spec.ts` 两处：**用例 2 扩**（`:105-114`）——下载产物 unzipEntries 解包，断言 content.json sheet theme 的 mainTopic/subTopic `line-class` 均为 `org.xmind.branchConnection.roundedElbow`、manifest.json file-entries 恰登记 content.json/metadata.json 两核心条目（无图文档不传 extra）；**用例 2b 新增**（`:123-163`）——种子文档无图，带图载荷走既有导入夹具（helpers/xmind-fixture 自带 4×4 PNG，经真实两段式上传落库，零新增图片数据）：导入（toast 逐字「未导入：图标 1」证明图片零降级）→ 分享弹框导出 → 解包断言 zip 恰一条 `resources/` PNG 魔数条目＋manifest 登记该键＋content.json 待办一 `topic.image` 四键写回（src=`xap:`+动态键、width/height=真实字节 4×4、align=夹具 bottom）。抓取失败的计数 toast 路径无 e2e（成本不匹配，单测已钉），如实登记。
+- 单测背书（任务 1/2 产出、本波收官复跑零回归）：`packages/xmind-io/src/build.test.ts` v2.3 三组＋金样（theme 字节逐字=金样独立捕获串）、`roundtrip.test.ts` 图片往返、`apps/web/src/editor/xmind-export.test.ts` 抓取五例（打包/同键去重/reject 计数/404/无图零 fetch）。
+
+### 门禁五件套（第三波收官 2026-11-15 当日全量连跑）
+
+`pnpm lint` 0（exit 0 无输出）/ `pnpm typecheck` 0（六包 Done）/ `pnpm test` **1181 passed, 0 failed**（shared 43＋xmind-io 78＋gmind-core 375＋engine 428＋server 77＋web 180；较返工批基线 1171 净增 10＝xmind-io +4（build v2.3 三例＋roundtrip 图片往返一例）＋web +6（终审修复生产链结构串用例一例＋图片抓取五例））/ `pnpm --filter @gmind/server test:e2e` **217 passed (19 文件)，0 failed（30.3s）** / web e2e 全量 **222 passed＋1 skipped，0 failed（2.2m，exit 0）**（skipped=perf-editor PERF 门合法跳过；已知观察项 canvas-tabs:46、collab:566 本轮均未复现，全轮零 flaky 零重试）。受影响 e2e 两 spec 先行 **16/16 passed（18.0s）**（import-export 9＋share-export 7），全量中同批用例无回归；夹具行为顺带核对（计划 Self-Review 接缝项）：夹具 zip 形状变化（buildXmind 产物多 theme、buildCleanXmind 走新 manifest）后导入侧用例 7/8/9 全绿，导入不读 manifest、theme 不计降级，与预判一致。
+
+### 诚实登记（第三波挂账，features ④ 同口径）
+
+1. **缺图 toast 路径无 e2e**：失败计数 toast 由单测钉（fetch reject/404 两例），浏览器端 toast 呈现无自动化——与 Task 2 评审登记一致，成本不匹配接受。
+2. **多图 zip 条目序=fetch 完成序每次抖动**（Task 2 评审 deferred 项沿用）：无功能影响；本波 e2e 只用单图夹具不涉序，带图金样若钉会 flake（修法挂账：Promise.all 后按 byKey 重组）。
+3. **0 字节/非白名单图片字节照常入包**（Task 2 登记沿用）：导出侧信任服务端直出原图（上传时已校验），未做客户端魔数嗅探。
+4. **theme 借用口径**：主题值=单一金样文件的软件默认主题逐字快照（含其字体栈/multi-line-colors），若需求方 XMind 版本/默认主题不同（如 XMind 8 经典主题），观感可能有差——待 XMind 8 实开核验（见 project-status 待人工清单）。
+
+## 十四、2026-11-15 导出主题按结构选型＋导入分侧 v3 补记（验收反馈两条：思维导图页线条又直了／思维导图导入节点全跑左边）
+
+核验日期：2026-11-15。起因与依据：第三波交付后需求方验收实开反馈两条——①「刚把结构从逻辑图（向右）改成了思维导图，导出的农千问待办10.27 (2).xmind 的线又变成了直愣愣的了」（画布 1）；②「思维导图.xmind 导进来后节点的方向都跑到左边去了」。计划与任务台账：`docs/superpowers/plans/2026-11-15-export-theme-sides.md`（任务 1=build 层 theme 按结构选型、任务 2=导入分侧 v3、任务 3=本节 e2e 断言同步＋文档三件套＋收官门禁；台账 `.superpowers/sdd/2026-11-15-export-theme-sides/progress.md`）；功能文档 `docs/features/import-export.md`（标题/①/规则 3/4/7/8/15/19/20 与③/④10 当日改写并当日 grep）。
+
+### 两条反馈与修复（行号 2026-11-15 当日 grep）
+
+1. **导出 theme 按画布结构二选一——反馈①根因=轮 3 的逻辑图金样错配思维导图页**（`packages/xmind-io/src/build.ts`，头注 v2.4 段 `:19-32`）：轮 3 起每 sheet 恒带 theme，但值=逻辑图金样（roundedElbow 圆角折线）——需求方把画布 1 切成思维导图后，思维导图页也被错配上逻辑图主题，XMind 打开线「又直愣愣」。修复=`themeOf(s.structureType)` 二选一（`build.ts:385`、落键 `:457`）：**mindmap→THEME_MINDMAP**（`build.ts:260`，逐字借本机真实思维导图金样「邢安家2025.08.01.xmind」map.unbalanced 画布 sheet.theme **十键全文**，centralTopic/mainTopic/subTopic/summaryTopic `line-class` 全 `org.xmind.branchConnection.curve` 曲线，无 skeletonThemeId/colorThemeId——金样本无，实现不自造）；**logic/org/缺省→THEME_LOGIC**（即轮 3 十五键 roundedElbow 金样，v2.4 仅改名 DEFAULT_THEME→THEME_LOGIC、零值变化，logic 画布观感不回归）。选型统计依据=「27/35 份 curve 主流」，**语料口径**（2026-11-15 当日核实，登记于 features 文档规则 15①——任务简报原要求补进 build.ts 头注，因本批收官任务不动代码文件，改记此处）：需求方本机 Downloads＋工作目录全部 .xmind 的 Zen JSON 共 **74 份**，其中 **35 份**显式 `map.unbalanced`（思维导图），这 35 份中 **27 份** theme 为 curve。**「农千问命中逻辑图」非缺陷**：实证该原始文件画布 1 本身即逻辑图结构，Gmind 导入零错判（解析器读导出件还原 [mindmap, logic] 零降级）、导出忠实还原原始数据——无代码改动，交付汇报向需求方说明。
+2. **导入分侧 v3——反馈②根因=锚点在第一支时右侧为空、整树全挤左边**（`apps/web/src/editor/xmind-import.ts` balancedSides，规则头注 v3 段 `:230-238`、回退腿 `:247-248`）：现行「子树权重最大的分支锚定左侧、其前分支居右、其后分支随左」规则**原样保留**（Gmind问题汇总 已验证形态零回归）；需求方的均匀 5 支文件权重 [4,1,2,1,1]、最大分支恰在文档第一位——锚点=第一支 ⟹ 其前无分支 ⟹ 右侧为空 ⟹ v2 规则把整树挤在左边。修复=**回退腿：右侧为空时改「从右起交替」**（偶下标右、奇下标左）。触发条件按锚点表述（**锚点=第一支（右侧空）→回退从右起交替**），作用面比「均匀小文件」宽（两支等权 [2,2] 因严格大于取首遇最大、同样落入回退腿）。**单分支行为随 v3 顺带变化：v2 居左→v3 居右**（唯一分支=锚点=第一支），随 v3 一并登记（features 规则 4）。诚实边界延续：XMind 8 文件不存分支位置、XMind 平衡算法亦无文档，v3 为按复测文件校准的近似规则，不表述为「与 XMind 算法一致」（features ④10 续登。**勘误注，同日终审 Minor#1**：前半句已被实证推翻——本机三份 XMind 8 格式文件均存 right-number（思维导图 rn=3／前端周报0712 rn=2／Gmind问题汇总 rn=7，当日逐份解包核实），v3 自轮 5 起降级为「仅文件未存 right-number 时的兜底」，本段保留作轮 4 当时口径的历史记录）。
+
+### 金样来源（零自造，本机真实文件只读使用、未入库）
+
+- **THEME_MINDMAP**：`/Users/guoyue/Downloads/邢安家2025.08.01.xmind` content.json 首个 `map.unbalanced` 画布的 `sheet.theme`，`python3 -I`（zipfile+json）逐字提取——键数 10、各层形状 `{type,properties}` 与键序均金样原文，`JSON.stringify` 与金样 compact JSON 逐字节一致（测试以独立捕获串钉死）。
+- **THEME_LOGIC（不回归基线）**：轮 3 借自「张智建总结计划 2025-08-01.xmind」（creator Vana 24.01）十五键原封，本批零漂移。
+
+### e2e 与自动化背书（行号 2026-11-15 当日 grep）
+
+- **`packages/xmind-io/src/build.test.ts` v2.4 用例（`:353`）**：mindmap sheet → mainTopic/centralTopic/subTopic line-class 全 `curve`＋`'skeletonThemeId' in theme === false`＋十键逐字节金样断言；logic/org/缺省三 sheet → roundedElbow 不回归。红→绿：实现前仅加测试 `1 failed | 78 passed`（received 为旧 THEME_LOGIC 全文）；实现后 `79 passed`。
+- **`apps/web/src/editor/xmind-import.test.ts` 两新用例**：均匀 5 支 [4,1,2,1,1]（max 在首位）断言 `['right','left','right','left','right']`；两支等权 [2,2] 断言 `['right','left']`。红→绿：实现前 `2 failed | 25 passed`（received 全 left）；实现后 `27 passed`。**问题汇总回归用例（[4,2,2,4,3,3,2,4,16,1]→前 8 右、九/十居左）断言一字未动、零回归**（锚点在第 9 支、右侧非空，不触发回退腿）。
+- **`apps/web/e2e/share-export.e2e.spec.ts` 用例 2（`:84`，断言块 `:98-120`）**：种子文档结构=mindmap → theme 断言 roundedElbow→**curve 两键**＋顺带加「无 skeletonThemeId」断言（任务 1 接缝：不随批同步必红）；manifest 恰两核心条目断言不变。受影响两 spec 先行 **16/16 passed（18.2s）**（share-export 7＋import-export 9）。
+
+### 门禁五件套（本批收官 2026-11-15 当日全量连跑）
+
+`pnpm lint` 0（exit 0 无输出）/ `pnpm typecheck` 0（六包 Done）/ `pnpm test` **1184 passed, 0 failed**（shared 43＋xmind-io 79＋gmind-core 375＋engine 428＋server 77＋web 182；较第三波基线 1181 净增 3＝xmind-io +1（build v2.4 theme 选型一例）＋web +2（分侧 v3 回退两例））/ `pnpm --filter @gmind/server test:e2e` **217 passed (19 文件)，0 failed（30.4s）** / web e2e 全量 **221 passed＋1 flaky＋1 skipped，0 failed（2.2m，exit 0）**——flaky=`editor.e2e.spec.ts:78`「Tab 新建节点提交后画布出现且自动保存」（首轮失败，套件内 retry#1 即过；**隔离重跑 2/2 绿（4.6s）**——本批改动面=xmind-io build 层单测/web 导入胶水单测/share-export e2e 断言/文档，未触碰编辑器新建节点与自动保存链路，判负载抖动，非已知观察项（canvas-tabs:46、collab:566 本轮均未复现））；skipped=perf-editor（PERF=1 门，存量合法跳过）。受影响 e2e 两 spec 先行 **16/16 passed（18.2s）**（import-export 9＋share-export 7，用例 2 theme 断言 roundedElbow→curve 随批同步），全量中同批用例无回归。
+
+### 诚实登记（本批挂账，features 文档同口径）
+
+1. **org 结构主题沿用 logic 变体**：无真实组织架构图导出样本可提取主题，org 画布导出 roundedElbow 主题与轮 3 相同——拿到真实组织架构图导出样本后再校准（features 规则 15① 登记）。
+2. **「27/35 curve」语料口径只在 features 文档登记**：任务简报原要求在 build.ts 头注补一句，但收官任务纪律不动代码文件——改记 features 文档规则 15① 与本节，build.ts 头注 v2.4 段的「35 份真实思维导图文件」未注语料口径，读码以 features 文档为准。
+3. **单分支行为顺带变化**（v2 居左→v3 居右）：非本轮点名诉求、系回退腿的必然结果（唯一分支=锚点=第一支），已随 v3 在 features 规则 4 登记——需求方若要单分支居左属新裁定、逐条可否决。
+4. **分侧回退腿仍是近似规则**（features ④10 续）：只覆盖「锚点=第一支（右侧空）」一种退化（左侧为空不可能出现——锚点必居左）；「最大分支在文档中部之后、多个大分支」等形态仍按锚定腿近似，不保证与 XMind 逐字一致。
+
+## 十五、2026-11-15 分侧忠实还原补记（需求方裁定「分支左右是用户内容不能猜」；当日立项当日交付）
+
+核验日期：2026-11-15。起因与依据：需求方截图反馈「思维导图.xmind 导入后左右分布与 XMind 不符」＋明确裁定「不能靠数字分析节点该在哪边，分支可拖拽、是用户内容」。**铁证：思维导图.xmind 根扩展 right-number=3，与其 XMind 截图（右=分支 1/2/3）一致**——文件里存了左右分布，照抄即可，不猜。计划与任务台账：`docs/superpowers/plans/2026-11-15-side-faithful.md`；台账 `.superpowers/sdd/2026-11-15-side-faithful/progress.md`；功能文档 `docs/features/import-export.md`（头注轮 5/①/规则 4 v4/规则 15 分侧扩/④10 当日改写并当日 grep）。
+
+### 四任务链与 T3 评审折算修正（行号 2026-11-15 当日 grep）
+
+- **T1 解析**（`packages/xmind-io/src/parse-json.ts:140-171`、`parse-xml.ts:156-172`、`types.ts:63`）：两种内部格式的**根主题** extensions 读 right-number → `XmindSheet.rightCount`（provider=org.xmind.ui.map.unbalanced 才认；仅根有效，子主题扩展忽略；非法值不产键不计降级——与 theme 同口径）。
+- **T2 build 写回**（`packages/xmind-io/src/build.ts:393-404` rightNumberExtensions、落键 `:468`/`:478`）：mindmap+rightCount!==undefined → 根 topic extensions 金样逐字形状；`roundtrip.test.ts:219` rightCount 经根扩展往返还原（3/0/缺省/logic 四态）。
+- **T3 web 接线**（`apps/web/src/editor/xmind-import.ts:239-246` sidesFromRightCount＋定侧分支 `:301-311`；行号为同日终审修复批当日 grep——该批 Minor#1 兜底头注改写致 :259 之后 +1 顺移）：导入 mindmap 定侧 rightCount 优先（floor＋clamp [0,分支数]，0=全左合法、越界=全右），文件未存才回退 balancedSides（v3 原样降兜底一字未动）；`xmind-export.ts` docToXmindSheets 传 rightCount 给 build。
+- **T4 折算修正（T3 评审裁定的正确性修正，本任务执行）**：T3 初版导出只统计持久 side==='right'，与 Gmind 实际渲染脱节——引擎对**无 side 的根子级按 index 0-2 视右**（`packages/engine/src/layout.ts:264` `persistedSide ?? (i < ROOT_SIDE_RIGHT_QUOTA ? 'right' : 'left')`；生产可达：EditorPage moveNode 到画布根 core 有意不写 side、模板直建同缺省），混合文档与全缺省模板文档的导出 right-number 因此与画布不一致、往返有损。修法=core `countRightSideRootChildren`（`packages/gmind-core/src/operations.ts:78-103`，持久侧计数＋index 0-2 折算右＋墓碑防御＋画布口径，头注齐备）**加 export 导出（只增，函数体一字未动）**，web docToXmindSheets 改用它取 rightCount、删除手写持久侧统计（`apps/web/src/editor/xmind-export.ts:148-161`；行号为终审修复批当日 grep——同批头注口径扩写致 :29 之后 +4 顺移）——两端语义=引擎渲染精确断言。随之的行为变化如实登记：mindmap 画布导出**恒产** right-number（含空画布产 '0'；T3 版「无侧别信息不产键」口径被折算修正取代——「文件未存回退算法」的语义只属于导入侧读不到扩展的文件，导出侧不再伪造「未声明」）。评审裁定原文要点：「导出 rightCount 必须反映 Gmind 实际渲染，否则往返有损且静默改写用户内容；属正确性修正非产品偏好」。
+
+### e2e 与自动化背书（行号 2026-11-15 当日 grep）
+
+- **单测折算两例（红→绿留痕，T4）**：`apps/web/src/editor/xmind-export.test.ts:231` 全缺省模板文档（buildSubtree 直建 5 支无 side）→ rightCount=3（修正前 undefined，先红）；`:247` 混合文档（第 1 支拖入无 side、其余 addChild 持久 [R,R,L,L]）→ 引擎渲染 [R,R,R,L,L]→rightCount=3（修正前 2，先红）。实现后该文件 **20/20 全绿**——T3 既有持久侧=2/全左=0/logic 负例三例零改动零回归；`pnpm --filter @gmind/core test` **375/375**（export 关键字零行为差异）。
+- **`apps/web/e2e/helpers/xmind-fixture.ts:122` buildCleanXmind**：纯净水树夹具补 mindmap 结构串＋根扩展 right-number=1（走 buildXmind 通道传 sheet 参数，rightCount 需 structureType='mindmap' 才产键）。
+- **`apps/web/e2e/import-export.e2e.spec.ts:339` 用例 8 扩**：导入「示例树.xmind」（toast 仍逐字「已完整导入」——扩展不计降级）→ 打开 → 导出菜单下载 → content.json 根 extensions 与夹具值逐字一致（`provider='org.xmind.ui.map.unbalanced'`＋`right-number='1'`）＝**right-number 往返无损背书**。
+- **`apps/web/e2e/share-export.e2e.spec.ts:84` 用例 2 扩（断言 `:121-126`）**：种子文档「本周计划」（模板直建三分支、无持久 side）导出件根扩展 right-number='3'——引擎折算口径（index 0-2 视右）端到端实证，解析侧读回同值。注：用例 8 扩致 import-export.e2e 其后用例行号顺移（往返 :345→:367）——§十/§十二所引该文件行号为当日历史值，读码以现文件为准。
+- 受影响 e2e 两 spec 先行 **16/16 passed（13.6s）**（import-export 9＋share-export 7，零重试）。
+
+### 门禁五件套（本批收官 2026-11-15 当日全量连跑）
+
+`pnpm lint` 0（exit 0 无输出）/ `pnpm typecheck` 0（六包 Done）/ `pnpm test` **1202 passed, 0 failed**（shared 43＋xmind-io 88＋gmind-core 375＋engine 428＋server 77＋web 191；较轮 4 基线 1184 净增 18＝xmind-io +9（T1 解析 describe 5 例 `parse.test.ts:820-925`＋T2 构建 3 例 `build.test.ts:434-497`＋roundtrip 1 例 `:219`）＋web +9（T3 导入 4 例＋导出 4 例＋T4 折算两例替换 T3 一例的净增 1））/ `pnpm --filter @gmind/server test:e2e` **217 passed (19 文件)，0 failed（30.2s）** / web e2e 全量 **222 passed＋1 skipped，0 failed（1.7m，exit 0）**（skipped=perf-editor PERF 门合法跳过；全轮零 flaky 零重试，已知观察项 canvas-tabs:46、collab:566、editor:78 本轮均未复现）。受影响 e2e 两 spec 先行 **16/16 passed（13.6s，零重试）**（import-export 9＋share-export 7），全量中同批用例无回归。TDD 留痕：折算两例实现前实跑红（全缺省 received undefined≠3、混合 received 2≠3），实现后绿；core 全量 375/375（export 关键字零行为差异）。
+
+### 诚实登记（本批挂账，features ④10 同口径）
+
+1. **Gmind问题汇总.xmind rn=7 与其 XMind 截图 8 右差一支**：疑 XMind 8 手动拖拽分支后不刷新根扩展计数（文件存储值确实为 7）——导入忠实按存储值处理，不算不猜；要与 XMind 显示一致，在 XMind 拖动该分支并重存（强刷计数）后重导（features ④10/规则 4 同口径专项说明）。定位信息（同日终审 Minor#2 补记，当日读文件核实）：①**点名移位分支=按文档序第 8 支「设置」**——根下文档序为 场景/首页/harness使用总结/Ai/筛选/任务看板/协作/设置/文件/分支主题 6 共 10 支，rn=7 时前 7 支居右、它从 XMind 截图的右侧落到 Gmind 左侧；②**同名双文件指认**——工作目录 `/Users/guoyue/工作/个人项目/Gmind/Gmind问题汇总.xmind` 才是存 rn=7 的原件（XMind 8 格式 content.xml），Downloads 下同名文件是旧 Gmind 导出件（无 right-number，导入走兜底）。
+2. **right-number 缺失文件的兜底算法仍为近似规则**（features ④10 延续）：v3「锚左＋空右交替」按复测文件校准，不表述为「与 XMind 算法一致」。
+3. **mindmap 画布导出恒产 right-number**（折算修正的必然结果）：空画布产 '0'、全缺省模板产折算值——语义=引擎渲染断言，不再是「文件未存」的模糊态；T3 版「无侧别不产键」口径就此作废（§十五 T4 段已记）。
