@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import type * as Y from 'yjs';
 import { api, apiPost } from '../api/client';
 import { InviteSection } from './MemberPanel';
-import { exportCsv, exportMarkdown } from './docExport';
+import { exportCsv, exportMarkdown, exportXlsx } from './docExport';
 import './share-dialog.css';
 
 /**
@@ -15,8 +15,9 @@ import './share-dialog.css';
  *   关=DELETE /share；开态显示链接+复制（1.5s「已复制」）。有效期/访问密码为
  *   原型 mock（share_links 预留列，FR-SHR-003 二期）——不设，如实登记；
  *   非 owner 只读提示（服务端 owner-only 404 不泄露）；
- * - 导出：XMind/PNG×3/JPG×3 转发既有导出通道（EditorPage 闭包）+ Markdown
- *   大纲/CSV 任务表真实下载（docExport，全部画布）。
+ * - 导出（2026-11-15 改版五项列表）：XMind/JPG（2× 白底）转发既有导出通道
+ *   （EditorPage 闭包）+ Markdown/CSV/XLSX 真实下载（docExport，全部画布）；
+ *   PNG 2026-11-15 退役。单项点击即导出，1800ms「已导出 ✓」回落。
  */
 
 export interface ShareDialogProps {
@@ -26,12 +27,12 @@ export interface ShareDialogProps {
   title: string;
   /** 文件创建者视角（owner 可管理链接与邀请）。 */
   canManage: boolean;
-  /** MD/CSV 导出的文档与负责人昵称映射（EditorPage 传入 memberIndex 闭包）。 */
+  /** MD/CSV/XLSX 导出的文档与负责人昵称映射（EditorPage 传入 memberIndex 闭包）。 */
   doc: Y.Doc | null;
   nameOf(userId: string): string;
   showToast(message: string): void;
-  /** 既有导出通道转发：kind 与倍率（image-export/exportXmind 落在 EditorPage 闭包）。 */
-  onExport(kind: 'xmind' | 'png' | 'jpg', scale?: 1 | 2 | 3): void;
+  /** 既有导出通道转发（2026-11-15 图片统一 JPG 白底，PNG 退役）。 */
+  onExport(kind: 'xmind' | 'jpg', scale?: 1 | 2 | 3): void;
 }
 
 export function ShareDialog(p: ShareDialogProps) {
@@ -42,6 +43,8 @@ export function ShareDialog(p: ShareDialogProps) {
   const [role, setRole] = useState<'editor' | 'viewer'>('editor');
   const [copied, setCopied] = useState(false);
   const [toggling, setToggling] = useState(false);
+  // 导出反馈（2026-11-15 改版）：记录刚导出成功的项 id，1800ms 后回落为「导出」。
+  const [exported, setExported] = useState('');
 
   useEffect(() => {
     if (!p.open || !p.canManage) return;
@@ -112,13 +115,30 @@ export function ShareDialog(p: ShareDialogProps) {
     }
   };
 
-  const runTextExport = (kind: 'md' | 'csv'): void => {
+  const runTextExport = (kind: 'md' | 'csv' | 'xlsx'): void => {
     if (!p.doc) return;
+    if (kind === 'md') exportMarkdown(p.doc, p.title || '未命名');
+    else if (kind === 'csv') exportCsv(p.doc, p.title || '未命名', p.nameOf);
+    else exportXlsx(p.doc, p.title || '未命名', p.nameOf);
+  };
+
+  interface ExportItem { id: string; testid: string; title: string; ext: string; desc: string; tint: string; bg: string; run: () => void }
+  const EXPORTS: ExportItem[] = [
+    { id: 'xmind', testid: 'share-export-xmind', title: 'XMind', ext: '.xmind', desc: '可在 XMind 中继续编辑，保留完整层级，含全部画布', tint: '#f43f5e', bg: '#fdeceb', run: () => p.onExport('xmind') },
+    { id: 'jpg', testid: 'share-export-jpg', title: '图片', ext: '.jpg', desc: '白底高清整图（2×），适合插入文档与汇报', tint: '#0ea5e9', bg: '#eaf5ff', run: () => p.onExport('jpg', 2) },
+    { id: 'md', testid: 'share-export-md', title: 'Markdown', ext: '.md', desc: '层级大纲文本，可粘贴到笔记与文档工具', tint: '#8b5cf6', bg: '#f1edff', run: () => runTextExport('md') },
+    { id: 'csv', testid: 'share-export-csv', title: 'CSV 表格', ext: '.csv', desc: '任务表 7 列，可用 Excel 打开', tint: '#14b8a6', bg: '#e9f8f4', run: () => runTextExport('csv') },
+    { id: 'xlsx', testid: 'share-export-xlsx', title: 'Excel 表格', ext: '.xlsx', desc: '任务表电子表格，可用 Excel/WPS 打开', tint: '#16a34a', bg: '#e9f9ef', run: () => runTextExport('xlsx') },
+  ];
+
+  const runExport = (e: ExportItem): void => {
     try {
-      if (kind === 'md') exportMarkdown(p.doc, p.title || '未命名');
-      else exportCsv(p.doc, p.title || '未命名', p.nameOf);
-    } catch (e) {
-      p.showToast(e instanceof Error ? e.message : '导出失败');
+      e.run();
+      setExported(e.id);
+      p.showToast(`已导出 ${e.title}`);
+      setTimeout(() => setExported((x) => (x === e.id ? '' : x)), 1800);
+    } catch (err) {
+      p.showToast(err instanceof Error ? err.message : '导出失败');
     }
   };
 
@@ -207,30 +227,23 @@ export function ShareDialog(p: ShareDialogProps) {
 
         {tab === 'export' && (
           <div className="share-dialog-body share-dialog-export">
-            <button type="button" onClick={() => p.onExport('xmind')} data-testid="share-export-xmind">
-              <b>XMind</b>
-              <span>.xmind 格式，全部画布</span>
-            </button>
-            <button type="button" onClick={() => runTextExport('md')} data-testid="share-export-md">
-              <b>Markdown</b>
-              <span>大纲文本 .md，全部画布</span>
-            </button>
-            <button type="button" onClick={() => runTextExport('csv')} data-testid="share-export-csv">
-              <b>CSV 表格</b>
-              <span>任务表，可用 Excel 打开</span>
-            </button>
-            {[1, 2, 3].map((n) => (
-              <button key={`png${n}`} type="button" onClick={() => p.onExport('png', n as 1 | 2 | 3)} data-testid={`share-export-png-${n}x`}>
-                <b>PNG {n}x</b>
-                <span>{n === 1 ? '标准分辨率' : `${n} 倍分辨率`}</span>
-              </button>
-            ))}
-            {[1, 2, 3].map((n) => (
-              <button key={`jpg${n}`} type="button" onClick={() => p.onExport('jpg', n as 1 | 2 | 3)} data-testid={`share-export-jpg-${n}x`}>
-                <b>JPG {n}x</b>
-                <span>{n === 1 ? '标准分辨率（白底）' : `${n} 倍分辨率（白底）`}</span>
-              </button>
-            ))}
+            <p className="share-export-note">导出「{p.title}」：XMind 与表格类格式含已折叠的全部节点；图片按当前折叠状态导出</p>
+            <ul className="share-export-list">
+              {EXPORTS.map((e) => (
+                <li key={e.id}>
+                  <button type="button" className="share-export-row" data-testid={e.testid} onClick={() => runExport(e)}>
+                    <span className="share-export-icon" style={{ background: e.bg, color: e.tint }} aria-hidden>
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" /></svg>
+                    </span>
+                    <span className="share-export-text">
+                      <b>{e.title}<i className="share-export-ext">{e.ext}</i></b>
+                      <span>{e.desc}</span>
+                    </span>
+                    <span className={'share-export-btn' + (exported === e.id ? ' done' : '')}>{exported === e.id ? '已导出 ✓' : '导出'}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
           </div>
         )}
       </div>

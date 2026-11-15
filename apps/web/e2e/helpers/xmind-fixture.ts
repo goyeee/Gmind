@@ -114,11 +114,20 @@ export function buildFixtureXmind(): Buffer {
   );
 }
 
-/** 纯净水树：buildXmind 直出（无标记/无图/无样式——快路径导入，零降级）。 */
+/** 纯净水树：buildXmind 直出（无标记/无图/无样式——快路径导入，零降级）。
+ *  分侧忠实还原 Task 4 起带 mindmap 结构串＋根扩展 right-number=1（sheet 参数直传，
+ *  build 层落根 extensions）：导入按存储值定侧[右] → 导出计数镜像引擎渲染=1 →
+ *  导出件根扩展与夹具值逐字一致——import-export 用例 8 的 right-number 往返无损
+ *  断言载体（rightCount=1 需 structureType='mindmap' 才产键，见 build rightNumberExtensions）。 */
 export function buildCleanXmind(): Buffer {
   return Buffer.from(
     buildXmind([
-      { title: '画布 1', root: { title: '示例树', children: [{ title: '子节点甲', children: [] }] } },
+      {
+        title: '画布 1',
+        root: { title: '示例树', children: [{ title: '子节点甲', children: [] }] },
+        structureType: 'mindmap',
+        rightCount: 1,
+      },
     ]),
   );
 }

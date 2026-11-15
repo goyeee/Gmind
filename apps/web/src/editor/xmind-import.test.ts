@@ -243,6 +243,159 @@ describe('importXmindFile（FR-IO-001；2026-11-14 v2 两段式）', () => {
     ]);
   });
 
+  it('均匀小文件（最大分支在首位）：右侧为空 → 回退从右起交替（v3）', async () => {
+    // 复刻需求方新建的均匀小文件形态：5 支权重 [4,1,2,1,1]，最大为分支 A(4) 且落在
+    // 第一位 → 现行锚定规则下其前无分支（右侧为空、全 left）；XMind 对此类均匀小文件
+    // 呈左右交替排 → v3 回退「从右起交替」：右、左、右、左、右。
+    const tree: XmindNode = {
+      title: '根',
+      children: [
+        { title: 'A', children: [{ title: 'A1', children: [] }, { title: 'A2', children: [] }, { title: 'A3', children: [] }] }, // 4 ← 最大在首位
+        { title: 'B', children: [] }, // 1
+        { title: 'C', children: [{ title: 'C1', children: [] }] }, // 2
+        { title: 'D', children: [] }, // 1
+        { title: 'E', children: [] }, // 1
+      ],
+    };
+    const result = await importXmindFile(
+      xmindFile('均匀.xmind', buildXmind([{ title: '', root: tree }])),
+      makeDeps(),
+    );
+    const doc = docOf(result.state);
+    const kids = childrenIds(doc, ROOT_NODE_ID);
+    expect(kids).toHaveLength(5);
+    expect(kids.map((id) => getNode(doc, id)?.side)).toEqual(['right', 'left', 'right', 'left', 'right']);
+  });
+
+  it('两分支等权 [2,2]：max 取首位（严格大于不换）→ 右侧为空 → 回退交替 [右, 左]', async () => {
+    const tree: XmindNode = {
+      title: '根',
+      children: [
+        { title: 'A', children: [{ title: 'A1', children: [] }] }, // 2
+        { title: 'B', children: [{ title: 'B1', children: [] }] }, // 2
+      ],
+    };
+    const result = await importXmindFile(
+      xmindFile('等权.xmind', buildXmind([{ title: '', root: tree }])),
+      makeDeps(),
+    );
+    const doc = docOf(result.state);
+    const kids = childrenIds(doc, ROOT_NODE_ID);
+    expect(kids.map((id) => getNode(doc, id)?.side)).toEqual(['right', 'left']);
+  });
+
+  // —— 分侧忠实还原（2026-11-15 Task 3）：根扩展 right-number 定侧优先，算法降兜底 ——
+  // 依据：需求方截图反馈（导入左右与 XMind 不符）+ 11 份真实文件 right-number 实证；
+  // XMind 把 map.unbalanced 画布的左右分布存在根扩展 right-number（语义=attached
+  // 文档序前 N 支居右），文件存了就忠实照抄，不再用 balancedSides 算法猜。
+  it('分侧忠实还原：根扩展 right-number=3、5 支 → 前 3 右其余左（优先于算法兜底）', async () => {
+    const attached = ['一', '二', '三', '四', '五'].map((t) => ({ class: 'topic', title: t, children: [] }));
+    const bytes = manualZip({
+      'content.json': jsonEntry([
+        {
+          class: 'sheet',
+          title: '',
+          rootTopic: {
+            class: 'topic',
+            title: '根',
+            extensions: [
+              { provider: 'org.xmind.ui.map.unbalanced', content: [{ name: 'right-number', content: '3' }] },
+            ],
+            children: { attached },
+          },
+        },
+      ]),
+    });
+    const result = await importXmindFile(xmindFile('忠实.xmind', bytes), makeDeps());
+    const doc = docOf(result.state);
+    const kids = childrenIds(doc, ROOT_NODE_ID);
+    expect(kids).toHaveLength(5);
+    // 等权 5 支在现行兜底算法下产出交替 [R,L,R,L,R]——忠实还原后按存储值 [R,R,R,L,L]
+    expect(kids.map((id) => getNode(doc, id)?.side)).toEqual(['right', 'right', 'right', 'left', 'left']);
+  });
+
+  it('right-number=0（全左合法值）：5 支全居左', async () => {
+    const attached = Array.from({ length: 5 }, (_, i) => ({ class: 'topic', title: `支${i + 1}`, children: [] }));
+    const bytes = manualZip({
+      'content.json': jsonEntry([
+        {
+          class: 'sheet',
+          title: '',
+          rootTopic: {
+            class: 'topic',
+            title: '根',
+            extensions: [
+              { provider: 'org.xmind.ui.map.unbalanced', content: [{ name: 'right-number', content: '0' }] },
+            ],
+            children: { attached },
+          },
+        },
+      ]),
+    });
+    const result = await importXmindFile(xmindFile('全左.xmind', bytes), makeDeps());
+    const doc = docOf(result.state);
+    const kids = childrenIds(doc, ROOT_NODE_ID);
+    expect(kids.map((id) => getNode(doc, id)?.side)).toEqual(['left', 'left', 'left', 'left', 'left']);
+  });
+
+  it('right-number 越界（7 > 5 支）：clamp 到分支数 → 全居右', async () => {
+    const attached = Array.from({ length: 5 }, (_, i) => ({ class: 'topic', title: `支${i + 1}`, children: [] }));
+    const bytes = manualZip({
+      'content.json': jsonEntry([
+        {
+          class: 'sheet',
+          title: '',
+          rootTopic: {
+            class: 'topic',
+            title: '根',
+            extensions: [
+              { provider: 'org.xmind.ui.map.unbalanced', content: [{ name: 'right-number', content: '7' }] },
+            ],
+            children: { attached },
+          },
+        },
+      ]),
+    });
+    const result = await importXmindFile(xmindFile('越界.xmind', bytes), makeDeps());
+    const doc = docOf(result.state);
+    const kids = childrenIds(doc, ROOT_NODE_ID);
+    expect(kids.map((id) => getNode(doc, id)?.side)).toEqual(['right', 'right', 'right', 'right', 'right']);
+  });
+
+  it('rightCount 仅 mindmap 有语义：logic 画布带 right-number 不按计数定侧（保持 addChild 右配额既有值）', async () => {
+    const bytes = manualZip({
+      'content.json': jsonEntry([
+        {
+          class: 'sheet',
+          title: 'S',
+          rootTopic: {
+            class: 'topic',
+            title: '中心',
+            structureClass: 'org.xmind.ui.logic.right',
+            extensions: [
+              { provider: 'org.xmind.ui.map.unbalanced', content: [{ name: 'right-number', content: '2' }] },
+            ],
+            children: {
+              attached: [
+                { class: 'topic', title: '一', children: [] },
+                { class: 'topic', title: '二', children: [] },
+                { class: 'topic', title: '三', children: [] },
+                { class: 'topic', title: '四', children: [] },
+              ],
+            },
+          },
+        },
+      ]),
+    });
+    const result = await importXmindFile(xmindFile('逻辑带计数.xmind', bytes), makeDeps());
+    const doc = docOf(result.state);
+    expect(getMeta(doc).structureType).toBe('logic');
+    const kids = childrenIds(doc, ROOT_NODE_ID);
+    // 与下方「logic 画布不做均衡定侧」同口径：addChild 右配额 3 前 3 右第 4 左——
+    // right-number 被整体忽略（若计数外溢到非 mindmap 画布会变 [R,R,L,L]）。
+    expect(kids.map((id) => getNode(doc, id)?.side)).toEqual(['right', 'right', 'right', 'left']);
+  });
+
   it('logic 画布不做均衡定侧（侧别无语义，保持 addChild 右配额既有值）', async () => {
     const bytes = manualZip({
       'content.json': jsonEntry([

@@ -9,7 +9,7 @@ import { registerAndLogin } from './helpers/auth';
  * - 画布B root 直接子级默认命名「分支主题 1」（nextChildText 画布根口径，非「子主题」）；
  * - 查找替换匹配集 = 当前画布子树：画布B 查「周」0/0，切回画布 1 同查询 6/6；
  * - Ctrl+A 全选范围 = 当前画布子树（画布B 2 个选中：root+子；画布 1 7 个）；
- * - PNG 导出文件名多画布 = 文件标题＋画布名（「本周计划-画布B.png」）；
+ * - JPG 导出文件名多画布 = 文件标题＋画布名（「本周计划-画布B.jpg」；2026-11-15 PNG 退役）；
  * - XMind 导出文件名保持「本周计划.xmind」（中间态只改范围不改文件名）。
  *
  * 前置编排复用 canvas-tabs.e2e.spec.ts（页签条 UI 新建画布）；登录走公共 helper helpers/auth（邮箱注册即赠 3 个种子文件）。
@@ -128,7 +128,7 @@ test('查找/全选口径：画布B 查「周」0/0，切回画布 1 同查询 6
   await expect(page.locator('.editor-canvas svg g.gm-selected')).toHaveCount(2);
 });
 
-test('导出口径：画布B PNG 文件名 = 文件标题＋画布名；XMind 文件名保持文件标题', async ({
+test('导出口径：画布B JPG 文件名 = 文件标题＋画布名；XMind 文件名保持文件标题', async ({
   page,
 }) => {
   test.setTimeout(90_000);
@@ -138,11 +138,11 @@ test('导出口径：画布B PNG 文件名 = 文件标题＋画布名；XMind �
   await addChildNamed(page, '中心主题', '画布B任务');
 
   await page.getByTestId('export-menu').click();
-  const [png] = await Promise.all([
+  const [jpg] = await Promise.all([
     page.waitForEvent('download'),
-    page.getByTestId('export-png-1x').click(),
+    page.getByTestId('export-jpg-1x').click(),
   ]);
-  expect(png.suggestedFilename()).toBe('本周计划-画布B.png');
+  expect(jpg.suggestedFilename()).toBe('本周计划-画布B.jpg');
 
   await page.getByTestId('export-menu').click();
   const [xmind] = await Promise.all([

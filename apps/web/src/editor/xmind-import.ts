@@ -26,6 +26,15 @@
 // - 其余解析/组装错误（GmindCoreError 如 TEXT_TOO_LONG、深树栈溢出 RangeError）→
 //   「文件已损坏，无法解析，请检查文件后重试」。
 // 降级提示文案（FR-IO-002 v2 逐项点名）由 degradedSummary 统一构造。
+//
+// 分侧忠实还原（2026-11-15 v4，Task 3）：思维导图分支左右从「算法猜」改为**忠实还原**
+// 优先——XMind 把 map.unbalanced 画布的左右分布存在根主题扩展 right-number（语义=
+// attached 文档序前 N 支居右；解析层 Task 1 产出 sheet.rightCount），mindmap 画布定侧
+// 直读该计数：floor+clamp 后前 N 支 right、其余 left。文件未存 right-number 时才回退
+// balancedSides 算法兜底（v3 锚左+空右交替，同日校准）。依据：需求方截图反馈（导入
+// 左右与 XMind 不符、分支可拖拽属用户内容不能靠数字猜）+ 11 份真实文件 right-number
+// 实证（含 rn=0 全左、双画布各自计数；已知异常 Gmind问题汇总 rn=7 与其截图 8 右不一
+// 致，疑 XMind 8 拖拽不刷新计数——导入忠实按存储值，专项说明挂 features 文档）。
 import { type IconGroup,
   addCanvas,
   addChild,
@@ -227,11 +236,27 @@ export async function importXmindFile(file: File, deps: ImportDeps): Promise<Imp
     }
   };
 
-  /** 分侧规则（2026-11-15 按需求方源文件 Gmind问题汇总.xmind 校准）：子树权重最大的
-   *  分支**锚定左侧**，文档序在它之前的分支全部居右（保持文档序），它之后的分支随它
-   *  居左（引擎左列文档序倒排，视觉顺序即与 XMind 一致）。上一版「轻侧贪心」会把靠前
-   *  的小分支甩去左边、打乱读序，被打回；XMind 平衡算法无文档，此为按复测文件校准的
-   *  规则，诚实边界见 features 文档④。 */
+  /** 分侧忠实还原直读路径（2026-11-15 v4，Task 3）：文件存了根扩展 right-number
+   *  （解析层 sheet.rightCount，合法非负整数，types.ts 头注裁定 clamp 归本层）→
+   *  N=floor 后 clamp 到 [0, 分支数]（0=全左合法、越界=全右），前 N 支 right、
+   *  其余 left——XMind 存储值照抄，不算不猜。 */
+  const sidesFromRightCount = (children: XmindNode[], rightCount: number): Array<'left' | 'right'> => {
+    const n = Math.min(Math.max(Math.floor(rightCount), 0), children.length);
+    return children.map((_, i) => (i < n ? 'right' : 'left'));
+  };
+
+  /** 分侧算法**兜底**（2026-11-15 v4 降级：仅文件未存根扩展 right-number 时使用；
+   *  忠实还原路径见 sidesFromRightCount 与文件头注 v4 段）。规则（同日按需求方源
+   *  文件 Gmind问题汇总.xmind 校准；同日 v3 补均匀小文件回退）：子树权重最大的分支
+   *  **锚定左侧**，文档序在它之前的分支全部居右（保持文档序），它之后的分支随它居左
+   *  （引擎左列文档序倒排，视觉顺序即与 XMind 一致）。v3 回退：锚点落在第一支（其前
+   *  无分支）时右侧为空——现行规则会全挤左侧，与 XMind 对均匀小文件（如 5 支
+   *  [4,1,2,1,1]）的左右交替排布不符——此时改「从右起交替」（偶下标右、奇下标左）。
+   *  诚实边界（2026-11-15 终审 Minor#1 改写——旧句「XMind 8 文件不存分支位置」与本机
+   *  三份 XMind 8 格式文件均存 right-number 的实证矛盾，删除）：本兜底仅文件未存
+   *  right-number 时生效（部分文件/画布未存，此时兜底）；XMind 平衡算法亦无文档，
+   *  此为按复测文件校准的近似规则，不表述为「与 XMind 算法一致」。上一版「轻侧贪心」
+   *  会把靠前的小分支甩去左边、打乱读序，被打回；诚实边界见 features 文档④。 */
   const balancedSides = (children: XmindNode[]): Array<'left' | 'right'> => {
     const weight = (n: XmindNode): number => 1 + n.children.reduce((sum, c) => sum + weight(c), 0);
     const weights = children.map(weight);
@@ -239,7 +264,9 @@ export async function importXmindFile(file: File, deps: ImportDeps): Promise<Imp
     weights.forEach((w, i) => {
       if ((w as number) > (weights[maxIdx] as number)) maxIdx = i;
     });
-    return children.map((_, i) => (i >= maxIdx ? 'left' : 'right'));
+    const sides = children.map((_, i) => (i >= maxIdx ? 'left' : 'right'));
+    // v3 回退：右侧为空（锚点=第一支，全 left）→ 从右起交替（0 右、1 左、2 右…）。
+    return sides.includes('right') ? sides : children.map((_, i) => (i % 2 === 0 ? 'right' : 'left'));
   };
 
   /** 先序组装（walk 携带节点 id）：本节点字段 → 子节点 addChild 收集 id → 概要 → 递归；
@@ -271,12 +298,16 @@ export async function importXmindFile(file: File, deps: ImportDeps): Promise<Imp
       const rootId = rootIdOf(doc, canvasId);
       if (i > 0 && sheet.root.title) setText(doc, rootId, sheet.root.title, ORIGIN, canvasId); // 附加画布根文本 = Sheet 根标题
       const rootChildIds = walk(sheet.root, rootId, canvasId);
-      // 左右均衡定侧（2026-11-14 需求方拍板）：mindmap 画布（未指定结构亦缺省 mindmap）
-      // 根分支按子树规模均衡；logic/org 侧别无语义不处理。setNodeSide 同值守卫零开销。
+      // 定侧（2026-11-15 分侧忠实还原 v4，Task 3）：mindmap 画布（未指定结构亦缺省
+      // mindmap）文件存了 right-number → 忠实按存储值（sidesFromRightCount）；未存 →
+      // balancedSides 算法兜底（2026-11-14 需求方拍板的均衡规则）。logic/org 侧别无
+      // 语义不处理（rightCount 即便在文件里也忽略）。setNodeSide 同值守卫零开销。
       if ((sheet.structureType ?? 'mindmap') === 'mindmap') {
-        balancedSides(sheet.root.children).forEach((side, i) =>
-          setNodeSide(doc, rootChildIds[i] as string, side, ORIGIN, canvasId),
-        );
+        const sides =
+          sheet.rightCount !== undefined
+            ? sidesFromRightCount(sheet.root.children, sheet.rightCount)
+            : balancedSides(sheet.root.children);
+        sides.forEach((side, i) => setNodeSide(doc, rootChildIds[i] as string, side, ORIGIN, canvasId));
       }
     });
   } catch (e) {

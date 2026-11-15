@@ -1,18 +1,24 @@
-// image-export.ts：PNG/JPG 导出胶水（M4 Task 9，FR-IO-003/005）。
+// image-export.ts：JPG 导出胶水（M4 Task 9，FR-IO-003/005；2026-11-15 PNG 透明档
+// 随需求方裁定退役，图片导出统一 JPG 白底，git 历史留 PNG 双格式实现）。
 //
-// 流程：core cloneExpanded（仅导出快照不改画布——展开折叠发生在克隆上）→
+// 流程：docToState→docFromState 装载通道克隆快照（不改画布；2026-11-15 需求方裁定：
+// 按当前折叠状态导出、不自动展开——快照保留 collapsed，引擎对折叠节点按叶子布局
+// 并产 collapsedCount，渲染层画「+N」展开徽标）→
 // engine exportSceneSvg（detached 容器离屏渲染 + XMLSerializer 序列化）→
 // inlineImages（SVG-as-image 上下文禁载一切外部资源，/api/images/ 引用必须内联为
-// data URL 后才能被 Image 加载）→ Canvas 栅格化（JPG 或非透明 PNG 先铺白底）→
-// toBlob（PNG 无损 / JPEG 质量 0.92）→ a[download] 触发浏览器下载。
+// data URL 后才能被 Image 加载）→ stripCollapseToggles（图里不要可点击的交互折叠钮：
+// 剥 g.gm-collapse-toggle 整组，「+N」徽标 g.gm-collapse-badge 保留）→
+// Canvas 栅格化（恒先铺白底——JPG 无 alpha 通道）→
+// toBlob（JPEG 质量 0.92）→ a[download] 触发浏览器下载。
 //
 // 图片鉴权事实（storage.controller.ts）：/api/images/* 读取端点公开（浏览器 <img>
 // 无法带 Authorization，仅上传鉴权），同源 fetch 即可，无需附加头。
 import type * as Y from 'yjs';
 import {
   childrenIds,
-  cloneExpanded,
   countAliveReachable,
+  docFromState,
+  docToState,
   getMeta,
   getNode,
   listCanvases,
@@ -24,10 +30,9 @@ import { exportSceneSvg, type DocReader } from '@gmind/engine';
 import { MAX_DOC_NODES } from '@gmind/shared';
 
 export interface ImageExportOptions {
-  format: 'png' | 'jpg';
+  /** 图片导出统一 JPG 白底（2026-11-15 PNG 透明档退役，仅存 'jpg' 一档）。 */
+  format: 'jpg';
   scale: 1 | 2 | 3;
-  /** 透明背景（PNG 生效；JPG 无 alpha 通道恒白底）。 */
-  transparent: boolean;
   /** 导出画布（多画布 Task 4 item 8）：缺省=core 缺省解析（单画布零差异）。
    *  配额/克隆/布局/文件名全部按该画布口径。 */
   canvasId?: string;
@@ -72,31 +77,28 @@ export async function exportImage(
   // 多画布（裁定 1 配额按画布）：计数口径 = 导出画布。
   if (countAliveReachable(doc, canvasId) > MAX_DOC_NODES) throw new Error('文件过大，请拆分后导出');
 
-  // 仅导出快照不改画布：折叠是视图态，导出恒为完整层级——在克隆上展开
-  // （多画布：克隆的展开/根解析/读绑定全部限定导出画布）。
-  const expanded = cloneExpanded(doc, canvasId);
+  // 仅导出快照不改画布（2026-11-15 需求方裁定：按当前折叠状态导出、不自动展开）：
+  // docToState→docFromState 装载通道克隆，collapsed 原样保留——引擎对折叠节点按
+  // 叶子布局并产 collapsedCount，渲染层出「+N」徽标（导出与画布同形）。多画布：
+  // 克隆的根解析/读绑定全部限定导出画布。
+  const snapshot = docFromState(docToState(doc));
   try {
-    const meta = getMeta(expanded, canvasId);
-    const { svg, width, height } = exportSceneSvg(readerOf(expanded, canvasId), {
+    const meta = getMeta(snapshot, canvasId);
+    const { svg, width, height } = exportSceneSvg(readerOf(snapshot, canvasId), {
       structure: meta.structureType,
       themeId: meta.themeId,
-      rootId: rootIdOf(expanded, canvasId),
+      rootId: rootIdOf(snapshot, canvasId),
     });
-    const inlined = await inlineImages(svg);
-    // JPG 恒不透明；PNG 取消透明勾选时同样铺白底（canvas 默认透明黑）
-    const canvas = await rasterize(
-      inlined,
-      width * opts.scale,
-      height * opts.scale,
-      opts.format === 'jpg' || !opts.transparent,
-    );
+    const inlined = stripCollapseToggles(await inlineImages(svg));
+    // JPG 无 alpha 通道：栅格化恒先铺白底（canvas 默认透明黑，不铺会出黑边）
+    const canvas = await rasterize(inlined, width * opts.scale, height * opts.scale);
     const blob = await new Promise<Blob | null>((resolve) =>
-      canvas.toBlob(resolve, opts.format === 'png' ? 'image/png' : 'image/jpeg', 0.92),
+      canvas.toBlob(resolve, 'image/jpeg', 0.92),
     );
     if (!blob) throw new Error('导出失败：画面编码失败');
-    downloadBlob(blob, `${imageExportFileName(doc, title, canvasId)}.${opts.format}`);
+    downloadBlob(blob, `${imageExportFileName(doc, title, canvasId)}.jpg`);
   } finally {
-    expanded.destroy(); // 快照克隆用完即弃，不泄漏 Yjs 实例
+    snapshot.destroy(); // 快照克隆用完即弃，不泄漏 Yjs 实例
   }
 }
 
@@ -125,6 +127,21 @@ async function inlineImages(svg: string): Promise<string> {
   return new XMLSerializer().serializeToString(parsed.documentElement);
 }
 
+/**
+ * 剥交互折叠钮（2026-11-15 需求方裁定：导出图里不要可点击的钮，折叠信息只以
+ * 「+N」徽标呈现）：删除序列化 SVG 里所有 g.gm-collapse-toggle 整组（嵌套的
+ * hit/fg/btn 随组消失，无孤儿），g.gm-collapse-badge「+N」徽标保留。命名导出供
+ * e2e 语义参照；无 toggle 时原样返回（快路径，不付 parse/serialize）。
+ */
+export function stripCollapseToggles(svg: string): string {
+  if (!svg.includes('gm-collapse-toggle')) return svg; // 快路径：无交互钮原样返回
+  const parsed = new DOMParser().parseFromString(svg, 'image/svg+xml');
+  for (const toggle of Array.from(parsed.querySelectorAll('g.gm-collapse-toggle'))) {
+    toggle.remove();
+  }
+  return new XMLSerializer().serializeToString(parsed.documentElement);
+}
+
 function blobToDataURL(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -135,15 +152,11 @@ function blobToDataURL(blob: Blob): Promise<string> {
 }
 
 /**
- * SVG 字符串 → 目标尺寸 Canvas。opaque 时先铺白底再绘制。SVG 自带 width/height
- * 属性，Image 按其解码，drawImage 显式目标尺寸完成 xN 放大（1x 布局 × scale）。
+ * SVG 字符串 → 目标尺寸 Canvas，恒先铺白底再绘制（JPG 无 alpha 通道，2026-11-15
+ * PNG 透明档退役后无不透明开关）。SVG 自带 width/height 属性，Image 按其解码，
+ * drawImage 显式目标尺寸完成 xN 放大（1x 布局 × scale）。
  */
-async function rasterize(
-  svg: string,
-  width: number,
-  height: number,
-  opaque: boolean,
-): Promise<HTMLCanvasElement> {
+async function rasterize(svg: string, width: number, height: number): Promise<HTMLCanvasElement> {
   const url = URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml;charset=utf-8' }));
   try {
     const img = new Image();
@@ -157,10 +170,8 @@ async function rasterize(
     canvas.height = height;
     const ctx = canvas.getContext('2d');
     if (!ctx) throw new Error('导出失败：Canvas 不可用');
-    if (opaque) {
-      ctx.fillStyle = '#ffffff';
-      ctx.fillRect(0, 0, width, height);
-    }
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, width, height);
     ctx.drawImage(img, 0, 0, width, height);
     return canvas;
   } finally {

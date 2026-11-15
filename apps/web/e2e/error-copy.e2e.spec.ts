@@ -139,7 +139,7 @@ test('⑦ 导出过大：拒绝文案含「文件过大」+「拆分后导出」
     addChild(doc, ROOT_NODE_ID, { text: `分支${i}` });
   }
   await expect(
-    exportImage(doc, '超大文档', { format: 'png', scale: 1, transparent: true }),
+    exportImage(doc, '超大文档', { format: 'jpg', scale: 1 }), // 2026-11-15 PNG 退役：format 恒 'jpg'
   ).rejects.toThrow('文件过大，请拆分后导出');
 });
 

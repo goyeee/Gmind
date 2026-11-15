@@ -130,26 +130,55 @@
 .share-link-copy:hover { background: #2b5fd9; }
 .share-dialog-hint { margin: 0; color: #86909c; font-size: 13px; }
 
-/* 导出页签：两列卡片 */
-.share-dialog-export {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
-}
-.share-dialog-export button {
+/* 导出页签（2026-11-15 改版）：说明行 + 五项列表（行卡片/配色图标盒/ext 徽标/右侧小钮） */
+.share-export-note { margin: 0 0 10px; font-size: 12px; color: #86909c; }
+.share-export-list { display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.share-export-row {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 12px 14px;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 10px 12px;
   border: 1px solid #e5e6eb;
   border-radius: 10px;
   background: #fff;
   cursor: pointer;
   text-align: left;
 }
-.share-dialog-export button:hover { border-color: #3370ff; box-shadow: 0 4px 12px rgb(51 112 255 / 0.12); }
-.share-dialog-export b { font-size: 13px; font-weight: 600; color: #1f2329; }
-.share-dialog-export span { font-size: 12px; color: #86909c; }
+.share-export-row:hover { border-color: #3370ff; box-shadow: 0 4px 12px rgb(51 112 255 / 0.12); }
+.share-export-icon {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+}
+.share-export-text { display: flex; flex: 1; min-width: 0; flex-direction: column; gap: 2px; }
+.share-export-text b { display: flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; color: #1f2329; }
+.share-export-text > span { font-size: 12px; color: #86909c; }
+.share-export-ext {
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: #f2f3f5;
+  color: #86909c;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 400;
+}
+.share-export-btn {
+  display: flex;
+  flex: none;
+  align-items: center;
+  height: 32px;
+  padding: 0 12px;
+  border-radius: 8px;
+  background: #3370ff;
+  color: #fff;
+  font-size: 12px;
+}
+.share-export-btn.done { background: #16a34a; }
 
 /* 链接权限档位（2026-10-28 P0）：active 态权限行 */
 .share-link-role { display: flex; align-items: center; gap: 8px; width: 100%; font-size: 12px; color: #86909c; }

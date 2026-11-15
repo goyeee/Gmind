@@ -1,6 +1,6 @@
 import * as fs from 'node:fs';
 import { expect, test, type Page } from '@playwright/test';
-import { buildXmind, parseXmind, type XmindNode } from '@gmind/xmind-io';
+import { buildXmind, parseXmind, unzipEntries, type XmindNode } from '@gmind/xmind-io';
 import { registerAndLogin } from './helpers/auth';
 import { buildCleanXmind, buildFixtureXmind } from './helpers/xmind-fixture';
 
@@ -177,53 +177,67 @@ test('导出 XMind 并往返导入：层级/文本/备注一致', async ({ page 
   await expect(page.locator('.editor-canvas svg .gm-note-badge')).toHaveCount(1);
 });
 
-// ─────────────── M4 Task 9：PNG/JPG 导出（FR-IO-003） ───────────────
+// ─────────────── M4 Task 9：图片导出（FR-IO-003；2026-11-15 PNG 透明档退役，统一 JPG 白底） ───────────────
 
-// 用例 4：无折叠直接导出 PNG 3x——下载产物为合法 PNG 且 IHDR 尺寸可被 3 整除
+/** JPEG SOF0/2 段扫描取宽高（基准 PNG IHDR 断言的 JPEG 等价物：JPG 尺寸信息在
+ *  SOF 标记段，位置不定——逐 marker 跳段直到 C0/C2）。 */
+function jpegSize(bytes: Buffer): { w: number; h: number } {
+  for (let i = 2; i < bytes.length - 9;) {
+    if (bytes[i] !== 0xff) { i += 1; continue; }
+    const marker = bytes[i + 1];
+    if (marker === 0xc0 || marker === 0xc2) return { h: bytes.readUInt16BE(i + 5), w: bytes.readUInt16BE(i + 7) };
+    i += 2 + bytes.readUInt16BE(i + 2);
+  }
+  throw new Error('JPEG 无 SOF 段');
+}
+
+// 用例 4：无折叠直接导出 JPG 3x——下载产物为合法 JPEG 且 SOF 尺寸可被 3 整除
 // （1x 布局包围盒取整 ×3，binding 意图「3x 输出为 1x 布局的三倍」）。
-test('导出 PNG 3x：下载产物 IHDR 尺寸可被 3 整除；无折叠不弹确认', async ({ page }) => {
+test('导出 JPG 3x：下载产物 JPEG 尺寸可被 3 整除；无折叠不弹确认', async ({ page }) => {
   await openSeedDoc(page, '本周计划');
   let dialogCount = 0;
   page.on('dialog', () => {
     dialogCount += 1;
   });
   await page.getByTestId('export-menu').click();
-  // 透明背景勾选默认开启（PNG 生效；JPG 恒白底）
-  await expect(page.getByTestId('export-transparent')).toBeChecked();
   const [download] = await Promise.all([
     page.waitForEvent('download'),
-    page.getByTestId('export-png-3x').click(),
+    page.getByTestId('export-jpg-3x').click(),
   ]);
   expect(dialogCount).toBe(0); // 无折叠：直接导出，不弹 confirm
-  expect(download.suggestedFilename()).toBe('本周计划.png');
-  const png = await fs.promises.readFile(await download.path());
-  expect(png.subarray(1, 4).toString()).toBe('PNG');
-  const w = png.readUInt32BE(16);
-  const h = png.readUInt32BE(20); // IHDR
+  expect(download.suggestedFilename()).toBe('本周计划.jpg');
+  const jpg = await fs.promises.readFile(await download.path());
+  expect(jpg.subarray(0, 3).toString('hex')).toBe('ffd8ff'); // JPEG 魔数（SOI）
+  const { w, h } = jpegSize(jpg);
   expect(w).toBeGreaterThan(0);
   expect(w % 3).toBe(0);
   expect(h % 3).toBe(0);
 });
 
-// 用例 5：折叠时先提示「检测到 N 处折叠，将自动展开后导出」，确认才导出；
-// 导出只作用于快照克隆——画布折叠态不变（徽标仍在、孙节点仍隐藏）。
-test('折叠提示：检测到 1 处折叠 → 确认后导出（画布折叠态不变）', async ({ page }) => {
+// 用例 5（2026-11-15 导出返工批裁定：按当前折叠状态导出、不自动展开、无确认框）：
+// 折叠态下点导出不再弹「检测到 N 处折叠」确认框，直接出图；导出只作用于快照克隆
+// ——画布折叠态不变（徽标仍在、孙节点仍隐藏）。图内折叠节点出「+N」徽标、交互
+// 折叠钮剥离（stripCollapseToggles，语义由 image-export 单测钉住——JPEG 像素层
+// 无法在 e2e 断言）。
+test('折叠态导出：不弹确认框直接导出（画布折叠态不变）', async ({ page }) => {
   await openSeedDoc(page, '本周计划');
   // 折叠 root（默认选中）：Ctrl+/（同 editor.e2e.spec.ts 用例 6 的操作路径）
   await page.keyboard.press('Control+/');
   await expect(page.locator('.editor-canvas svg .gm-collapse-badge')).toHaveCount(1);
-  let dialogMessage = '';
-  page.on('dialog', (d) => {
-    dialogMessage = d.message();
-    void d.accept();
+  let dialogCount = 0;
+  page.on('dialog', () => {
+    dialogCount += 1;
   });
   await page.getByTestId('export-menu').click();
   const [download] = await Promise.all([
     page.waitForEvent('download'),
-    page.getByTestId('export-png-1x').click(),
+    page.getByTestId('export-jpg-1x').click(),
   ]);
-  expect(dialogMessage).toContain('1 处折叠');
-  expect(download.suggestedFilename()).toBe('本周计划.png');
+  expect(dialogCount).toBe(0); // 折叠态也直接导出：确认框已删
+  expect(download.suggestedFilename()).toBe('本周计划.jpg');
+  const jpg = await fs.promises.readFile(await download.path());
+  expect(jpg.length).toBeGreaterThan(0);
+  expect(jpg.subarray(0, 3).toString('hex')).toBe('ffd8ff'); // JPEG 魔数（SOI）
   // 折叠态不变：徽标仍在、孙节点仍隐藏（仅导出快照不改画布）
   await expect(page.locator('.editor-canvas svg .gm-collapse-badge')).toHaveCount(1);
   await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '周会对齐' })).toHaveCount(0);
@@ -319,10 +333,32 @@ test('导入合成夹具：标记/图片/概要/超链接/样式/结构落位，
 });
 
 // 用例 8：纯净水树（buildXmind 直出，零降级源）→ 恒弹 toast「已完整导入」（裁定 3）。
-test('导入纯净水树：toast「已完整导入」且新文件出现', async ({ page }) => {
+// 分侧忠实还原 Task 4 起夹具带根扩展 right-number=1（helpers/xmind-fixture sheet 参数），
+// 补往返无损断言：导入按存储值定侧 → 打开 → 导出 → content.json 根扩展 right-number
+// 与夹具值逐字一致（导出计数镜像引擎渲染=持久 side 1 个，往返不改写用户内容）。
+test('导入纯净水树：toast「已完整导入」、新文件出现且 right-number 往返无损', async ({ page }) => {
   await registerAndLogin(page);
   await importFromWorkspace(page, '示例树.xmind', buildCleanXmind(), '已完整导入');
   await expect(page.getByTestId('file-card').filter({ hasText: '示例树' }).first()).toBeVisible();
+  // 往返：打开导入件 → 导出菜单下载 → 解包断言根扩展与夹具值（right-number='1'）一致
+  await page.getByTestId('file-card').filter({ hasText: '示例树' }).first().click();
+  await expect(page).toHaveURL(/\/edit\//);
+  await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '示例树' })).toBeVisible();
+  await page.getByTestId('export-menu').click();
+  const [download] = await Promise.all([
+    page.waitForEvent('download'),
+    page.getByTestId('export-xmind').click(),
+  ]);
+  expect(download.suggestedFilename()).toBe('示例树.xmind'); // 文件名=编辑器标题（=原文件名去后缀）
+  const bytes = new Uint8Array(await fs.promises.readFile(await download.path()));
+  const entries = unzipEntries(bytes);
+  const content = JSON.parse(new TextDecoder().decode(entries['content.json']!)) as Array<{
+    rootTopic: { extensions?: Array<{ provider: string; content: Array<{ name: string; content: string }> }> };
+  }>;
+  // 金样逐字形状（build rightNumberExtensions 同款）：provider=map.unbalanced + right-number='1'
+  expect(content[0]!.rootTopic.extensions).toEqual([
+    { provider: 'org.xmind.ui.map.unbalanced', content: [{ name: 'right-number', content: '1' }] },
+  ]);
 });
 
 // 用例 9：导出往返（spec §3.2 roundtrip 口径）——夹具导入产物经导出菜单下载，node 端
