@@ -10,12 +10,14 @@ import {
   PRIORITY_LEGACY_MAP,
   PROGRESS_STAGE_PCT,
   canonicalCustomColumns,
+  canonicalSharedFilter,
   iconValuesOf,
   isValidCustomValueOfType,
   progressStageOf,
   type CustomColumnDef,
   type IconGroup,
   type ProgressValue,
+  type SharedFilter,
 } from './constants';
 import { ORIGIN_SYSTEM } from './undo';
 import { applySummaryRepair, planSummaryRepair, type SummaryRepairPlan } from './summary';
@@ -52,7 +54,8 @@ import { applySummaryRepair, planSummaryRepair, type SummaryRepairPlan } from '.
  *  ⑧ 自定义列收敛（表格自定义列）：meta.customColumns 非法项剔除（doc 级一次，含非
  *    数组归 []、重复 id 保首、超 CUSTOM_COLUMN_LIMIT 截断）；各存活画布节点 custom
  *    键——非 Y.Map 删键、schema 外列键删（孤儿清理）、值形状与列类型不符删键
- *    （口径见 planCustomRepair）；
+ *    （口径见 planCustomRepair）；meta.sharedFilter（轮 2 筛选双层化）非对象删键、
+ *    含 keyword 键剔除（会话级，永不入文档）；
  *  ⑩ 画布序与墓碑收敛：canvasOrder 中非字符串/重复（保首个，对齐规则①去重口径）/
  *    指向不存在或墓碑画布的项 → 移除；存活画布不在 order 中 → 按 canvasId 升序追加
  *    （确定性——两个副本并发迁移同一旧文档时 order 可能重复 'canvas-1'，去重后收敛
@@ -497,7 +500,8 @@ export function normalizeTree(doc: Y.Doc, origin: string = ORIGIN_SYSTEM): numbe
   repairs +=
     (customPlan.columns !== null ? 1 : 0) +
     customPlan.dropCustom.length +
-    customPlan.dropFields.length;
+    customPlan.dropFields.length +
+    (customPlan.sharedFilter !== null ? 1 : 0);
 
   // ── 规则⑩：画布序与墓碑收敛（仅新形状）。
   const orderPlan = planCanvasOrderRepair(doc);
@@ -1169,6 +1173,9 @@ export interface CustomRepairPlan {
   dropCustom: Array<{ canvasId: string; nodeId: string }>;
   /** 节点 custom 内需删除的列键（schema 外孤儿 / 值形状与列类型不符）。 */
   dropFields: Array<{ canvasId: string; nodeId: string; colId: string }>;
+  /** meta.sharedFilter 修复：'delete' = 非对象删键；SharedFilter = 规范化替换
+   *  （含 keyword 键剔除）；null = 无需修复（键缺失或已合法）。轮 2 筛选双层化。 */
+  sharedFilter: 'delete' | SharedFilter | null;
 }
 
 /**
@@ -1194,7 +1201,7 @@ export interface CustomRepairPlan {
  * 收敛同一「外部状态直入入口（docFromState / 第 64 写摊销清扫 / 安全阀）」口径。
  */
 export function planCustomRepair(doc: Y.Doc): CustomRepairPlan {
-  const plan: CustomRepairPlan = { columns: null, dropCustom: [], dropFields: [] };
+  const plan: CustomRepairPlan = { columns: null, dropCustom: [], dropFields: [], sharedFilter: null };
   const meta = doc.getMap('meta');
   const rawColumns = meta.get('customColumns');
   let schema: CustomColumnDef[];
@@ -1221,14 +1228,33 @@ export function planCustomRepair(doc: Y.Doc): CustomRepairPlan {
       }
     }
   }
+  // meta.sharedFilter（轮 2 筛选双层化）：键存在且非对象 → 删键；含 keyword 键 →
+  // 剔除该键后规范化替换；键缺失或已合法 → 零修复（不补写）。
+  const rawShared = meta.get('sharedFilter');
+  if (rawShared !== undefined) {
+    if (rawShared === null || typeof rawShared !== 'object' || Array.isArray(rawShared)) {
+      plan.sharedFilter = 'delete';
+    } else {
+      const canonical = canonicalSharedFilter(rawShared);
+      const hadKeyword = 'keyword' in (rawShared as Record<string, unknown>);
+      if (canonical !== undefined && (hadKeyword || JSON.stringify(canonical) !== JSON.stringify(rawShared))) {
+        plan.sharedFilter = canonical;
+      }
+    }
+  }
   return plan;
 }
 
 /** 应用自定义列收敛计划（必须在调用方已开启的事务内执行）：meta 整体替换 +
- *  节点 custom 键/列键删除。 */
+ *  节点 custom 键/列键删除 + meta.sharedFilter 修复（轮 2 筛选双层化）。 */
 export function applyCustomRepair(doc: Y.Doc, plan: CustomRepairPlan): void {
   if (plan.columns !== null) {
     doc.getMap('meta').set('customColumns', plan.columns.map((c) => ({ ...c })));
+  }
+  if (plan.sharedFilter === 'delete') {
+    doc.getMap('meta').delete('sharedFilter');
+  } else if (plan.sharedFilter !== null) {
+    doc.getMap('meta').set('sharedFilter', plan.sharedFilter);
   }
   for (const drop of plan.dropCustom) {
     scopedNodesMap(doc, drop.canvasId)?.get(drop.nodeId)?.delete('custom');

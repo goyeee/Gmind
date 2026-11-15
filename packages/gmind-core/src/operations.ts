@@ -18,6 +18,7 @@ import {
   TASK_OWNER_MIN_LENGTH,
   TASK_STATUSES,
   canonicalCustomColumns,
+  canonicalSharedFilter,
   canonicalTableView,
   iconValuesOf,
   isValidDateStr,
@@ -26,6 +27,7 @@ import {
   type CustomColumnType,
   type CustomFieldValue,
   type IconGroup,
+  type SharedFilter,
   type TableViewMeta,
 } from './constants';
 import { GmindCoreError, type GmindCoreErrorCode } from './errors';
@@ -986,6 +988,52 @@ export function setTableView(
 
   withTransaction(doc, origin, () => {
     doc.getMap('meta').set('tableView', next);
+  });
+}
+
+/** 整体写入公共筛选（轮 2 筛选双层化，2026-11-15 需求方拍板：改动默认仅自己可见，
+ * 「对所有人生效」写入文件成为团队公共筛选、他人打开默认用这套）。公共筛选 = doc 级
+ * meta.sharedFilter（不含 keyword——会话级；不含 scope——旧模型已退役）。
+ *
+ * 数据口径：meta.sharedFilter = SharedFilter（plain JSON 对象存 meta Y.Map）。
+ *
+ * 归一（canonicalSharedFilter 单源，先于事务）：入参含 keyword 键抛 SHARED_FILTER_INVALID
+ * （keyword 不允许入文档）；非对象（且非 null）抛 SHARED_FILTER_INVALID；null → 清除公共筛选。
+ * 其余按 canonicalSharedFilter 规则归一（owners/statuses 数组归一、conds 四键提取、布尔/字符串
+ * 按类型回退）。
+ *
+ * 同值守卫：现值 canonical 后与入参归一结果 JSON 全同 → 零事务。
+ *
+ * origin 默认 system（与 setTableView 同裁定）：公共筛选是协作视图偏好而非内容编辑，
+ * 不进撤销栈（Ctrl+Z 不回滚视图态），随 Yjs 正常协同同步。
+ * restore 排除（随 meta.title 先例「视图偏好不随版本回滚」）。 */
+export function setSharedFilter(
+  doc: Y.Doc,
+  filter: SharedFilter | null,
+  origin: WriteOrigin = ORIGIN_SYSTEM,
+): void {
+  if (filter !== null && (typeof filter !== 'object' || Array.isArray(filter))) {
+    throw new GmindCoreError('SHARED_FILTER_INVALID', '公共筛选配置必须是对象，请刷新后重试');
+  }
+  if (filter !== null && 'keyword' in filter) {
+    throw new GmindCoreError('SHARED_FILTER_INVALID', '公共筛选不能包含搜索关键词（关键词仅本次会话可见），请移除后重试');
+  }
+  const next = filter === null ? null : canonicalSharedFilter(filter);
+  if (filter !== null && next === undefined) {
+    throw new GmindCoreError('SHARED_FILTER_INVALID', '公共筛选配置非法，请刷新后重试');
+  }
+  // 同值守卫：现值（防御读）与归一结果全同 → 零事务。
+  const current = canonicalSharedFilter(doc.getMap('meta').get('sharedFilter'));
+  const currentJson = current === undefined ? 'null' : JSON.stringify(current);
+  const nextJson = next === null ? 'null' : JSON.stringify(next);
+  if (currentJson === nextJson) return;
+
+  withTransaction(doc, origin, () => {
+    if (next === null) {
+      doc.getMap('meta').delete('sharedFilter');
+    } else {
+      doc.getMap('meta').set('sharedFilter', next);
+    }
   });
 }
 

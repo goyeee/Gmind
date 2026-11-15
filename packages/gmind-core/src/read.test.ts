@@ -697,3 +697,64 @@ describe('多画布读路径（Task 3：canvasId 签名扫荡）', () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// 公共筛选读取防御（getMeta.sharedFilter，轮 2 筛选双层化）：
+// 非对象 → undefined；字段级防御（owners/statuses 非数组 → []、布尔/字符串按类型回退）。
+// ---------------------------------------------------------------------------
+
+describe('sharedFilter 防御读取（getMeta.sharedFilter，轮 2 筛选双层化）', () => {
+  it('键缺失/非对象（字符串/数字/数组/null）→ undefined（不抛错）', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [] });
+    expect(getMeta(doc).sharedFilter).toBeUndefined();
+    for (const bad of ['x', 42, [], null]) {
+      doc.getMap('meta').set('sharedFilter', bad);
+      expect(getMeta(doc).sharedFilter, `raw=${JSON.stringify(bad)}`).toBeUndefined();
+    }
+  });
+
+  it('字段级防御：owners/statuses 非数组→[]、conds 非数组→[]、布尔/字符串按类型回退默认、keyword 键剔除', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [] });
+    doc.getMap('meta').set('sharedFilter', {
+      owners: 'not-array',
+      statuses: 42,
+      overdueOnly: 'yes',
+      unassignedOnly: 1,
+      conds: 'bad',
+      grp: 123,
+      dept: null,
+      keyword: 'x', // 应被剔除
+    });
+    expect(getMeta(doc).sharedFilter).toEqual({
+      owners: [],
+      statuses: [],
+      overdueOnly: false,
+      unassignedOnly: false,
+      conds: [],
+      grp: '',
+      dept: '',
+    });
+  });
+
+  it('合法对象透传：cond 字段按 id/col/op/val 保留（多余字段剔除）', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [] });
+    doc.getMap('meta').set('sharedFilter', {
+      owners: ['u1', 'u2'],
+      statuses: ['doing', 'done'],
+      overdueOnly: true,
+      unassignedOnly: false,
+      conds: [{ id: 'c1', col: 'owner', op: 'eq', val: 'u1', extra: 'x' }],
+      grp: 'g1',
+      dept: 'd1',
+    });
+    expect(getMeta(doc).sharedFilter).toEqual({
+      owners: ['u1', 'u2'],
+      statuses: ['doing', 'done'],
+      overdueOnly: true,
+      unassignedOnly: false,
+      conds: [{ id: 'c1', col: 'owner', op: 'eq', val: 'u1' }],
+      grp: 'g1',
+      dept: 'd1',
+    });
+  });
+});

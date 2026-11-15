@@ -1228,3 +1228,62 @@ describe('多画布作用域收敛（规则⑨⑩，Task 5）', () => {
     expect(getNode(loaded, 'c2-b', 'c2')!.side).toBe('right');
   });
 });
+
+// ---------------------------------------------------------------------------
+// 公共筛选归一（meta.sharedFilter，轮 2 筛选双层化）：
+// 随 normalizeTree 全量执行；非对象→删键；带 keyword→剔除该键；合法零替换。
+// ---------------------------------------------------------------------------
+
+describe('sharedFilter 归一（meta.sharedFilter，轮 2 筛选双层化）', () => {
+  /** 裸写 meta.sharedFilter。 */
+  function rawSetSharedFilter(doc: Y.Doc, raw: unknown): void {
+    doc.transact(() => {
+      doc.getMap('meta').set('sharedFilter', raw);
+    });
+  }
+
+  it('非对象 → 删键；带 keyword → 剔除该键（其余字段保留）；合法零替换', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [] });
+
+    // 非对象 → 删键
+    rawSetSharedFilter(doc, 'garbage');
+    expect(normalizeTree(doc)).toBe(1);
+    expect(doc.getMap('meta').get('sharedFilter')).toBeUndefined();
+    expect(normalizeTree(doc)).toBe(0); // 幂等
+
+    // 带 keyword → 剔除该键
+    rawSetSharedFilter(doc, {
+      owners: ['u1'],
+      statuses: [],
+      overdueOnly: false,
+      unassignedOnly: false,
+      conds: [],
+      grp: '',
+      dept: '',
+      keyword: 'x',
+    });
+    expect(normalizeTree(doc)).toBe(1);
+    expect(doc.getMap('meta').get('sharedFilter')).toEqual({
+      owners: ['u1'],
+      statuses: [],
+      overdueOnly: false,
+      unassignedOnly: false,
+      conds: [],
+      grp: '',
+      dept: '',
+    });
+    expect(normalizeTree(doc)).toBe(0); // 幂等
+
+    // 合法零替换
+    rawSetSharedFilter(doc, {
+      owners: ['u1'],
+      statuses: ['doing'],
+      overdueOnly: true,
+      unassignedOnly: false,
+      conds: [],
+      grp: 'g1',
+      dept: '',
+    });
+    expect(normalizeTree(doc)).toBe(0);
+  });
+});

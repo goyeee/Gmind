@@ -24,7 +24,10 @@ export type GmindCoreErrorCode =
   | 'CANVAS_NOT_FOUND'
   /** 多画布画布管理写（Task 7）：画布名为空（trim 后）/ 超长（>50，与
    *  MAX_CANVAS_NAME_LENGTH 对齐）/ 删除最后一张存活画布（文案两段式=原因+下一步）。 */
-  | 'CANVAS_NAME_EMPTY' | 'CANVAS_NAME_TOO_LONG' | 'CANVAS_LAST_FORBIDDEN';
+  | 'CANVAS_NAME_EMPTY' | 'CANVAS_NAME_TOO_LONG' | 'CANVAS_LAST_FORBIDDEN'
+  /** 公共筛选（meta.sharedFilter，轮 2 筛选双层化）：入参形状非法 / 含 keyword 键
+   *  （keyword 会话级，永不入文档）（文案两段式=原因+下一步）。 */
+  | 'SHARED_FILTER_INVALID';
 
 export class GmindCoreError extends Error {
   constructor(readonly code: GmindCoreErrorCode, message: string) {

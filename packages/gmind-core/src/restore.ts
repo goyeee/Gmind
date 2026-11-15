@@ -141,6 +141,10 @@ interface CanvasMetaPatch {
  *   meta 与 PATCH /files），版本恢复是文档内容回滚，若回写快照 title 会把用户在快照
  *   之后的改名一并吃掉，且 files.title 行值不随之变更（画布与列表名号劈叉）——
  *   恢复不改名，title 恒保留 target 现值。
+ *   meta.sharedFilter 恒排除（轮 2 筛选双层化，2026-11-15）——公共筛选是协作视图
+ *   偏好而非文档内容，随 meta.title 同裁定不随版本回滚；快照的 sharedFilter 值
+ *   也不复活。restore diff 代码天然不含此键（只走 nodes/canvases/customColumns/
+ *   tableView），本条注释钉死语义，防未来扩 diff 时误含。
  *
  * ── 概要（summaries）×恢复口径（裁定 6 钉死，2026-10-21，引
  *   docs/superpowers/specs/2026-10-21-multi-canvas-ruling.md §一.6＝m6-acceptance

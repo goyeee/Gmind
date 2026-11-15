@@ -14,6 +14,7 @@ import {
   setIcon,
   setNodeTask,
   setNote,
+  setSharedFilter,
   setStyle,
   setText,
 } from './operations';
@@ -520,3 +521,46 @@ function enrichRandom(rnd: () => number, doc: Y.Doc): void {
     i += 1;
   }
 }
+
+// ---------------------------------------------------------------------------
+// 公共筛选不随版本回滚（轮 2 筛选双层化）：sharedFilter 随 meta.title 先例
+// 恒排除——恢复是文档内容回滚，公共筛选是协作视图偏好，不回滚、快照值也不复活。
+// ---------------------------------------------------------------------------
+
+describe('restore：sharedFilter 不随版本回滚（meta.title 排除先例扩展）', () => {
+  it('snapshot 有 sharedFilter A、target 有 sharedFilter B → 恢复后 target 仍为 B', () => {
+    const base = makeDoc();
+    const snap = docFromState(docToState(base));
+    // target：写入与快照不同的公共筛选
+    setSharedFilter(base, {
+      owners: ['u-target'],
+      statuses: [],
+      overdueOnly: true,
+      unassignedOnly: false,
+      conds: [],
+      grp: '',
+      dept: '',
+    });
+    // snapshot：写入不同的公共筛选（先于快照）
+    setSharedFilter(snap, {
+      owners: ['u-snap'],
+      statuses: ['done'],
+      overdueOnly: false,
+      unassignedOnly: true,
+      conds: [],
+      grp: 'g-snap',
+      dept: '',
+    });
+    const r = restoreFromSnapshot(base, snap);
+    expect(r).toEqual({ deleted: 0, created: 0, moved: 0, updated: 0 }); // 无节点变化
+    expect(getMeta(base).sharedFilter).toEqual({
+      owners: ['u-target'],
+      statuses: [],
+      overdueOnly: true,
+      unassignedOnly: false,
+      conds: [],
+      grp: '',
+      dept: '',
+    });
+  });
+});

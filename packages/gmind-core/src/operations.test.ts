@@ -24,6 +24,7 @@ import {
   setStyle,
   setText,
   setTableView,
+  setSharedFilter,
   toggleCollapse,
   withTransaction,
   ORIGIN_SYSTEM,
@@ -1910,3 +1911,71 @@ describe('多画布写路径（Task 4：写层画布化）', () => {
   });
 });
 
+
+// ---------------------------------------------------------------------------
+// 公共筛选（meta.sharedFilter，轮 2 筛选双层化）：setSharedFilter 整体写入
+// （canonical 归一 + 同值守卫 + 默认 system origin 不进撤销栈）。
+// ---------------------------------------------------------------------------
+
+describe('setSharedFilter（公共筛选持久态整体写入，轮 2 筛选双层化）', () => {
+  const EMPTY_SHARED = { owners: [], statuses: [], overdueOnly: false, unassignedOnly: false, conds: [], grp: '', dept: '' };
+
+  it('写入读回：结构化条件一次落盘，getMeta 防御读回 canonical 形状', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [] });
+    setSharedFilter(doc, { owners: ['u1'], statuses: ['doing'], overdueOnly: true, unassignedOnly: false, conds: [], grp: 'g1', dept: '' });
+    expect(getMeta(doc).sharedFilter).toEqual({ owners: ['u1'], statuses: ['doing'], overdueOnly: true, unassignedOnly: false, conds: [], grp: 'g1', dept: '' });
+  });
+
+  it('setSharedFilter(doc, null) → sharedFilter 键删除，getMeta 读回 undefined', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [] });
+    setSharedFilter(doc, { ...EMPTY_SHARED, owners: ['u1'] });
+    expect(getMeta(doc).sharedFilter).toBeDefined();
+    setSharedFilter(doc, null);
+    expect(getMeta(doc).sharedFilter).toBeUndefined();
+  });
+
+  it('入参含 keyword 键 → 抛 SHARED_FILTER_INVALID（keyword 会话级，永不入文档）', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [] });
+    try {
+      setSharedFilter(doc, { ...EMPTY_SHARED, keyword: 'x' } as never);
+      expect.unreachable('keyword 应被拒');
+    } catch (e) {
+      expect(e).toBeInstanceOf(GmindCoreError);
+      expect((e as GmindCoreError).code).toBe('SHARED_FILTER_INVALID');
+    }
+  });
+
+  it('同值守卫：现值与入参 canonical 结果 JSON 全同 → 零事务（afterTransaction 计数不变）', () => {
+    let n = 0;
+    const doc = createTemplateDoc({ title: 'T', children: [] });
+    doc.on('afterTransaction', () => { n += 1; });
+    setSharedFilter(doc, { ...EMPTY_SHARED, owners: ['u1'] }); // 1 次
+    expect(n).toBe(1);
+    setSharedFilter(doc, { ...EMPTY_SHARED, owners: ['u1'] }); // 同值：零事务
+    expect(n).toBe(1);
+    setSharedFilter(doc, { ...EMPTY_SHARED, owners: ['u2'] }); // 变更：1 次
+    expect(n).toBe(2);
+  });
+
+  it('非对象入参（string/number/array）→ 抛 SHARED_FILTER_INVALID 且零变更', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [] });
+    for (const bad of ['x', 42, []]) {
+      try {
+        setSharedFilter(doc, bad as never);
+        expect.unreachable(`raw=${JSON.stringify(bad)}`);
+      } catch (e) {
+        expect(e).toBeInstanceOf(GmindCoreError);
+        expect((e as GmindCoreError).code).toBe('SHARED_FILTER_INVALID');
+      }
+    }
+    expect(doc.getMap('meta').get('sharedFilter')).toBeUndefined();
+  });
+
+  it('默认 system origin 不进撤销栈（视图态裁定，同 setTableView）；用户撤销不受视图写影响', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
+    const um = createUndoManager(doc);
+    setSharedFilter(doc, { ...EMPTY_SHARED, owners: ['u1'] });
+    expect(undo(um)).toBe(false); // 无可撤销内容
+    expect(getMeta(doc).sharedFilter).toBeDefined(); // 视图态仍在
+  });
+});

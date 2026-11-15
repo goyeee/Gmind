@@ -478,3 +478,80 @@ export function canonicalTableView(
       : null;
   return { order: [...order, ...missing], hidden, pinned, sort };
 }
+
+/* ── 公共筛选（meta.sharedFilter，轮 2 筛选双层化）───────────────────────── */
+
+/** 公共筛选条件实例（conds 数组元素）：与 web 侧 taskFilter.ts FilterCond 同构；
+ *  op 在 core 用 string 放宽（防御读取），值域与 web FilterOp 同。 */
+export interface SharedFilterCond {
+  id: string;
+  col: string;
+  op: string;
+  val: string;
+}
+
+/** 公共筛选持久态（doc 级）：不含 keyword（会话级）、不含 scope（旧模型已退役）。 */
+export interface SharedFilter {
+  /** 负责人 id 集（JSON 数组，非 Set——Yjs meta 只存 plain JSON）。 */
+  owners: string[];
+  /** 任务状态集（值域 TASK_STATUSES）。 */
+  statuses: TaskStatus[];
+  overdueOnly: boolean;
+  unassignedOnly: boolean;
+  /** 字段条件数组（person/number/time/text 四类）。 */
+  conds: SharedFilterCond[];
+  /** 分组 id；'' = 不限。 */
+  grp: string;
+  /** 部门 id；'' = 不限。 */
+  dept: string;
+}
+
+/** meta.sharedFilter 防御读取/规范化（纯函数，canonicalTableView 同款分层）：
+ *  read.getMeta 透传 + operations.setSharedFilter 写入归一共用此单源。规则：
+ *  - 非对象 → undefined（缺省=从未有人发布）；
+ *  - keyword 键剔除（会话级，永不入文档）；
+ *  - owners/statuses 非字符串数组 → []；其余非字符串元素剔除、去重保首；
+ *  - conds 非对象数组 → []；元素按 id/col/op/val 四键提取（非字符串回退 ''），多余键剔除；
+ *  - 布尔字段按 typeof 回退默认（false）；字符串字段按 typeof 回退默认（''）。
+ * 写入口按同规则归一后落盘，远端坏数据/crafted doc_state 只影响读取、不抛错。 */
+export function canonicalSharedFilter(raw: unknown): SharedFilter | undefined {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const rec = raw as Record<string, unknown>;
+  const strArray = (v: unknown): string[] => {
+    if (!Array.isArray(v)) return [];
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const item of v) {
+      if (typeof item !== 'string' || seen.has(item)) continue;
+      seen.add(item);
+      out.push(item);
+    }
+    return out;
+  };
+  const strField = (v: unknown): string => (typeof v === 'string' ? v : '');
+  const boolField = (v: unknown): boolean => (typeof v === 'boolean' ? v : false);
+  const conds: SharedFilterCond[] = (() => {
+    if (!Array.isArray(rec.conds)) return [];
+    const out: SharedFilterCond[] = [];
+    for (const item of rec.conds) {
+      if (item === null || typeof item !== 'object' || Array.isArray(item)) continue;
+      const c = item as Record<string, unknown>;
+      out.push({
+        id: strField(c.id),
+        col: strField(c.col),
+        op: strField(c.op),
+        val: strField(c.val),
+      });
+    }
+    return out;
+  })();
+  return {
+    owners: strArray(rec.owners),
+    statuses: strArray(rec.statuses) as TaskStatus[],
+    overdueOnly: boolField(rec.overdueOnly),
+    unassignedOnly: boolField(rec.unassignedOnly),
+    conds,
+    grp: strField(rec.grp),
+    dept: strField(rec.dept),
+  };
+}

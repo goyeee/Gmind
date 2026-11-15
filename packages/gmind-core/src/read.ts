@@ -3,12 +3,14 @@ import type { StructureType } from '@gmind/shared';
 import { canvasMapOf, canvasNodesMap, listCanvases, rootIdOf } from './canvas';
 import {
   canonicalCustomColumns,
+  canonicalSharedFilter,
   canonicalTableView,
   ICON_GROUPS,
   TASK_STATUSES,
   isValidDateStr,
   type CustomColumnDef,
   type IconGroup,
+  type SharedFilter,
   type TableViewMeta,
 } from './constants';
 import { GmindCoreError } from './errors';
@@ -35,6 +37,14 @@ export interface DocMeta {
    * origin 不进撤销栈），setDocMeta 不受理该键。
    */
   tableView?: TableViewMeta;
+  /**
+   * 公共筛选持久态（doc 级，轮 2 筛选双层化）：写入唯一入口是
+   * operations.setSharedFilter（同值守卫、视图态 system origin 不进撤销栈），
+   * setDocMeta 不受理该键。防御读取（canonicalSharedFilter 单源）：非对象 →
+   * undefined（= 从未有人发布）；keyword 键剔除（会话级）；owners/statuses 非
+   * 数组 → []；布尔/字符串字段按类型回退默认。不含 scope（旧模型已退役）。
+   */
+  sharedFilter?: SharedFilter;
 }
 
 /** 图片相对文字的位置（图文四槽位，需求方 2026-10-20）：top=图在文字上方、bottom=图在
@@ -142,6 +152,7 @@ export function getMeta(doc: Y.Doc, canvasId?: string): DocMeta {
     themeId: asString(canvas.get('themeId'), 'gmind-light'),
     customColumns,
     tableView: canonicalTableView(meta.get('tableView'), customColumns),
+    sharedFilter: canonicalSharedFilter(meta.get('sharedFilter')),
   };
 }
 
