@@ -91,6 +91,15 @@ export class CollabService implements OnApplicationShutdown {
       onLoadDocument: async (data) => this.loadDocument(data),
       onChange: async (data) => this.handleChange(data),
       onStoreDocument: async (data) => this.storeDocument(data),
+      // 客户端 stateless 中转（轮 2 筛选双层化）：客户端发的 stateless 消息经此转发
+      // 给文档内所有在线连接（hocuspocus 默认不自动转发）。filter-updated 类型即
+      // 公共筛选变更通知——viewer 的 doc 更新被 beforeHandleMessage 拦截，但 stateless
+      // 是独立通道不受影响，因此 viewer 也能收到筛选变更通知。
+      onStateless: async (data) => {
+        this.hocuspocus.documents
+          .get(data.documentName)
+          ?.broadcastStateless(data.payload);
+      },
       // 写拦截（2026-10-28 P0 链接档位）：viewer 连接的文档写消息在应用前拒绝
       // （awareness 光标/选区走另一钩子不受影响——只读协作者仍可见彼此光标）
       beforeHandleMessage: async (data) => {

@@ -78,7 +78,9 @@ export function opLabel(kind: FilterKind, op: FilterOp): string {
 
 export const needsVal = (op: FilterOp): boolean => op !== 'empty' && op !== 'notEmpty';
 
-/** 内置条件字段（colLabels 改名由调用方覆盖 label）。 */
+/** 内置条件字段（colLabels 改名由调用方覆盖 label）。
+ *  负责人经字段条件行筛选（需求方 2026-11-16 拍板「保留负责人字段筛选，删更多条件·人员」）；
+ *  「更多条件·人员」下拉已删除（此前与字段条件行双入口导致两组标签）。 */
 export const BUILTIN_COND_FIELDS: CondField[] = [
   { key: 'owner', label: '负责人', kind: 'person' },
   { key: 'progress', label: '进度', kind: 'number' },

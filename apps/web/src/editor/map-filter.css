@@ -217,28 +217,54 @@
   font-size: 15px;
   font-weight: 600;
 }
+/* 轮 2 筛选双层化：「· 仅你可见」徽章 / 已同步徽章 / 弹窗头按钮组 */
+.mf-personal-badge {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--gm-ink-3, #86909c);
+  margin-left: 6px;
+}
+.mf-synced-badge {
+  font-size: 13px;
+  color: var(--gm-success, #00b42a);
+  font-weight: 500;
+}
 .mf-scope {
   display: flex;
-  padding: 2px;
-  border-radius: 999px;
-  background: var(--gm-brand-soft, #eaf2ff);
+  align-items: center;
+  gap: 8px;
   font-size: 13px;
 }
-.mf-scope button {
-  height: 24px;
-  padding: 0 10px;
-  border: none;
-  border-radius: 999px;
-  background: none;
-  color: var(--gm-ink-2, #4e5969);
+.mf-personal-label {
+  color: var(--gm-ink-3, #86909c);
+}
+.mf-publish-btn {
+  padding: 3px 10px;
+  border: 1px solid var(--gm-brand, #3370ff);
+  border-radius: 4px;
+  background: var(--gm-brand, #3370ff);
+  color: #fff;
+  font-size: 12px;
   cursor: pointer;
 }
-.mf-scope button.active {
-  background: #fff;
-  font-weight: 500;
-  color: var(--gm-brand, #3370ff);
-  box-shadow: 0 1px 3px rgb(31 35 41 / 0.12);
+.mf-publish-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
+.mf-restore-btn {
+  padding: 3px 10px;
+  border: 1px solid var(--gm-line, #e5e6eb);
+  border-radius: 4px;
+  background: none;
+  color: var(--gm-ink-2, #4e5969);
+  font-size: 12px;
+  cursor: pointer;
+}
+.mf-restore-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
 .mf-conds {
   display: flex;
   flex-direction: column;

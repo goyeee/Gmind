@@ -86,6 +86,12 @@ export interface CollabHandle {
   markEditing(): void;
   /** 本地选区广播（SelectionModel.onChange 桥接）。 */
   setSelection(nodeIds: string[]): void;
+  /** 公共筛选变更广播（轮 2 筛选双层化）：通过 awareness 发一条瞬时消息，
+   *  所有在线端（含 viewer——doc 更新被服务端拦截，awareness 不受影响）都能收到。
+   *  payload.nickname = 发布者昵称（toast 话术「xx 更改了筛选条件」用）。 */
+  broadcastFilterUpdated(nickname: string): void;
+  /** 注册公共筛选变更回调（他人广播时触发；含 nickname）。 */
+  onFilterUpdated(cb: (nickname: string) => void): () => void;
 }
 
 /** GET /api/users/me 响应（collab 消费 id/nickname/avatarUrl——头像广播数据源）。 */
@@ -214,6 +220,9 @@ export function startCollab(fileId: string, doc: Y.Doc, opts: CollabOptions): Co
   const awareness = provider.awareness;
   const selfClientID = doc.clientID; // Awareness 构造沿用 doc.clientID：本地身份键
   let destroyed = false;
+  // 公共筛选变更回调注册表（轮 2 筛选双层化）：在 onStateless 之前声明，
+  // 供 onStateless 的 filter-updated 分支调用。
+  const filterUpdatedCallbacks = new Set<(nickname: string) => void>();
   // 本地镜像：身份装配（users/me）与写活动/选区是异步到达的两条线，谁先到都不许
   // 互相覆盖——身份落定时回放当前镜像，而不是重置（selection 同理，见 setSelection）。
   let localSelection: string[] = [];
@@ -268,7 +277,7 @@ export function startCollab(fileId: string, doc: Y.Doc, opts: CollabOptions): Co
   };
   const onStateless = ({ payload }: { payload: string }): void => {
     try {
-      const msg = JSON.parse(payload) as { type?: string; at?: string; updatedAt?: string };
+      const msg = JSON.parse(payload) as { type?: string; at?: string; updatedAt?: string; nickname?: string; senderClientID?: number };
       if (msg.type === 'persisted') {
         onStatus('saved', msg.at);
         // 写序 base 刷新（准入 7.1）：以落库后的行值为准；旧载荷无 updatedAt 不更新
@@ -277,6 +286,11 @@ export function startCollab(fileId: string, doc: Y.Doc, opts: CollabOptions): Co
         onStatus('quota');
       } else if (msg.type === 'comment-updated') {
         opts.onCommentUpdated?.();
+      } else if (msg.type === 'filter-updated' && typeof msg.nickname === 'string') {
+        // 自己发的广播不弹 toast（senderClientID === selfClientID → 跳过）
+        if (msg.senderClientID !== selfClientID) {
+          for (const cb of filterUpdatedCallbacks) cb(msg.nickname);
+        }
       }
     } catch {
       // 非 JSON stateless 广播：与本页无关，忽略
@@ -307,10 +321,27 @@ export function startCollab(fileId: string, doc: Y.Doc, opts: CollabOptions): Co
     (window as unknown as { __gmindCollab?: typeof hooks }).__gmindCollab = hooks;
   }
 
+  // ── 公共筛选变更广播（轮 2 筛选双层化）────────────────────────────────
+  // stateless 通道（viewer 也能收到——doc 更新被服务端 beforeHandleMessage 拦截，
+  // stateless 消息是独立通道不受影响）。广播端经 provider.sendStateless 发一条
+  // {type:'filter-updated', nickname, senderClientID}；接收端经 onStateless 统一分发。
+  // senderClientID 用于接收端过滤自己发的广播（不给自己弹 toast）。
+  const broadcastFilterUpdated = (nickname: string): void => {
+    provider.sendStateless(
+      JSON.stringify({ type: 'filter-updated', nickname, senderClientID: selfClientID }),
+    );
+  };
+  const onFilterUpdated = (cb: (nickname: string) => void): (() => void) => {
+    filterUpdatedCallbacks.add(cb);
+    return () => filterUpdatedCallbacks.delete(cb);
+  };
+
   return {
     provider,
     markEditing,
     setSelection,
+    broadcastFilterUpdated,
+    onFilterUpdated,
     destroy(): void {
       destroyed = true;
       if (editingTimer !== null) clearTimeout(editingTimer);

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import type * as Y from 'yjs';
 import {
@@ -44,6 +44,8 @@ import {
   withTransaction,
   type IconGroup,
   type NodeSide,
+  type SharedFilter,
+  setSharedFilter,
 } from '@gmind/core';
 import {
   computeFit,
@@ -142,7 +144,7 @@ import { MemberPanel } from '../editor/MemberPanel';
 import { RichPanel } from '../editor/RichPanel';
 import { StructurePanel, type StructureTypeValue } from '../editor/StructurePanel';
 import { TaskTable, EMPTY_FILTERS, type Filters } from '../editor/TaskTable';
-import { MapFilterBar } from '../editor/MapFilterBar';
+import { MapFilterBar, toSharedFilter, fromSharedFilter, isEqualToShared } from '../editor/MapFilterBar';
 import { evalCond, resolveCondVal, condFieldsOf } from '../editor/taskFilter';
 import type { CustomColumnType } from '@gmind/core';
 import { TodoBench, type BenchRow } from '../editor/TodoBench';
@@ -424,6 +426,8 @@ export function EditorPage() {
   const collabHandleRef = useRef<CollabHandle | null>(null);
   // 在线成员（FR-COL-005）：collab onPresence 推进；成员面板开合。
   const [members, setMembers] = useState<PresenceMember[]>([]);
+  const membersRef = useRef<PresenceMember[]>([]);
+  membersRef.current = members;
   const [membersOpen, setMembersOpen] = useState(false);
   // 「更多」下拉（2026-10-25 原型顶栏重组）：评论/快捷键两入口的收纳菜单——
   // 原标题组「评论」钮与协作组「快捷键」钮随本轮改版移入（移动端只读分支的
@@ -582,6 +586,34 @@ export function EditorPage() {
   const [tableFilters, setTableFilters] = useState<Filters>(EMPTY_FILTERS);
   const tableFiltersRef = useRef<Filters>(EMPTY_FILTERS);
   tableFiltersRef.current = tableFilters;
+  /** 公共筛选（doc 级 meta.sharedFilter 的本地镜像；null = 从未有人发布）。 */
+  const [sharedFilter, setSharedFilterState] = useState<SharedFilter | null>(null);
+  const sharedFilterRef = useRef<SharedFilter | null>(null);
+  sharedFilterRef.current = sharedFilter;
+  /** 自己刚发布过（true = synced badge 可见；false = 跟随他人的，不显示）。
+   *  需求方 2026-11-15：接收人打开筛选弹窗时不显示「已同步给所有人」，只有操作人显示。 */
+  const selfPublishedRef = useRef(false);
+  /** 点「对所有人生效」：把当前筛选（去 keyword）写入文档成为公共筛选 + 广播通知。 */
+  const publishSharedFilter = useCallback((): void => {
+    if (!doc) return;
+    const payload = toSharedFilter(tableFiltersRef.current);
+    setSharedFilter(doc, payload);
+    setSharedFilterState(payload);
+    selfPublishedRef.current = true;
+    // stateless 广播：通知所有在线端（含 viewer——doc 更新被服务端拦截，
+    // stateless 通道独立不受影响）「xx 更改了筛选条件」。
+    const me = membersRef.current.find((m) => m.isSelf);
+    collabHandleRef.current?.broadcastFilterUpdated(me?.nickname ?? '有成员');
+  }, [doc]);
+  /** 点「恢复为公共筛选」：回到团队公共筛选状态（keyword 不动）。 */
+  const restoreSharedFilter = useCallback((): void => {
+    const sf = sharedFilterRef.current;
+    if (sf === null) {
+      setTableFilters(EMPTY_FILTERS);
+    } else {
+      setTableFilters({ ...fromSharedFilter(sf), keyword: tableFiltersRef.current.keyword });
+    }
+  }, []);
   const [benchOpen, setBenchOpen] = useState(false);
   /** 最新一帧节点视觉快照（rerender 装配）：待办抽屉/筛选计数的数据源。 */
   const nodeDataRef = useRef<Map<string, NodeVisual>>(new Map());
@@ -674,7 +706,6 @@ export function EditorPage() {
       if (ok && flt.statuses.size > 0 && !flt.statuses.has(r.status)) ok = false;
       if (ok && flt.overdueOnly && !((r.dueDate ?? '') !== '' && (r.dueDate ?? '') < todayStr() && r.status !== 'done')) ok = false;
       if (ok && flt.unassignedOnly && r.owners.length > 0) ok = false;
-      if (ok && flt.scope === 'me' && meId !== '' && !r.owners.includes(meId)) ok = false;
       if (ok && (flt.grp !== '' || flt.dept !== '')) {
         const mHit = r.owners.some((o) => {
           const mm = orgMembership.get(o);
@@ -3618,7 +3649,6 @@ export function EditorPage() {
         flt.overdueOnly ||
         flt.unassignedOnly ||
         flt.conds.length > 0 ||
-        flt.scope === 'me' ||
         flt.grp !== '' ||
         flt.dept !== '';
       let fadeOf: ((id: string) => 'hit' | 'path' | 'dim' | undefined) | undefined;
@@ -3642,7 +3672,6 @@ export function EditorPage() {
           if (hit && flt.statuses.size > 0 && !flt.statuses.has(st)) hit = false;
           if (hit && flt.overdueOnly && !((t?.dueDate ?? '') !== '' && (t?.dueDate ?? '') < today0 && st !== 'done')) hit = false;
           if (hit && flt.unassignedOnly && owners.length > 0) hit = false;
-          if (hit && flt.scope === 'me' && me0 !== '' && !owners.includes(me0)) hit = false;
           if (hit && (flt.grp !== '' || flt.dept !== '')) {
             const mHit = owners.some((o) => {
               const mm = membership.get(o);
@@ -3887,6 +3916,63 @@ export function EditorPage() {
       },
     });
     collabHandleRef.current = collab;
+
+    // e2e 调试暴露：让测试可直接读 Yjs doc meta（filter-two-tier e2e 断言
+    // sharedFilter 持久态不含 keyword 键用）。仅测试环境暴露。
+    if (import.meta.env.MODE === 'test' || import.meta.env.DEV) {
+      (window as unknown as { __gmindDoc?: typeof d }).__gmindDoc = d;
+    }
+
+    // ── 公共筛选协同跟随（轮 2 筛选双层化，2026-11-15）────────────────────
+    // 订阅 doc 级 meta.sharedFilter 变化：远端发布公共筛选时——
+    //   · 若本地无个人调整（与事件前公共筛选逐字段相等，keyword 不参与）→ 自动跟随
+    //     到新公共筛选；有个人调整 → 不动本地筛选。
+    //   通知（toast）走 stateless 通道（onFilterUpdated 回调），所有在线端含 viewer
+    //   都能收到——doc 更新被服务端 beforeHandleMessage 拦截，stateless 独立不受影响。
+    // 初始装载：doc 已有公共筛选（他人此前发布）→ 无个人调整（新会话=空筛选）→
+    // 直接跟随，无 toast（非新事件）。
+    const initialShared = getMeta(d).sharedFilter ?? null;
+    if (initialShared !== null) {
+      setSharedFilterState(initialShared);
+      setTableFilters({ ...fromSharedFilter(initialShared), keyword: tableFiltersRef.current.keyword });
+    }
+    let lastSharedFilter: SharedFilter | null = initialShared;
+    const metaObserver = (event: Y.YMapEvent<unknown>): void => {
+      if (!event.keysChanged.has('sharedFilter')) return;
+      const newShared: SharedFilter | null = getMeta(d).sharedFilter ?? null;
+      const oldShared = lastSharedFilter;
+      lastSharedFilter = newShared;
+      // 自己发布时 newShared 与 tableFilters 一致（刚写入），此时无需跟随。
+      const currentFilters = tableFiltersRef.current;
+      const justPublished = newShared !== null &&
+        isEqualToShared(currentFilters, newShared);
+      if (justPublished) {
+        setSharedFilterState(newShared);
+        return;
+      }
+      // 远端发布：判定本地是否在做个人调整
+      selfPublishedRef.current = false;
+      const wasSynced = oldShared === null
+        ? isEqualToShared(currentFilters, null)
+        : isEqualToShared(currentFilters, oldShared);
+      if (wasSynced) {
+        // 无个人调整 → 跟随
+        if (newShared !== null) {
+          setTableFilters({ ...fromSharedFilter(newShared), keyword: currentFilters.keyword });
+        } else {
+          setTableFilters({ ...EMPTY_FILTERS, keyword: currentFilters.keyword });
+        }
+      }
+      // 有个人调整 → 不动本地筛选；toast 由 stateless 回调统一处理（见下方）。
+      setSharedFilterState(newShared);
+    };
+    d.getMap('meta').observe(metaObserver);
+
+    // stateless 通道：公共筛选变更通知（所有在线端含 viewer 都能收到）。
+    const offFilterUpdated = collab.onFilterUpdated((nickname) => {
+      showToast(`${nickname} 更改了筛选条件`);
+    });
+
     // 键盘写路径：移动端只读不装配（OPEN-T-005 裁定「以不挂载实现」——Enter/
     // Tab/Delete/粘贴等全部写键位随监听缺席一并失效；readOnly 入 effect 依赖，
     // 断点跨越时按本 effect 重建路径重新装配/卸下）。
@@ -3969,6 +4055,8 @@ export function EditorPage() {
       svgEl.removeEventListener('wheel', onWheelSync);
       document.removeEventListener('paste', onDocPaste);
       d.off('update', onDocUpdate);
+      d.getMap('meta').unobserve(metaObserver);
+      offFilterUpdated();
       stopSave.stop();
       if (thumbTimer !== null) clearTimeout(thumbTimer); // 缩略图尾沿定时器随装配拆卸
       collabHandleRef.current = null;
@@ -4669,6 +4757,10 @@ export function EditorPage() {
             customColumns={customColumns}
             orgOptions={orgOptions}
             fileId={fileId}
+            sharedFilter={sharedFilter}
+            selfPublished={selfPublishedRef.current}
+            onPublish={publishSharedFilter}
+            onRestoreShared={restoreSharedFilter}
           />
         {/* 表格视图（M7a-T4）：画布仅 CSS 隐藏（引擎场景/视口/选中不卸载，切回即恢复），
             概要行内编辑随画布容器一并隐藏。 */}

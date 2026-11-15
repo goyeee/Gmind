@@ -161,8 +161,6 @@ export interface Filters {
   unassignedOnly: boolean;
   /** 字段条件（二期对齐轮，原型 conds）：求值单源 taskFilter.evalCond。 */
   conds: FilterCond[];
-  /** 生效范围（原型 scope）：'me' = 仅本人可见（负责人含查看者）。 */
-  scope: 'all' | 'me';
   /** 分组/部门（org directory 口径：负责人任一人的挂靠命中即算）。 */
   grp: string;
   dept: string;
@@ -175,7 +173,6 @@ export const EMPTY_FILTERS: Filters = {
   overdueOnly: false,
   unassignedOnly: false,
   conds: [],
-  scope: 'all',
   grp: '',
   dept: '',
 };
@@ -538,7 +535,6 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
     filters.overdueOnly ||
     filters.unassignedOnly ||
     filters.conds.length > 0 ||
-    filters.scope === 'me' ||
     filters.grp !== '' ||
     filters.dept !== '';
 
@@ -564,8 +560,7 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
     if (filters.statuses.size > 0 && !filters.statuses.has(t?.status ?? 'todo')) return false;
     if (filters.overdueOnly && !isOverdue(n, nodes)) return false;
     if (filters.unassignedOnly && owners.length > 0) return false;
-    // scope/分组/部门 + 字段条件（二期对齐轮）：求值单源 taskFilter
-    if (filters.scope === 'me' && props.meId !== '' && !owners.includes(props.meId)) return false;
+    // 分组/部门 + 字段条件（二期对齐轮）：求值单源 taskFilter
     if (filters.grp !== '' || filters.dept !== '') {
       const hit = owners.some((o) => {
         const m = props.orgMembership.get(o);

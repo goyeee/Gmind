@@ -623,9 +623,9 @@ body.painter-active .editor-canvas svg {
 .editor-toast {
   position: fixed;
   left: 50%;
-  bottom: 64px;
+  top: 120px;
   transform: translateX(-50%);
-  background: rgba(31, 35, 41, 0.9);
+  background: var(--gm-brand, #3370ff);
   color: #fff;
   padding: 8px 16px;
   border-radius: 6px;

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { CustomColumnType } from '@gmind/core';
+import type { CustomColumnType, SharedFilter } from '@gmind/core';
 import type { TaskStatus } from '@gmind/shared';
 import type { Filters } from './TaskTable';
 import { EMPTY_FILTERS } from './TaskTable';
@@ -9,7 +9,6 @@ import {
   needsVal,
   opLabel,
   OPS_BY_KIND,
-  resolveCondVal,
   type CondField,
   type FilterCond,
   type FilterKind,
@@ -46,7 +45,6 @@ interface SavedView {
     overdueOnly: boolean;
     unassignedOnly: boolean;
     conds: FilterCond[];
-    scope: 'all' | 'me';
     grp: string;
     dept: string;
   };
@@ -62,7 +60,8 @@ function loadViews(fileId: string): SavedView[] {
   }
 }
 
-/** Filters ↔ 可序列化（owners Set ↔ array）。 */
+/** Filters ↔ 可序列化（owners Set ↔ array；scope 已退役——旧数据 scope:'me' 迁移为
+ *  owners:[meId]，与「我的待办」预设等价语义）。 */
 function serialize(f: Filters): SavedView['filters'] {
   return {
     owners: [...f.owners],
@@ -70,10 +69,20 @@ function serialize(f: Filters): SavedView['filters'] {
     overdueOnly: f.overdueOnly,
     unassignedOnly: f.unassignedOnly,
     conds: f.conds,
-    scope: f.scope,
     grp: f.grp,
     dept: f.dept,
   };
+}
+
+/** 旧模型迁移：scope:'me' → owners:[meId]（其余字段不变）；scope:'all'/缺失 → 无操作。 */
+function migrateLegacyScope(v: SavedView['filters'], meId: string): SavedView['filters'] {
+  const legacy = v as SavedView['filters'] & { scope?: 'all' | 'me' };
+  if (legacy.scope !== 'me') return v;
+  const owners = new Set(v.owners);
+  owners.add(meId);
+  const rest = { ...legacy };
+  delete rest.scope;
+  return { ...rest, owners: [...owners] };
 }
 
 function deserialize(v: SavedView['filters']): Filters {
@@ -84,10 +93,53 @@ function deserialize(v: SavedView['filters']): Filters {
     overdueOnly: v.overdueOnly,
     unassignedOnly: v.unassignedOnly,
     conds: v.conds,
-    scope: v.scope,
     grp: v.grp,
     dept: v.dept,
   };
+}
+
+/** Filters（会话态）→ SharedFilter（持久态）：去 keyword（会话级，永不入文档）。 */
+export function toSharedFilter(f: Filters): SharedFilter {
+  return {
+    owners: [...f.owners],
+    statuses: [...f.statuses] as SharedFilter['statuses'],
+    overdueOnly: f.overdueOnly,
+    unassignedOnly: f.unassignedOnly,
+    conds: f.conds.map((c) => ({ id: c.id, col: c.col, op: c.op, val: c.val })),
+    grp: f.grp,
+    dept: f.dept,
+  };
+}
+
+/** SharedFilter（持久态）→ Filters（会话态）：keyword 恒 ''（由调用方按需回填）。 */
+export function fromSharedFilter(sf: SharedFilter): Filters {
+  return {
+    keyword: '',
+    owners: new Set(sf.owners),
+    statuses: new Set(sf.statuses) as Filters['statuses'],
+    overdueOnly: sf.overdueOnly,
+    unassignedOnly: sf.unassignedOnly,
+    conds: sf.conds.map((c) => ({ ...c }) as FilterCond),
+    grp: sf.grp,
+    dept: sf.dept,
+  };
+}
+
+/** 当前筛选与公共筛选逐字段相等（keyword 不参与——会话级）。 */
+export function isEqualToShared(f: Filters, shared: SharedFilter | null): boolean {
+  if (shared === null) {
+    return (
+      f.owners.size === 0 &&
+      f.statuses.size === 0 &&
+      !f.overdueOnly &&
+      !f.unassignedOnly &&
+      f.conds.length === 0 &&
+      f.grp === '' &&
+      f.dept === ''
+    );
+  }
+  const a = toSharedFilter(f);
+  return JSON.stringify(a) === JSON.stringify(shared);
 }
 
 export interface MapFilterBarProps {
@@ -106,10 +158,19 @@ export interface MapFilterBarProps {
   orgOptions: { depts: Array<{ id: string; name: string }>; groups: Array<{ id: string; name: string }> };
   /** 保存视图的存储键（按文件隔离）。 */
   fileId: string;
+  /** 公共筛选（doc 级，经 getMeta(doc).sharedFilter 防御归一；null = 从未有人发布）。 */
+  sharedFilter: SharedFilter | null;
+  /** 是否自己刚发布过（true = 弹窗头显示「✓ 已同步给所有人」；false = 跟随他人的，
+   *  不显示——需求方 2026-11-15：接收人不显示该话术，只有操作人显示）。 */
+  selfPublished: boolean;
+  /** 点「对所有人生效」：把当前筛选（去 keyword）写入文档成为公共筛选。 */
+  onPublish: () => void;
+  /** 点「恢复为公共筛选」：回到团队公共筛选状态。 */
+  onRestoreShared: () => void;
 }
 
 export function MapFilterBar(props: MapFilterBarProps): React.ReactElement {
-  const { filters, onFiltersChange, candidates, meId, totalTasks, hitCount, customColumns, orgOptions, fileId, view } = props;
+  const { filters, onFiltersChange, candidates, meId, totalTasks, hitCount, customColumns, orgOptions, fileId, view, sharedFilter, selfPublished, onPublish, onRestoreShared } = props;
   const [pop, setPop] = useState<'' | 'filter' | 'views'>('');
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const fields = useMemo(() => condFieldsOf(customColumns), [customColumns]);
@@ -117,7 +178,6 @@ export function MapFilterBar(props: MapFilterBarProps): React.ReactElement {
   const [viewName, setViewName] = useState('');
   const [menu, setMenu] = useState<'' | 'add' | string>(''); // 'add' = 添加条件的字段菜单；其余 = 条件行字段菜单（cond id）
   const [folded, setFolded] = useState<Set<string>>(new Set());
-
   useEffect(() => {
     setSavedViews(loadViews(fileId));
   }, [fileId]);
@@ -140,9 +200,28 @@ export function MapFilterBar(props: MapFilterBarProps): React.ReactElement {
     filters.overdueOnly ||
     filters.unassignedOnly ||
     filters.conds.length > 0 ||
-    filters.scope === 'me' ||
     filters.grp !== '' ||
     filters.dept !== '';
+
+  /** 与公共筛选是否一致（逐字段，keyword 不参与——会话级）。 */
+  const matchesShared = sharedFilter !== null && isEqualToShared(filters, sharedFilter);
+  /** synced badge 只在自己是操作人时显示（需求方：接收人不显示「已同步给所有人」）。 */
+  const synced = matchesShared && selfPublished;
+  /** 「· 仅你可见」+ 按钮组的显示规则：
+   *  - 无公共筛选（sharedFilter===null）：有筛选条件才显示（空筛选=无操作，不显示）。
+   *  - 有公共筛选：与公共不一致就显示（含清空已同步筛选后的不一致——需求方 2026-11-16：
+   *    清空后也要能重新「对所有人生效」）。
+   *  - 与公共一致：不显示（你没有在做个人调整）。 */
+  const hasFilterConditions =
+    filters.owners.size > 0 ||
+    filters.statuses.size > 0 ||
+    filters.overdueOnly ||
+    filters.unassignedOnly ||
+    filters.conds.length > 0 ||
+    filters.grp !== '' ||
+    filters.dept !== '';
+  const showPersonalBadge =
+    sharedFilter === null ? hasFilterConditions : !matchesShared;
 
   const set = (p: Partial<Filters>): void => onFiltersChange({ ...filters, ...p });
   const setCond = (id: string, p: Partial<FilterCond>): void =>
@@ -184,6 +263,10 @@ export function MapFilterBar(props: MapFilterBarProps): React.ReactElement {
     setPop('');
   };
 
+  const applySavedView = (v: SavedView['filters']): void => {
+    applyView(deserialize(migrateLegacyScope(v, meId)));
+  };
+
   const fieldMenu = (pick: (field: CondField) => void, posClass: string): React.ReactElement => (
     <>
       <div className="mf-menu-mask" onClick={() => setMenu('')} />
@@ -200,7 +283,6 @@ export function MapFilterBar(props: MapFilterBarProps): React.ReactElement {
   );
 
   const tagList: Array<[string, string, () => void]> = [];
-  if (filters.scope === 'me') tagList.push(['范围', '对本人生效', () => set({ scope: 'all' })]);
   if (filters.owners.size > 0)
     tagList.push([
       '负责人',
@@ -257,30 +339,38 @@ export function MapFilterBar(props: MapFilterBarProps): React.ReactElement {
         >
           筛选
           {tagList.length > 0 && <b className="mf-badge">{tagList.length}</b>}
+          {!synced && showPersonalBadge && <span className="mf-personal-badge" data-testid="map-filter-personal-badge">· 仅你可见</span>}
           <i className="mf-caret" aria-hidden />
         </button>
         {pop === 'filter' && (
           <div className="mf-pop mf-pop-wide" data-testid="map-filter-pop" role="dialog" aria-label="筛选条件">
             <div className="mf-pop-head">
               <b>筛选</b>
-              <div className="mf-scope" role="group" aria-label="生效范围">
-                <button
-                  type="button"
-                  className={filters.scope === 'all' ? 'active' : ''}
-                  aria-pressed={filters.scope === 'all'}
-                  onClick={() => set({ scope: 'all' })}
-                >
-                  对所有人生效
-                </button>
-                <button
-                  type="button"
-                  className={filters.scope === 'me' ? 'active' : ''}
-                  aria-pressed={filters.scope === 'me'}
-                  onClick={() => set({ scope: 'me' })}
-                >
-                  对本人生效
-                </button>
-              </div>
+              {synced ? (
+                <span className="mf-synced-badge" data-testid="map-filter-synced-badge">
+                  ✓ 已同步给所有人
+                </span>
+              ) : showPersonalBadge ? (
+                <div className="mf-scope" role="group" aria-label="筛选生效范围">
+                  <span className="mf-personal-label">调整仅你可见</span>
+                  <button
+                    type="button"
+                    data-testid="map-filter-publish"
+                    className="mf-publish-btn"
+                    onClick={onPublish}
+                  >
+                    对所有人生效
+                  </button>
+                  <button
+                    type="button"
+                    data-testid="map-filter-restore-shared"
+                    className="mf-restore-btn"
+                    onClick={onRestoreShared}
+                  >
+                    恢复为公共筛选
+                  </button>
+                </div>
+              ) : null}
             </div>
             <div className="mf-conds">
               {filters.conds.map((c) => {
@@ -289,9 +379,11 @@ export function MapFilterBar(props: MapFilterBarProps): React.ReactElement {
                 const open = !folded.has(c.id);
                 const summary = condSummary(field, c, labelOf);
                 const Glyph = KIND_GLYPH[kind];
-                const selVals = resolveCondVal(c.val, meId)
-                  .split(',')
-                  .filter(Boolean);
+                // 存取都用原始 val（字面量 'me' 保留）——此前经 resolveCondVal 解析后
+                // selVals 含 meId，checked/toggleVal 用字面量 'me' 比较 → checked 恒 false、
+                // toggle 恒走追加分支（需求方 2026-11-16 bug 反馈）。求值时再解析（evalCond
+                // 调用方 resolveCondVal 路径不变）。
+                const selVals = c.val.split(',').filter(Boolean);
                 const toggleVal = (id: string): void => {
                   const next = selVals.includes(id) ? selVals.filter((x) => x !== id) : [...selVals, id];
                   setCond(c.id, { val: next.join(',') });
@@ -392,7 +484,6 @@ export function MapFilterBar(props: MapFilterBarProps): React.ReactElement {
             </div>
             <div className="mf-more-title">更多条件</div>
             <div className="mf-more">
-              {sel('人员', filters.scope === 'me' ? '' : [...filters.owners][0] ?? '', (v) => set({ owners: v === '' ? new Set() : new Set([v]) }), candidates.map((c) => [c.id, c.label] as [string, string]), filters.scope === 'me')}
               {sel('分组', filters.grp, (v) => set({ grp: v }), orgOptions.groups.map((g) => [g.id, g.name] as [string, string]))}
               {sel('部门', filters.dept, (v) => set({ dept: v }), orgOptions.depts.map((d) => [d.id, d.name] as [string, string]))}
             </div>
@@ -448,7 +539,7 @@ export function MapFilterBar(props: MapFilterBarProps): React.ReactElement {
         {pop === 'views' && (
           <div className="mf-pop mf-views-pop" data-testid="map-views-pop" role="dialog" aria-label="筛选视图">
             <div className="mf-menu-title">常用视图</div>
-            <button type="button" className="mf-view-item" onClick={() => applyView({ ...EMPTY_FILTERS, scope: 'me' })}>
+            <button type="button" className="mf-view-item" onClick={() => applyView({ ...EMPTY_FILTERS, owners: new Set([meId]) })}>
               我的待办
             </button>
             <button type="button" className="mf-view-item" onClick={() => applyView({ ...EMPTY_FILTERS, overdueOnly: true })}>
@@ -461,7 +552,7 @@ export function MapFilterBar(props: MapFilterBarProps): React.ReactElement {
             {savedViews.length === 0 && <p className="mf-hint">暂无，设置筛选后可保存</p>}
             {savedViews.map((v) => (
               <div key={v.id} className="mf-view-row">
-                <button type="button" className="mf-view-item" onClick={() => applyView(deserialize(v.filters))}>
+                <button type="button" className="mf-view-item" onClick={() => applySavedView(v.filters)}>
                   {v.name}
                 </button>
                 <button type="button" aria-label={`删除视图 ${v.name}`} className="mf-view-del" onClick={() => dropView(v.id)}>
