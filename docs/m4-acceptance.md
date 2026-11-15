@@ -305,3 +305,36 @@ emoji(28)/数字(10) 组往返仍丢（无 XMind 原生源）；颜色/形状信
 1. **Gmind问题汇总.xmind rn=7 与其 XMind 截图 8 右差一支**：疑 XMind 8 手动拖拽分支后不刷新根扩展计数（文件存储值确实为 7）——导入忠实按存储值处理，不算不猜；要与 XMind 显示一致，在 XMind 拖动该分支并重存（强刷计数）后重导（features ④10/规则 4 同口径专项说明）。定位信息（同日终审 Minor#2 补记，当日读文件核实）：①**点名移位分支=按文档序第 8 支「设置」**——根下文档序为 场景/首页/harness使用总结/Ai/筛选/任务看板/协作/设置/文件/分支主题 6 共 10 支，rn=7 时前 7 支居右、它从 XMind 截图的右侧落到 Gmind 左侧；②**同名双文件指认**——工作目录 `/Users/guoyue/工作/个人项目/Gmind/Gmind问题汇总.xmind` 才是存 rn=7 的原件（XMind 8 格式 content.xml），Downloads 下同名文件是旧 Gmind 导出件（无 right-number，导入走兜底）。
 2. **right-number 缺失文件的兜底算法仍为近似规则**（features ④10 延续）：v3「锚左＋空右交替」按复测文件校准，不表述为「与 XMind 算法一致」。
 3. **mindmap 画布导出恒产 right-number**（折算修正的必然结果）：空画布产 '0'、全缺省模板产折算值——语义=引擎渲染断言，不再是「文件未存」的模糊态；T3 版「无侧别不产键」口径就此作废（§十五 T4 段已记）。
+
+## 十六、2026-11-15 轮 2 筛选双层化补记（需求方三轮 AskUserQuestion 拍板）
+
+### 需求方裁定原话要点（AskUserQuestion 三轮，2026-11-15）
+
+1. **公共筛选不含 keyword**（推荐项，原型口径）：「原型里『我保存的视图』和公共筛选都不含 keyword，keyword 只在『当前这次筛选』里生效。」
+2. **旧视图自动迁移**（推荐项）：「localStorage 里已存的旧视图如果带 scope:'me'，打开时自动转成『负责人=我』，效果与旧版一致，用户无感。」
+3. **提示用 toast，话术「xx 更改了筛选条件」**（指定项）。
+4. **冲突保护 = 正在做个人调整的人不被覆盖**（推荐项）：「如果自己有自己的筛选还没保存，那么就不发生变化。」
+
+### 实现要点
+
+- **core**：`meta.sharedFilter` doc 级新字段（`setSharedFilter` op，setTableView 同款形状——同值守卫、ORIGIN_SYSTEM 不进撤销栈）；`canonicalSharedFilter` 防御归一单源（constants.ts）；restore 排除（随 meta.title 先例「视图偏好不随版本回滚」）；repair 规则⑧扩展（非对象删键/带 keyword 剔除）。
+- **web**：`Filters` 删 `scope`（TaskTable/MapFilterBar/EditorPage 三处清除）；`MapFilterBar` 双层 UI（「· 仅你可见」badge、`对所有人生效` publish、`恢复为公共筛选` restore、`✓已同步给所有人` synced）；`isEqualToShared` 逐字段比较（keyword 不参与）；旧视图 `scope:'me'` 迁移为 `owners:[meId]`；「我的待办」预设改 `owners:[meId]`。
+- **协同跟随**：EditorPage 订阅 `meta.observe`——远端发布时按「事件前公共筛选 vs 当前筛选」判定（无个人调整→跟随 + toast；有个人调整→仅 toast）；`justPublished` 短路（自己发布时不跟随不 toast）；toast 昵称从 awareness presence 取（回退「有成员」）。
+- **keyword 会话级**：`toSharedFilter` 去 keyword；`setSharedFilter` op 对带 keyword 键的入参抛 `SHARED_FILTER_INVALID`；`isEqualToShared` keyword 不参与。
+
+### 交付用例（当日 grep 行号）
+
+| 用例 | 位置 | 结果 |
+|------|------|------|
+| setSharedFilter 写入读回 / null 删除 / keyword 抛错 / 同值守卫 / 非对象抛错 / 不进撤销栈 | `packages/gmind-core/src/operations.test.ts` 「setSharedFilter（公共筛选持久态整体写入，轮 2 筛选双层化）」describe 块 | 6/6 通过 |
+| sharedFilter 防御读取（非对象→undefined/字段级防御/合法透传） | `packages/gmind-core/src/read.test.ts` 「sharedFilter 防御读取」describe 块 | 3/3 通过 |
+| restore sharedFilter 不随版本回滚 | `packages/gmind-core/src/restore.test.ts` 「restore：sharedFilter 不随版本回滚」describe 块 | 1/1 通过 |
+| sharedFilter repair 归一（非对象删键/keyword 剔除/合法零替换） | `packages/gmind-core/src/repair.test.ts` 「sharedFilter 归一」describe 块 | 1/1 通过 |
+| 基础双层 + 协同跟随 + 冲突保护 + 恢复 + keyword 隔离 | `apps/web/e2e/filter-two-tier.e2e.spec.ts` 四用例 | 4/4 通过 |
+
+### 门禁五件套（2026-11-15 收官）
+
+- lint 0 / typecheck 0
+- 单测 1213 = shared 43 + xmind-io 88 + core 386 + engine 428 + server 77 + web 191
+- server e2e 217/217
+- web e2e 226 过 + 1 skip、零 flaky
