@@ -797,6 +797,129 @@ describe('parseXmind：content.xml 回落（XMind 8）', () => {
 });
 
 // ---------------------------------------------------------------------------
+// 根扩展 right-number（2026-11-15 分侧忠实还原：attached 文档序前 N 支居右计数）
+// ---------------------------------------------------------------------------
+
+/** XML 根扩展真值形状：`<extensions><extension provider=…><content><right-number>N`。 */
+const extXml = (provider: string, rightNumber?: string) =>
+  `<extensions><extension provider="${provider}"><content>` +
+  `${rightNumber === undefined ? '' : `<right-number>${rightNumber}</right-number>`}</content></extension></extensions>`;
+
+/** JSON 根主题（带 extensions 数组真值形状 `[{provider,content:[{name,content}]}]`）。 */
+const rnTopicJson = (extensions: unknown) => ({
+  class: 'topic',
+  title: '中心',
+  extensions,
+  children: { attached: [{ class: 'topic', title: 'A' }] },
+});
+
+const rnExtJson = (content: string) => [
+  { provider: 'org.xmind.ui.map.unbalanced', content: [{ name: 'right-number', content }] },
+];
+
+describe('parseXmind：根扩展 right-number（分侧忠实还原）', () => {
+  it('XML：根 extensions provider=org.xmind.ui.map.unbalanced right-number=3 → rightCount 3；无 extensions 不产键', () => {
+    const topicXml =
+      `<topic id="t1"><title>中心</title>${extXml('org.xmind.ui.map.unbalanced', '3')}` +
+      '<children><topics type="attached"><topic id="a1"><title>A</title></topic></topics></children></topic>';
+    const hit = parseXmind(zipOf({ 'content.xml': xmlMap(`<sheet id="s1">${topicXml}</sheet>`) }));
+    expect(hit.sheets[0]!.rightCount).toBe(3);
+    expect(hit.degraded).toEqual([]); // 扩展不计降级（与 theme 同口径）
+
+    const miss = parseXmind(zipOf({ 'content.xml': xmlMap(`<sheet id="s1">${ROOT_TOPIC_XML}</sheet>`) }));
+    expect(miss.sheets[0]!.rightCount).toBeUndefined();
+    expect('rightCount' in miss.sheets[0]!).toBe(false); // 无 extensions 不产键
+  });
+
+  it('JSON：root.extensions 数组 [{provider,content:[{name,content}]}] → rightCount；rn=0 是合法值必须产键', () => {
+    const hit = parseXmind(jsonZip(sheet(rnTopicJson(rnExtJson('3')))));
+    expect(hit.sheets[0]!.rightCount).toBe(3);
+    expect(hit.degraded).toEqual([]);
+
+    const zero = parseXmind(jsonZip(sheet(rnTopicJson(rnExtJson('0')))));
+    expect(zero.sheets[0]!.rightCount).toBe(0); // 0=全左合法（前端周报真实文件实证）
+  });
+
+  it('非法值不产键：负数/非数字/空 content → undefined（XML/JSON 同口径）', () => {
+    const xmlTopicOf = (rn: string) =>
+      `<topic id="t1"><title>中心</title>${extXml('org.xmind.ui.map.unbalanced', rn)}</topic>`;
+    for (const bad of ['-1', 'abc', '']) {
+      const j = parseXmind(jsonZip(sheet(rnTopicJson(rnExtJson(bad)))));
+      expect(j.sheets[0]!.rightCount).toBeUndefined();
+      expect('rightCount' in j.sheets[0]!).toBe(false);
+      expect(j.degraded).toEqual([]); // 非法值不计降级
+
+      const x = parseXmind(zipOf({ 'content.xml': xmlMap(`<sheet id="s1">${xmlTopicOf(bad)}</sheet>`) }));
+      expect(x.sheets[0]!.rightCount).toBeUndefined();
+      expect('rightCount' in x.sheets[0]!).toBe(false);
+    }
+  });
+
+  it('provider 不匹配（map.balanced）或 content 无 right-number → 不产键；子主题 extensions 忽略（仅根有效）；均不计降级', () => {
+    const j = parseXmind(
+      jsonZip(
+        sheet({
+          class: 'topic',
+          title: '中心',
+          extensions: [
+            { provider: 'org.xmind.ui.map.balanced', content: [{ name: 'right-number', content: '3' }] }, // provider 不匹配
+            { provider: 'org.xmind.ui.map.unbalanced', content: [{ name: 'other', content: '3' }] }, // 无 right-number
+          ],
+          children: {
+            attached: [
+              {
+                class: 'topic',
+                title: '子',
+                extensions: rnExtJson('5'), // 子主题扩展忽略
+              },
+            ],
+          },
+        }),
+      ),
+    );
+    expect(j.sheets[0]!.rightCount).toBeUndefined();
+    expect('rightCount' in j.sheets[0]!).toBe(false);
+    expect(j.sheets[0]!.root.children[0]!.title).toBe('子'); // 子主题 extensions 不炸树
+    expect(j.degraded).toEqual([]);
+
+    const x = parseXmind(
+      zipOf({
+        'content.xml': xmlMap(
+          `<sheet id="s1"><topic id="t1"><title>中心</title>${extXml('org.xmind.ui.map.balanced', '3')}` +
+            `<children><topics type="attached"><topic id="a1"><title>A</title>${extXml('org.xmind.ui.map.unbalanced', '5')}</topic></topics></children></topic></sheet>`,
+        ),
+      }),
+    );
+    expect(x.sheets[0]!.rightCount).toBeUndefined(); // 根 provider 不匹配；子主题的合法扩展不顶用
+    expect(x.degraded).toEqual([]);
+  });
+
+  it('多 sheet 各自独立计数（前端周报 rn=[0,2] 形状：sheet0=0、sheet1=2；无扩展 sheet 不产键）', () => {
+    const j = parseXmind(
+      jsonZip(
+        JSON.stringify([
+          { class: 'sheet', title: 'S1', rootTopic: rnTopicJson(rnExtJson('0')) },
+          { class: 'sheet', title: 'S2', rootTopic: rnTopicJson(rnExtJson('2')) },
+          { class: 'sheet', title: 'S3', rootTopic: { class: 'topic', title: '无扩展' } },
+        ]),
+      ),
+    );
+    expect(j.sheets.map((s) => s.rightCount)).toEqual([0, 2, undefined]);
+    expect(j.degraded).toEqual([]);
+
+    const x = parseXmind(
+      zipOf({
+        'content.xml': xmlMap(
+          `<sheet id="s1"><topic id="t1"><title>a</title>${extXml('org.xmind.ui.map.unbalanced', '0')}</topic></sheet>` +
+            `<sheet id="s2"><topic id="t2"><title>b</title>${extXml('org.xmind.ui.map.unbalanced', '2')}</topic></sheet>`,
+        ),
+      }),
+    );
+    expect(x.sheets.map((s) => s.rightCount)).toEqual([0, 2]);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // 错误契约
 // ---------------------------------------------------------------------------
 

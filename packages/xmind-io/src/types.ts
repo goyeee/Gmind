@@ -56,6 +56,11 @@ export interface XmindSheet {
   title: string;
   root: XmindNode;
   structureType?: XmindStructureType;
+  /** 根扩展 right-number=attached 文档序前 N 支居右计数（2026-11-15 分侧忠实还原；
+   *  provider=org.xmind.ui.map.unbalanced，仅根主题上的扩展有效，子主题忽略）。解析层
+   *  只在合法非负整数时产键（否则不产），越界 clamp 到 [0, attached 数] 由导入胶水层做，
+   *  此处原样透传数字。 */
+  rightCount?: number;
 }
 
 /** 降级目录键（v2 命名制；键序=DEGRADED_LABELS 目录序=「未导入：…」提示文案顺序）。
@@ -159,6 +164,9 @@ export interface JsonTopic {
   range?: unknown;
   /** 样式属性表（2020+ JSON：`style:{properties:{…}}`）。 */
   properties?: unknown;
+  /** 根主题扩展（2026-11-15 分侧真值：`extensions:[{provider,content:[{name,content}]}]`，
+   *  仅根主题上的有效——子主题的 extensions 解析层忽略）。 */
+  extensions?: unknown[];
   /** 任务信息（v2 起计数丢弃）。 */
   taskInfo?: unknown;
   children?: {

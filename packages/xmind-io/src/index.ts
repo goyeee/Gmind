@@ -34,6 +34,11 @@ export function zipEntries(entries: Record<string, Uint8Array>): Uint8Array {
   return zipSync(entries);
 }
 
+/** 解包 zip（fflate unzipSync 包装，与 zipEntries 对称的测试/工具开口；导入主链路不使用）。 */
+export function unzipEntries(bytes: Uint8Array): Record<string, Uint8Array> {
+  return unzipSync(bytes);
+}
+
 /** 魔数嗅探（spec §四白名单）：png `\x89PNG` / jpg `\xFF\xD8\xFF` / gif `GIF8` / webp `RIFF..WEBP`；
  *  白名单外返回 undefined（不入 resources 表，引用处计图片降级）。 */
 function sniffImageMime(b: Uint8Array): string | undefined {

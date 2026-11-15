@@ -11,13 +11,15 @@
 // - 链接：topic 的 xlink:href（非 http/https 计超链接）；
 // - 样式：topic style-id → styles.xml 间接表（parseXmind 预解析 Map 传入；缺表逐个计样式属性）；
 // - 结构：根 structure-class 映射 structureType、非根逐个计结构覆盖；
+// - 分侧（2026-11-15 忠实还原）：根 <extensions> provider=org.xmind.ui.map.unbalanced 的
+//   <right-number> → sheet.rightCount（仅根有效；未知 provider/无 right-number 忽略不计降级）；
 // - sheet theme 是**属性**（子元素兜底）——两者都**不再计入**降级（2026-11-14 需求方
 //   拍板：主题由 Gmind 自有主题替换，非内容丢失）；legend 忽略不计。
 // 描述（M7c-C1）：XML 侧无对应标签（XMind 8 格式无 description 概念），登记不映射——
 // 导入不产出、导出（buildXmind 只走 JSON 侧）不写入（口径见 types.ts XmindNode 头注）。
 import type { DegradedItem, XmindIcons, XmindNode, XmindResources, XmindSheet } from './types';
 import { XmindParseError } from './types';
-import { applyStyleKeyMap, DegradedCollector, IMG_ALIGNS, RANGE_RE, structureTypeOf } from './parse-json';
+import { applyStyleKeyMap, DegradedCollector, IMG_ALIGNS, RANGE_RE, rightNumberOf, structureTypeOf, UNBALANCED_PROVIDER } from './parse-json';
 import type { ImageAlign } from './parse-json';
 import { markersToIcons } from './markers';
 
@@ -149,6 +151,25 @@ function resolveXmlImages(el: Element, resources: XmindResources, d: DegradedCol
 function summaryElements(el: Element): Element[] {
   const summariesEl = childElement(el, 'summaries');
   return summariesEl ? childElements(summariesEl, 'summary') : [];
+}
+
+/** 根扩展 right-number（分侧真值，仅根主题上的扩展有效）：
+ *  `<extensions><extension provider=…><content><right-number>N</right-number>`——provider
+ *  恰为 org.xmind.ui.map.unbalanced 才读；不认识的 provider / 无 right-number / 非法值
+ *  一律不产键，也不计降级（与 theme 同口径）。 */
+function resolveXmlRightCount(el: Element): number | undefined {
+  const extsEl = childElement(el, 'extensions');
+  if (!extsEl) return undefined;
+  for (const extEl of childElements(extsEl, 'extension')) {
+    if (extEl.getAttribute('provider') !== UNBALANCED_PROVIDER) continue;
+    const contentEl = childElement(extEl, 'content');
+    const rnEl = contentEl ? childElement(contentEl, 'right-number') : null;
+    if (rnEl) {
+      const n = rightNumberOf((rnEl.textContent ?? '').trim());
+      if (n !== undefined) return n;
+    }
+  }
+  return undefined;
 }
 
 /** XML 概要：<summary range topic-id>，标签取同父标签桶（id=topic-id）的 <title>：
@@ -307,11 +328,13 @@ export function parseContentXml(
     // sheet theme（属性/子元素）不再计入（2026-11-14 需求方拍板：主题由 Gmind 自有主题
     // 替换呈现，属有意替换非内容丢失）
     const structureType = structureTypeOf(topicEl.getAttribute('structure-class'), d);
+    const rightCount = resolveXmlRightCount(topicEl); // 分侧计数仅看根扩展（子主题忽略）
     const titleEl = childElement(sheetEl, 'title');
     out.push({
       title: titleEl?.textContent ?? '',
       root: walkXmlTopic(topicEl, d, resources, styles, true), // 每 sheet 的根都按根处理
       ...(structureType !== undefined ? { structureType } : {}),
+      ...(rightCount !== undefined ? { rightCount } : {}),
     });
   });
   return { sheets: out, degraded: d.items() };

@@ -81,8 +81,11 @@ const ROOT_SIDE_RIGHT_QUOTA = 3;
  * - 无 side 字段的旧节点按文档序折算：index 0-2 视为 right、≥3 视为 left；
  * - 墓碑不入计（normalize 后 root children 恒为存活节点，此处再防御一次）。
  * 画布口径（Task 4）：按 canvasId 解析该画布子图与该画布根。
+ * 2026-11-15 分侧忠实还原 Task 4 起 export（只增，函数体一字未动）：web 导出链
+ * docToXmindSheets 用它产导出件根扩展 right-number——导出计数镜像引擎渲染折算口径
+ * （本函数与 engine layout.ts assignMindmapSides 同款折算），模板/混合文档往返无损。
  */
-function countRightSideRootChildren(doc: Y.Doc, canvasId?: string): number {
+export function countRightSideRootChildren(doc: Y.Doc, canvasId?: string): number {
   const nodes = canvasNodesMap(doc, canvasId);
   const root = nodes.get(rootIdOf(doc, canvasId));
   const children = root?.get('children') as Y.Array<string> | undefined;

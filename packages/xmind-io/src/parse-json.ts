@@ -3,7 +3,9 @@
 // 命名制逐项计数（目录序见 types.ts DEGRADED_LABELS）。形状真值以 spec §二/§四 为准：
 // `markers:[{markerId}]`、概要两段式（标签文本在 `children.summary:[{id,title}]`，父节点
 // `summaries:[{id,topicId,range:"(s,e)"}]` 引用）、`branch:"folded"` 折叠态、根 `structureClass`。
-// 共享工具（DegradedCollector/applyStyleKeyMap/structureTypeOf）由 parse-xml 复用。
+// 2026-11-15 分侧忠实还原：根 `extensions` provider=org.xmind.ui.map.unbalanced 的
+// right-number → sheet.rightCount（仅根有效；未知 provider/无 right-number 忽略不计降级）。
+// 共享工具（DegradedCollector/applyStyleKeyMap/structureTypeOf/rightNumberOf）由 parse-xml 复用。
 import type {
   DegradedItem,
   DegradedKey,
@@ -126,6 +128,39 @@ export function structureTypeOf(raw: unknown, d: DegradedCollector): XmindStruct
   if (raw.startsWith('org.xmind.ui.map.')) return 'mindmap';
   if (raw.startsWith('org.xmind.ui.org-chart.')) return 'org';
   d.add('structureOverride');
+  return undefined;
+}
+
+/** 分侧扩展 provider 真值（2026-11-15 分侧忠实还原，11 份本机真实文件实证）：根主题扩展
+ *  `org.xmind.ui.map.unbalanced` 的 right-number = attached 文档序**前 N 支居右**计数。 */
+export const UNBALANCED_PROVIDER = 'org.xmind.ui.map.unbalanced';
+
+/** right-number 文本 → 计数：parseInt 后非负整数才返回，否则 undefined（不产键）。
+ *  与 parse-xml 共用（单源防口径分叉）。 */
+export function rightNumberOf(text: string): number | undefined {
+  const n = Number.parseInt(text, 10);
+  return Number.isInteger(n) && n >= 0 ? n : undefined;
+}
+
+/** 根扩展 right-number（分侧真值，仅根主题上的扩展有效）：`extensions:[{provider,
+ *  content:[{name,content}]}]`——provider 恰为 map.unbalanced 且 content 数组中
+ *  name==='right-number' 项的 content 字符串 parseInt；不认识的 provider / 无
+ *  right-number / 非法值一律不产键，也不计降级（与 theme 同口径）。 */
+function resolveJsonRightCount(root: JsonTopic): number | undefined {
+  if (!Array.isArray(root.extensions)) return undefined;
+  for (const e of root.extensions) {
+    if (!isTopicLike(e)) continue;
+    const { provider, content } = e as { provider?: unknown; content?: unknown };
+    if (provider !== UNBALANCED_PROVIDER || !Array.isArray(content)) continue;
+    for (const item of content) {
+      if (!isTopicLike(item)) continue;
+      const { name, content: value } = item as { name?: unknown; content?: unknown };
+      if (name === 'right-number' && typeof value === 'string') {
+        const n = rightNumberOf(value);
+        if (n !== undefined) return n;
+      }
+    }
+  }
   return undefined;
 }
 
@@ -318,10 +353,12 @@ export function parseContentJson(
     // 属有意替换非内容丢失；legend 忽略不计口径不变）
     const root = s.rootTopic as JsonTopic;
     const structureType = structureTypeOf(root.structureClass, d);
+    const rightCount = resolveJsonRightCount(root); // 分侧计数仅看根扩展（子主题忽略）
     out.push({
       title: typeof s.title === 'string' ? s.title : '',
       root: walkTopic(root, d, resources, true), // 每 sheet 的根都按根处理（结构类可映射）
       ...(structureType !== undefined ? { structureType } : {}),
+      ...(rightCount !== undefined ? { rightCount } : {}),
     });
   });
   return { sheets: out, degraded: d.items() };
