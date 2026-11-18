@@ -338,3 +338,179 @@ emoji(28)/数字(10) 组往返仍丢（无 XMind 原生源）；颜色/形状信
 - 单测 1213 = shared 43 + xmind-io 88 + core 386 + engine 428 + server 77 + web 191
 - server e2e 217/217
 - web e2e 226 过 + 1 skip、零 flaky
+
+## 十七、2026-11-16 轮 3 顶栏在线绿点补记（原型 CollabStack 对齐）
+
+### 需求
+
+原型 `CollabStack`（`Gmind脑图表格产品/src/components/ui.tsx:55-92`）：在线优先排序、在线绿点、离线置灰、溢出 +N title 显示明细。
+
+### 实现
+
+- `MemberChipAvatar` 加 `online` 属性：在线时右下角绿点（`members-stack-online-dot`，`bg-ok ring-2 ring-white` 原型值），离线时置灰（背景 `#e5e6eb`、文字 `#a9aeb8`）。
+- 顶栏头像堆排序：在线在前（按昵称字典序）、离线在后；溢出 +N title 逐行显示 `昵称 · 在线/离线`。
+- 在线判定 = `presence`（`members` state）里有这个人；`onlineUserIds` = `new Set(members.map(m => m.userId))`。
+
+### 涉及文件
+
+- `apps/web/src/pages/EditorPage.tsx`——`MemberChipAvatar` 加 online 属性 + 绿点/置灰；头像堆排序 + 溢出 title；`onlineUserIds` 派生。
+- `apps/web/src/pages/editor.css`——`.members-stack-avatar-wrap`、`.members-stack-online-dot`、`.members-stack-avatar-offline`。
+
+### 交付用例
+
+- `apps/web/e2e/collab.e2e.spec.ts`「顶栏头像堆：在线绿点 + 在线优先排序 + 离线置灰」——A/B/C 同开一文件 → 三绿点；C 关闭 → 2 绿点 + C 离线置灰；在线优先排序断言。
+
+### 门禁五件套（2026-11-16 收官）
+
+- lint 0 / typecheck 0
+- 单测 1213（web 191）
+- server e2e 217/217
+- web e2e 224 过 + 3 flaky + 1 skip
+
+## 十八、2026-11-16 轮 4 登录页＋设置页视觉对齐补记（纯视觉收尾，功能零改动）
+
+### 范围
+
+原型 11-14 版视觉规格对齐：登录页左侧 InfiniteMap 无限延伸动效 + 右侧表单样式规格；设置页卡片/输入框/按钮/开关样式规格。
+
+### 红线
+
+全部 testid 与既有文案逐字不动——login-page/settings/error-copy e2e 全绿零改动。
+
+### 实现
+
+- 登录页：左侧 hero 装饰区换成 `InfiniteMap` 组件（原型 168 行移植）；右侧表单输入框 40px 高/圆角 10px/聚焦品牌蓝 ring、按钮 42px 高/圆角 10px、验证码行按钮 40px×96px；卖点加「无限节点」。
+- 设置页：卡片 padding 24px、输入框 40px 高/圆角 10px、按钮 36px 高/圆角 10px、通知偏好开关改原型 Switch 样式（24px×44px 圆角全圆、品牌蓝底/灰底、滑动圆钮）。
+- 换绑区/昵称行内编辑按钮高度对齐 36px。
+
+### 涉及文件
+
+- `apps/web/src/pages/LoginPage.tsx`——InfiniteMap 替换旧 hero-art；卖点加「无限节点」。
+- `apps/web/src/pages/InfiniteMap.tsx`（新建）——原型 InfiniteMap 移植（168 行，SVG 无限延伸脑图示意）。
+- `apps/web/src/pages/SettingsPage.tsx`——通知偏好开关改 `.pref-switch`（`<button role="switch">` 替代 `<input type="checkbox">`）。
+- `apps/web/src/styles.css`——表单输入框/按钮/验证码行/设置卡片/开关样式规格对齐。
+
+### 交付用例
+
+- login-page.e2e / settings.e2e / error-copy.e2e 全绿零改动（红线守住）。
+
+### 门禁五件套（2026-11-16 收官）
+
+- lint 0 / typecheck 0
+- 单测 1213（web 191）
+- server e2e 217/217
+- web e2e 227 过 + 1 skip、零 flaky
+
+## 十九、2026-11-16 头像刷新全链路＋弹框交互修复补记
+
+### 范围（需求方当日反馈两批）
+
+1. **头像刷新**：设置页换头像后左下角导航头像、编辑器成员堆不同步；首页/我的文件/最近文件的文件创建者头像显示首字符（如「张」）而非真实头像；进入页面应刷新出其他人最新头像。
+2. **弹框交互**：通知下拉、导航栏用户设置菜单点击其他位置不消失；文件详情页右上角本人头像 avatar-me 及其个人中心弹框**整体删除**（需求方裁定，账号设置/退出登录由工作台侧栏用户卡承接）。
+
+### 实现
+
+- 头像 URL 统一经 `avatarSrcOf`：上传键 `users/{id}/...` 转 `/api/images/...`（`WorkspacePage.OwnerAvatar`、`EditorPage.MemberChipAvatar`）；`Avatar`/`MemberChipAvatar`/`OwnerAvatar` 加 onError 回退首字符 + avatar 变化重置失败态；文件创建者头像悬停 title 显示昵称。
+- 换头像后：`SettingsPage` 清 `collab.ts` 模块级 me 缓存（新增 `clearMeCache`）+ dispatch `gmind:avatar-updated`；`WorkspaceShell`（重拉 /users/me）、`WorkspacePage`（重拉文件列表）、`useTaskMembers`（重拉 collaborators）各自监听刷新。**该事件仅当前浏览器窗口有效**；其他人最新头像由进入页面时重新拉取 collaborators/files 保证，不做跨用户实时广播。
+- 通知下拉（`NotifyBell`）与侧栏用户菜单（`WorkspaceShell`）各加 document pointerdown 外点关闭（wrap 内含触发按钮，toggle 语义不被打断）。
+- `EditorPage` 删除 avatar-me 按钮 + personal-menu 弹框 + personalOpen/logout 链路；`editor.css` 删 .avatar-me/.personal-* 样式块；`.toolbar-members-btn` 宽度改按内容自适应（原固定 28px 装不下头像堆+角标，avatar-me 删除后溢出顶出工具栏）；`.members-stack-avatar-wrap` 补 -6px 重叠偏移（轮 3 包 wrap 后重叠失效的顺带修复）。
+
+### 涉及文件
+
+- `apps/web/src/editor/TaskFields.tsx`、`apps/web/src/editor/collab.ts`、`apps/web/src/pages/{SettingsPage,WorkspaceShell,WorkspacePage,EditorPage}.tsx`、`apps/web/src/pages/editor.css`。
+- 测试：`apps/web/e2e/notify.e2e.spec.ts`、`workspace.e2e.spec.ts`、`member-center.e2e.spec.ts`、`toolbar.e2e.spec.ts`、`mobile-readonly.e2e.spec.ts`。
+
+### 交付用例（2026-11-16 当日 grep 行号）
+
+- `notify.e2e.spec.ts:100`「通知下拉：点击外部立即收起，再点铃铛可重新打开」——新增，先红后绿。
+- `workspace.e2e.spec.ts:292`「用户菜单：账号设置入口 + 退出登录清 token 回登录页」——扩外点关闭断言，先红后绿。
+- `member-center.e2e.spec.ts:42`「顶栏右缘：成员钮角标与可访问名…本人头像入口已删除」——改写，钉 avatar-me/personal-menu 零渲染；原「个人中心」用例随功能删除。
+- `toolbar.e2e.spec.ts:66/131`——EXISTING_TESTIDS 移除 avatar-me、组序断言改 members-btn 最右；单行不溢出断言在成员钮自适应修复后复绿。
+- `mobile-readonly.e2e.spec.ts` EDITING_TESTIDS 移除 avatar-me。
+
+### 外点关闭审计（需求方要求「列出来再决定」，仅记录未改）
+
+- **文件卡片 ⋯ 菜单**（`WorkspacePage.tsx` card-menu/file-row-menu）：无外点监听无遮罩——点其他位置不收，只能再点 ⋯ 或选菜单项。
+- **筛选弹窗**（`MapFilterBar.tsx:185-193`）：有外点关闭但用 mousedown——画布 onSvgPointerDown 的 preventDefault 会抑制兼容性 mousedown，点画布空白可能不收（编辑器其他弹层因此统一改 pointerdown 的先例见 EditorPage 导出菜单注释）。
+- 其余已具备外点关闭：编辑器工具栏各面板（统一 pointerdown）、表格各弹层（tt-overlay 遮罩）、分享弹框（遮罩点击）、新建下拉（遮罩）、画布页签菜单/成员面板邀请候选（pointerdown）、组织管理分组弹层（遮罩）、图片预览右键菜单（点击预览层即收）。
+
+### 门禁五件套（2026-11-16 收官）
+
+- lint 0 / typecheck 0
+- 单测：无新增单测（纯 UI 交互与样式，背书走上述 e2e）；存量全量随门禁复跑
+- server e2e：未触碰服务端，随全量门禁复跑
+- web e2e 全量 231 过 + 1 skip、零失败零 flaky（2026-11-16 收官实测）
+
+## 二十、2026-11-18 卡片菜单＋筛选弹窗外点关闭补记
+
+### 范围
+
+§十九 审计列出、需求方当日拍板「两项都改」：
+①文件卡片 ⋯ 菜单（`WorkspacePage.tsx` card-menu/file-row-menu）——新增 document pointerdown 外点关闭（豁免 `.card-ops`/`.file-row-ops` 操作区，⋯ 按钮 toggle 不受打断）；
+②筛选弹窗（`MapFilterBar.tsx`）——外点监听 mousedown → pointerdown，修「画布空白点击收不起」（画布 onSvgPointerDown preventDefault 抑制兼容性 mousedown）。
+
+### 交付用例（2026-11-18 当日 grep 行号，均先红后绿）
+
+- `workspace.e2e.spec.ts:292`「卡片 ⋯ 菜单：点击外部自动收起，再点 ⋯ 可重新打开」——新增。
+- `filter-two-tier.e2e.spec.ts:54`「筛选弹窗：点击画布空白自动收起（pointerdown 外点关闭）」——新增。
+
+### 门禁
+
+- lint 0 / typecheck 0；受影响套件 workspace 20/20＋filter-two-tier 全过；全量 web e2e 233 过 + 1 skip、零失败零 flaky（2026-11-18 收官实测）。
+- 文档：`docs/features/filter.md` 规则 12 新增、project-status 跟进。
+
+## 二十一、2026-11-18 设置页原型对齐补轮（结构级，需求方两项拍板）
+
+### 范围
+
+轮 4 仅对齐样式规格，本轮对齐原型 `Settings.tsx` 的结构性细节（需求方 2026-11-18「先做分析，确定疑问点后开始改」；两项疑问 AskUserQuestion 拍板：**手机号改掩码（跟原型）**、**账号资料卡补部门/分组只读行（跟原型）**）。
+
+### 实现
+
+- **头像卡**：预置头像选中态（蓝圈 + 右下角蓝色小勾，`aria-pressed` 钉契约）；上传按钮虚线框 + Upload 图标；新增底部说明「支持 JPG、PNG，2MB 以内；协作成员、评论与任务负责人处都会显示该头像」；预置图标 36→40px。
+- **账号资料卡**：新增部门/分组两行只读（`profile-dept`/`profile-groups`，数据源 GET /org/directory 取本人 membership，未分配/接口失败显示「无」）+ 说明「部门与分组由管理员在"组织管理"中调整」。
+- **换绑账号卡**：邮箱/手机号小标题加 Mail/Smartphone 图标；当前绑定手机号改掩码 `138 **** 1234`（`maskPhone`；「未验证」徽标保留——真项目既有口径，原型无此徽标）。
+- **绑定微信卡**：按钮加 MessageCircle 图标。
+- **通知偏好卡**：按事件类型区包灰底圆角容器（`notify-pref-group`）+ 每项图标（AtSign/Reply/ShieldCheck）；邮件摘要总开关关闭后说明文案切换为「邮件摘要已整体关闭，以下选项暂不生效。」（原说明文案保留在开启态，逐字未动）。
+- `lucide-data.tsx` 补 6 枚原型图标（Mail/Smartphone/MessageCircle/AtSign/Reply/ShieldCheck，lucide 同源路径）。
+
+### 红线
+
+既有 testid 全部保留（新增 testid 仅 profile-dept/profile-groups/notify-pref-group）；既有文案逐字未动（新增说明文案除外）。
+
+### 交付用例（2026-11-18 当日 grep 行号，均先红后绿）
+
+- `settings.e2e.spec.ts:113` 换绑手机号——断言改掩码（`138 **** xxxx` 且不含完整号码）。
+- `settings.e2e.spec.ts:131` 账号资料——新增部门/分组「无」与说明文案断言。
+- `settings.e2e.spec.ts:49` 头像区——新增选中预置 `aria-pressed` 断言。
+- `settings.e2e.spec.ts:172` 新增「邮件摘要总开关关闭：按事件类型区提示『暂不生效』且开关禁用」。
+
+### 门禁
+
+- lint 0 / typecheck 0；settings.e2e 9/9；全量 web e2e 233 过 + 1 flaky + 1 skip（flaky=filter-two-tier:165 恢复公共筛选，重试即过，与本轮无交互；2026-11-18 收官实测）。
+- 文档：本节 + project-status 跟进 + README 进度行。
+
+## 二十二、2026-11-18 设置页视觉规格逐项校准＋摘要细项开关语义反转补记
+
+### 范围
+
+需求方对照原型截图指出「按钮大小、提及/回复/权限的位置和样式、表单大小没还原」。逐项按原型 `Settings.tsx` 规格校准；细项开关语义经 AskUserQuestion 拍板**跟原型反转**。
+
+### 实现（均为样式/展示层，服务端零改动）
+
+- 表单输入框：max-width 320→**340px**、width 100%、hover 边色 #c9cdd4、聚焦 ring 3px→4px/10%；昵称编辑态输入框 36px 高 / 224px 宽；换绑验证码行 max-width 同步 340（按钮 96px 宽原有）。
+- 主按钮：补 font-size 14px（36px 高 / 圆角 10 / 600 字重原有）。
+- 通知偏好行：上下 padding 8→**14px**、虚线分隔改细分隔线 #eceef1、标题字重 500；`.pref-text` 补 `flex:1`——修「图标在左、文字被 space-between 挤到中间」的错位（截图实证后修复）。
+- 灰底分组背景色按原型 token `--color-canvas: #f5f6f7`（含图标底盒）；卡片纵向间距 20→16px（`.ws-content.settings-page` 覆盖）。
+- 手机号小标题括号说明改灰色正常字重（原型 font-normal text-ink-3）。
+- **细项开关语义反转（需求方拍板）**：蓝=接收该类型邮件提醒（默认全蓝），点灭=关闭提醒；仅 `aria-checked` 显示反转（`!optOut.has`），`emailOptOut` 存储语义与点击链路不变。
+
+### 交付用例
+
+- `settings.e2e.spec.ts:157`「偏好开关切换 → 刷新仍保持」——改钉新语义（默认全蓝、点灭提及、刷新后提及灭/其余蓝），先红后绿；其余 8 用例零改动全绿。
+- `settings.e2e.spec.ts:174` 摘要总开关用例——全量高负载下曾 flaky 一次，加固为 waitForResponse 等 PATCH 真实成功再断言（排除乐观更新竞态），加固后 repeat 4/4。
+- 视觉核对：Playwright 截图逐项比对（整页/头像卡/通知卡/换绑卡），通知行错位经截图复验修复。
+
+### 门禁
+
+- lint 0 / typecheck 0；settings/error-copy/login-page 31/31；全量 web e2e 233 过 + 1 skip、零失败零 flaky（2026-11-18 收官实测）。

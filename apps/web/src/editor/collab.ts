@@ -114,6 +114,12 @@ function fetchMe(): Promise<MeResponse> {
   return mePromise;
 }
 
+/** 清除 me 缓存（设置页换头像后调用——avatarUrl 变更需刷新缓存，否则编辑器
+ *  右上角用户头像、awareness 广播的 avatar 字段都还是旧值）。 */
+export function clearMeCache(): void {
+  mePromise = null;
+}
+
 /** 当前用户身份的公开读取口（M3a Task 4）：EditorPage afterUserWrite 的
  *  markLastEditor 依据——与 awareness 广播共用同一模块级缓存，不重发请求。
  *  身份未装配（GET 失败）时 id 为空串，调用方跳过标记。 */

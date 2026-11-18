@@ -182,14 +182,16 @@ export function MapFilterBar(props: MapFilterBarProps): React.ReactElement {
     setSavedViews(loadViews(fileId));
   }, [fileId]);
 
-  // 外点关闭（弹层内不关）
+  // 外点关闭（弹层内不关）。2026-11-18 改 pointerdown：画布 onSvgPointerDown 的
+  // preventDefault 会抑制兼容性 mousedown，旧 mousedown 监听在画布空白点击时收不起
+  // （与 EditorPage 导出菜单 M7c-D2 同款根因）；wrapRef 含触发按钮与弹窗，toggle 不受影响。
   useEffect(() => {
     if (pop === '') return;
-    const onDown = (e: MouseEvent): void => {
+    const onDown = (e: PointerEvent): void => {
       if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setPop('');
     };
-    document.addEventListener('mousedown', onDown);
-    return () => document.removeEventListener('mousedown', onDown);
+    document.addEventListener('pointerdown', onDown);
+    return () => document.removeEventListener('pointerdown', onDown);
   }, [pop]);
 
   const labelOf = (id: string): string => (id === meId ? '我' : (candidates.find((c) => c.id === id)?.label ?? `成员 ${id.slice(-4)}`));

@@ -11,6 +11,7 @@ import { TemplateThumb, specNodeCount } from '../editor/TemplateThumb';
 import { useRealThumb } from '../editor/thumbnail';
 import { WorkspaceShell, type ShellNav } from './WorkspaceShell';
 import { Lucide } from '../components/lucide-data';
+import { avatarSrcOf } from '../editor/TaskFields';
 import './workspace.css';
 
 /**
@@ -137,19 +138,25 @@ interface FileCardProps {
   onDelete(): void;
 }
 
-/** 创建者头像（2026-10-25 原型文件卡）：自定义头像直出；无头像=ownerUserId 稳定
- *  色相的首字符圆块（与协同个人色同思路，工作台本地实现避免耦合 editor 模块）。 */
+/** 创建者头像（2026-10-25 原型文件卡）：自定义头像经 avatarSrcOf 转 URL（预置直出/
+ *  上传键经 /api/images/ 端点）；无头像=ownerUserId 稳定色相的首字符圆块。 */
 function OwnerAvatar({ userId, name, url }: { userId: string; name: string | null; url: string | null }) {
   const label = (name ?? '').trim().charAt(0) || '?';
+  const [imgFailed, setImgFailed] = useState(false);
+  useEffect(() => {
+    setImgFailed(false);
+  }, [url]);
   const hue = [...userId].reduce((acc, ch) => acc + (ch.codePointAt(0) ?? 0), 0) % 360;
-  return url ? (
+  const showImg = url && !imgFailed;
+  return showImg ? (
     <img
       className="card-owner-avatar"
-      src={url}
+      src={avatarSrcOf(url, userId)}
       alt=""
       aria-hidden
       title={name ?? undefined}
       data-testid="card-owner-avatar"
+      onError={() => setImgFailed(true)}
     />
   ) : (
     <span
@@ -484,6 +491,21 @@ export function WorkspacePage() {
   const importInputRef = useRef<HTMLInputElement | null>(null);
   const [guideOpen, setGuideOpen] = useState(false);
 
+  // 卡片 ⋯ 菜单外点关闭（需求方 2026-11-18：点其他位置应自动消失）：
+  // 豁免 .card-ops / .file-row-ops（卡片与列表行的操作区，含 ⋯ 按钮与菜单本体），
+  // 按钮自身的 toggle 由 onClick 处理，不被本监听抢先收-开抖动。
+  useEffect(() => {
+    if (menuFor === null) return;
+    const onDocPointerDown = (e: PointerEvent): void => {
+      const el = e.target as Element | null;
+      if (!el?.closest) return;
+      if (el.closest('.card-ops, .file-row-ops')) return;
+      setMenuFor(null);
+    };
+    document.addEventListener('pointerdown', onDocPointerDown);
+    return () => document.removeEventListener('pointerdown', onDocPointerDown);
+  }, [menuFor]);
+
   /** 视图以 URL 为唯一事实源（2026-10-21 外壳抽取：侧栏跨页导航 → /workspace?view=x）。 */
   const rawView = searchParams.get('view') ?? 'mine';
   const view: View = VIEW_PARAMS.has(rawView) ? (rawView as View) : 'mine';
@@ -554,6 +576,15 @@ export function WorkspacePage() {
   useEffect(() => {
     if (view === 'templates') return;
     void loadFiles(view).catch((e) => setError(msgOf(e)));
+  }, [view, loadFiles]);
+
+  // 换头像后刷新文件列表（ownerAvatarUrl 变更需重新拉取）
+  useEffect(() => {
+    const onAvatarUpdated = (): void => {
+      if (view !== 'templates') void loadFiles(view).catch(() => undefined);
+    };
+    window.addEventListener('gmind:avatar-updated', onAvatarUpdated);
+    return () => window.removeEventListener('gmind:avatar-updated', onAvatarUpdated);
   }, [view, loadFiles]);
 
   // 引导触发（M5 Task 3）：完成/跳过前首进即开。换装后数据分视图装载

@@ -97,6 +97,16 @@ test('A @B → B 铃铛 +1 → 下拉显示 → 点击已读 → badge 清零并
   await ctxB.close();
 });
 
+test('通知下拉：点击外部立即收起，再点铃铛可重新打开', async ({ page }) => {
+  await registerAndLogin(page);
+  await page.getByTestId('notify-bell').click();
+  await expect(page.getByTestId('notify-list')).toBeVisible();
+  await page.getByTestId('search-input').click();
+  await expect(page.getByTestId('notify-list')).toHaveCount(0);
+  await page.getByTestId('notify-bell').click();
+  await expect(page.getByTestId('notify-list')).toBeVisible();
+});
+
 test('M4 清偿：通知点击深链 ?node= → 装载后定位对应节点并清参', async ({ browser, request }) => {
   test.setTimeout(90_000);
   const ctxA = await browser.newContext();

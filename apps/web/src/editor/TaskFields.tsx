@@ -88,6 +88,11 @@ export function Avatar({
 }) {
   const color = colorForUser(userId);
   const [imgFailed, setImgFailed] = useState(false);
+  // 换头像后重置失败态：此前旧图 onError 置 true 后，新 avatar prop 传入时 imgFailed
+  // 仍为 true → 继续显示文字圆不重新加载（需求方 2026-11-16「换头像后没变化」反馈）。
+  useEffect(() => {
+    setImgFailed(false);
+  }, [avatar]);
   const src = avatarSrcOf(avatar, userId);
   if (!imgFailed) {
     return (
@@ -138,6 +143,17 @@ export function useTaskMembers(
     return () => {
       alive = false;
     };
+  }, [fileId]);
+
+  // 换头像后刷新 collaborators（设置页 dispatch 'gmind:avatar-updated' → 重拉）
+  useEffect(() => {
+    const onAvatarUpdated = (): void => {
+      api<Array<{ userId: string; nickname: string; avatar?: string | null }>>(`/files/${fileId}/collaborators`)
+        .then(setCollaborators)
+        .catch(() => undefined);
+    };
+    window.addEventListener('gmind:avatar-updated', onAvatarUpdated);
+    return () => window.removeEventListener('gmind:avatar-updated', onAvatarUpdated);
   }, [fileId]);
   const ownerKey = docOwnerIds.join('|');
   return useMemo(() => {

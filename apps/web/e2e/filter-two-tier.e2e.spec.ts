@@ -51,6 +51,22 @@ async function pickOwner(page: Page): Promise<string> {
 }
 
 test.describe('轮 2 筛选双层化', () => {
+  test('筛选弹窗：点击画布空白自动收起（pointerdown 外点关闭）', async ({ page }) => {
+    await openSeedDoc(page, '本周计划');
+    await page.getByTestId('map-filter-toggle').click();
+    await expect(page.getByTestId('map-filter-pop')).toBeVisible();
+    // 画布空白点击：onSvgPointerDown 的 preventDefault 会抑制兼容性 mousedown，
+    // 旧实现用 mousedown 监听因此收不起；pointerdown 修复后应立即收起
+    // 画布空白点击：onSvgPointerDown 的 preventDefault 会抑制兼容性 mousedown，
+    // 旧实现用 mousedown 监听因此收不起；pointerdown 修复后应立即收起。
+    // 落点取画布中下部（30,30 会被顶部筛选弹窗本身覆盖，点不到画布）
+    await page.locator('.editor-canvas').click({ position: { x: 600, y: 500 } });
+    await expect(page.getByTestId('map-filter-pop')).toHaveCount(0);
+    // 再点筛选按钮可重新打开（toggle 在 wrap 内，不被外点监听打断）
+    await page.getByTestId('map-filter-toggle').click();
+    await expect(page.getByTestId('map-filter-pop')).toBeVisible();
+  });
+
   // 用例 ①：改动默认仅自己可见 → 点「对所有人生效」→ 新用户打开同文件看到相同筛选
   test('基础双层：改动仅你可见 → 对所有人生效 → 他人打开默认使用公共筛选', async ({ browser, request }) => {
     const ctxA = await browser.newContext();

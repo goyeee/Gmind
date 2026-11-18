@@ -289,6 +289,19 @@ test('表格文件（批次 D）：新建表格默认开表格视图；卡片徽
   await expect(mineCardOf(page, '未命名表格')).toBeVisible();
 });
 
+test('卡片 ⋯ 菜单：点击外部自动收起，再点 ⋯ 可重新打开', async ({ page }) => {
+  await registerAndLogin(page);
+  const card = page.getByTestId('mine-grid').getByTestId('file-card').first();
+  await card.getByTestId('card-menu-btn').click();
+  await expect(card.getByTestId('card-menu')).toBeVisible();
+  // 点击菜单外（搜索框）应立即收起
+  await page.getByTestId('search-input').click();
+  await expect(card.getByTestId('card-menu')).toHaveCount(0);
+  // 再点 ⋯ 重新打开（触发按钮在豁免区内，不被外点监听抢先收-开抖动）
+  await card.getByTestId('card-menu-btn').click();
+  await expect(card.getByTestId('card-menu')).toBeVisible();
+});
+
 test('用户菜单：账号设置入口 + 退出登录清 token 回登录页', async ({ page }) => {
   await registerAndLogin(page);
   // 左下用户卡 → 菜单（账号设置/退出登录；账号管理仅超管——本用例普通 member 不见）
@@ -297,6 +310,11 @@ test('用户菜单：账号设置入口 + 退出登录清 token 回登录页', a
   await expect(menu).toBeVisible();
   await expect(menu.getByTestId('settings-entry')).toBeVisible();
   await expect(menu.getByTestId('admin-users-entry')).toHaveCount(0);
+  // 点击菜单外的搜索框应立即收起；重新打开后原有退出入口仍可用
+  await page.getByTestId('search-input').click();
+  await expect(menu).toHaveCount(0);
+  await page.getByTestId('user-card').click();
+  await expect(menu).toBeVisible();
   await menu.getByTestId('logout-button').click();
   await expect(page).toHaveURL(/\/login/);
   const token = await page.evaluate(() => localStorage.getItem('gmind.token'));

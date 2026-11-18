@@ -2,26 +2,16 @@ import { expect, test, type Page } from '@playwright/test';
 import { apiRegister, injectToken, registerAndLogin } from './helpers/auth';
 
 /**
- * 顶栏成员入口与个人中心 E2E —— 2026-10-11 需求方裁定：协作者头像栏（M6 Task 9，
- * ≤5 枚 chips + 溢出位）退役，顶栏最右改为：
- *   [成员钮 members-btn（MembersIcon + members-count 在线数角标）] → 成员面板
- *   [本人头像 avatar-me（昵称首字符 + 个人色）] → 个人中心下拉
- * 工具栏协作组的旧 members-btn 删除（testid 随按钮迁移，既有用例零改动）；
- * membersFocus 定位管线保留但暂无头像触发入口。
- *
- * 个人中心下拉（最小版）：本人昵称 + 账号标识（GET /users/me）、返回工作台、
- * 退出登录（POST /auth/logout + 清 token 回 /login，复用工作台范式）；Esc/外点关闭。
- *
- * 登录走公共 helper（API 邮箱注册即登录 + 注 token，见 helpers/auth.ts）。注记
- * （2026-11-12 账号重做）：分享链接 B 的「登录表单提交→回跳」一腿由任务 7 的
- * login-page.e2e.spec.ts 覆盖，本文件的 B 腿经 helper 造号注入直达。
+ * 顶栏成员入口 E2E —— 2026-10-11 需求方裁定：协作者头像栏（M6 Task 9）退役，
+ * 顶栏最右 = 成员钮 members-btn（头像堆 + members-count 在线数角标）→ 成员面板。
+ * 2026-11-16 需求方裁定：本人头像 avatar-me 与个人中心下拉**整体删除**——账号
+ * 设置/退出登录由工作台侧栏用户卡（user-card → user-menu）承接，见 workspace.e2e。
  *
  * 覆盖面：
  * - 单上下文：成员钮角标=1、accessible name「在线成员」；点成员钮开成员面板；
- *   本人头像可见（首字符）；点本人头像开个人中心（昵称/账号标识/两菜单项）；Esc 关闭；
- * - 个人中心：返回工作台 → /workspace；退出登录 → token 清除 + /login；
+ *   avatar-me / personal-menu 不再渲染；
  * - 双上下文：B 经分享链接加入 → A 角标 1→2、成员面板可见 B 行；B 关闭 → 角标回 1；
- * - 多人在线：6 人 → 角标 6 + 成员面板 6 行（头像栏的 ≤5+溢出语义随退役移除）。
+ * - 多人在线：6 人 → 角标 6 + 成员面板 6 行。
  */
 
 const authHeader = (token: string) => ({ Authorization: `Bearer ${token}` });
@@ -49,9 +39,9 @@ async function userIdOf(page: Page): Promise<string> {
   });
 }
 
-test('顶栏右缘：成员钮角标与可访问名，点成员钮开成员面板；本人头像开个人中心', async ({ page }) => {
+test('顶栏右缘：成员钮角标与可访问名，点成员钮开成员面板；本人头像入口已删除', async ({ page }) => {
   test.setTimeout(90_000);
-  const { email } = await registerAndLogin(page);
+  await registerAndLogin(page);
   await page.getByTestId('file-card').filter({ hasText: '本周计划' }).first().click();
   await expect(page).toHaveURL(/\/edit\//);
   await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '本周计划' })).toBeVisible();
@@ -60,48 +50,13 @@ test('顶栏右缘：成员钮角标与可访问名，点成员钮开成员面�
   await expect(membersBtn).toBeVisible();
   await expect(page.getByTestId('members-count')).toHaveText('1', { timeout: 15_000 });
   await expect(membersBtn).toHaveAccessibleName('在线成员');
-  // 本人头像：昵称首字符（圆形钮，位于成员钮右侧）
-  const avatar = page.getByTestId('avatar-me');
-  await expect(avatar).toBeVisible();
-  const avatarBox = (await avatar.boundingBox())!;
-  const membersBox = (await membersBtn.boundingBox())!;
-  expect(avatarBox.x).toBeGreaterThan(membersBox.x);
-  // 点成员钮 = 打开成员面板（原 members-btn 行为）
+  // 2026-11-16 裁定：本人头像与个人中心下拉整体删除
+  await expect(page.getByTestId('avatar-me')).toHaveCount(0);
+  await expect(page.getByTestId('personal-menu')).toHaveCount(0);
+  // 点成员钮 = 打开成员面板
   await membersBtn.click();
   await expect(page.getByTestId('member-panel')).toBeVisible();
   await page.getByTestId('member-panel-close').click();
-  // 点本人头像 = 个人中心下拉：昵称/账号标识 + 两菜单项；Esc 关闭
-  await avatar.click();
-  const menu = page.getByTestId('personal-menu');
-  await expect(menu).toBeVisible();
-  await expect(menu.getByTestId('personal-nickname')).not.toHaveText('');
-  // 账号标识展示（2026-11-12 邮箱化：渲染 me.email，邮箱账号恒有值）
-  await expect(menu.getByTestId('personal-email')).toHaveText(email);
-  await expect(menu.getByTestId('personal-workspace')).toBeVisible();
-  await expect(menu.getByTestId('personal-logout')).toBeVisible();
-  await page.keyboard.press('Escape');
-  await expect(menu).toHaveCount(0);
-});
-
-test('个人中心：返回工作台跳转 /workspace；退出登录清 token 回 /login', async ({ page }) => {
-  test.setTimeout(90_000);
-  await openSeedDoc(page, '本周计划');
-  const avatar = page.getByTestId('avatar-me');
-  await expect(avatar).toBeVisible();
-  // 返回工作台
-  await avatar.click();
-  const menu = page.getByTestId('personal-menu');
-  await expect(menu).toBeVisible();
-  await menu.getByTestId('personal-workspace').click();
-  await expect(page).toHaveURL(/\/workspace/);
-  // 回编辑器再退出登录（会话作废 + token 清除 + 回登录页）
-  await page.getByTestId('file-card').filter({ hasText: '本周计划' }).first().click();
-  await expect(page).toHaveURL(/\/edit\//);
-  await page.getByTestId('avatar-me').click();
-  await page.getByTestId('personal-logout').click();
-  await expect(page).toHaveURL(/\/login/);
-  const token = await page.evaluate(() => localStorage.getItem('gmind.token'));
-  expect(token).toBeNull();
 });
 
 test('双上下文：B 加入 → 角标 1→2 且成员面板见 B 行；B 关闭 → 角标回 1', async ({ browser, request }) => {

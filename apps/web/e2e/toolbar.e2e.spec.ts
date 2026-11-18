@@ -47,7 +47,7 @@ const EXISTING_TESTIDS = [
   'theme-panel-toggle',
   'export-menu',
   'members-btn',
-  'avatar-me', // 本人头像=个人中心入口（2026-10-11 顶栏右缘重组）
+  // avatar-me 已随 2026-11-16 需求方裁定整体删除（个人中心入口退役）
   'versions-toggle',
   'activity-toggle',
   'more-toggle',
@@ -215,11 +215,10 @@ test('工具栏：组序符合企微对标布局（返回|标题|视图|撤销�
   expect(activityX).toBeGreaterThan(versionsX); // T8 动态入口在版本历史右侧
   expect(findX).toBeGreaterThan(activityX);
   expect(moreX).toBeGreaterThan(findX);
-  // 2026-10-11：members-btn 钉顶栏最右（本人头像 avatar-me 左侧），在查找右侧
+  // 2026-11-16：本人头像 avatar-me 删除后，members-btn 为顶栏最右入口，在查找右侧
   const membersX = (await page.getByTestId('members-btn').boundingBox())!.x;
-  const avatarMeX = (await page.getByTestId('avatar-me').boundingBox())!.x;
   expect(membersX).toBeGreaterThan(findX);
-  expect(avatarMeX).toBeGreaterThan(membersX);
+  await expect(page.getByTestId('avatar-me')).toHaveCount(0);
 });
 
 test('更多菜单：评论/快捷键收纳下拉，菜单项触发目标面板并收起（2026-10-25 原型顶栏重组）', async ({ page }) => {

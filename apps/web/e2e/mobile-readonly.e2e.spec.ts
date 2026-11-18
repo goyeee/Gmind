@@ -58,7 +58,7 @@ const EDITING_TESTIDS = [
   // 2026-10-25 原型顶栏重组：快捷键/评论收进「更多」下拉（help-toggle 移出清单）
   'more-toggle',
   'members-btn',
-  'avatar-me',
+  // avatar-me 已随 2026-11-16 需求方裁定整体删除（桌面也不再装配）
 ] as const;
 
 test('移动端：画布照常渲染，编辑控件不装配，保留返回/标题只读/保存状态', async ({ page }) => {

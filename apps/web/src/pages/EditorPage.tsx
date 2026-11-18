@@ -176,7 +176,7 @@ import { useIsMobileViewport } from '../editor/useIsMobileViewport';
 import { exportXmind } from '../editor/xmind-export';
 import { exportImage } from '../editor/image-export';
 import { track } from '../api/events';
-import { api, apiPost, clearToken } from '../api/client';
+import { api, apiPost } from '../api/client';
 import './editor.css';
 import '../editor/marker-picker.css';
 import '../editor/image-preview.css';
@@ -440,12 +440,10 @@ export function EditorPage() {
   // 时清空（下次普通打开不复用旧目标）。注：头像栏随 2026-10-11 裁定退役，本
   // 定位管线暂无 UI 触发入口，保留为面板能力。
   const [membersFocus, setMembersFocus] = useState<string | null>(null);
-  // 个人中心（2026-10-11 需求方裁定：顶栏最右 = [成员钮][本人头像]）：本人身份
-  // 经 GET /users/me 拉取（昵称/账号标识，presence 自有身份仅用于首字符兜底）；
-  // 下拉含返回工作台/退出登录（复用工作台 logout 范式）。
-  // 账号标识 2026-11-12 邮箱化：邮箱优先，旧手机号账号回落 phone（清库后 email 恒有）。
+  // 本人身份（2026-10-11 引入；2026-11-16 个人中心弹框随需求方裁定整体删除后，
+  // 仍保留：members 头像堆需要本人 nickname/avatar 数据源）。失败静默（头像回退
+  // 首字符）。
   const [me, setMe] = useState<{ id: string; nickname: string; phone: string | null; email: string | null } | null>(null);
-  const [personalOpen, setPersonalOpen] = useState(false);
   // 版本历史面板开合（M4 Task 8，FR-VER-004 UI）：装配模式同成员面板 open/onClose
   const [versionsOpen, setVersionsOpen] = useState(false);
   // 文档动态面板开合（M6 Task 8，企微对标）：版本历史旁入口，open/onClose 同款装配
@@ -661,6 +659,8 @@ export function EditorPage() {
   const memberIndex = useTaskMembers(fileId, members, docOwnerIds);
   const memberIndexRef = useRef(memberIndex);
   memberIndexRef.current = memberIndex;
+  /** 在线用户 id 集合（presence 含自己）：成员钮头像堆的 online 判定数据源。 */
+  const onlineUserIds = useMemo(() => new Set(members.map((m) => m.userId)), [members]);
 
   useEffect(() => {
     if (!doc) return;
@@ -944,7 +944,6 @@ export function EditorPage() {
       themePanelOpen ||
       structurePanelOpen ||
       commentsOpen ||
-      personalOpen ||
       formatOpen ||
       taskPanelOpen;
     if (!anyOpen) return;
@@ -960,7 +959,7 @@ export function EditorPage() {
       if (
         el.closest('[data-popover-toggle]') ||
         el.closest(
-          '.editor-right, .editor-mobile-comments, .theme-panel, .structure-panel, .theme-wrap, .structure-wrap, .activity-panel, .help-panel, .find-bar, .member-panel, .version-panel, .marker-panel, .personal-menu, .more-menu, .gm-task-assignee, .gm-task-owner-avatar, .assignee-picker',
+          '.editor-right, .editor-mobile-comments, .theme-panel, .structure-panel, .theme-wrap, .structure-wrap, .activity-panel, .help-panel, .find-bar, .member-panel, .version-panel, .marker-panel, .more-menu, .gm-task-assignee, .gm-task-owner-avatar, .assignee-picker',
         ) ||
         exportWrapRef.current?.contains(el)
       ) {
@@ -994,20 +993,9 @@ export function EditorPage() {
     themePanelOpen,
     structurePanelOpen,
     commentsOpen,
-    personalOpen,
     formatOpen,
     taskPanelOpen,
   ]);
-
-  // —— 个人中心下拉（2026-10-11）：Esc 关闭（外点关闭走统一 effect 上方）。 ——
-  useEffect(() => {
-    if (!personalOpen) return;
-    const onKeyDown = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') setPersonalOpen(false);
-    };
-    document.addEventListener('keydown', onKeyDown);
-    return () => document.removeEventListener('keydown', onKeyDown);
-  }, [personalOpen]);
 
   // —— 结构面板（2026-09-30 任务 3）：Esc 关闭（ThemePanel 无 Esc，本面板按需求
   // 方要求补齐；编辑覆盖层自身的 Esc 先行 stopPropagation 不受影响）。 ——
@@ -3297,16 +3285,8 @@ export function EditorPage() {
     if (state) setStarred(state.starred);
   }, [state]);
 
-  /** 个人中心动作（2026-10-11）：返回工作台 / 退出登录——复用工作台范式
-   *  （POST /auth/logout + clearToken + 回登录页；登出失败也照常本地登出）。 */
-  const logout = (): void => {
-    void api('/auth/logout', { method: 'POST' }).catch(() => undefined);
-    clearToken();
-    navigate('/login');
-  };
-
-  // 本人身份（个人中心，2026-10-11）：进编辑器拉一次 GET /users/me（昵称/账号标识
-  // 展示 + 头像首字符）；失败静默（下拉头部降级「我」，菜单项仍可用）。
+  // 本人身份（2026-10-11 引入）：进编辑器拉一次 GET /users/me（members 头像堆的
+  // 本人昵称/头像数据源）；失败静默（头像回退首字符）。
   useEffect(() => {
     void api<{ id: string; nickname: string; phone: string | null; email: string | null }>('/users/me')
       .then(setMe)
@@ -4602,13 +4582,12 @@ export function EditorPage() {
             </div>
           )}
         </div>
-        {/* 顶栏右缘（2026-10-11 需求方裁定）：[成员钮][本人头像=个人中心]。
+        {/* 顶栏右缘：分享 + 成员钮（2026-11-16 需求方裁定：本人头像 avatar-me 及
+            个人中心下拉整体删除——账号设置/退出登录由工作台侧栏用户卡承接）。
             成员钮=成员面板唯一入口（2026-10-25 原型头像堆形态：本人头像 + 前 2 位
             协作者头像 + 溢出 +N，数据源 memberIndex=collaborators∪presence；
             在线数徽标保留——数字语义在线数，testid members-count 既有用例零改动）；
-            本人头像=个人中心下拉（昵称/手机号 + 返回工作台 + 退出登录）。协作者头像
-            栏（M6 Task 9）整体退役——在线名单以成员面板为准；移动端只读分支不装配
-            （随桌面工具栏整体隐藏）。 */}
+            移动端只读分支不装配（随桌面工具栏整体隐藏）。 */}
         <div className="toolbar-trailing">
           {/* 分享（2026-10-25 原型 ShareModal）：打开分享弹窗（邀请协作/链接分享/
               导出三页签——链接管理与 MD/CSV 导出本弹窗新增；直接复制链接的旧行为
@@ -4639,15 +4618,30 @@ export function EditorPage() {
                 userId={me?.id ?? 'me'}
                 nickname={me?.nickname ?? '我'}
                 avatar={me ? memberIndex.get(me.id)?.avatar : undefined}
+                online={me ? onlineUserIds.has(me.id) : false}
               />
               {[...memberIndex.values()]
                 .filter((u) => u.userId !== me?.id)
+                // 在线优先（presence 里有 = 在线），离线置灰在后；同组内按昵称字典序稳定排序
+                .sort((a, b) => {
+                  const aOnline = onlineUserIds.has(a.userId);
+                  const bOnline = onlineUserIds.has(b.userId);
+                  if (aOnline !== bOnline) return aOnline ? -1 : 1;
+                  return a.nickname.localeCompare(b.nickname);
+                })
                 .slice(0, 2)
                 .map((u) => (
-                  <MemberChipAvatar key={u.userId} userId={u.userId} nickname={u.nickname} avatar={u.avatar} />
+                  <MemberChipAvatar key={u.userId} userId={u.userId} nickname={u.nickname} avatar={u.avatar} online={onlineUserIds.has(u.userId)} />
                 ))}
               {memberIndex.size - 3 > 0 && (
-                <span className="members-stack-avatar members-stack-more">
+                <span
+                  className="members-stack-avatar members-stack-more"
+                  title={[...memberIndex.values()]
+                    .filter((u) => u.userId !== me?.id)
+                    .slice(2)
+                    .map((u) => `${u.nickname} · ${onlineUserIds.has(u.userId) ? '在线' : '离线'}`)
+                    .join('\n')}
+                >
                   +{Math.max(0, memberIndex.size - 3)}
                 </span>
               )}
@@ -4656,59 +4650,7 @@ export function EditorPage() {
               {members.length}
             </span>
           </button>
-          <button
-            type="button"
-            data-testid="avatar-me"
-            className="avatar-me"
-            style={me ? { background: colorForUser(me.id) } : undefined}
-            title="个人中心"
-            aria-label="个人中心"
-            aria-haspopup="menu"
-            aria-expanded={personalOpen}
-            onClick={() => setPersonalOpen((v) => !v)}
-          >
-            {(me?.nickname ?? '我').charAt(0)}
-          </button>
         </div>
-        {personalOpen && (
-          <div className="personal-menu" data-testid="personal-menu" role="menu" aria-label="个人中心">
-            <div className="personal-head">
-              <span
-                className="personal-avatar"
-                style={me ? { background: colorForUser(me.id) } : undefined}
-                aria-hidden
-              >
-                {(me?.nickname ?? '我').charAt(0)}
-              </span>
-              <div className="personal-id">
-                <span className="personal-nickname" data-testid="personal-nickname">
-                  {me?.nickname ?? '我'}
-                </span>
-                <span className="personal-email" data-testid="personal-email">
-                  {me?.email ?? me?.phone ?? ''}
-                </span>
-              </div>
-            </div>
-            <button
-              type="button"
-              className="personal-item"
-              data-testid="personal-workspace"
-              role="menuitem"
-              onClick={() => navigate('/workspace')}
-            >
-              返回工作台
-            </button>
-            <button
-              type="button"
-              className="personal-item"
-              data-testid="personal-logout"
-              role="menuitem"
-              onClick={logout}
-            >
-              退出登录
-            </button>
-          </div>
-        )}
       </>
         )}
       </header>
@@ -5300,22 +5242,38 @@ function clipboardErrorMessage(e: unknown): string {
 }
 
 /** 成员钮头像堆单元（2026-10-25 原型 AvatarStack 形态）：自定义头像直出，
- *  无头像 = 首字符 + colorForUser 个人色。 */
+ *  无头像 = 首字符 + colorForUser 个人色。
+ *  轮 3 在线状态：online=true 时右下角绿点；online=false 时离线置灰
+ *  （原型 CollabStack 口径：背景 #e5e6eb、文字 #a9aeb8）。 */
 function MemberChipAvatar({
   userId,
   nickname,
   avatar,
+  online,
 }: {
   userId: string;
   nickname: string;
   avatar?: string | null;
+  online: boolean;
 }) {
   const label = (nickname ?? '').trim().charAt(0) || '?';
-  return avatar ? (
-    <img className="members-stack-avatar" src={avatar} alt="" />
-  ) : (
-    <span className="members-stack-avatar" style={{ background: colorForUser(userId) }}>
-      {label}
+  const [imgFailed, setImgFailed] = useState(false);
+  useEffect(() => {
+    setImgFailed(false);
+  }, [avatar]);
+  const cls = online ? 'members-stack-avatar' : 'members-stack-avatar members-stack-avatar-offline';
+  const dot = online ? <span className="members-stack-online-dot" aria-hidden /> : null;
+  const showImg = avatar && !imgFailed;
+  return (
+    <span className="members-stack-avatar-wrap" title={`${nickname} · ${online ? '在线' : '离线'}`}>
+      {showImg ? (
+        <img className={cls} src={avatarSrcOf(avatar, userId)} alt="" onError={() => setImgFailed(true)} />
+      ) : (
+        <span className={cls} style={{ background: online ? colorForUser(userId) : undefined }}>
+          {label}
+        </span>
+      )}
+      {dot}
     </span>
   );
 }

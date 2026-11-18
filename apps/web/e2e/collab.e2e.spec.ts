@@ -653,3 +653,61 @@ test('双页并发结构操作收敛：move vs delete 删除胜，reload 后结�
   await ctxA.close();
   await ctxB.close();
 });
+
+// 轮 3 在线状态（2026-11-16）：顶栏头像堆绿点/排序/离线置灰
+// A/B/C 同开一文件 → 三人在线全带绿点；C 关闭 → C 离线置灰、在线优先排序（A/B 在前）
+test('顶栏头像堆：在线绿点 + 在线优先排序 + 离线置灰', async ({ browser, request }) => {
+  const ctxA = await browser.newContext();
+  const pageA = await ctxA.newPage();
+  await registerAndLogin(pageA);
+  await openSeedDoc(pageA, '本周计划');
+  const fileId = fileIdFromUrl(pageA);
+  const nickA = await nicknameOf(pageA);
+
+  const ctxB = await browser.newContext();
+  const pageB = await ctxB.newPage();
+  const { email: emailB } = await registerAndLogin(pageB);
+  await grantCollaborator(request, fileId, emailB);
+  await pageB.goto(`/edit/${fileId}`);
+  await expect(pageB.locator('.editor-canvas svg .gm-text', { hasText: '本周计划' })).toBeVisible({
+    timeout: 15_000,
+  });
+  await pageB.waitForTimeout(500); // 等 B 的 presence 同步
+
+  const ctxC = await browser.newContext();
+  const pageC = await ctxC.newPage();
+  const { email: emailC } = await registerAndLogin(pageC);
+  await grantCollaborator(request, fileId, emailC);
+  await pageC.goto(`/edit/${fileId}`);
+  await expect(pageC.locator('.editor-canvas svg .gm-text', { hasText: '本周计划' })).toBeVisible({
+    timeout: 15_000,
+  });
+  await pageC.waitForTimeout(500); // 等 C 的 presence 同步
+
+  // A 刷新页面让 collaborators 拉取包含 C（此前 A 先打开，C 后加入，A 的 collaborators
+  // 快照里没有 C——C 关闭后 presence 移除，memberIndex 里 C 就消失了）
+  await pageA.reload();
+  await expect(pageA.locator('.editor-canvas svg .gm-text', { hasText: '本周计划' })).toBeVisible({
+    timeout: 15_000,
+  });
+
+  // 三人在线：A/B/C 头像都带绿点（members-stack-online-dot 在 wrap 内）
+  const stackA = pageA.locator('.members-stack');
+  await expect(stackA.locator('.members-stack-online-dot')).toHaveCount(3, { timeout: 10_000 });
+
+  // C 关闭 → C 离线置灰 + 绿点消失；A/B 仍在线（2 绿点）
+  await ctxC.close();
+  await expect(pageA.getByTestId('members-count')).toHaveText('2');
+  await expect(stackA.locator('.members-stack-online-dot')).toHaveCount(2, { timeout: 10_000 });
+
+  // 离线置灰断言：C 的头像带 offline 类
+  await expect(stackA.locator('.members-stack-avatar-offline')).toHaveCount(1);
+
+  // 在线优先排序：A/B 的头像 wrap 在 C 之前（DOM 顺序）
+  const wraps = stackA.locator('.members-stack-avatar-wrap');
+  const firstWrap = wraps.nth(0);
+  await expect(firstWrap).toContainText(nickA.charAt(0));
+
+  await ctxA.close();
+  await ctxB.close();
+});

@@ -300,91 +300,7 @@ body.painter-active .editor-canvas svg {
   height: 28px; /* 单行判定：与按钮行等高 */
   margin-left: auto;
 }
-.editor-toolbar .avatar-me {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 26px;
-  height: 26px;
-  padding: 0;
-  border: 2px solid #fff;
-  border-radius: 50%;
-  background: #3370ff;
-  color: #fff;
-  font-size: 12px;
-  line-height: 1;
-  cursor: pointer;
-  box-shadow: 0 0 0 1px #e5e6eb;
-}
-.editor-toolbar .avatar-me:hover {
-  box-shadow: 0 0 0 2px #e8f3ff;
-}
-/* 个人中心下拉（fixed 锚定本人头像下沿）：身份头部 + 菜单项 */
-.personal-menu {
-  position: fixed;
-  z-index: 1200;
-  top: 40px; /* 工具栏下方（28px 行高 + 间隙）——窄视口右缘钳制见下方 */
-  right: 12px;
-  width: 220px;
-  padding: 12px;
-  background: #fff;
-  border: 1px solid #e5e6eb;
-  border-radius: 10px;
-  box-shadow: 0 8px 24px rgba(31, 35, 41, 0.16);
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  font-size: 13px;
-}
-.personal-head {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding-bottom: 10px;
-  margin-bottom: 4px;
-  border-bottom: 1px solid #f2f3f5;
-}
-.personal-avatar {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  border-radius: 50%;
-  background: #3370ff;
-  color: #fff;
-  font-size: 14px;
-  flex: none;
-}
-.personal-id {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-}
-.personal-nickname {
-  font-weight: 600;
-  color: #1f2329;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.personal-email {
-  color: #86909c;
-  font-size: 12px;
-}
-.personal-item {
-  padding: 7px 10px;
-  border: none;
-  border-radius: 6px;
-  background: transparent;
-  text-align: left;
-  font-size: 13px;
-  color: #1f2329;
-  cursor: pointer;
-}
-.personal-item:hover {
-  background: #f2f3f5;
-}
+/* avatar-me / personal-* 样式已随 2026-11-16 本人头像+个人中心下拉删除而移除 */
 
 .editor-canvas {
   flex: 1;
@@ -1244,9 +1160,13 @@ body.painter-active .editor-canvas svg {
   color: #8f959e;
 }
 
-/* 协作成员钮（原型 Users+文案+人数形态）：数字语义保持在线数 */
-.toolbar-members-btn {
+/* 协作成员钮（原型 Users+文案+人数形态）：数字语义保持在线数。
+   2026-11-16：avatar-me 删除后成员钮成为顶栏最右元素——宽度改按内容自适应
+   （头像堆 20 + 角标 16 + 间距），否则固定 28px 装不下内容、溢出顶出工具栏。 */
+.editor-toolbar .toolbar-members-btn {
   gap: 4px;
+  width: auto;
+  padding: 0 6px;
 }
 .toolbar-members-btn .members-badge {
   flex: none;
@@ -1315,4 +1235,30 @@ body.painter-active .editor-canvas svg {
 .members-stack-more {
   background: #34c724;
   box-shadow: none;
+}
+
+/* 轮 3 在线状态（原型 CollabStack）：绿点 + 离线置灰 */
+.members-stack-avatar-wrap {
+  position: relative;
+  display: inline-flex;
+  /* 轮 3 包 wrap 后重叠偏移移到 wrap 上（内层 avatar 恒 :first-child 偏移为 0） */
+  margin-left: -6px;
+}
+.members-stack-avatar-wrap:first-child {
+  margin-left: 0;
+}
+.members-stack-online-dot {
+  position: absolute;
+  bottom: -1px;
+  right: -1px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--gm-success, #00b42a);
+  border: 2px solid #fff;
+  box-sizing: border-box;
+}
+.members-stack-avatar-offline {
+  background: #e5e6eb !important;
+  color: #a9aeb8 !important;
 }

@@ -63,6 +63,9 @@ test('头像区：当前头像与预置库渲染，选预置后当前头像与 m
   await page.getByTestId('avatar-preset-4').click();
   await expect(page.getByTestId('avatar-current').locator('img')).toHaveAttribute('src', '/avatars/preset-4.svg');
   await expect(page.getByTestId('toast')).toContainText('头像已更新');
+  // 2026-11-18 原型对齐：选中预置带选中态（蓝圈 + 小勾），其余未选
+  await expect(page.getByTestId('avatar-preset-4')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByTestId('avatar-preset-1')).toHaveAttribute('aria-pressed', 'false');
   const token = await page.evaluate(() => localStorage.getItem('gmind.token'));
   const me = await page.request.get('/api/users/me', { headers: { Authorization: `Bearer ${token ?? ''}` } });
   expect(((await me.json()) as { avatarUrl: string }).avatarUrl).toBe('/avatars/preset-4.svg');
@@ -117,7 +120,11 @@ test('换绑手机号：仅当前密码核身 → toast，当前手机号带「�
   await page.getByTestId('rebind-phone-save').click();
 
   await expect(page.getByTestId('toast')).toContainText('手机号已更新');
-  await expect(page.getByTestId('rebind-phone-block').locator('.settings-hint')).toContainText(newPhone);
+  // 2026-11-18 原型对齐：当前绑定手机号掩码展示（138 **** 1234 形态）
+  await expect(page.getByTestId('rebind-phone-block').locator('.settings-hint')).toContainText(
+    `${newPhone.slice(0, 3)} **** ${newPhone.slice(7)}`,
+  );
+  await expect(page.getByTestId('rebind-phone-block').locator('.settings-hint')).not.toContainText(newPhone);
   await expect(page.getByTestId('phone-unverified-badge')).toHaveText('未验证');
 });
 
@@ -134,6 +141,10 @@ test('账号资料：昵称行内编辑 → toast，刷新仍保持', async ({ p
 
   await page.reload();
   await expect(page.getByTestId('profile-nickname')).toHaveText('资料卡新昵称');
+  // 2026-11-18 原型对齐：部门/分组只读行（新注册用户未分配 → 均显示「无」）
+  await expect(page.getByTestId('profile-dept')).toContainText('无');
+  await expect(page.getByTestId('profile-groups')).toContainText('无');
+  await expect(page.getByTestId('profile-section')).toContainText('部门与分组由管理员在"组织管理"中调整');
 });
 
 test('绑定微信占位卡：点击 toast「微信绑定暂未开通，敬请期待」', async ({ page }) => {
@@ -147,13 +158,36 @@ test('偏好开关切换 → 刷新仍保持', async ({ page }) => {
   await registerAndLogin(page);
   await openSettings(page);
 
-  // 开关即 PATCH：勾选后「已完成」toast 到达
-  await page.getByTestId('notify-pref-mention').check();
+  // 2026-11-18 原型语义（需求方拍板反转）：蓝=接收该类型邮件提醒，默认全蓝；
+  // 点灭=关闭提醒（写入 emailOptOut，服务端语义不变）
+  await expect(page.getByTestId('notify-pref-mention')).toBeChecked();
+  await page.getByTestId('notify-pref-mention').uncheck();
   await expect(page.getByTestId('toast')).toContainText('已完成');
 
-  // 刷新后开关保持勾选，且其他开关不受影响
+  // 刷新后「提及」保持关闭，其他类型仍接收
   await page.reload();
-  await expect(page.getByTestId('notify-pref-mention')).toBeChecked();
-  await expect(page.getByTestId('notify-pref-reply')).not.toBeChecked();
-  await expect(page.getByTestId('notify-pref-permission')).not.toBeChecked();
+  await expect(page.getByTestId('notify-pref-mention')).not.toBeChecked();
+  await expect(page.getByTestId('notify-pref-reply')).toBeChecked();
+  await expect(page.getByTestId('notify-pref-permission')).toBeChecked();
+});
+
+test('邮件摘要总开关关闭：按事件类型区提示「暂不生效」且开关禁用', async ({ page }) => {
+  await registerAndLogin(page);
+  await openSettings(page);
+  // 等 PATCH 真实成功再断言（乐观更新在高负载全量跑时可能与回滚/二次点击竞态）
+  const waitPrefPatch = (): Promise<unknown> =>
+    page.waitForResponse(
+      (r) => r.url().includes('/api/users/me/notify-prefs') && r.request().method() === 'PATCH' && r.ok(),
+    );
+  let patched = waitPrefPatch();
+  await page.getByTestId('notify-master-digest').click();
+  await patched;
+  // 2026-11-18 原型对齐：总开关关后说明文案切换 + 细项禁用
+  await expect(page.getByTestId('notify-pref-group')).toContainText('邮件摘要已整体关闭，以下选项暂不生效。');
+  await expect(page.getByTestId('notify-pref-mention')).toBeDisabled();
+  // 重新打开：说明回到原口径
+  patched = waitPrefPatch();
+  await page.getByTestId('notify-master-digest').click();
+  await patched;
+  await expect(page.getByTestId('notify-pref-group')).toContainText('回收站清理提醒恒发');
 });

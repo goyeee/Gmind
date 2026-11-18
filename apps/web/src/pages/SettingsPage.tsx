@@ -2,8 +2,10 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, apiPatch, apiPost } from '../api/client';
 import { codeSchema, emailSchema, NICKNAME_LENGTH_MESSAGE, PASSWORD_LENGTH_MESSAGE } from '@gmind/shared';
 import { Avatar, PRESET_AVATAR_COUNT } from '../editor/TaskFields';
+import { clearMeCache } from '../editor/collab';
 import { WorkspaceShell } from './WorkspaceShell';
 import { useCodeCountdown } from './useCodeCountdown';
+import { Lucide } from '../components/lucide-data';
 
 /**
  * 账号设置页（M5 Task 1 三区 → 2026-11-12 账号体系重做邮箱化）：六卡。
@@ -42,11 +44,17 @@ interface NotifyPrefs {
   digestEnabled?: boolean;
 }
 
-const PREF_ITEMS: Array<{ key: EmailOptOutType; label: string; desc: string }> = [
-  { key: 'mention', label: '提及', desc: '有人 @ 我时发邮件提醒' },
-  { key: 'reply', label: '回复', desc: '有人回复我的评论时发邮件提醒' },
-  { key: 'permission', label: '权限', desc: '文件协作权限变动时发邮件提醒' },
+const PREF_ITEMS: Array<{ key: EmailOptOutType; label: string; desc: string; icon: string }> = [
+  { key: 'mention', label: '提及', desc: '有人 @ 我时发邮件提醒', icon: 'AtSign' },
+  { key: 'reply', label: '回复', desc: '有人回复我的评论时发邮件提醒', icon: 'Reply' },
+  { key: 'permission', label: '权限', desc: '文件协作权限变动时发邮件提醒', icon: 'ShieldCheck' },
 ];
+
+/** 当前绑定手机号掩码（2026-11-18 原型对齐）：138 **** 1234 形态；未绑定原样返回。 */
+function maskPhone(phone: string | null | undefined): string {
+  if (!phone) return '未绑定';
+  return `${phone.slice(0, 3)} **** ${phone.slice(7)}`;
+}
 
 /** 改密/换绑/改昵称的客户端预检（2026-11-12）：文案与 server 端单点同源（shared 导出
  *  常量与 schema）；邮箱与验证码直接复用 shared schema 对象 safeParse（zod 不进 web
@@ -137,6 +145,34 @@ export function SettingsPage() {
   useEffect(() => {
     void reload().catch((e) => setError(msgOf(e)));
   }, [reload]);
+
+  // 账号资料卡·部门/分组只读行（2026-11-18 原型对齐，需求方拍板新增）：
+  // 数据源 GET /org/directory（EditorPage 筛选同款端点），取本人 membership 映射名称；
+  // 未分配/接口失败均显示「无」，纯展示不可编辑。
+  const [orgInfo, setOrgInfo] = useState<{ dept: string; groups: string }>({ dept: '无', groups: '无' });
+  useEffect(() => {
+    if (!me) return;
+    let alive = true;
+    void api<{
+      departments: Array<{ id: string; name: string }>;
+      groups: Array<{ id: string; name: string }>;
+      memberships: Array<{ userId: string; departmentId: string | null; groupIds: string[] }>;
+    }>('/org/directory')
+      .then((dir) => {
+        if (!alive) return;
+        const m = dir.memberships.find((x) => x.userId === me.id);
+        const dept = dir.departments.find((d) => d.id === m?.departmentId)?.name ?? '无';
+        const groups = (m?.groupIds ?? [])
+          .map((gid) => dir.groups.find((g) => g.id === gid)?.name)
+          .filter((n): n is string => typeof n === 'string')
+          .join('、');
+        setOrgInfo({ dept, groups: groups === '' ? '无' : groups });
+      })
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, [me]);
 
   /** 改密：预检 → 当前密码核身；成功后 hasPassword 即为真——本地同步。 */
   async function changePassword(): Promise<void> {
@@ -285,33 +321,45 @@ export function SettingsPage() {
         <div className="avatar-section-row">
           {me && (
             <span className="avatar-current" data-testid="avatar-current">
-              <Avatar userId={me.id} nickname={me.nickname} avatar={me.avatarUrl} size={56} />
+              <Avatar userId={me.id} nickname={me.nickname} avatar={me.avatarUrl} size={60} />
             </span>
           )}
           <div className="avatar-presets">
-            {Array.from({ length: PRESET_AVATAR_COUNT }, (_, i) => `/avatars/preset-${i + 1}.svg`).map((url) => (
-              <button
-                key={url}
-                type="button"
-                className="avatar-preset-btn"
-                data-testid={`avatar-preset-${url.match(/preset-(\d)/)?.[1]}`}
-                aria-label={`选择预置头像 ${url}`}
-                onClick={() => {
-                  void (async () => {
-                    try {
-                      await apiPatch('/users/me/avatar', { avatarUrl: url });
-                      await reload();
-                      showToast('头像已更新');
-                    } catch (e) {
-                      showToast(msgOf(e));
-                    }
-                  })();
-                }}
-              >
-                <img src={url} alt="" width={36} height={36} />
-              </button>
-            ))}
+            {Array.from({ length: PRESET_AVATAR_COUNT }, (_, i) => `/avatars/preset-${i + 1}.svg`).map((url) => {
+              const selected = me?.avatarUrl === url;
+              return (
+                <button
+                  key={url}
+                  type="button"
+                  className={'avatar-preset-btn' + (selected ? ' active' : '')}
+                  data-testid={`avatar-preset-${url.match(/preset-(\d)/)?.[1]}`}
+                  aria-label={`选择预置头像 ${url}`}
+                  aria-pressed={selected}
+                  onClick={() => {
+                    void (async () => {
+                      try {
+                        await apiPatch('/users/me/avatar', { avatarUrl: url });
+                        clearMeCache();
+                        await reload();
+                        window.dispatchEvent(new Event('gmind:avatar-updated'));
+                        showToast('头像已更新');
+                      } catch (e) {
+                        showToast(msgOf(e));
+                      }
+                    })();
+                  }}
+                >
+                  <img src={url} alt="" width={40} height={40} />
+                  {selected && (
+                    <i className="avatar-preset-check" aria-hidden>
+                      <Lucide name="Check" size={10} strokeWidth={3} />
+                    </i>
+                  )}
+                </button>
+              );
+            })}
             <label className="avatar-upload-btn">
+              <Lucide name="Upload" size={14} />
               上传头像
               <input
                 type="file"
@@ -325,7 +373,9 @@ export function SettingsPage() {
                   void (async () => {
                     try {
                       await uploadAvatar(file);
+                      clearMeCache();
                       await reload();
+                      window.dispatchEvent(new Event('gmind:avatar-updated'));
                       showToast('头像已更新');
                     } catch (err) {
                       showToast(msgOf(err));
@@ -336,6 +386,7 @@ export function SettingsPage() {
             </label>
           </div>
         </div>
+        <p className="settings-hint">支持 JPG、PNG，2MB 以内；协作成员、评论与任务负责人处都会显示该头像</p>
       </section>
 
       {/* 账号资料（2026-11-12 新增）：昵称行内编辑 → PATCH /users/me */}
@@ -381,6 +432,18 @@ export function SettingsPage() {
           )}
         </div>
         {profileError && <p className="error">{profileError}</p>}
+        {/* 部门/分组只读行（2026-11-18 原型对齐）：组织目录接口取本人归属，不可编辑 */}
+        <div className="profile-org">
+          <span className="profile-org-row" data-testid="profile-dept">
+            <span className="profile-org-label">部门</span>
+            <span className="profile-org-value">{orgInfo.dept}</span>
+          </span>
+          <span className="profile-org-row" data-testid="profile-groups">
+            <span className="profile-org-label">分组</span>
+            <span className="profile-org-value">{orgInfo.groups}</span>
+          </span>
+        </div>
+        <p className="settings-hint">部门与分组由管理员在"组织管理"中调整</p>
       </section>
 
       {/* 登录密码（2026-11-12 重做）：恒密码核身；无密码账号引导走登录页「忘记密码」 */}
@@ -421,7 +484,10 @@ export function SettingsPage() {
       <section className="settings-card" data-testid="rebind-section">
         <h3>换绑账号</h3>
         <div className="rebind-block" data-testid="rebind-email-block">
-          <h4 className="settings-subhead">邮箱（登录身份）</h4>
+          <h4 className="settings-subhead">
+            <Lucide name="Mail" size={15} className="settings-subhead-icon" />
+            邮箱（登录身份）
+          </h4>
           <p className="settings-hint">当前绑定：{me?.email ?? '未绑定'}</p>
           <input
             data-testid="rebind-email"
@@ -460,9 +526,12 @@ export function SettingsPage() {
           </button>
         </div>
         <div className="rebind-block" data-testid="rebind-phone-block">
-          <h4 className="settings-subhead">手机号（协作标识，暂不可用于登录）</h4>
+          <h4 className="settings-subhead">
+            <Lucide name="Smartphone" size={15} className="settings-subhead-icon" />
+            手机号<span className="settings-subhead-note">（协作标识，暂不可用于登录）</span>
+          </h4>
           <p className="settings-hint">
-            当前绑定：{me?.phone ?? '未绑定'}
+            当前绑定：{maskPhone(me?.phone)}
             {me?.phone && (
               <span className="badge-unverified" data-testid="phone-unverified-badge">
                 未验证
@@ -496,7 +565,8 @@ export function SettingsPage() {
       <section className="settings-card" data-testid="wechat-section">
         <h3>绑定微信</h3>
         <p className="settings-hint">绑定后可使用微信扫码登录（暂未开通）</p>
-        <button className="primary" data-testid="wechat-bind-btn" onClick={() => showToast('微信绑定暂未开通，敬请期待')}>
+        <button className="primary settings-btn-icon" data-testid="wechat-bind-btn" onClick={() => showToast('微信绑定暂未开通，敬请期待')}>
+          <Lucide name="MessageCircle" size={15} />
           绑定微信
         </button>
       </section>
@@ -509,43 +579,70 @@ export function SettingsPage() {
             <span className="pref-label">站内通知</span>
             <span className="pref-desc">关闭后不再生成新的站内通知（历史通知保留）</span>
           </span>
-          <input
-            type="checkbox"
+          <button
+            type="button"
+            role="switch"
+            aria-checked={notifyEnabled}
+            aria-label="站内通知"
+            className="pref-switch"
             data-testid="notify-master-enabled"
-            checked={notifyEnabled}
-            onChange={(e) => void toggleMaster('notifyEnabled', e.target.checked)}
-          />
+            onClick={() => void toggleMaster('notifyEnabled', !notifyEnabled)}
+          >
+            <i aria-hidden />
+          </button>
         </label>
         <label className="pref-row">
           <span className="pref-text">
             <span className="pref-label">邮件摘要</span>
             <span className="pref-desc">每日未读通知汇总邮件；关闭后不再发送</span>
           </span>
-          <input
-            type="checkbox"
+          <button
+            type="button"
+            role="switch"
+            aria-checked={digestEnabled}
+            aria-label="邮件摘要"
+            className="pref-switch"
             data-testid="notify-master-digest"
-            checked={digestEnabled}
-            onChange={(e) => void toggleMaster('digestEnabled', e.target.checked)}
-          />
+            onClick={() => void toggleMaster('digestEnabled', !digestEnabled)}
+          >
+            <i aria-hidden />
+          </button>
         </label>
-        <h4 className="settings-subhead">按事件类型关闭邮件摘要</h4>
-        <p className="settings-hint">
-          关闭后对应事件不再发送邮件摘要；回收站清理提醒恒发，不在本设置范围。
-        </p>
-        {PREF_ITEMS.map((item) => (
-          <label className="pref-row" key={item.key}>
-            <span className="pref-text">
-              <span className="pref-label">{item.label}</span>
-              <span className="pref-desc">{item.desc}</span>
-            </span>
-            <input
-              type="checkbox"
-              data-testid={`notify-pref-${item.key}`}
-              checked={optOut.has(item.key)}
-              onChange={(e) => void togglePref(item.key, e.target.checked)}
-            />
-          </label>
-        ))}
+        {/* 按事件类型区（2026-11-18 原型对齐）：灰底圆角容器 + 图标行；
+            邮件摘要总开关关闭后说明文案切换为「暂不生效」口径，细项禁用 */}
+        <div className={'pref-subgroup' + (digestEnabled ? '' : ' pref-subgroup-disabled')} data-testid="notify-pref-group">
+          <h4 className="settings-subhead">按事件类型关闭邮件摘要</h4>
+          <p className="settings-hint">
+            {digestEnabled
+              ? '关闭后对应事件不再发送邮件摘要；回收站清理提醒恒发，不在本设置范围。'
+              : '邮件摘要已整体关闭，以下选项暂不生效。'}
+          </p>
+          {PREF_ITEMS.map((item) => (
+            <label className="pref-row" key={item.key}>
+              <span className="pref-icon" aria-hidden>
+                <Lucide name={item.icon} size={16} />
+              </span>
+              <span className="pref-text">
+                <span className="pref-label">{item.label}</span>
+                <span className="pref-desc">{item.desc}</span>
+              </span>
+              <button
+                type="button"
+                role="switch"
+                // 2026-11-18 需求方拍板跟原型反转：蓝=接收该类型邮件提醒（默认全蓝），
+                // 点灭=关闭提醒。optOut 语义不变（存服务端 emailOptOut），仅显示反转。
+                aria-checked={!optOut.has(item.key)}
+                aria-label={item.label}
+                className="pref-switch"
+                data-testid={`notify-pref-${item.key}`}
+                disabled={!digestEnabled}
+                onClick={() => void togglePref(item.key, !optOut.has(item.key))}
+              >
+                <i aria-hidden />
+              </button>
+            </label>
+          ))}
+        </div>
         {prefError && <p className="error">{prefError}</p>}
       </section>
 

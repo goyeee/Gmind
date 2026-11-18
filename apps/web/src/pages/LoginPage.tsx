@@ -9,6 +9,7 @@ import {
   type LoginResponse,
 } from '@gmind/shared';
 import { useCodeCountdown } from './useCodeCountdown';
+import { InfiniteMap } from './InfiniteMap';
 
 /**
  * 登录页三视图（2026-11-12 账号体系重做，spec §4.4）：`login|register|forgot` 状态机，
@@ -23,6 +24,36 @@ import { useCodeCountdown } from './useCodeCountdown';
  */
 
 type View = 'login' | 'register' | 'forgot';
+
+type LoginIconName = 'share' | 'infinity' | 'users' | 'maximize' | 'network';
+
+/** 登录页专用装饰图标，路径与原型使用的 Lucide 图标一致，无需引入新依赖。 */
+function LoginIcon({ name, className }: { name: LoginIconName; className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      {name === 'share' && (
+        <>
+          <circle cx="18" cy="5" r="3" /><circle cx="6" cy="12" r="3" /><circle cx="18" cy="19" r="3" />
+          <path d="m8.59 13.51 6.83 3.98m-.01-10.98-6.82 3.98" />
+        </>
+      )}
+      {name === 'infinity' && <path d="M12 12c-2-2.67-4-4-6-4a4 4 0 1 0 0 8c2 0 4-1.33 6-4Zm0 0c2 2.67 4 4 6 4a4 4 0 0 0 0-8c-2 0-4 1.33-6 4Z" />}
+      {name === 'users' && (
+        <>
+          <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" />
+          <path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" />
+        </>
+      )}
+      {name === 'maximize' && <path d="M8 3H5a2 2 0 0 0-2 2v3m13-5h3a2 2 0 0 1 2 2v3M3 16v3a2 2 0 0 0 2 2h3m8 0h3a2 2 0 0 0 2-2v-3" />}
+      {name === 'network' && (
+        <>
+          <rect x="16" y="16" width="6" height="6" rx="1" /><rect x="2" y="16" width="6" height="6" rx="1" />
+          <rect x="9" y="2" width="6" height="6" rx="1" /><path d="M5 16v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3M12 12V8" />
+        </>
+      )}
+    </svg>
+  );
+}
 
 /** 登录成功后的落点（M3b Task 4，FR-SHR-001）：缺省 /workspace；分享落地页经
  *  /login?redirect=/s/:token 回跳。仅接受站内路径（以单个 / 开头，拒绝 // 与
@@ -163,35 +194,28 @@ export function LoginPage() {
       {/* 左侧 hero（品牌宣传层，≤900px 隐藏）：装饰节点/连线为纯 CSS/SVG，无业务语义 */}
       <div className="login-hero" aria-hidden={false}>
         <div className="login-hero-logo">
-          <span className="login-logo-mark">G</span> Gmind
+          <span className="login-logo-mark"><LoginIcon name="share" /></span> Gmind
         </div>
         <div className="login-hero-art" aria-hidden>
-          <svg className="hero-lines" viewBox="0 0 960 1200" preserveAspectRatio="xMidYMid slice">
-            <path d="M480 470 C 420 380, 340 330, 250 300" />
-            <path d="M480 470 C 560 360, 660 320, 740 300" />
-            <path d="M480 470 C 430 560, 360 620, 300 660" />
-            <path d="M480 470 C 540 580, 620 640, 690 680" />
-          </svg>
-          <span className="hero-node" style={{ left: '12%', top: '22%' }}>头脑风暴</span>
-          <span className="hero-node" style={{ right: '14%', top: '22%' }}>灵感捕捉</span>
-          <span className="hero-node" style={{ right: '32%', top: '54%' }}>实时协作</span>
-          <span className="hero-node" style={{ right: '20%', bottom: '36%' }}>结构整理</span>
-          <span className="hero-node hero-root">中心主题</span>
+          <InfiniteMap />
         </div>
         <h1 className="login-hero-title">
-          让想法自由生长，
-          <br />
-          <em>连接成图</em>
+          让想法自由生长，<em>连接成图</em>
         </h1>
         <p className="login-hero-desc">
-          Gmind 是在线思维导图与协作画布，把会议纪要、灵感与计划，整理成清晰的结构。
+          节点无限延展，不设上限。Gmind 是在线思维导图与协作画布，把会议纪要、灵感与计划，整理成清晰的结构。
         </p>
         <div className="login-hero-feats">
-          <span>实时协作</span>
-          <span>无限画布</span>
-          <span>多结构切换</span>
+          {([
+            ['infinity', '无限节点'],
+            ['users', '实时协作'],
+            ['maximize', '无限画布'],
+            ['network', '多结构切换'],
+          ] as const).map(([icon, label]) => (
+            <span key={label}><LoginIcon name={icon} className="login-feature-icon" />{label}</span>
+          ))}
         </div>
-        <p className="login-hero-copy">© 2026 Gmind Team</p>
+        <p className="login-hero-copy">© 2025 Gmind Team</p>
       </div>
 
       {/* 右侧表单：三视图状态机（login/register/forgot） */}

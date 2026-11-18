@@ -1,4 +1,6 @@
-import { useCallback, useEffect, useState, type MutableRefObject, type ReactElement, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type MutableRefObject, type ReactElement, type ReactNode } from 'react';
+import { Avatar } from '../editor/TaskFields';
+
 import { useNavigate } from 'react-router-dom';
 import { api, apiPost, clearToken } from '../api/client';
 import { onNotifyEvent, type NotifyItem } from '../notify';
@@ -59,6 +61,18 @@ function NotifyBell(): ReactElement {
   const [notifs, setNotifs] = useState<NotifyItem[]>([]);
   const [bellOpen, setBellOpen] = useState(false);
   const [filter, setFilter] = useState<'all' | 'mention' | 'reply' | 'remind'>('all');
+  // 外点关闭（需求方 2026-11-16：点开通知后点其他位置应收起）：监听 document
+  // pointerdown，命中 .notify-wrap 之外即收起。wrap 内含铃铛按钮本身，故点击铃铛
+  // 的 toggle 语义不被本监听抢先打断。
+  const wrapRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!bellOpen) return;
+    const onDocPointerDown = (e: PointerEvent): void => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setBellOpen(false);
+    };
+    document.addEventListener('pointerdown', onDocPointerDown);
+    return () => document.removeEventListener('pointerdown', onDocPointerDown);
+  }, [bellOpen]);
 
   const loadUnread = useCallback(async () => {
     try {
@@ -120,7 +134,7 @@ function NotifyBell(): ReactElement {
   }
 
   return (
-    <div className="notify-wrap">
+    <div className="notify-wrap" ref={wrapRef}>
       <button className="notify-bell" data-testid="notify-bell" title="通知" onClick={toggleBell}>
         <Lucide name="Bell" size={22} />
         {unread > 0 && (
@@ -233,9 +247,29 @@ export function WorkspaceShell({
   const [me, setMe] = useState<ShellMe | null>(null);
   const [userMenuAt, setUserMenuAt] = useState<'side' | 'top' | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
+  // 外点关闭（需求方 2026-11-16：点开用户菜单后点其他位置应收起）：.ws-user 包含
+  // 用户卡按钮与弹出的菜单，命中其外即收起；点按钮自身的 toggle 由 onClick 处理。
+  const userWrapRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (userMenuAt === null) return;
+    const onDocPointerDown = (e: PointerEvent): void => {
+      if (userWrapRef.current && !userWrapRef.current.contains(e.target as Node)) setUserMenuAt(null);
+    };
+    document.addEventListener('pointerdown', onDocPointerDown);
+    return () => document.removeEventListener('pointerdown', onDocPointerDown);
+  }, [userMenuAt]);
 
   useEffect(() => {
     void api<ShellMe>('/users/me').then(setMe).catch(() => undefined);
+  }, []);
+
+  // 换头像后刷新（设置页 dispatch 'gmind:avatar-updated' → 本壳重拉 me）
+  useEffect(() => {
+    const onAvatarUpdated = (): void => {
+      void api<ShellMe>('/users/me').then(setMe).catch(() => undefined);
+    };
+    window.addEventListener('gmind:avatar-updated', onAvatarUpdated);
+    return () => window.removeEventListener('gmind:avatar-updated', onAvatarUpdated);
   }, []);
 
   function navTarget(key: ShellNav): string {
@@ -380,14 +414,14 @@ export function WorkspaceShell({
           <div className="ws-side-bottom">
             <div className="ws-nav">{navItem(TRASH_NAV)}</div>
           </div>
-          <div className="ws-user">
+          <div className="ws-user" ref={userWrapRef}>
             <button
               className="ws-user-card"
               data-testid="user-card"
               onClick={() => setUserMenuAt((v) => (v === 'side' ? null : 'side'))}
             >
               <span className="ws-avatar" aria-hidden>
-                {(me?.nickname ?? '…').charAt(0)}
+                {me ? <Avatar userId={me.id} nickname={me.nickname} avatar={me.avatar} size={28} /> : '…'}
               </span>
               <span className="ws-user-meta">
                 <span className="ws-user-name" data-testid="user-nickname">

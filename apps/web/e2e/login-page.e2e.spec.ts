@@ -27,6 +27,88 @@ async function uiLogin(page: Page, account: string, password: string): Promise<v
   await page.getByTestId('login-submit').click();
 }
 
+// 原型布局回归：插画若再铺满左栏，以下相邻区域的位置关系会立即失败。
+test('登录页左侧按原型三段排列，常见屏幕一屏完整显示且不重叠', async ({ page }) => {
+  for (const viewport of [
+    { width: 1440, height: 900 },
+    { width: 1280, height: 800 },
+    { width: 1280, height: 720 },
+    { width: 1024, height: 768 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await page.goto('/login');
+    await expect(page.getByTestId('login-view')).toBeVisible();
+
+    const logo = await page.locator('.login-hero-logo').boundingBox();
+    const art = await page.locator('.login-hero-art').boundingBox();
+    const title = await page.locator('.login-hero-title').boundingBox();
+    const feats = await page.locator('.login-hero-feats').boundingBox();
+    const copy = await page.locator('.login-hero-copy').boundingBox();
+    if (!logo || !art || !title || !feats || !copy) throw new Error('登录页左侧区域未完整渲染');
+
+    expect(art.y).toBeGreaterThanOrEqual(logo.y + logo.height);
+    expect(title.y).toBeGreaterThanOrEqual(art.y + art.height);
+    expect(copy.y).toBeGreaterThanOrEqual(feats.y + feats.height);
+    expect(copy.y + copy.height).toBeLessThanOrEqual(viewport.height);
+    expect(await page.evaluate(() => document.documentElement.scrollHeight)).toBe(viewport.height);
+  }
+});
+
+// 右侧位置按可见结果断言，而非只钉 CSS 文本：4vh 底部空间会让中心上移 2vh。
+test('登录表单按原型垂直居中并保留 4vh 底部空间', async ({ page }) => {
+  for (const viewport of [{ width: 1280, height: 800 }, { width: 390, height: 844 }]) {
+    await page.setViewportSize(viewport);
+    await page.goto('/login');
+    await expect(page.getByTestId('login-view')).toBeVisible();
+
+    const panel = await page.locator('.login-panel').boundingBox();
+    const form = await page.locator('.login-page').boundingBox();
+    if (!panel || !form) throw new Error('登录页右侧区域未完整渲染');
+
+    const expectedCenter = panel.y + (panel.height - viewport.height * 0.04) / 2;
+    const actualCenter = form.y + form.height / 2;
+    expect(Math.abs(actualCenter - expectedCenter)).toBeLessThanOrEqual(1);
+  }
+});
+
+// 动效不是类名摆设：真实项目必须存在与原型相同的 700ms 分层淡入。
+test('登录页脑图按原型分层淡入，并尊重减少动态效果设置', async ({ page }) => {
+  await page.goto('/login');
+  const link = page.locator('path.login-map-enter').first();
+  const node = page.locator('g.login-map-enter').first();
+  await expect(link).toBeAttached();
+  await expect(link).toHaveCSS('animation-name', 'login-map-fade-in');
+  await expect(link).toHaveCSS('animation-duration', '0.7s');
+  await expect(link).toHaveCSS('animation-delay', '0.36s');
+  await expect(node).toHaveCSS('animation-delay', '0.28s');
+
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await expect(link).toHaveCSS('animation-name', 'none');
+});
+
+test('登录页还原 Figma 16:708 的真实尺寸与位置', async ({ page }) => {
+  await page.setViewportSize({ width: 1512, height: 845 });
+  await page.goto('/login');
+  await expect(page.locator('.login-logo-mark svg')).toHaveCount(1);
+  await expect(page.locator('.login-feature-icon')).toHaveCount(4);
+  await expect(page.locator('.login-hero-feats span').first()).toHaveCSS('font-size', '12.25px');
+  await expect(page.locator('.login-hero-desc')).toHaveCSS('max-width', '448px');
+  await expect(page.locator('.login-page')).toHaveCSS('width', '312px');
+  await expect(page.locator('.login-page h1')).toHaveCSS('font-size', '28px');
+  await expect(page.locator('.login-page h1')).toHaveCSS('line-height', '28px');
+
+  const hero = await page.locator('.login-hero').boundingBox();
+  const art = await page.locator('.login-hero-art > svg').boundingBox();
+  const title = await page.locator('.login-hero-title').boundingBox();
+  const form = await page.locator('.login-page').boundingBox();
+  if (!hero || !art || !title || !form) throw new Error('登录页未完整渲染');
+  expect(Math.abs(hero.width - 792)).toBeLessThanOrEqual(1);
+  expect(Math.abs(art.height - 458.523)).toBeLessThanOrEqual(2);
+  expect(Math.abs(title.y - 581.483)).toBeLessThanOrEqual(2);
+  expect(Math.abs(form.y - 261.58)).toBeLessThanOrEqual(2);
+  expect(Math.abs(form.height - 289.2)).toBeLessThanOrEqual(2);
+});
+
 // ① 注册旅程（注册即登录，注册即赠 3 个示例文件——语义同 helpers/auth.ts 注记）
 test('注册旅程：UI 收码填表 → 落工作台 → 3 个示例文件可见（发码钮 60s 倒计时禁用）', async ({ page }) => {
   const email = uniqueEmail();
