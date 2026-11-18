@@ -123,6 +123,10 @@ export function SettingsPage() {
 
   const [prefError, setPrefError] = useState('');
   const [error, setError] = useState('');
+  // 偏好写入版本号（2026-11-18 装载竞态修复，全量 e2e 实证）：用户每次点开关 +1。
+  // reload 发起时记录版本，响应落地时若版本已变（期间用户动过开关），偏好三态
+  // 不再覆盖——否则迟到的初始 GET 旧值会把用户刚做的选择「回冲」掉。
+  const prefsVersionRef = useRef(0);
 
   // 成功动作轻提示（形态同 WorkspacePage/EditorPage toast）
   const [toast, setToast] = useState('');
@@ -135,8 +139,11 @@ export function SettingsPage() {
   }
 
   const reload = useCallback(async () => {
+    const versionAtStart = prefsVersionRef.current;
     const [meData, prefs] = await Promise.all([api<MeIdentity>('/users/me'), api<NotifyPrefs>('/users/me/notify-prefs')]);
     setMe(meData);
+    // 发起后用户动过开关 → 这份响应的偏好已是旧值，跳过（me 身份数据照常应用）
+    if (versionAtStart !== prefsVersionRef.current) return;
     setOptOut(new Set(prefs.emailOptOut));
     setNotifyEnabled(prefs.notifyEnabled !== false);
     setDigestEnabled(prefs.digestEnabled !== false);
@@ -263,6 +270,7 @@ export function SettingsPage() {
   /** 开关即 PATCH（全量替换）：乐观更新，失败回滚并透出服务端原因文案。
    *  全量替换语义——emailOptOut 与两总开关必须同包提交（2026-10-28 P1）。 */
   async function togglePref(key: EmailOptOutType, checked: boolean): Promise<void> {
+    prefsVersionRef.current += 1;
     const prev = optOut;
     const next = new Set(prev);
     if (checked) next.add(key);
@@ -284,6 +292,7 @@ export function SettingsPage() {
 
   /** 总开关切换（2026-10-28 P1）：notifyEnabled=站内通知；digestEnabled=邮件摘要。 */
   async function toggleMaster(key: 'notifyEnabled' | 'digestEnabled', checked: boolean): Promise<void> {
+    prefsVersionRef.current += 1;
     const prevN = notifyEnabled;
     const prevD = digestEnabled;
     if (key === 'notifyEnabled') setNotifyEnabled(checked);

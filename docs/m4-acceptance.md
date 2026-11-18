@@ -508,12 +508,12 @@ emoji(28)/数字(10) 组往返仍丢（无 XMind 原生源）；颜色/形状信
 ### 交付用例
 
 - `settings.e2e.spec.ts:157`「偏好开关切换 → 刷新仍保持」——改钉新语义（默认全蓝、点灭提及、刷新后提及灭/其余蓝），先红后绿；其余 8 用例零改动全绿。
-- `settings.e2e.spec.ts:174` 摘要总开关用例——全量高负载下曾 flaky 一次，加固为 waitForResponse 等 PATCH 真实成功再断言（排除乐观更新竞态），加固后 repeat 4/4。
+- `settings.e2e.spec.ts:174` **装载竞态产品 bug 修复**（全量 flaky 追根）：初始 GET 旧偏好晚于用户 PATCH 到达时会「回冲」用户刚做的开关选择——`SettingsPage` 加 `prefsVersionRef`，用户每次点开关 +1，reload 响应落地时版本已变则跳过偏好三态覆盖（me 身份照常）。复现用例用 route.fetch 先取真实旧响应再延迟 fulfill，红→绿；摘要总开关用例同步保留 waitForResponse 硬等待。
 - 视觉核对：Playwright 截图逐项比对（整页/头像卡/通知卡/换绑卡），通知行错位经截图复验修复。
 
 ### 门禁
 
-- lint 0 / typecheck 0；settings/error-copy/login-page 31/31；全量 web e2e 233 过 + 1 skip、零失败零 flaky（2026-11-18 收官实测）。
+- lint 0 / typecheck 0；settings 10/10（含新增装载竞态用例红→绿）；全量 web e2e **241 过 + 1 skip、零失败零 flaky**（2026-11-18 收官实测；总数较此前 +8 为另一批分享功能新增用例）。
 
 ## 二十三、2026-11-18 分享弹窗导出页原型对齐补记
 

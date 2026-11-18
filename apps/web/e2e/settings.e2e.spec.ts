@@ -171,6 +171,30 @@ test('偏好开关切换 → 刷新仍保持', async ({ page }) => {
   await expect(page.getByTestId('notify-pref-permission')).toBeChecked();
 });
 
+test('装载竞态：初始偏好未返回时点开关，不被迟到的旧数据回冲', async ({ page }) => {
+  await registerAndLogin(page);
+  // 初始 GET 在服务端先读旧值、响应延迟 1s 才到页面（route.fetch 先取回真实旧响应，
+  // 再 fulfill）——精确复现「旧数据晚于用户 PATCH 到达」的回冲窗口
+  await page.route('**/api/users/me/notify-prefs', async (route) => {
+    if (route.request().method() !== 'GET') return route.continue();
+    const resp = await route.fetch();
+    await new Promise((r) => setTimeout(r, 1000));
+    await route.fulfill({ response: resp });
+  });
+  await openSettings(page);
+  const initialGet = page.waitForResponse(
+    (r) => r.url().includes('/api/users/me/notify-prefs') && r.request().method() === 'GET' && r.ok(),
+  );
+  await page.getByTestId('notify-master-digest').click();
+  // PATCH 成功 + 迟到的初始 GET（旧值）也已落地后，UI 必须仍保持用户选择
+  await page.waitForResponse(
+    (r) => r.url().includes('/api/users/me/notify-prefs') && r.request().method() === 'PATCH' && r.ok(),
+  );
+  await initialGet;
+  await expect(page.getByTestId('notify-pref-group')).toContainText('邮件摘要已整体关闭，以下选项暂不生效。');
+  await expect(page.getByTestId('notify-master-digest')).toHaveAttribute('aria-checked', 'false');
+});
+
 test('邮件摘要总开关关闭：按事件类型区提示「暂不生效」且开关禁用', async ({ page }) => {
   await registerAndLogin(page);
   await openSettings(page);
