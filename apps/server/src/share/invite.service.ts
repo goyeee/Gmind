@@ -88,6 +88,23 @@ export class InviteService {
         await this.inviteRepo.save(row);
       }
       invited++;
+      // 已注册联系人的 pending 邀请也进入其站内通知；未注册联系人仅走既有邮件/回填通道。
+      const invitedUser = await this.fileRepo.manager.findOneBy(UserEntity, type === 'email' ? { email: contact, status: 'active' } : { phone: contact, status: 'active' });
+      if (invitedUser) {
+        owner ??= await this.fileRepo.manager.findOneByOrFail(UserEntity, { id: userId });
+        try {
+          await this.notify.notify(invitedUser.id, 'permission', {
+            fileId: file.id,
+            title: file.title,
+            memberName: invitedUser.nickname,
+            inviterName: owner.nickname || '用户',
+            action: 'invited',
+            content: `${owner.nickname || '用户'} 邀请你协作「${file.title}」`,
+          });
+        } catch {
+          // 通知旁路失败不回滚已创建的邀请。
+        }
+      }
       if (type === 'email') {
         owner ??= await this.fileRepo.manager.findOneByOrFail(UserEntity, { id: userId });
         await this.sendInviteMail(owner, file.title, contact);

@@ -67,7 +67,8 @@ describe('share 域', () => {
     const fileId = created.body.id as string;
     const share = await request(app.getHttpServer())
       .post(`/api/files/${fileId}/share`)
-      .set('Authorization', `Bearer ${owner.token}`);
+      .set('Authorization', `Bearer ${owner.token}`)
+      .send({ role: 'editor' }); // 既有 join 用例显式创建可编辑链接；新默认 viewer 单独覆盖
     expect(share.status).toBe(201);
     return { fileId, shareToken: share.body.shareToken as string };
   }
@@ -267,6 +268,77 @@ describe('share 域', () => {
       .delete(`/api/files/${fileId}/share`)
       .set('Authorization', `Bearer ${owner.token}`);
     expect(again.status).toBe(404);
+  });
+
+  it('新链接默认 viewer/永久/无密码；commenter 链接真实写入可评论角色', async () => {
+    const owner = await newUser();
+    const viewer = await newUser();
+    const commenter = await newUser();
+    const fileId = await makeFile(owner, '链接角色与默认值');
+
+    const created = await request(app.getHttpServer()).post(`/api/files/${fileId}/share`).set('Authorization', `Bearer ${owner.token}`);
+    expect(created.status).toBe(201);
+    const described = await request(app.getHttpServer()).get(`/api/files/${fileId}/share`).set('Authorization', `Bearer ${owner.token}`);
+    expect(described.body).toEqual({ status: 'active', shareToken: created.body.shareToken, role: 'viewer', password: null, expiresIn: 'forever', expiresAt: null });
+    expect((await request(app.getHttpServer()).get(`/api/share/${created.body.shareToken}`)).body).toMatchObject({ status: 'active', role: 'viewer', requiresPassword: false });
+    expect((await request(app.getHttpServer()).post(`/api/share/${created.body.shareToken}/join`).set('Authorization', `Bearer ${viewer.token}`)).status).toBe(201);
+    expect((await collabRepo.findOneByOrFail({ fileId, userId: viewer.id })).role).toBe('viewer');
+
+    const changed = await request(app.getHttpServer()).patch(`/api/files/${fileId}/share`).set('Authorization', `Bearer ${owner.token}`).send({ role: 'commenter' });
+    expect(changed.status).toBe(200);
+    expect((await request(app.getHttpServer()).get(`/api/files/${fileId}/share`).set('Authorization', `Bearer ${owner.token}`)).body.role).toBe('commenter');
+    expect((await request(app.getHttpServer()).post(`/api/share/${created.body.shareToken}/join`).set('Authorization', `Bearer ${commenter.token}`)).status).toBe(201);
+    expect((await collabRepo.findOneByOrFail({ fileId, userId: commenter.id })).role).toBe('commenter');
+    // 链接档位只决定新加入者，已有成员角色由成员管理单独维护。
+    expect((await collabRepo.findOneByOrFail({ fileId, userId: viewer.id })).role).toBe('viewer');
+  });
+
+  it('访问密码：自动生成4位、错误拒绝、正确加入；关闭再开启生成新密码', async () => {
+    const owner = await newUser();
+    const first = await newUser();
+    const second = await newUser();
+    const third = await newUser();
+    const fileId = await makeFile(owner, '链接密码用例');
+    const created = await request(app.getHttpServer()).post(`/api/files/${fileId}/share`).set('Authorization', `Bearer ${owner.token}`).send({ passwordEnabled: true });
+    const token = created.body.shareToken as string;
+    const described = await request(app.getHttpServer()).get(`/api/files/${fileId}/share`).set('Authorization', `Bearer ${owner.token}`);
+    const oldPassword = described.body.password as string;
+    expect(oldPassword).toMatch(/^\d{4}$/);
+    expect((await request(app.getHttpServer()).get(`/api/share/${token}`)).body.requiresPassword).toBe(true);
+
+    expect((await request(app.getHttpServer()).post(`/api/share/${token}/join`).set('Authorization', `Bearer ${first.token}`)).status).toBe(400);
+    expect((await request(app.getHttpServer()).post(`/api/share/${token}/join`).set('Authorization', `Bearer ${first.token}`).send({ password: '0000' })).body.message).toBe('访问密码错误，请重新输入');
+    expect((await request(app.getHttpServer()).post(`/api/share/${token}/join`).set('Authorization', `Bearer ${first.token}`).send({ password: oldPassword })).status).toBe(201);
+
+    expect((await request(app.getHttpServer()).patch(`/api/files/${fileId}/share`).set('Authorization', `Bearer ${owner.token}`).send({ passwordEnabled: false })).status).toBe(200);
+    expect((await request(app.getHttpServer()).post(`/api/share/${token}/join`).set('Authorization', `Bearer ${second.token}`)).status).toBe(201);
+    expect((await request(app.getHttpServer()).patch(`/api/files/${fileId}/share`).set('Authorization', `Bearer ${owner.token}`).send({ passwordEnabled: true })).status).toBe(200);
+    const renewed = await request(app.getHttpServer()).get(`/api/files/${fileId}/share`).set('Authorization', `Bearer ${owner.token}`);
+    const newPassword = renewed.body.password as string;
+    expect(newPassword).not.toBe(oldPassword);
+    expect((await request(app.getHttpServer()).post(`/api/share/${token}/join`).set('Authorization', `Bearer ${third.token}`).send({ password: oldPassword })).status).toBe(400);
+    expect((await request(app.getHttpServer()).post(`/api/share/${token}/join`).set('Authorization', `Bearer ${third.token}`).send({ password: newPassword })).status).toBe(201);
+  });
+
+  it('有效期：过期链接永久失效，重新开启生成新token并重新计时', async () => {
+    const owner = await newUser();
+    const member = await newUser();
+    const fileId = await makeFile(owner, '链接过期用例');
+    const created = await request(app.getHttpServer()).post(`/api/files/${fileId}/share`).set('Authorization', `Bearer ${owner.token}`).send({ role: 'commenter', expiresIn: '7', passwordEnabled: true });
+    const oldToken = created.body.shareToken as string;
+    const link = await shareRepo.findOneByOrFail({ token: oldToken });
+    expect(link.expiresIn).toBe('7');
+    expect(link.expiresAt!.getTime()).toBeGreaterThan(Date.now() + 6 * 24 * 60 * 60 * 1000);
+    link.expiresAt = new Date(Date.now() - 1000);
+    await shareRepo.save(link);
+
+    expect((await request(app.getHttpServer()).get(`/api/share/${oldToken}`)).body).toEqual({ status: 'expired' });
+    expect((await request(app.getHttpServer()).post(`/api/share/${oldToken}/join`).set('Authorization', `Bearer ${member.token}`)).status).toBe(404);
+    expect((await request(app.getHttpServer()).get(`/api/files/${fileId}/share`).set('Authorization', `Bearer ${owner.token}`)).body.status).toBe('expired');
+    const renewed = await request(app.getHttpServer()).post(`/api/files/${fileId}/share`).set('Authorization', `Bearer ${owner.token}`).send({ role: 'commenter', expiresIn: '7', passwordEnabled: true });
+    expect(renewed.body.shareToken).not.toBe(oldToken);
+    expect((await request(app.getHttpServer()).get(`/api/share/${oldToken}`)).body).toEqual({ status: 'expired' });
+    expect((await request(app.getHttpServer()).get(`/api/share/${renewed.body.shareToken}`)).body).toMatchObject({ status: 'active', role: 'commenter', requiresPassword: true });
   });
 
   // ---------- 批量邀请与注册回填（M3b Task 5，FR-SHR-004） ----------

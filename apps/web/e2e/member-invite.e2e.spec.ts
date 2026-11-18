@@ -30,9 +30,9 @@ const authHeader = (token: string) => ({ Authorization: `Bearer ${token}` });
 test('成员面板邀请：粘贴多个地址批量邀请成功；非法地址逐条报错', async ({ page }) => {
   await openSeedDoc(page, '本周计划');
   await page.getByTestId('members-btn').click();
-  const panel = page.getByTestId('member-panel');
+  const panel = page.getByTestId('share-dialog');
   await expect(panel).toBeVisible();
-  await panel.getByTestId('member-tab-invite').click();
+  await panel.getByTestId('share-tab-invite').click();
   await expect(panel.getByTestId('invite-section')).toBeVisible(); // owner 可见邀请区
   await panel.getByTestId('invite-contacts-toggle').click(); // 展开站外联系人粘贴框
   const input = page.getByTestId('invite-input');
@@ -71,7 +71,7 @@ test('成员面板邀请区仅 owner 可见：协作者不显示', async ({ brow
 
   // B 打开成员面板：面板可见但无邀请区（非 owner）
   await page.getByTestId('members-btn').click();
-  await expect(page.getByTestId('member-panel')).toBeVisible();
+  await expect(page.getByTestId('share-dialog')).toBeVisible();
   await expect(page.getByTestId('invite-section')).toHaveCount(0);
   await context.close();
 });
@@ -81,7 +81,7 @@ test('成员面板邀请区仅 owner 可见：协作者不显示', async ({ brow
 test('成员面板邀请：混合批次 toast 分计数；M=0 保持旧文案；textarea aria-label', async ({ page }) => {
   await openSeedDoc(page, '本周计划');
   await page.getByTestId('members-btn').click();
-  await page.getByTestId('member-tab-invite').click(); // 2026-10-25 原型重排：邀请页签
+  await page.getByTestId('share-tab-invite').click(); // 2026-10-25 原型重排：邀请页签
   await expect(page.getByTestId('invite-section')).toBeVisible();
   await page.getByTestId('invite-contacts-toggle').click(); // 2026-10-11 起折叠为次要入口
 
@@ -114,9 +114,9 @@ test('成员面板拉取站内用户：搜索候选 → 待邀请 → 确定拉�
 
   await openSeedDoc(page, '本周计划');
   await page.getByTestId('members-btn').click();
-  const panel = page.getByTestId('member-panel');
+  const panel = page.getByTestId('share-dialog');
   await expect(panel).toBeVisible();
-  await panel.getByTestId('member-tab-invite').click();
+  await panel.getByTestId('share-tab-invite').click();
   await expect(panel.getByTestId('invite-section')).toBeVisible();
   await expect(panel.getByTestId('invite-pull-submit')).toBeDisabled(); // 空 pending 不可确定
 
@@ -136,7 +136,7 @@ test('成员面板拉取站内用户：搜索候选 → 待邀请 → 确定拉�
   await expect(panel.getByTestId('member-row').filter({ hasText: bNick })).toHaveCount(1);
 
   // 重进邀请页签：目录已排除 B（同搜索词无候选行）
-  await panel.getByTestId('member-tab-invite').click();
+  await panel.getByTestId('share-tab-invite').click();
   await panel.getByTestId('invite-user-search').fill(userB.email);
   await expect(panel.getByTestId('invite-user-row').filter({ hasText: bNick })).toHaveCount(0);
 });

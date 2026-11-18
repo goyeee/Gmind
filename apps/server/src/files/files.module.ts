@@ -3,6 +3,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { CollabModule } from '../collab/collab.module';
 import { EventsModule } from '../events/events.module';
 import { OrgModule } from '../org/org.module';
+import { NotifyModule } from '../notify/notify.module';
 import { StorageCoreModule } from '../storage/storage-core.module';
 import { TaskIndexModule } from '../todos/task-index.module';
 import { UserEntity } from '../users/user.entity';
@@ -34,6 +35,7 @@ import { FilesController, SearchController } from './files.controller';
     StorageCoreModule,
     EventsModule,
     OrgModule,
+    NotifyModule,
   ],
   providers: [FilesService],
   controllers: [FilesController, SearchController],

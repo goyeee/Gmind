@@ -100,10 +100,10 @@ export class CollabService implements OnApplicationShutdown {
           .get(data.documentName)
           ?.broadcastStateless(data.payload);
       },
-      // 写拦截（2026-10-28 P0 链接档位）：viewer 连接的文档写消息在应用前拒绝
-      // （awareness 光标/选区走另一钩子不受影响——只读协作者仍可见彼此光标）
+      // 只读使用 Hocuspocus 内置 connection.readOnly：同步/在线状态/评论消息继续，
+      // 仅 Yjs 写入被拒绝并返回失败状态；不能抛错断掉整个连接。
       beforeHandleMessage: async (data) => {
-        if (data.context.readOnly === true) throw new Error('permission-denied');
+        data.connection.readOnly = data.context.readOnly === true;
       },
       beforeUnloadDocument: async (data) => {
         // 卸载兜底（FR-VER-001）：会话结束仍有未快照的变更 → 立即落行（补「编辑 1 分钟
@@ -198,6 +198,22 @@ export class CollabService implements OnApplicationShutdown {
    *  本单一入口（quota-exceeded/persisted 为网关内部路径，不经此处）。 */
   broadcastStateless(fileId: string, payload: string): void {
     this.hocuspocus.documents.get(fileId)?.broadcastStateless(payload);
+  }
+
+  /** 角色变更即时更新目标连接的写闸；移除（role=null）立即断开并通知前端刷新身份。 */
+  updateMemberPermission(fileId: string, userId: string, role: 'editor' | 'commenter' | 'viewer' | null): void {
+    const doc = this.hocuspocus.documents.get(fileId);
+    if (!doc) return;
+    for (const [connection] of doc.connections) {
+      const context = connection.context as { userId?: string; readOnly?: boolean };
+      if (context.userId !== userId) continue;
+      if (role === null) connection.close();
+      else {
+        context.readOnly = role !== 'editor';
+        connection.readOnly = role !== 'editor';
+      }
+    }
+    doc.broadcastStateless(JSON.stringify({ type: 'permission-updated', fileId, userId, role }));
   }
 
   async onApplicationShutdown(): Promise<void> {

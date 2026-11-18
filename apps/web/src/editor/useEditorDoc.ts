@@ -48,7 +48,7 @@ interface FileContentResponse {
   starred: boolean;
   docState: string;
   /** 本人角色（2026-10-28 P0）：viewer=只读装配（只读链接加入/只读协作者）。 */
-  myRole?: 'owner' | 'editor' | 'viewer';
+  myRole?: 'owner' | 'editor' | 'commenter' | 'viewer';
 }
 
 function base64ToBytes(b64: string): Uint8Array {
@@ -68,7 +68,7 @@ export function useEditorDoc(fileId: string): {
   /** 文件 kind（'map'|'table'，批次 D）：表格文件默认开表格视图的判定源。 */
   fileKind: 'map' | 'table';
   /** 本人角色（2026-10-28 P0）：viewer=只读装配（服务端随文件详情下发）。 */
-  myRole: 'owner' | 'editor' | 'viewer' | null;
+  myRole: 'owner' | 'editor' | 'commenter' | 'viewer' | null;
   /** 写序 base（准入 7.1）：GET 装载的行 updated_at，persisted ack 刷新；null = 无 base
    *  （离线恢复路径/未装载）。ref 形态：saveLoop 决策与 collab 回调都要读/写最新值，
    *  不需要触发渲染。 */
@@ -77,7 +77,7 @@ export function useEditorDoc(fileId: string): {
   const [state, setState] = useState<EditorDocState | null>(null);
   const [error, setError] = useState('');
   const [fileKind, setFileKind] = useState<'map' | 'table'>('map');
-  const [myRole, setMyRole] = useState<'owner' | 'editor' | 'viewer' | null>(null);
+  const [myRole, setMyRole] = useState<'owner' | 'editor' | 'commenter' | 'viewer' | null>(null);
   const patchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingTitle = useRef<string | null>(null);
   const baseUpdatedAtRef = useRef<string | null>(null);
@@ -130,6 +130,21 @@ export function useEditorDoc(fileId: string): {
     return () => {
       cancelled = true;
     };
+  }, [fileId]);
+
+  // 在线角色变更：只刷新本人权限，不重建文档，避免打断当前查看与评论。
+  useEffect(() => {
+    const onPermission = (event: Event): void => {
+      const detail = (event as CustomEvent<{ fileId?: string }>).detail;
+      if (detail?.fileId !== fileId) return;
+      void api<FileContentResponse>(`/files/${fileId}`)
+        .then((meta) => setMyRole(meta.myRole ?? null))
+        .catch((e) => {
+          if (e instanceof ApiError && e.status === 404) setError('你已被移出该文件，请返回工作台');
+        });
+    };
+    window.addEventListener('gmind:permission-updated', onPermission);
+    return () => window.removeEventListener('gmind:permission-updated', onPermission);
   }, [fileId]);
 
   // 卸载：清理防抖计时并把未落库的标题直接 PATCH（冲刷，避免丢改名）

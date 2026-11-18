@@ -25,14 +25,17 @@ export class ShareLinkEntity {
 
   /** 链接权限档位（2026-10-28 P0）：editor=加入即可编辑（存量默认）；viewer=仅查看
    *  （join 的协作者行 role=viewer，编辑器只读装配）。 */
-  @Column({ type: 'enum', enum: ['editor', 'viewer'] })
-  role: 'editor' | 'viewer' = 'editor';
+  @Column({ type: 'enum', enum: ['editor', 'viewer', 'commenter'] })
+  role: 'editor' | 'viewer' | 'commenter' = 'editor';
 
   @Column({ type: 'varchar', length: 64, nullable: true })
   password: string | null = null;
 
   @Column({ type: 'datetime', precision: 3, nullable: true, name: 'expires_at' })
   expiresAt: Date | null = null;
+
+  @Column({ type: 'enum', enum: ['forever', '7', '30'], name: 'expires_in' })
+  expiresIn: 'forever' | '7' | '30' = 'forever';
 
   @Column({ type: 'datetime', precision: 3, nullable: true, name: 'closed_at' })
   closedAt: Date | null = null;

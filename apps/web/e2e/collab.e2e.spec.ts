@@ -318,7 +318,7 @@ test('成员面板：编辑/查看分组、创建者标识与离线即时移除'
   const nickC = await nicknameOf(pageC); // C 只看不编辑 → editing=false
 
   await pageA.getByTestId('members-btn').click();
-  const panel = pageA.getByTestId('member-panel');
+  const panel = pageA.getByTestId('share-dialog');
   await expect(panel).toBeVisible();
   await expect(pageA.getByTestId('members-count')).toHaveText('3');
   // 2026-10-25 原型重排：面板=全量协作者名单（协作成员 tab，collaborators 投影），
@@ -337,9 +337,9 @@ test('成员面板：编辑/查看分组、创建者标识与离线即时移除'
     all.locator('[data-testid="member-row"]', { hasText: nickC }).getByTestId('member-editing-badge'),
   ).toHaveCount(0);
 
-  // 创建者标识：owner（A 自己）行带「创建者」，B/C 行不带
+  // 创建者标识：owner（A 自己）行带「所有者」，B/C 行不带
   const rowA = panel.locator('[data-testid="member-row"]', { hasText: nickA });
-  await expect(rowA.getByTestId('owner-badge')).toHaveText('创建者');
+  await expect(rowA.getByTestId('owner-badge')).toHaveText('所有者');
   const rowB = panel.locator('[data-testid="member-row"]', { hasText: nickB });
   await expect(rowB.getByTestId('owner-badge')).toHaveCount(0);
 

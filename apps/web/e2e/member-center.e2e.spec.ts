@@ -55,8 +55,8 @@ test('顶栏右缘：成员钮角标与可访问名，点成员钮开成员面�
   await expect(page.getByTestId('personal-menu')).toHaveCount(0);
   // 点成员钮 = 打开成员面板
   await membersBtn.click();
-  await expect(page.getByTestId('member-panel')).toBeVisible();
-  await page.getByTestId('member-panel-close').click();
+  await expect(page.getByTestId('share-dialog')).toBeVisible();
+  await page.getByTestId('share-dialog-close').click();
 });
 
 test('双上下文：B 加入 → 角标 1→2 且成员面板见 B 行；B 关闭 → 角标回 1', async ({ browser, request }) => {
@@ -85,11 +85,11 @@ test('双上下文：B 加入 → 角标 1→2 且成员面板见 B 行；B 关�
   // A 角标 1 → 2（presence 通道，15s 容忍）；点成员钮开面板见 B 行
   await expect(pageA.getByTestId('members-count')).toHaveText('2', { timeout: 15_000 });
   await pageA.getByTestId('members-btn').click();
-  const panel = pageA.getByTestId('member-panel');
+  const panel = pageA.getByTestId('share-dialog');
   await expect(panel).toBeVisible();
   await expect(panel.locator(`[data-member-user="${bId}"]`)).toBeVisible();
   await expect(panel.locator('[data-testid="member-row"]')).toHaveCount(2);
-  await pageA.getByTestId('member-panel-close').click();
+  await pageA.getByTestId('share-dialog-close').click();
 
   // B 关闭 → A 角标回 1（awareness 即时移除路径，10s 容忍）
   await contextB.close();
@@ -123,7 +123,7 @@ test('多人在线：6 人角标 6，成员面板 6 行', async ({ browser, requ
   // 角标=6（presence 收敛 15s 容忍）；面板 6 行
   await expect(pageA.getByTestId('members-count')).toHaveText('6', { timeout: 15_000 });
   await pageA.getByTestId('members-btn').click();
-  const panel = pageA.getByTestId('member-panel');
+  const panel = pageA.getByTestId('share-dialog');
   await expect(panel).toBeVisible();
   await expect(panel.locator('[data-testid="member-row"]')).toHaveCount(6, { timeout: 15_000 });
 });

@@ -283,7 +283,7 @@ export function startCollab(fileId: string, doc: Y.Doc, opts: CollabOptions): Co
   };
   const onStateless = ({ payload }: { payload: string }): void => {
     try {
-      const msg = JSON.parse(payload) as { type?: string; at?: string; updatedAt?: string; nickname?: string; senderClientID?: number };
+      const msg = JSON.parse(payload) as { type?: string; at?: string; updatedAt?: string; nickname?: string; senderClientID?: number; fileId?: string; userId?: string; role?: string };
       if (msg.type === 'persisted') {
         onStatus('saved', msg.at);
         // 写序 base 刷新（准入 7.1）：以落库后的行值为准；旧载荷无 updatedAt 不更新
@@ -297,6 +297,8 @@ export function startCollab(fileId: string, doc: Y.Doc, opts: CollabOptions): Co
         if (msg.senderClientID !== selfClientID) {
           for (const cb of filterUpdatedCallbacks) cb(msg.nickname);
         }
+      } else if (msg.type === 'permission-updated' && typeof msg.fileId === 'string') {
+        window.dispatchEvent(new CustomEvent('gmind:permission-updated', { detail: { fileId: msg.fileId, userId: msg.userId } }));
       }
     } catch {
       // 非 JSON stateless 广播：与本页无关，忽略

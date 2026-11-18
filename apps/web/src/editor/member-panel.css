@@ -1,460 +1,66 @@
-/* 在线成员面板 — M2 Task 6（FR-COL-005）。定位：编辑器右上角工具栏下方浮层。 */
+/* 分享弹窗内的成员名单与邀请区块。 */
+.member-group { display: flex; flex: 1; min-height: 0; flex-direction: column; padding: 0 20px; }
+.member-group-scroll { flex: 1; min-height: 0; overflow-y: auto; }
+.member-group-empty { margin: 24px 0; color: #86909c; font-size: 13px; text-align: center; }
+.member-group-empty button { margin-left: 6px; border: none; background: none; color: #3370ff; cursor: pointer; }
+.member-rows { list-style: none; margin: 0; padding: 0; }
+.member-row { display: flex; align-items: center; gap: 10px; min-height: 54px; padding: 8px 0; border-bottom: 1px solid #f0f1f2; }
+.member-row.member-row-located { background: #e8f3ff; border-radius: 6px; transition: background-color 0.2s; }
+.member-avatar { position: relative; flex: none; width: 32px; height: 32px; }
+.member-row-main { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 3px; }
+.member-name { min-width: 0; overflow: hidden; color: #1f2329; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.member-row-sub { overflow: hidden; color: #8f959e; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.member-owner-badge { flex: none; padding: 2px 8px; border-radius: 6px; background: #fff3e8; color: #d25f00; font-size: 12px; }
+.member-self-mark { margin-left: 2px; color: #8f959e; font-size: 11px; font-style: normal; }
+.member-online-dot { position: absolute; right: -1px; bottom: -1px; width: 8px; height: 8px; border: 2px solid #fff; border-radius: 50%; background: #00b42a; }
+.member-editing-badge { margin-left: 6px; padding: 0 5px; border-radius: 999px; background: #e8f0ff; color: #3370ff; font-size: 10px; line-height: 16px; }
+.member-role-select { width: 82px; height: 28px; padding: 0 4px; border: 1px solid #e5e6eb; border-radius: 6px; background: #fff; color: #4e5969; font-size: 12px; }
+.member-role-readonly { color: #86909c; font-size: 12px; }
+.member-remove-btn { padding: 4px 6px; border: none; border-radius: 6px; background: transparent; color: #8f959e; cursor: pointer; font-size: 12px; }
+.member-remove-btn:hover { background: #feeceb; color: #f54a45; }
+.member-empty { display: flex; align-items: center; flex-direction: column; margin-top: 20px; padding: 24px 12px; border-radius: 12px; background: #f7f8fa; text-align: center; }
+.member-empty b { font-size: 13px; }
+.member-empty span { margin-top: 5px; color: #86909c; font-size: 12px; }
+.member-empty button { height: 32px; margin-top: 14px; padding: 0 16px; border: none; border-radius: 8px; background: #3370ff; color: #fff; cursor: pointer; }
+.member-list-footer { display: flex; flex: none; align-items: center; justify-content: space-between; margin-top: 8px; padding: 12px 0 16px; border-top: 1px solid #e5e6eb; color: #8f959e; font-size: 12px; }
+.member-list-footer button { border: none; background: none; color: #3370ff; cursor: pointer; }
 
-.member-panel {
-  position: fixed;
-  top: 56px;
-  right: 16px;
-  width: 248px;
-  max-height: 60vh;
-  overflow: auto;
-  background: #fff;
-  border: 1px solid #e5e6eb;
-  border-radius: 8px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
-  z-index: 1150;
-  padding: 8px 12px 12px;
-  font-size: 13px;
-}
-
-.member-panel-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 4px 0 6px;
-  border-bottom: 1px solid #f2f3f5;
-}
-.member-panel-title {
-  font-weight: 600;
-}
-.member-panel-close {
-  border: none;
-  background: none;
-  font-size: 16px;
-  line-height: 1;
-  color: #86909c;
-  cursor: pointer;
-  padding: 2px 6px;
-}
-
-.member-group {
-  margin-top: 8px;
-}
-.member-group-title {
-  margin: 0 0 4px;
-  font-size: 12px;
-  font-weight: 600;
-  color: #4e5969;
-}
-.member-group-count {
-  margin-left: 6px;
-  color: #86909c;
-  font-weight: 400;
-}
-.member-group-empty {
-  margin: 0;
-  color: #c9cdd4;
-  padding: 4px 0;
-}
-
-.member-rows {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-.member-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 5px 0;
-}
-/* 头像点击定位（M6 T9 评审修复轮）：目标行短时高亮（2s 后由 MemberPanel 移除） */
-.member-row.member-row-located {
-  background: #e8f3ff;
-  border-radius: 6px;
-  transition: background-color 0.2s;
-}
-.member-avatar {
-  flex: none;
-  width: 22px;
-  height: 22px;
-  border-radius: 50%;
-  color: #fff;
-  font-size: 12px;
-  line-height: 22px;
-  text-align: center;
-  user-select: none;
-}
-.member-name {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.member-owner-badge {
-  flex: none;
-  padding: 1px 6px;
-  border-radius: 4px;
-  background: #fff3e8;
-  color: #d25f00;
-  font-size: 11px;
-}
-.member-joined {
-  flex: none;
-  color: #86909c;
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
-}
-
-/* 邀请区（2026-10-11 重做：站内用户 picker + 折叠站外粘贴入口）：owner 专属，
-   面板底部整宽。 */
-.member-invite {
-  margin-top: 10px;
-  padding-top: 8px;
-  border-top: 1px solid #f2f3f5;
-}
-.member-invite-search {
-  box-sizing: border-box;
-  width: 100%;
-  padding: 5px 8px;
-  border: 1px solid #e5e6eb;
-  border-radius: 6px;
-  font-family: inherit;
-  font-size: 12px;
-}
-.member-invite-search:focus {
-  border-color: #94bfff;
-  outline: none;
-}
-.member-invite-list {
-  list-style: none;
-  margin: 6px 0 0;
-  padding: 0;
-  max-height: 180px;
-  overflow-y: auto;
-}
-.member-invite-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 2px;
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 12px;
-}
-.member-invite-row:hover {
-  background: #f7f8fa;
-}
-.member-invite-name {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.member-invite-contact {
-  flex: none;
-  color: #86909c;
-  font-size: 11px;
-}
-.member-invite-empty {
-  color: #c9cdd4;
-  font-size: 12px;
-  padding: 8px 2px;
-}
-.member-invite-pager {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-top: 6px;
-  font-size: 12px;
-}
-.member-invite-pager button {
-  border: 1px solid #e5e6eb;
-  border-radius: 4px;
-  background: #fff;
-  cursor: pointer;
-  padding: 2px 8px;
-  font-size: 12px;
-}
-.member-invite-pager button:disabled {
-  cursor: not-allowed;
-  opacity: 0.5;
-}
-.member-invite-page-info {
-  color: #86909c;
-  font-variant-numeric: tabular-nums;
-}
-.member-invite-footer {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-top: 6px;
-}
-.member-invite-selected {
-  color: #86909c;
-  font-size: 12px;
-}
-.member-invite-pull {
-  padding: 5px 14px;
-  border: none;
-  border-radius: 6px;
-  background: #3370ff;
-  color: #fff;
-  cursor: pointer;
-  font-size: 12px;
-}
-.member-invite-pull:disabled {
-  cursor: not-allowed;
-  opacity: 0.5;
-}
-.member-invite-contacts-toggle {
-  margin-top: 8px;
-  padding: 0;
-  border: none;
-  background: none;
-  color: #86909c;
-  font-size: 12px;
-  cursor: pointer;
-}
-.member-invite-contacts-toggle:hover {
-  color: #3370ff;
-}
-.member-invite-hint {
-  margin: 6px 0 6px;
-  color: #86909c;
-  font-size: 12px;
-}
-.member-invite-input {
-  box-sizing: border-box;
-  width: 100%;
-  height: 56px;
-  padding: 6px 8px;
-  border: 1px solid #e5e6eb;
-  border-radius: 6px;
-  font-family: inherit;
-  font-size: 12px;
-  resize: none;
-}
-.member-invite-input:focus {
-  border-color: #94bfff;
-  outline: none;
-}
-.member-invite-submit {
-  width: 100%;
-  margin-top: 6px;
-  padding: 5px 0;
-  border: 1px solid #e5e6eb;
-  border-radius: 6px;
-  background: #f2f3f5;
-  cursor: pointer;
-  font-size: 12px;
-}
-.member-invite-submit:hover:not(:disabled) {
-  background: #e5e6eb;
-}
-.member-invite-submit:disabled {
-  cursor: not-allowed;
-  opacity: 0.6;
-}
-
-/* ── 2026-10-25 原型 ShareModal 重排：页签 / 归属行 / 在线态 / 候选下拉 / 待邀请 ── */
-
-.member-panel-sub {
-  margin-left: auto;
-  margin-right: 4px;
-  color: #8f959e;
-  font-size: 11px;
-  white-space: nowrap;
-}
-
-.member-tabs {
-  display: flex;
-  gap: 4px;
-  margin: 0 12px 10px;
-  padding: 2px;
-  border-radius: 8px;
-  background: #f2f3f5;
-}
-.member-tab {
-  flex: 1;
-  height: 26px;
-  border: none;
-  border-radius: 6px;
-  background: transparent;
-  color: #646a73;
-  cursor: pointer;
-  font-size: 12px;
-}
-.member-tab.active {
-  background: #fff;
-  color: #3370ff;
-  font-weight: 600;
-  box-shadow: 0 1px 2px rgb(31 35 41 / 0.08);
-}
-
-/* 名单行改两行布局：主行（昵称+标记）+ 归属副行 */
-.member-row {
-  align-items: center;
-}
-.member-row-main {
-  display: flex;
-  min-width: 0;
-  flex: 1;
-  flex-direction: column;
-  gap: 1px;
-}
-.member-row-sub {
-  overflow: hidden;
-  color: #8f959e;
-  font-size: 11px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.member-avatar {
-  position: relative;
-}
-.member-online-dot {
-  position: absolute;
-  right: -1px;
-  bottom: -1px;
-  width: 8px;
-  height: 8px;
-  border: 2px solid #fff;
-  border-radius: 50%;
-  background: #00b42a;
-}
-.member-self-mark {
-  margin-left: 2px;
-  color: #8f959e;
-  font-size: 11px;
-  font-style: normal;
-}
-.member-editing-badge {
-  margin-left: 6px;
-  padding: 0 5px;
-  border-radius: 999px;
-  background: #e8f0ff;
-  color: #3370ff;
-  font-size: 10px;
-  line-height: 16px;
-}
-.member-remove-btn {
-  padding: 2px 8px;
-  border: none;
-  border-radius: 6px;
-  background: transparent;
-  color: #8f959e;
-  cursor: pointer;
-  font-size: 11px;
-}
-.member-remove-btn:hover {
-  background: #feeceb;
-  color: #f54a45;
-}
-
-/* 邀请候选下拉（原型 invite tab：搜索 focus 出候选，absolute 挂搜索框下） */
-.member-invite-searchwrap {
-  position: relative;
-}
-.member-invite-drop {
-  position: absolute;
-  top: calc(100% + 4px);
-  left: 0;
-  z-index: 30;
-  max-height: 220px;
-  margin: 0;
-  padding: 4px;
-  border: 1px solid #e5e6eb;
-  border-radius: 8px;
-  background: #fff;
-  list-style: none;
-  overflow-y: auto;
-  box-shadow: 0 8px 24px rgb(31 35 41 / 0.15);
-}
-.member-invite-drop .member-invite-row {
-  display: flex;
-  width: 100%;
-  align-items: center;
-  gap: 8px;
-  padding: 5px 6px;
-  border: none;
-  background: transparent;
-  cursor: pointer;
-  font-size: 12px;
-  text-align: left;
-}
-.member-invite-drop .member-invite-row:hover {
-  background: #f5f6f7;
-}
-.member-invite-affil {
-  margin-left: auto;
-  overflow: hidden;
-  color: #8f959e;
-  font-size: 11px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.member-invite-more {
-  padding: 4px 6px;
-  color: #8f959e;
-  font-size: 11px;
-  text-align: center;
-}
-
-/* 待邀请列表 + 底部动作行 */
-.member-invite-pending-title {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin: 12px 0 4px;
-  font-size: 12px;
-  font-weight: 600;
-}
-.member-invite-hint-line {
-  margin: 0 0 8px;
-  padding: 14px 0;
-  border-radius: 8px;
-  background: #f5f6f7;
-  color: #8f959e;
-  font-size: 12px;
-  text-align: center;
-}
-.member-invite-pending {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-.member-invite-pending-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 5px 2px;
-  border-bottom: 1px solid #f0f1f2;
-  font-size: 12px;
-}
-.member-invite-remove {
-  padding: 0 4px;
-  border: none;
-  background: transparent;
-  color: #8f959e;
-  cursor: pointer;
-  font-size: 14px;
-  line-height: 1;
-}
-.member-invite-remove:hover {
-  color: #f54a45;
-}
-.member-invite-clear {
-  padding: 5px 14px;
-  border: 1px solid #e5e6eb;
-  border-radius: 6px;
-  background: #fff;
-  color: #646a73;
-  cursor: pointer;
-  font-size: 12px;
-}
-.member-invite-clear:disabled {
-  cursor: not-allowed;
-  opacity: 0.45;
-}
+.member-invite { display: flex; flex: 1; width: 100%; min-width: 0; min-height: 0; flex-direction: column; }
+.member-invite-scroll { flex: 1; min-width: 0; min-height: 0; overflow-y: auto; padding-top: 4px; }
+.member-invite-searchwrap { position: relative; }
+.member-invite-search { box-sizing: border-box; width: 100%; height: 40px; padding: 0 12px; border: 1px solid #e5e6eb; border-radius: 8px; font-family: inherit; font-size: 13px; }
+.member-invite-search:focus { border-color: #3370ff; outline: none; box-shadow: 0 0 0 3px rgb(51 112 255 / 0.1); }
+.member-invite-drop { position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 30; max-height: 220px; margin: 0; padding: 4px; border: 1px solid #e5e6eb; border-radius: 8px; background: #fff; list-style: none; overflow-y: auto; box-shadow: 0 8px 24px rgb(31 35 41 / 0.15); }
+.member-invite-row { display: flex; width: 100%; align-items: center; gap: 8px; padding: 6px; border: none; border-radius: 6px; background: transparent; cursor: pointer; font-size: 12px; text-align: left; }
+.member-invite-row:hover { background: #f5f6f7; }
+.member-invite-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.member-invite-name small { display: block; margin-top: 2px; color: #8f959e; font-size: 11px; }
+.member-invite-contact { flex: none; max-width: 160px; overflow: hidden; color: #86909c; font-size: 11px; text-overflow: ellipsis; }
+.member-invite-affil { flex: none; max-width: 45%; margin-left: auto; overflow: hidden; color: #8f959e; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.member-invite-empty { padding: 10px 6px; color: #86909c; font-size: 12px; text-align: center; }
+.member-invite-more { padding: 4px 6px; color: #8f959e; font-size: 11px; text-align: center; }
+.member-invite-pending-title { display: flex; align-items: center; gap: 6px; margin: 14px 0 6px; font-size: 13px; font-weight: 600; }
+.member-group-count { color: #86909c; font-weight: 400; }
+.member-invite-hint-line { margin: 0 0 8px; padding: 12px; border-radius: 8px; background: #f5f6f7; color: #8f959e; font-size: 12px; text-align: center; }
+.member-invite-pending { margin: 0; padding: 0; list-style: none; }
+.member-invite-pending-row { display: flex; align-items: center; gap: 8px; min-height: 44px; border-bottom: 1px solid #f0f1f2; font-size: 12px; }
+.member-invite-pending-row select { width: 82px; height: 28px; border: 1px solid #e5e6eb; border-radius: 6px; background: #fff; color: #4e5969; }
+.member-invite-remove { padding: 0 4px; border: none; background: transparent; color: #8f959e; cursor: pointer; font-size: 14px; }
+.member-invite-remove:hover { color: #f54a45; }
+.member-invite-recommended h4 { margin: 14px 0 4px; font-size: 13px; }
+.member-invite-recommended ul { margin: 0; padding: 0; list-style: none; }
+.member-invite-recommended li { display: flex; align-items: center; gap: 9px; min-height: 44px; border-bottom: 1px solid #f0f1f2; font-size: 13px; }
+.member-invite-recommended button { padding: 5px 12px; border: none; border-radius: 6px; background: #e8f0ff; color: #3370ff; cursor: pointer; }
+.member-invite-footer { display: flex; flex: none; align-items: center; justify-content: space-between; gap: 8px; margin-top: 10px; padding: 12px 0 16px; border-top: 1px solid #e5e6eb; }
+.member-invite-footer > span { color: #8f959e; font-size: 12px; }
+.member-invite-footer > div { display: flex; gap: 8px; }
+.member-invite-clear, .member-invite-pull { height: 36px; padding: 0 16px; border-radius: 8px; cursor: pointer; font-size: 13px; }
+.member-invite-clear { border: 1px solid #e5e6eb; background: #fff; color: #4e5969; }
+.member-invite-pull { border: none; background: #3370ff; color: #fff; }
+.member-invite-clear:disabled, .member-invite-pull:disabled { cursor: not-allowed; opacity: 0.45; }
+.member-invite-contacts-toggle { margin-top: 10px; padding: 0; border: none; background: none; color: #86909c; font-size: 12px; cursor: pointer; }
+.member-invite-contacts-toggle:hover { color: #3370ff; }
+.member-invite-hint { margin: 8px 0; color: #86909c; font-size: 12px; }
+.member-invite-input { box-sizing: border-box; width: 100%; height: 64px; padding: 8px; border: 1px solid #e5e6eb; border-radius: 8px; font-family: inherit; font-size: 12px; resize: none; }
+.member-invite-submit { width: 100%; height: 34px; margin-top: 8px; border: 1px solid #e5e6eb; border-radius: 8px; background: #f2f3f5; cursor: pointer; font-size: 12px; }
+.member-invite-submit:disabled { cursor: not-allowed; opacity: 0.6; }

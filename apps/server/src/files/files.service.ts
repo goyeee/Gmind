@@ -22,10 +22,11 @@ import { CollabService } from '../collab/collab.service';
 import { EventsService } from '../events/events.service';
 import { OrgService } from '../org/org.service';
 import { StorageService } from '../storage/storage.service';
+import { NotifyService } from '../notify/notify.service';
 import { TaskIndexService } from '../todos/task-index.service';
 import { UserEntity } from '../users/user.entity';
 import { isDuplicateKeyError } from '../utils/duplicate-key';
-import { FileCollaboratorEntity } from './file-collaborator.entity';
+import { FileCollaboratorEntity, type FileCollaboratorRole } from './file-collaborator.entity';
 import { FileEntity } from './file.entity';
 import { FileStarEntity } from './file-star.entity';
 import { FolderEntity } from '../folders/folder.entity';
@@ -81,6 +82,7 @@ export class FilesService {
     // OrgService（2026-10-25 原型成员归属行）：membershipsFor/listDepartments/listGroups
     // 只读挂靠查询——协作者与可拉取目录投影的部门·分组归属
     @Inject(OrgService) private readonly org: OrgService,
+    @Inject(NotifyService) private readonly notify: NotifyService,
     // DataSource（2026-10-28 P1 全文搜索）：node_index 原生 SQL（LIKE+可见性 JOIN）
     @Inject(DataSource) private readonly dataSource: DataSource,
   ) {}
@@ -401,6 +403,15 @@ export class FilesService {
     return row?.role === 'editor';
   }
 
+  /** 评论权限：owner/editor 可写文档；commenter 只读文档但可评论；viewer 仅查看。 */
+  async canComment(userId: string, fileId: string): Promise<boolean> {
+    const file = await this.repo.findOne({ where: { id: fileId, deletedAt: IsNull() } });
+    if (!file) return false;
+    if (file.ownerUserId === userId) return true;
+    const row = await this.collabRepo.findOneBy({ fileId: file.id, userId });
+    return row?.role === 'editor' || row?.role === 'commenter';
+  }
+
   /** 真实缩略图写入（2026-10-21）：编辑器 persisted ack 后上传引擎直出 SVG。
    *  canAccess 口径（owner/协作者皆可——协同双方任一端保存都可能触发）。
    *  **原生 SQL 直写**：TypeORM 的 save()/UpdateQueryBuilder 都会自动刷
@@ -489,6 +500,25 @@ export class FilesService {
     const file = await this.repo.findOne({ where: { id: fileId, deletedAt: IsNull() } });
     if (!file || file.ownerUserId !== userId) throw new NotFoundException('文件不存在');
     await this.collabRepo.delete({ fileId: file.id, userId: targetUserId });
+    this.collab.updateMemberPermission(file.id, targetUserId, null);
+  }
+
+  /** owner 修改非 owner 成员角色；后续写/评论校验直接读取最新行，无需重登录。 */
+  async changeCollaboratorRole(
+    userId: string,
+    fileId: string,
+    targetUserId: string,
+    role: Exclude<FileCollaboratorRole, 'owner'>,
+  ): Promise<{ userId: string; role: typeof role }> {
+    const file = await this.repo.findOne({ where: { id: fileId, deletedAt: IsNull() } });
+    if (!file || file.ownerUserId !== userId) throw new NotFoundException('文件不存在');
+    if (targetUserId === file.ownerUserId) throw new BadRequestException('创建者角色不可修改，请选择其他成员');
+    const row = await this.collabRepo.findOneBy({ fileId: file.id, userId: targetUserId });
+    if (!row) throw new NotFoundException('协作者不存在，请刷新成员名单后重试');
+    row.role = role;
+    await this.collabRepo.save(row);
+    this.collab.updateMemberPermission(file.id, targetUserId, role);
+    return { userId: targetUserId, role };
   }
 
   /**
@@ -557,6 +587,7 @@ export class FilesService {
     userId: string,
     fileId: string,
     userIds: string[],
+    roles: ReadonlyMap<string, Exclude<FileCollaboratorRole, 'owner'>> = new Map(),
   ): Promise<{ added: number; skipped: number }> {
     const file = await this.repo.findOne({ where: { id: fileId, deletedAt: IsNull() } });
     if (!file || file.ownerUserId !== userId) throw new NotFoundException('文件不存在');
@@ -565,19 +596,33 @@ export class FilesService {
     const existing = new Set([file.ownerUserId, ...rows.map((r) => r.userId)]);
     const targets = await this.userRepo.find({
       where: { id: In(uniq), status: 'active' as const },
-      select: ['id'],
+      select: ['id', 'nickname'],
     });
     let added = 0;
+    const owner = await this.userRepo.findOneBy({ id: userId });
     for (const t of targets) {
       if (existing.has(t.id)) continue;
       const row = this.collabRepo.create();
       row.fileId = file.id;
       row.userId = t.id;
-      row.role = 'editor';
+      row.role = roles.get(t.id) ?? 'editor';
       try {
         await this.collabRepo.save(row);
         added += 1;
         existing.add(t.id);
+        // 仅真实新增通知；通知旁路失败不回滚已加入的协作者。
+        try {
+          await this.notify.notify(t.id, 'permission', {
+            fileId: file.id,
+            title: file.title,
+            memberName: t.nickname,
+            inviterName: owner?.nickname ?? '用户',
+            action: 'added',
+            content: `${owner?.nickname ?? '用户'} 已把你加入「${file.title}」`,
+          });
+        } catch {
+          // 邀请主流程已成功，通知失败不影响返回真实新增数。
+        }
       } catch (err) {
         if (!isDuplicateKeyError(err)) throw err; // 并发双插的败者：幂等归并
       }
@@ -608,11 +653,12 @@ export class FilesService {
   async getOwnedFileWithState(
     userId: string,
     id: string,
-  ): Promise<{ id: string; title: string; structure: string; themeId: string; kind: string; nodeCount: number; ownerUserId: string; updatedAt: string; starred: boolean; docState: string; myRole: 'owner' | 'editor' | 'viewer' }> {
+  ): Promise<{ id: string; title: string; structure: string; themeId: string; kind: string; nodeCount: number; ownerUserId: string; updatedAt: string; starred: boolean; docState: string; myRole: 'owner' | 'editor' | 'commenter' | 'viewer' }> {
     const file = await this.findAliveOr404(userId, id);
     const starred = (await this.starRepo.countBy({ fileId: file.id, userId })) > 0;
-    // 角色（2026-10-28 P0）：编辑器只读装配依据——owner/editor 可写，viewer 只读
-    const myRole = file.ownerUserId === userId ? 'owner' : (await this.canWrite(userId, file.id)) ? 'editor' : 'viewer';
+    // 返回真实持久化角色：commenter 可读+评论但不可编辑。
+    const membership = file.ownerUserId === userId ? null : await this.collabRepo.findOneBy({ fileId: file.id, userId });
+    const myRole = file.ownerUserId === userId ? 'owner' : membership?.role ?? 'viewer';
     return {
       id: file.id,
       title: file.title,

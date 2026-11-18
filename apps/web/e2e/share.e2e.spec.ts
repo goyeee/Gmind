@@ -93,6 +93,35 @@ test('已登录用户打开 active 链接：自动加入并进入编辑器（画
   await context.close();
 });
 
+test('密码链接：登录后先验证密码，错误可重试，正确后进入编辑器', async ({ page, request }) => {
+  const owner = await apiRegister(request);
+  const created = await request.post('/api/files', { data: { title: '密码分享文档' }, headers: authHeader(owner.token) });
+  const fileId = ((await created.json()) as { id: string }).id;
+  const share = await request.post(`/api/files/${fileId}/share`, { data: { passwordEnabled: true }, headers: authHeader(owner.token) });
+  const shareToken = ((await share.json()) as { shareToken: string }).shareToken;
+  const described = await request.get(`/api/files/${fileId}/share`, { headers: authHeader(owner.token) });
+  const password = ((await described.json()) as { password: string }).password;
+  const wrongPassword = String((Number(password) + 1) % 10000).padStart(4, '0');
+
+  await registerAndLogin(page);
+  await page.goto(`/s/${shareToken}`);
+  await expect(page.getByTestId('share-password')).toBeVisible();
+  await page.getByTestId('share-password-input').fill(wrongPassword);
+  await page.getByTestId('share-password-submit').click();
+  await expect(page.getByTestId('share-password-error')).toHaveText('访问密码错误，请重新输入');
+  await page.getByTestId('share-password-input').fill(password);
+  await page.getByTestId('share-password-submit').click();
+  await expect(page).toHaveURL(new RegExp(`/edit/${fileId}`));
+  await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '中心主题' })).toBeVisible();
+});
+
+test('过期链接显示过期原因和联系创建者的下一步', async ({ page }) => {
+  const token = 'ab'.repeat(16);
+  await page.route(`**/api/share/${token}`, (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ status: 'expired' }) }));
+  await page.goto(`/s/${token}`);
+  await expect(page.getByTestId('share-invalid')).toContainText('链接已过期，请联系文件创建者重新分享');
+});
+
 test('closed/未知 token：未登录访客直达失效页（不走登录跳转）', async ({ browser, request }) => {
   const aToken = (await apiRegister(request)).token;
   const { fileId, shareToken } = await apiCreateSharedFile(request, aToken, '已关闭文档');

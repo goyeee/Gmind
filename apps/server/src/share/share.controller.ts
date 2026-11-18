@@ -5,8 +5,13 @@ import { InviteService } from './invite.service';
 import { inviteRequestSchema } from './invite-request.schema';
 import { ShareService } from './share.service';
 
-/** 链接权限档位（2026-10-28 P0）：editor|viewer，缺省 editor（存量行为不变）。 */
-const shareRoleSchema = z.object({ role: z.enum(['editor', 'viewer']).default('editor') });
+/** 链接设置：三档权限、密码开关、永久/7天/30天；缺省值由 service 补齐。 */
+const shareConfigSchema = z.object({
+  role: z.enum(['editor', 'commenter', 'viewer']).optional(),
+  passwordEnabled: z.boolean().optional(),
+  expiresIn: z.enum(['forever', '7', '30']).optional(),
+});
+const joinSchema = z.object({ password: z.string().max(4).optional() });
 
 /**
  * 分享域端点（M3b Task 4，FR-SHR-001 + Task 5，FR-SHR-004）。
@@ -29,7 +34,7 @@ export class ShareManageController {
 
   @Post(':id/share')
   create(@Req() req: { user: { id: string } }, @Param('id') id: string, @Body() body: unknown) {
-    return this.share.createForOwner(req.user.id, id, shareRoleSchema.parse(body ?? {}).role);
+    return this.share.createForOwner(req.user.id, id, shareConfigSchema.parse(body ?? {}));
   }
 
   /** 链接分享状态（2026-10-25 原型链接页签）：owner-only；无 active 行是合法态非错误。 */
@@ -41,7 +46,7 @@ export class ShareManageController {
   /** 修改权限档位（2026-10-28 P0）：token 不变即改即生效；无 active 行 404。 */
   @Patch(':id/share')
   setRole(@Req() req: { user: { id: string } }, @Param('id') id: string, @Body() body: unknown) {
-    return this.share.setRoleForOwner(req.user.id, id, shareRoleSchema.parse(body ?? {}).role);
+    return this.share.configureForOwner(req.user.id, id, shareConfigSchema.parse(body ?? {}));
   }
 
   @Delete(':id/share')
@@ -69,7 +74,7 @@ export class SharePublicController {
 
   @Post(':token/join')
   @UseGuards(UserGuard)
-  join(@Req() req: { user: { id: string } }, @Param('token') token: string) {
-    return this.share.joinByToken(req.user.id, token);
+  join(@Req() req: { user: { id: string } }, @Param('token') token: string, @Body() body: unknown) {
+    return this.share.joinByToken(req.user.id, token, joinSchema.parse(body ?? {}).password);
   }
 }

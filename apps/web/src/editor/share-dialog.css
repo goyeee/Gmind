@@ -1,185 +1,55 @@
-/* 分享弹窗（2026-10-25 原型 ShareModal：邀请协作/链接分享/导出） */
-
-.share-dialog-mask {
-  position: fixed;
-  inset: 0;
-  z-index: 1300;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgb(31 35 41 / 0.3);
-}
-
-.share-dialog {
-  display: flex;
-  flex-direction: column;
-  width: 520px;
-  max-width: calc(100vw - 48px);
-  max-height: min(640px, calc(100vh - 64px));
-  background: #fff;
-  border-radius: 12px;
-  box-shadow: 0 8px 24px rgb(31 35 41 / 0.16);
-}
-
-.share-dialog-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 16px 20px 10px;
-}
-
-.share-dialog-title { font-size: 15px; font-weight: 600; color: #1f2329; }
-
-.share-dialog-close {
-  border: none;
-  background: none;
-  color: #86909c;
-  font-size: 18px;
-  cursor: pointer;
-  line-height: 1;
-  padding: 4px;
-}
+/* 四页签分享弹窗：固定外框，中间滚动，底部操作固定。 */
+.share-dialog-mask { position: fixed; inset: 0; z-index: 1300; display: flex; align-items: center; justify-content: center; background: rgb(31 35 41 / 0.3); }
+.share-dialog { display: flex; flex-direction: column; width: 580px; height: min(580px, 90vh); max-width: calc(100vw - 48px); min-height: 0; overflow: hidden; background: #fff; border-radius: 12px; box-shadow: 0 8px 24px rgb(31 35 41 / 0.16); outline: none; }
+.share-dialog-head { display: flex; flex: none; align-items: center; justify-content: space-between; padding: 16px 20px 8px; }
+.share-dialog-title { font-size: 16px; font-weight: 600; color: #1f2329; }
+.share-dialog-close { border: none; background: none; color: #86909c; font-size: 18px; cursor: pointer; line-height: 1; padding: 4px; }
 .share-dialog-close:hover { color: #1f2329; }
+.share-dialog-tabs { display: flex; flex: none; gap: 4px; margin: 0 20px 12px; padding: 4px; border-radius: 999px; background: #f5f6f7; }
+.share-dialog-tabs button { flex: 1; height: 36px; border: none; border-radius: 999px; background: transparent; color: #4e5969; cursor: pointer; font-size: 13px; white-space: nowrap; }
+.share-dialog-tabs button.active { background: #fff; color: #3370ff; font-weight: 600; box-shadow: 0 1px 3px rgb(31 35 41 / 0.1); }
+.share-dialog-body { flex: 1; min-height: 0; overflow-y: auto; padding: 4px 20px 16px; }
+.share-dialog-invite { display: flex; overflow: hidden; padding: 0 20px; }
+.share-dialog-footer { flex: none; margin: 0 20px; padding: 12px 0 16px; border-top: 1px solid #e5e6eb; color: #8f959e; font-size: 12px; }
+.share-dialog-hint { margin: 0; color: #86909c; font-size: 13px; line-height: 1.7; }
 
-.share-dialog-tabs {
-  display: flex;
-  gap: 4px;
-  margin: 0 20px 12px;
-  padding: 2px;
-  border-radius: 10px;
-  background: #f2f3f5;
-}
-.share-dialog-tabs button {
-  flex: 1;
-  height: 30px;
-  border: none;
-  border-radius: 8px;
-  background: transparent;
-  color: #646a73;
-  cursor: pointer;
-  font-size: 13px;
-}
-.share-dialog-tabs button.active {
-  background: #fff;
-  color: #3370ff;
-  font-weight: 600;
-  box-shadow: 0 1px 2px rgb(31 35 41 / 0.08);
-}
-
-.share-dialog-body {
-  overflow-y: auto;
-  padding: 4px 20px 20px;
-}
-
-/* 邀请页签：InviteSection（member-panel.css 复用） */
-.share-dialog-invite { padding: 0 20px 16px; }
-
-/* 链接分享页签 */
-.share-dialog-link { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
-.share-link-toggle {
-  position: relative;
-  flex: none;
-  width: 40px;
-  height: 22px;
-  border: none;
-  border-radius: 999px;
-  background: #e5e6eb;
-  cursor: pointer;
-  transition: background 0.15s;
-}
+.share-link-status { display: flex; align-items: center; gap: 12px; padding: 14px; border-radius: 12px; background: #f7f8fa; }
+.share-link-toggle { position: relative; flex: none; width: 40px; height: 22px; padding: 0; border: none; border-radius: 999px; background: #e5e6eb; cursor: pointer; transition: background 0.15s; }
 .share-link-toggle.on { background: #3370ff; }
 .share-link-toggle:disabled { opacity: 0.55; cursor: not-allowed; }
-.share-link-knob {
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  background: #fff;
-  box-shadow: 0 1px 2px rgb(31 35 41 / 0.2);
-  transition: transform 0.15s;
-}
+.share-link-knob { position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgb(31 35 41 / 0.2); transition: transform 0.15s; }
 .share-link-toggle.on .share-link-knob { transform: translateX(18px); }
-.share-link-desc { display: flex; flex: 1; min-width: 200px; flex-direction: column; gap: 2px; }
-.share-link-desc b { font-size: 13px; font-weight: 600; color: #1f2329; }
+.share-link-desc { display: flex; flex: 1; min-width: 0; flex-direction: column; gap: 3px; }
+.share-link-desc b { font-size: 14px; font-weight: 600; color: #1f2329; }
 .share-link-desc span { font-size: 12px; color: #86909c; }
+.share-link-benefits { display: flex; flex-direction: column; gap: 10px; margin: 16px 0 0; padding: 14px 16px 14px 32px; border-radius: 12px; background: #f7f8fa; color: #4e5969; font-size: 13px; line-height: 1.5; }
+.share-link-settings { display: flex; flex-direction: column; gap: 14px; margin-top: 16px; }
 .share-link-row { display: flex; width: 100%; gap: 8px; }
-.share-link-url {
-  flex: 1;
-  overflow: hidden;
-  padding: 7px 10px;
-  border: 1px solid #e5e6eb;
-  border-radius: 8px;
-  background: #f7f8fa;
-  color: #4e5969;
-  font-size: 12px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.share-link-copy {
-  flex: none;
-  padding: 0 14px;
-  border: none;
-  border-radius: 8px;
-  background: #3370ff;
-  color: #fff;
-  cursor: pointer;
-  font-size: 12px;
-}
+.share-link-url { flex: 1; min-width: 0; overflow: hidden; padding: 8px 10px; border: 1px solid #e5e6eb; border-radius: 8px; background: #f7f8fa; color: #4e5969; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.share-link-copy { flex: none; padding: 0 14px; border: none; border-radius: 8px; background: #3370ff; color: #fff; cursor: pointer; font-size: 12px; }
 .share-link-copy:hover { background: #2b5fd9; }
-.share-dialog-hint { margin: 0; color: #86909c; font-size: 13px; }
+.share-link-role { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; font-size: 13px; color: #4e5969; }
+.share-link-role select { min-width: 130px; height: 32px; padding: 0 8px; border: 1px solid #e5e6eb; border-radius: 8px; background: #fff; color: #4e5969; font-size: 12px; }
+.share-link-password-row { display: flex; align-items: center; gap: 10px; color: #4e5969; font-size: 13px; }
+.share-link-password-row > span:last-child { margin-left: auto; color: #86909c; font-size: 12px; }
+.share-link-password-row code { color: #1f2329; font-weight: 600; }
 
-/* 导出页签（2026-11-15 改版）：说明行 + 五项列表（行卡片/配色图标盒/ext 徽标/右侧小钮） */
 .share-export-note { margin: 0 0 10px; font-size: 12px; color: #86909c; }
 .share-export-list { display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 0; list-style: none; }
-.share-export-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  width: 100%;
-  padding: 10px 12px;
-  border: 1px solid #e5e6eb;
-  border-radius: 10px;
-  background: #fff;
-  cursor: pointer;
-  text-align: left;
-}
-.share-export-row:hover { border-color: #3370ff; box-shadow: 0 4px 12px rgb(51 112 255 / 0.12); }
-.share-export-icon {
-  display: flex;
-  flex: none;
-  align-items: center;
-  justify-content: center;
-  width: 40px;
-  height: 40px;
-  border-radius: 10px;
-}
+.share-export-row { display: flex; align-items: center; gap: 12px; width: 100%; padding: 10px 12px; border: 1px solid #e5e6eb; border-radius: 10px; background: #fff; cursor: pointer; text-align: left; }
+.share-export-row:hover { border-color: #3370ff; background: #fafbff; }
+.share-export-icon { display: flex; flex: none; align-items: center; justify-content: center; width: 40px; height: 40px; border-radius: 10px; }
 .share-export-text { display: flex; flex: 1; min-width: 0; flex-direction: column; gap: 2px; }
 .share-export-text b { display: flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; color: #1f2329; }
 .share-export-text > span { font-size: 12px; color: #86909c; }
-.share-export-ext {
-  padding: 1px 6px;
-  border-radius: 4px;
-  background: #f2f3f5;
-  color: #86909c;
-  font-size: 11px;
-  font-style: normal;
-  font-weight: 400;
-}
-.share-export-btn {
-  display: flex;
-  flex: none;
-  align-items: center;
-  height: 32px;
-  padding: 0 12px;
-  border-radius: 8px;
-  background: #3370ff;
-  color: #fff;
-  font-size: 12px;
-}
-.share-export-btn.done { background: #16a34a; }
+.share-export-ext { padding: 1px 6px; border-radius: 4px; background: #f2f3f5; color: #86909c; font-size: 11px; font-style: normal; font-weight: 400; }
+.share-export-btn { display: flex; flex: none; align-items: center; height: 32px; padding: 0 12px; border-radius: 8px; background: #e8f0ff; color: #3370ff; font-size: 12px; }
+.share-export-btn.done { background: #e8faf2; color: #00b42a; }
 
-/* 链接权限档位（2026-10-28 P0）：active 态权限行 */
-.share-link-role { display: flex; align-items: center; gap: 8px; width: 100%; font-size: 12px; color: #86909c; }
-.share-link-role select { height: 28px; padding: 0 8px; border: 1px solid #e5e6eb; border-radius: 6px; background: #fff; color: #4e5969; font-size: 12px; }
+@media (max-width: 640px) {
+  .share-dialog { max-width: calc(100vw - 24px); }
+  .share-dialog-tabs { margin-inline: 12px; }
+  .share-dialog-tabs button { font-size: 12px; }
+  .share-dialog-body { padding-inline: 12px; }
+  .share-dialog-footer { margin-inline: 12px; }
+}

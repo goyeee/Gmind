@@ -514,3 +514,9 @@ emoji(28)/数字(10) 组往返仍丢（无 XMind 原生源）；颜色/形状信
 ### 门禁
 
 - lint 0 / typecheck 0；settings/error-copy/login-page 31/31；全量 web e2e 233 过 + 1 skip、零失败零 flaky（2026-11-18 收官实测）。
+
+## 二十三、2026-11-18 分享弹窗导出页原型对齐补记
+
+- 导出页顺序按原型调整为 XMind、图片、Markdown、Excel、CSV；行卡片间距与固定底部下载位置说明对齐。
+- 仅调整展示与顺序：五种导出仍走原真实通道，CSV/Excel 保持已验收 7 列，JPG 保持当前折叠态与白底 2×，XMind/Markdown 规则不变。
+- `share-export.e2e.spec.ts` 既有五项可见性与五类真实下载用例全部通过；`share-dialog.e2e.spec.ts` 同时覆盖固定高度与普通协作者默认导出。最终门禁数字见 `docs/m3b-acceptance.md` 2026-11-18 补记。

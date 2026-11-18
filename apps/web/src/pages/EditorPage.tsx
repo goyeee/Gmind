@@ -140,7 +140,6 @@ import {
 import { ImagePreview } from '../editor/ImagePreview';
 import { HelpPanel } from '../editor/HelpPanel';
 import { MarkerChip } from '../editor/MarkerChip';
-import { MemberPanel } from '../editor/MemberPanel';
 import { RichPanel } from '../editor/RichPanel';
 import { StructurePanel, type StructureTypeValue } from '../editor/StructurePanel';
 import { TaskTable, EMPTY_FILTERS, type Filters } from '../editor/TaskTable';
@@ -330,7 +329,9 @@ export function EditorPage() {
   // readOnly 为依赖，跨越即按文件切换同款路径重建场景/协同）。
   const { state, error, setTitle, fileKind, myRole, baseUpdatedAtRef } = useEditorDoc(fileId);
   // 2026-10-28 P0：viewer（只读链接加入/只读协作者）与移动端共用同一只读装配。
-  const readOnly = useIsMobileViewport() || myRole === 'viewer';
+  const mobileReadOnly = useIsMobileViewport();
+  // commenter 可评论但不可编辑；viewer 与移动端同样关闭写操作。
+  const readOnly = mobileReadOnly || myRole === 'viewer' || myRole === 'commenter';
   const doc = state?.doc ?? null;
   // 创建者标识依据（M2 Task 6，FR-COL-005）：GET /api/files/:id 扩展字段
   const ownerUserId = state?.ownerUserId ?? null;
@@ -428,13 +429,12 @@ export function EditorPage() {
   const [members, setMembers] = useState<PresenceMember[]>([]);
   const membersRef = useRef<PresenceMember[]>([]);
   membersRef.current = members;
-  const [membersOpen, setMembersOpen] = useState(false);
+  // 成员与分享统一入口：auto=分享默认页，members=直达协作成员。
+  const [shareView, setShareView] = useState<'closed' | 'auto' | 'members'>('closed');
   // 「更多」下拉（2026-10-25 原型顶栏重组）：评论/快捷键两入口的收纳菜单——
   // 原标题组「评论」钮与协作组「快捷键」钮随本轮改版移入（移动端只读分支的
   // 常驻评论钮不受影响）。
   const [moreOpen, setMoreOpen] = useState(false);
-  // 分享弹窗（2026-10-25 原型 ShareModal）：share-btn 打开（邀请/链接/导出三页签）。
-  const [shareOpen, setShareOpen] = useState(false);
   // 头像点击定位目标（M6 Task 9 评审修复轮）：随面板打开传给 MemberPanel——滚动
   // 目标成员行进视口并短时高亮。members-btn 打开置 null（无定位目标）；面板关闭
   // 时清空（下次普通打开不复用旧目标）。注：头像栏随 2026-10-11 裁定退役，本
@@ -475,10 +475,13 @@ export function EditorPage() {
   // 模块级缓存（不重发请求）；canInvite = 当前用户即创建者（WorkspacePage 行菜单
   // ownerUserId === me?.id 同口径），身份未装配（id 空串）一律不可见。
   const [meId, setMeId] = useState('');
+  const [identityReady, setIdentityReady] = useState(false);
   useEffect(() => {
     let alive = true;
     void getCurrentUser().then((me) => {
       if (alive) setMeId(me.id);
+    }).finally(() => {
+      if (alive) setIdentityReady(true);
     });
     return () => {
       alive = false;
@@ -935,7 +938,6 @@ export function EditorPage() {
     // 选区（面板转空态），面板常驻至显式关闭（自身按钮/工具栏互斥 toggle/只读强
     // 制收）。其余弹层维持外点即关。
     const anyOpen =
-      membersOpen ||
       moreOpen ||
       versionsOpen ||
       activityOpen ||
@@ -965,7 +967,6 @@ export function EditorPage() {
       ) {
         return;
       }
-      setMembersOpen(false);
       setMoreOpen(false); // MARKER-XF-2026 更多下拉：anyOpen 判定同步补关闭动作
       setVersionsOpen(false);
       setActivityOpen(false);
@@ -985,7 +986,6 @@ export function EditorPage() {
     document.addEventListener('pointerdown', onDocPointerDown);
     return () => document.removeEventListener('pointerdown', onDocPointerDown);
   }, [
-    membersOpen,
     versionsOpen,
     activityOpen,
     helpOpen,
@@ -4136,6 +4136,14 @@ export function EditorPage() {
             >
               评论
             </button>
+            {!mobileReadOnly && (
+              <>
+                <button type="button" data-testid="share-btn" className="toolbar-share-btn" title="分享" aria-label="分享" onClick={() => setShareView('auto')}>分享</button>
+                <button type="button" data-testid="members-btn" className="toolbar-btn" title="协作成员" aria-label="协作成员" onClick={() => { setMembersFocus(null); setShareView('members'); }}>
+                  成员 <span data-testid="members-count">{members.length}</span>
+                </button>
+              </>
+            )}
           </>
         ) : (
           <>
@@ -4598,7 +4606,7 @@ export function EditorPage() {
             className="toolbar-share-btn"
             title="分享"
             aria-label="分享"
-            onClick={() => setShareOpen(true)}
+            onClick={() => setShareView('auto')}
           >
             分享
           </button>
@@ -4610,7 +4618,7 @@ export function EditorPage() {
             aria-label="在线成员"
             onClick={() => {
               setMembersFocus(null); // 常规开关：无定位目标（M6 T9 评审修复轮）
-              setMembersOpen((v) => !v);
+              setShareView('members');
             }}
           >
             <span className="members-stack" aria-hidden>
@@ -5160,30 +5168,24 @@ export function EditorPage() {
         open={activityOpen}
         onClose={() => setActivityOpen(false)}
       />
-      <MemberPanel
-        members={members}
-        ownerUserId={ownerUserId}
-        open={membersOpen}
-        onClose={() => {
-          setMembersOpen(false);
-          setMembersFocus(null); // 关闭清空定位目标（下次打开不复用，M6 T9 修复轮）
-        }}
-        fileId={fileId}
-        canInvite={meId !== '' && meId === ownerUserId}
-        showToast={showToast}
-        focusUserId={membersFocus}
-        memberIndex={memberIndex}
-      />
       <HelpPanel open={helpOpen} onClose={() => setHelpOpen(false)} />
       {/* 分享弹窗（2026-10-25 原型 ShareModal）：邀请/链接/导出三页签；导出转发
           既有通道（XMind/JPG 与工具栏导出菜单同源；PNG 2026-11-15 退役），
           MD/CSV/XLSX 为弹窗内真实下载。 */}
       <ShareDialog
-        open={shareOpen}
-        onClose={() => setShareOpen(false)}
+        open={shareView !== 'closed'}
+        initialTab={shareView === 'closed' ? 'auto' : shareView}
+        onClose={() => {
+          setShareView('closed');
+          setMembersFocus(null);
+        }}
         fileId={fileId}
         title={meta?.title ?? ''}
         canManage={meId !== '' && meId === ownerUserId}
+        identityReady={identityReady}
+        members={members}
+        memberIndex={memberIndex}
+        focusUserId={membersFocus}
         doc={doc}
         nameOf={(uid) => memberIndexRef.current.get(uid)?.nickname ?? `成员 ${uid.slice(-4)}`}
         showToast={showToast}

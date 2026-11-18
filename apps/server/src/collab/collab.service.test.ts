@@ -221,3 +221,24 @@ describe('CollabService 快照脏标志 TOCTOU（M4 挂账清偿）', () => {
   });
 });
 
+describe('CollabService 在线成员权限变更', () => {
+  it('commenter/viewer 连接立即变只读；移除成员立即断开目标连接并广播权限变化', () => {
+    const service = makeService({ update: vi.fn() });
+    const doc = new Document(FILE_ID);
+    const close = vi.fn();
+    const connection = { context: { userId: 'member-a', readOnly: false }, close };
+    doc.connections.set(connection as never, { clients: new Set() });
+    const hocus = (service as unknown as { hocuspocus: { documents: Map<string, Document> } }).hocuspocus;
+    hocus.documents.set(FILE_ID, doc);
+    const broadcast = vi.spyOn(doc, 'broadcastStateless').mockImplementation(() => undefined as never);
+
+    service.updateMemberPermission(FILE_ID, 'member-a', 'commenter');
+    expect(connection.context.readOnly).toBe(true);
+    expect(close).not.toHaveBeenCalled();
+    expect(broadcast).toHaveBeenCalledWith(expect.stringContaining('"type":"permission-updated"'));
+
+    service.updateMemberPermission(FILE_ID, 'member-a', null);
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+});
+

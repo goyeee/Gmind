@@ -307,9 +307,87 @@ describe('files 域', () => {
         .send({ userIds: [] });
       expect(bad.status).toBe(400);
     });
-  });
 
-  // ── 真实缩略图（2026-10-21 需求方裁定真实内容快照）：POST 写 / GET 读 ──
+    it('成员角色管理：逐项邀请角色、commenter 可评论不可写、viewer 只读、owner 可即时改回 editor', async () => {
+      const owner = await createAccount(app);
+      const commenter = await createAccount(app);
+      const viewer = await createAccount(app);
+      const created = await request(app.getHttpServer())
+        .post('/api/files')
+        .set('Authorization', `Bearer ${owner.token}`)
+        .send({ title: '成员角色管理测试' });
+      const fileId = created.body.id as string;
+
+      const added = await request(app.getHttpServer())
+        .post(`/api/files/${fileId}/collaborators`)
+        .set('Authorization', `Bearer ${owner.token}`)
+        .send({ members: [{ userId: commenter.id, role: 'commenter' }, { userId: viewer.id, role: 'viewer' }] });
+      expect(added.status).toBe(201);
+      expect(added.body).toEqual({ added: 2, skipped: 0 });
+
+      const detail = await request(app.getHttpServer())
+        .get(`/api/files/${fileId}`)
+        .set('Authorization', `Bearer ${owner.token}`);
+      const commentBody = { nodeId: ROOT_NODE_ID, content: '按角色评论' };
+      expect((await request(app.getHttpServer()).post(`/api/files/${fileId}/comments`).set('Authorization', `Bearer ${commenter.token}`).send(commentBody)).status).toBe(201);
+      expect((await request(app.getHttpServer()).post(`/api/files/${fileId}/comments`).set('Authorization', `Bearer ${viewer.token}`).send(commentBody)).status).toBe(404);
+      expect((await request(app.getHttpServer()).put(`/api/files/${fileId}/doc-state`).set('Authorization', `Bearer ${commenter.token}`).send({ docState: detail.body.docState })).status).toBe(404);
+      expect((await request(app.getHttpServer()).put(`/api/files/${fileId}/doc-state`).set('Authorization', `Bearer ${viewer.token}`).send({ docState: detail.body.docState })).status).toBe(404);
+
+      expect((await request(app.getHttpServer()).patch(`/api/files/${fileId}/collaborators/${commenter.id}`).set('Authorization', `Bearer ${viewer.token}`).send({ role: 'editor' })).status).toBe(404);
+      const downgraded = await request(app.getHttpServer())
+        .patch(`/api/files/${fileId}/collaborators/${commenter.id}`)
+        .set('Authorization', `Bearer ${owner.token}`)
+        .send({ role: 'viewer' });
+      expect(downgraded.status).toBe(200);
+      expect(downgraded.body).toEqual({ userId: commenter.id, role: 'viewer' });
+      expect((await request(app.getHttpServer()).post(`/api/files/${fileId}/comments`).set('Authorization', `Bearer ${commenter.token}`).send(commentBody)).status).toBe(404);
+
+      expect((await request(app.getHttpServer()).patch(`/api/files/${fileId}/collaborators/${commenter.id}`).set('Authorization', `Bearer ${owner.token}`).send({ role: 'editor' })).status).toBe(200);
+      expect((await request(app.getHttpServer()).put(`/api/files/${fileId}/doc-state`).set('Authorization', `Bearer ${commenter.token}`).send({ docState: detail.body.docState })).status).toBe(200);
+      expect((await request(app.getHttpServer()).patch(`/api/files/${fileId}/collaborators/${owner.id}`).set('Authorization', `Bearer ${owner.token}`).send({ role: 'viewer' })).status).toBe(400);
+      expect((await request(app.getHttpServer()).patch(`/api/files/${fileId}/collaborators/${commenter.id}`).set('Authorization', `Bearer ${owner.token}`).send({ role: 'owner' })).status).toBe(400);
+    });
+
+    it('协作通知：真实新增成员收到文件通知，重复添加不重复通知', async () => {
+      const owner = await createAccount(app);
+      const member = await createAccount(app);
+      const created = await request(app.getHttpServer())
+        .post('/api/files')
+        .set('Authorization', `Bearer ${owner.token}`)
+        .send({ title: '邀请通知测试' });
+      const fileId = created.body.id as string;
+      const body = { members: [{ userId: member.id, role: 'editor' }] };
+      expect((await request(app.getHttpServer()).post(`/api/files/${fileId}/collaborators`).set('Authorization', `Bearer ${owner.token}`).send(body)).status).toBe(201);
+
+      const notices = await request(app.getHttpServer()).get('/api/notifications').set('Authorization', `Bearer ${member.token}`);
+      const matches = (notices.body as Array<{ type: string; payload: { fileId?: string; action?: string } }>).filter((n) => n.type === 'permission' && n.payload?.fileId === fileId && n.payload?.action === 'added');
+      expect(matches).toHaveLength(1);
+
+      expect((await request(app.getHttpServer()).post(`/api/files/${fileId}/collaborators`).set('Authorization', `Bearer ${owner.token}`).send(body)).body).toEqual({ added: 0, skipped: 1 });
+      const again = await request(app.getHttpServer()).get('/api/notifications').set('Authorization', `Bearer ${member.token}`);
+      expect((again.body as Array<{ payload: { fileId?: string } }>).filter((n) => n.payload?.fileId === fileId)).toHaveLength(1);
+    });
+
+    it('联系人邀请通知：已注册联系人收到 pending 邀请通知，未注册联系人不产生站内通知', async () => {
+      const owner = await createAccount(app);
+      const registered = await createAccount(app);
+      const created = await request(app.getHttpServer())
+        .post('/api/files')
+        .set('Authorization', `Bearer ${owner.token}`)
+        .send({ title: '联系人通知测试' });
+      const fileId = created.body.id as string;
+      const invited = await request(app.getHttpServer())
+        .post(`/api/files/${fileId}/invites`)
+        .set('Authorization', `Bearer ${owner.token}`)
+        .send({ contacts: [registered.email, 'not-registered-contact@test.dev'] });
+      expect(invited.status).toBe(201);
+      expect(invited.body).toEqual({ invited: 2, skipped: 0 });
+
+      const notices = await request(app.getHttpServer()).get('/api/notifications').set('Authorization', `Bearer ${registered.token}`);
+      expect((notices.body as Array<{ type: string; payload: { fileId?: string; action?: string } }>).some((n) => n.type === 'permission' && n.payload?.fileId === fileId && n.payload?.action === 'invited')).toBe(true);
+    });
+  });
   describe('真实缩略图（/api/files/:id/thumbnail）', () => {
     it('写读闭环：无快照 404 → POST 存 → GET 读回同 SVG（image/svg+xml）；写不翻 updatedAt；越权/非法体拦', async () => {
       const owner = await createAccount(app);

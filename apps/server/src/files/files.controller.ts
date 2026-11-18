@@ -47,10 +47,17 @@ const invitableQuerySchema = z.object({
   size: z.coerce.number().int().min(1).max(50).optional(),
 });
 
-// POST /api/files/:id/collaborators：一键拉取 userIds（1..50，ULID 26 位）。
-const addCollaboratorsSchema = z.object({
-  userIds: z.array(z.string().min(1).max(26)).min(1).max(50),
-});
+// POST /api/files/:id/collaborators：兼容旧 userIds（默认 editor），或 members 逐项指定角色。
+const addCollaboratorsSchema = z.union([
+  z.object({ userIds: z.array(z.string().min(1).max(26)).min(1).max(50) }),
+  z.object({
+    members: z.array(z.object({
+      userId: z.string().min(1).max(26),
+      role: z.enum(['editor', 'commenter', 'viewer']),
+    })).min(1).max(50),
+  }),
+]);
+const changeCollaboratorRoleSchema = z.object({ role: z.enum(['editor', 'commenter', 'viewer']) });
 
 @Controller('api/files')
 @UseGuards(UserGuard)
@@ -133,7 +140,27 @@ export class FilesController {
     @Param('id') id: string,
     @Body() body: unknown,
   ) {
-    return this.files.addCollaborators(req.user.id, id, addCollaboratorsSchema.parse(body ?? {}).userIds);
+    const parsed = addCollaboratorsSchema.parse(body ?? {});
+    if ('members' in parsed) {
+      return this.files.addCollaborators(
+        req.user.id,
+        id,
+        parsed.members.map((m) => m.userId),
+        new Map(parsed.members.map((m) => [m.userId, m.role])),
+      );
+    }
+    return this.files.addCollaborators(req.user.id, id, parsed.userIds);
+  }
+
+  /** 修改协作者角色：owner-only，owner 自身不可经此通道变更。 */
+  @Patch(':id/collaborators/:userId')
+  changeCollaboratorRole(
+    @Req() req: { user: { id: string } },
+    @Param('id') id: string,
+    @Param('userId') targetUserId: string,
+    @Body() body: unknown,
+  ) {
+    return this.files.changeCollaboratorRole(req.user.id, id, targetUserId, changeCollaboratorRoleSchema.parse(body ?? {}).role);
   }
 
   /** 移除协作者（2026-10-25 原型 ShareModal members tab「移除」）：仅 owner（404
