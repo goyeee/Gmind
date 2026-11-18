@@ -17,7 +17,13 @@ import { env } from '../config/env';
  * 通知落库/邀请落库/定时清理主流程；返回布尔供调用方（将来）回写 notifications.emailed_at。
  * （production 下唯一把 false 当失败的调用方是 EmailCodeService：验证码发不出去=
  * 注册/找回密码不可用。dev/test 不走此路径，见 email-code.service.ts。）
+ *
+ * 2026-11-18 发件额度事故防线：开发环境真发信后，每轮全量 web e2e 造号发码产生
+ * 数百封真实邮件（收件人全为测试域名 @e2e.gmind.dev），打爆真实发件箱额度。
+ * 裁定：非生产环境发往 E2E_MAIL_SUFFIX 域名的邮件一律只 log 不发送——单点收口
+ * （验证码/通知/摘要/邀请全走本函数），真实邮箱与生产环境不受影响。
  */
+const E2E_MAIL_SUFFIX = '@e2e.gmind.dev';
 @Injectable()
 export class MailService {
   private readonly transport: Transporter | null;
@@ -35,8 +41,10 @@ export class MailService {
   }
 
   async sendMail(to: string, subject: string, body: string): Promise<boolean> {
-    if (!this.transport) {
-      console.log(`[mail] SMTP 未配置，仅记录不发送：to=${to} subject=${subject} body=${body.slice(0, 120)}`);
+    // e2e 测试域名闸（2026-11-18）：非生产环境只记录不真发，防测试打爆真实发件额度
+    const e2eRecipient = env.NODE_ENV !== 'production' && to.trim().toLowerCase().endsWith(E2E_MAIL_SUFFIX);
+    if (!this.transport || e2eRecipient) {
+      console.log(`[mail] ${e2eRecipient ? 'e2e 测试域名拦截' : 'SMTP 未配置'}，仅记录不发送：to=${to} subject=${subject} body=${body.slice(0, 120)}`);
       return false;
     }
     try {
