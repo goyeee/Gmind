@@ -13,12 +13,12 @@ pnpm install
 cp docker/.env.example docker/.env
 pnpm compose:up          # MySQL 5.6 / Redis / MinIO / MailHog
 pnpm db:migrate          # 建表（gmind 库）
-pnpm dev                 # server :3000 + web :5173
+pnpm dev                 # server :3000 + web :5174
 ```
 
-打开 http://localhost:5173 ，用邮箱验证码注册、邮箱+密码登录。开发环境万能验证码 `123456` 始终可用；想在开发机也收到**真实验证码邮件**，把 SMTP 参数填进 `scripts/dev-local.env`（git 已忽略，模板在该文件内），跑 `scripts/dev-restart.sh` 生效。需要演示数据时空库跑一次 `pnpm --filter @gmind/server exec tsx scripts/seed-demo.ts`（server 运行中；演示超管 demo@gmind.dev / demo123456）。
+打开 http://localhost:5174 ，用邮箱验证码注册、邮箱+密码登录。开发环境万能验证码 `123456` 始终可用；想在开发机也收到**真实验证码邮件**，从 `scripts/dev-local.env.example` 复制出 `scripts/dev-local.env`（git 已忽略）并填入 SMTP 参数，再跑 `scripts/dev-restart.sh`（Windows：`powershell -ExecutionPolicy Bypass -File scripts/dev.ps1 restart`）生效。需要演示数据时空库跑一次 `pnpm --filter @gmind/server exec tsx scripts/seed-demo.ts`（server 运行中；演示超管 demo@gmind.dev / demo123456）。
 
-> **生产部署必读**：必须显式设置 `NODE_ENV=production`，并配置 `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASS`（缺一服务拒绝启动）；漏设 `NODE_ENV` 会以开发语义运行（邮箱验证码固定 `123456` 且不发信，可被用来重置任意账号密码），属严重配置错误。
+> **生产部署必读**：必须显式设置 `NODE_ENV=production`，并配置 `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASS`（缺一服务拒绝启动）；漏设 `NODE_ENV` 会以开发语义运行（可使用万能验证码 `123456`，未配置 SMTP 时不发信，可被用来重置任意账号密码），属严重配置错误。
 
 > 说明：MinIO / MailHog 的容器定义已就绪，但镜像来自 Docker Hub；若所在网络拉取受限，二者可暂缺 —— M0 代码路径不依赖它们（文件上传与邮件链路属后续里程碑）。
 
@@ -35,7 +35,7 @@ pnpm dev                 # server :3000 + web :5173
 
 ### 本机端口占用时的替代命令
 
-如果本机 3000 / 5173 已被无关应用占用（开发机实测如此），按下面这组命令跑，行为完全等价；环境变量名分别为 `PORT`、`API_ORIGIN`、`WEB_PORT`，不设置时默认值仍为 3000 / 5173 / 3000：
+如果本机 3000 已被无关应用占用（开发机实测如此），按下面这组命令跑，行为完全等价；环境变量名分别为 `PORT`、`API_ORIGIN`、`WEB_PORT`，不设置时默认值仍为 3000 / 5174 / 3000。web 默认使用 5174，避开另一项目常用的 5173；如仍需换 web 端口，可覆盖 `WEB_PORT`：
 
 ```bash
 pnpm compose:up                                                # 基础设施（同上）

@@ -5,7 +5,7 @@ import { MailService } from './mail.service';
  * MailService 传输层单测 — M3b Task 5（FR-SHR-004 邀请邮件接线 nodemailer）。
  *
  * 口径（M3a Task 7 裁定延续）：SMTP_HOST 缺省 → transport null → 仅 log 不发送；
- * 配置后经 nodemailer 明文 SMTP；sendMail 永不抛错（邮件为尽力而为旁路）。
+ * 配置后经 nodemailer（465 隐式 SSL，其余端口非隐式 TLS）；sendMail 永不抛错（邮件为尽力而为旁路）。
  * 2026-11-12 账号体系重做追加：transport auth（SMTP_USER/PASS）与 from（SMTP_FROM）断言，
  * 动态 import 重放模块顶层（env 为模块单例），用例结束整体还原 process.env。
  */
@@ -59,9 +59,18 @@ describe('MailService（SMTP 认证与发件人，2026-11-12 账号体系重做�
     return new Reloaded();
   }
 
-  function transportOptions(svc: MailService): { auth?: unknown } {
-    return (svc as unknown as { transport: { options: { auth?: unknown } } }).transport.options;
+  function transportOptions(svc: MailService): { auth?: unknown; secure?: boolean } {
+    return (svc as unknown as { transport: { options: { auth?: unknown; secure?: boolean } } }).transport.options;
   }
+
+  it('SMTP_PORT=465：transport 启用 SSL 加密连接', async () => {
+    process.env.SMTP_HOST = 'smtp.gmind.dev';
+    process.env.SMTP_PORT = '465';
+    process.env.SMTP_USER = 'mailer@gmind.dev';
+    process.env.SMTP_PASS = 'secret';
+    const svc = await makeServiceWithRealTransport();
+    expect(transportOptions(svc).secure).toBe(true);
+  });
 
   it('SMTP_USER/PASS 已配置：transport 携带 auth', async () => {
     process.env.SMTP_HOST = 'smtp.gmind.dev';

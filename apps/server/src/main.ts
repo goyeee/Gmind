@@ -18,7 +18,7 @@ async function bootstrap(): Promise<void> {
   app.use(json({ limit: '2mb' }));
   // CORS 走 env（2026-10-28 P0）：原硬编码 localhost:5173 会让生产域名直接被拒。
   // WEB_ORIGIN（web 静态源）+ APP_URL（邀请/注册链接基址）均可经环境变量覆写；
-  // dev 缺省=5174/5173 双端口并存。
+  // dev 缺省均为 5174；部署或本机覆盖时可分别配置两个来源。
   app.enableCors({ origin: [env.WEB_ORIGIN, env.APP_URL], credentials: true });
   app.useGlobalFilters(new ZodExceptionFilter(), new QuotaExceptionFilter(), new MulterExceptionFilter());
   await app.listen(env.PORT);

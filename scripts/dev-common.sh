@@ -4,7 +4,6 @@
 # 固定端口约定（与 e2e 门禁一致）：server 3001、web 5174（3000 留给本机其他项目）、
 # Redis 16379（低位固定端口，避开 Windows Hyper-V 高位动态保留区）。
 export PORT="${PORT:-3001}"
-export API_ORIGIN="${API_ORIGIN:-http://localhost:${PORT}}"
 export WEB_PORT="${WEB_PORT:-5174}"
 export REDIS_URL="${REDIS_URL:-redis://127.0.0.1:16379/0}"
 
@@ -13,6 +12,9 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # 本机私密配置（2026-11-14）：scripts/dev-local.env（git 忽略）存在则全部导出给子进程——
 # 放 SMTP 等不想进 git 的变量；填完跑 `scripts/dev-restart.sh` 生效。
 if [ -f "$REPO_ROOT/scripts/dev-local.env" ]; then set -a; . "$REPO_ROOT/scripts/dev-local.env"; set +a; fi
+
+# 在本机配置之后推导，确保 dev-local.env 只改 PORT 时，web 代理仍指向同一个后端。
+export API_ORIGIN="${API_ORIGIN:-http://localhost:${PORT}}"
 
 DATA_DIR="$REPO_ROOT/.data"
 LOG_FILE="$DATA_DIR/dev-server.log"

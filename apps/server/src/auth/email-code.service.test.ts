@@ -9,10 +9,10 @@ import { EmailCodeService } from './email-code.service';
  * 发码/验码全走 Redis（键与 TTL 逐字对齐简报），MailService 以假 sendMail 注入。
  * ioredis-mock 用法镜像 session.service.test.ts。
  *
- * 2026-11-14 语义：全环境恒随机 6 位码并尝试真实发信；production 发信失败 → 500+解锁，
- * dev/test 发信失败（含未配 SMTP）→ 容错成功；dev/test 万能码 env.DEV_MAIL_CODE（默认
- * '123456'）在**存在存量码**时可作为通行证（production 不认万能码）；无存量码时万能码
- * 无效（防未发码直通）。
+ * 2026-11-14 语义：全环境恒随机 6 位码并尝试真实发信；production 发信失败 → 500+解锁。
+ * 2026-11-18：dev/test 未配 SMTP 仍容错成功；已配 SMTP 但失败 → 500+解锁、写码供万能码
+ * 兜底，前端不倒计时。万能码 env.DEV_MAIL_CODE（默认 '123456'）在**存在存量码**时可作为
+ * 通行证（production 不认万能码）；无存量码时万能码无效（防未发码直通）。
  */
 
 const codeKey = (scene: string, email: string) => `email_code:${scene}:${email}`;
@@ -69,11 +69,52 @@ describe('EmailCodeService.issue（发码）', () => {
     expect(await redis.get(codeKey('register', 'other@b.dev'))).toBeNull();
   });
 
-  it('dev 未配 SMTP（sendMail false）→ 容错成功，码照常写入（Ruling A 语义收窄为生产限定）', async () => {
-    const { svc, redis, mail } = await makeService(async () => false);
-    await svc.issue('register', 'a@b.dev');
-    expect(await redis.get(codeKey('register', 'a@b.dev'))).toMatch(/^\d{6}$/);
-    expect(mail.sendMail).toHaveBeenCalledTimes(1); // 尝试了发信，但失败不致命
+  it('dev 未配 SMTP（sendMail false）→ 容错成功，码照常写入', async () => {
+    vi.resetModules();
+    const real = { ...process.env };
+    try {
+      process.env.NODE_ENV = 'development';
+      delete process.env.SMTP_HOST;
+      const { EmailCodeService: DevWithoutSmtp } = await import('./email-code.service');
+      const redis = new RedisMock() as unknown as Redis;
+      await redis.flushall();
+      const mail = { sendMail: vi.fn(async () => false) } as unknown as MailService;
+      const svc = new DevWithoutSmtp(redis, mail);
+
+      await svc.issue('register', 'a@b.dev');
+      expect(await redis.get(codeKey('register', 'a@b.dev'))).toMatch(/^\d{6}$/);
+      expect(mail.sendMail).toHaveBeenCalledTimes(1); // 尝试了发信，但未配置 SMTP 不致命
+    } finally {
+      process.env = real;
+    }
+  });
+
+  it('dev 已配 SMTP 但发信失败 → 500、不倒计时所需的重发锁被解除，仍可用本地万能码', async () => {
+    vi.resetModules();
+    const real = { ...process.env };
+    try {
+      process.env.NODE_ENV = 'development';
+      process.env.SMTP_HOST = 'smtp.gmind.dev';
+      process.env.SMTP_PORT = '465';
+      process.env.SMTP_USER = 'u';
+      process.env.SMTP_PASS = 'p';
+      const { EmailCodeService: Dev } = await import('./email-code.service');
+      const redis = new RedisMock() as unknown as Redis;
+      await redis.flushall();
+      const svc = new Dev(redis, { sendMail: vi.fn(async () => false) } as unknown as MailService);
+
+      await expectStatus(
+        svc.issue('register', 'dev-failure@b.dev'),
+        500,
+        '邮件发送失败，请检查 SMTP 配置；本地开发可使用万能验证码 123456',
+      );
+      expect(await redis.get(waitKey('register', 'dev-failure@b.dev'))).toBeNull();
+      expect(await redis.get(codeKey('register', 'dev-failure@b.dev'))).toMatch(/^\d{6}$/);
+      await svc.verify('register', 'dev-failure@b.dev', '123456');
+      expect(await redis.get(codeKey('register', 'dev-failure@b.dev'))).toBeNull();
+    } finally {
+      process.env = real;
+    }
   });
 
   it('60s 内二次 issue → 429「验证码发送过于频繁，请 60 秒后再试」', async () => {

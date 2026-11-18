@@ -396,7 +396,7 @@ describe('share 域', () => {
     const mailText = mailLogs.join('\n');
     expect(mailText).toContain('邀请甲');
     expect(mailText).toContain('批量邀请域用例');
-    expect(mailText).toContain('http://localhost:5173/login');
+    expect(mailText).toContain('http://localhost:5174/login');
   });
 
   it('非 owner 批量邀请 404（与不存在同口径）；空列表 400', async () => {

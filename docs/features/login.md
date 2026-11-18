@@ -18,7 +18,7 @@
 6. **密码 6~64 位**：注册、登录、重置密码三处同一口径（`packages/shared/src/api/auth.ts:50`、`:57`、`:65`）。
 7. **验证码三条规则**：10 分钟内有效（`apps/server/src/auth/email-code.service.ts:9`）；60 秒内不能重发（`apps/server/src/auth/email-code.service.ts:11`，服务端在 `:58-61` 强制；前端发码成功才起倒计时，`apps/web/src/pages/useCodeCountdown.ts:8-17`、`apps/web/src/pages/LoginPage.tsx:88`）；**连续输错 5 次作废**，须重新获取（`apps/server/src/auth/email-code.service.ts:13`、`:79-89`）。
 8. **发码前先查场景**：注册场景邮箱已被注册 → 直接 409「该邮箱已注册，请直接登录或换用其他邮箱」；忘记密码场景邮箱未注册 → 404「该邮箱尚未注册，请确认后重试或先注册」（`apps/server/src/auth/auth.controller.ts:38-43`）。
-9. **验证码全环境恒为随机 6 位数字并尝试真实发信**（`apps/server/src/auth/email-code.service.ts:50-52`、`:63-72`）。开发/测试环境**万能码 `123456` 并存**：只要系统给这个邮箱发过码（存在存量码），输入 123456 也算通过（`email-code.service.ts` verify 的 masterOk 分支、默认值在 `apps/server/src/config/env.ts:31`）——没发过码时 123456 无效；生产环境不认万能码，只认真实验证码。开发环境没配 SMTP 时发信静默跳过（不影响用万能码），配了就真发信（本机配置方法：`scripts/dev-local.env`，git 已忽略，填完跑 `scripts/dev-restart.sh`）。
+9. **验证码全环境恒为随机 6 位数字并尝试真实发信**（`apps/server/src/auth/email-code.service.ts:50-52`、`:63-72`）。开发/测试环境**万能码 `123456` 并存**：只要系统给这个邮箱发过码（存在存量码），输入 123456 也算通过（`email-code.service.ts` verify 的 masterOk 分支、默认值在 `apps/server/src/config/env.ts:31`）——没发过码时 123456 无效；生产环境不认万能码，只认真实验证码。开发环境没配 SMTP 时发信静默跳过（不影响用万能码），配了就真发信；`SMTP_PORT=465` 时使用 SSL 加密连接，其他端口保持非隐式 TLS 协商。已配 SMTP 但发信失败时，页面显示失败原因、不启动重发倒计时，并解除服务端重发锁；本地仍可使用万能验证码继续流程。本机从 `scripts/dev-local.env.example` 复制出 `scripts/dev-local.env`（git 已忽略）并填写；macOS / Linux 跑 `scripts/dev-restart.sh`，Windows 跑 `powershell -ExecutionPolicy Bypass -File scripts/dev.ps1 restart` 生效。
 10. **手机号只是资料**：可以在设置页补填/换绑手机号（需当前密码核身，`apps/server/test/users.e2e-spec.ts:236`），页面标「未验证」（`apps/web/src/pages/SettingsPage.tsx:468`）；**手机号本期不能用来登录**（登录 schema 只收邮箱，`packages/shared/src/api/auth.ts:55-59`）。
 11. **页面布局（2026-11-17 Figma 16:708 实读校准）**：宽屏左侧依次为连线标志、脑图插画、介绍文案，三块正常排列、不互相覆盖；蓝紫背景光晕、四个特点图标、文案和间距按原型实现（`apps/web/src/pages/LoginPage.tsx:31-59`、`:196-218`；`apps/web/src/styles.css:33-60`）。左栏占 11/21，登录页以一屏高度为边界，脑图在剩余空间里等比缩放；常见桌面窗口不需要滚动即可看全（`apps/web/src/styles.css:32`、`:45-46`）。右侧表单水平、垂直居中，底部保留视口高度 4% 的空间，使视觉重心略向上（`apps/web/src/styles.css:61`）。特点与版权文字为 12.25px，介绍最大宽度 448px，右侧标题为 28px；复选框和底部链接不再被通用输入框、按钮高度撑大（`apps/web/src/styles.css:51-64`、`:78-84`）。宽度不超过 900px 时隐藏左栏，只显示表单（`apps/web/src/styles.css:87-91`）。这只是视觉布局，不改变三视图的填写、提交和跳转逻辑。
 12. **脑图动效**：二级及以下连线在 700ms 内淡入，延迟为「层级 × 180ms」；节点也在 700ms 内淡入，延迟为「100ms + 层级 × 180ms」。一级连线和中心主题不额外添加动画（`apps/web/src/pages/InfiniteMap.tsx:100-121`；`apps/web/src/styles.css:47-48`）。系统开启「减少动态效果」时不播放（`apps/web/src/styles.css:90-92`）。
@@ -44,4 +44,5 @@
 ## ⑤ 最后核对
 
 - 功能规则 1–10 的核对日期：2026-11-13；代码版本：commit `aeb91bd709e14ea3c097f2013031e7c970379adf`（main）。
+- 规则 9 的本机 SMTP 配置说明核对日期：2026-11-18；代码版本：commit `ebc53c250a86c44cbf348d8edbbc82377ba6295d` 加当日尚未提交的开发配置改动。
 - 视觉规则 11–12 的核对日期：2026-11-17；代码版本：commit `08f5750682d32e5c0a10f269a2442856dc705ada` 加当日尚未提交的登录页改动。本次只改布局与动效，功能规则未改。

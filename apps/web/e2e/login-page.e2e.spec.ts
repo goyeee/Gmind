@@ -150,6 +150,22 @@ test('登录失败文案：账号不存在 / 密码错误（服务端两段式�
   await expect(page).toHaveURL(/\/login/);
 });
 
+test('发信失败：显示原因与本地万能码兜底，不启动重发倒计时', async ({ page }) => {
+  const message = '邮件发送失败，请检查 SMTP 配置；本地开发可使用万能验证码 123456';
+  await page.route('**/api/auth/email-code', async (route) => {
+    await route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ message }) });
+  });
+  await page.goto('/login');
+  await page.getByTestId('link-register').click();
+  await page.getByTestId('reg-email').fill(uniqueEmail());
+
+  const sendButton = page.getByTestId('reg-code-send');
+  await sendButton.click();
+  await expect(page.locator('.error')).toHaveText(message);
+  await expect(sendButton).toBeEnabled();
+  await expect(sendButton).toHaveText('获取验证码');
+});
+
 // ③ 记住我：勾选 → 登录 → 刷新仍登录（token 持久化；TTL 差异由 server auth e2e 钉）
 test('记住我：勾选登录后刷新仍登录（token 持久化）', async ({ page }) => {
   const account = await apiRegister(page.request);

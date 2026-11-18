@@ -24,6 +24,25 @@ $ErrorActionPreference = 'Stop'
 
 # ── 公共配置（对齐 dev-common.sh）───────────────────────────────────────────
 $RepoRoot = Split-Path -Parent $PSScriptRoot
+
+# 本机私密配置（SMTP 等）不入 git。与 dev-common.sh 一样，在计算默认端口前加载，
+# 让 dev-local.env 可覆盖 PORT/WEB_PORT 等值；支持 KEY=VALUE、export 前缀与成对引号。
+$LocalEnvFile = Join-Path $PSScriptRoot 'dev-local.env'
+if (Test-Path $LocalEnvFile) {
+  foreach ($Line in Get-Content $LocalEnvFile) {
+    $Trimmed = $Line.Trim()
+    if (-not $Trimmed -or $Trimmed.StartsWith('#')) { continue }
+    if ($Trimmed -match '^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$') {
+      $Name = $Matches[1]
+      $Value = $Matches[2].Trim()
+      $DoubleQuoted = $Value.Length -ge 2 -and $Value.StartsWith('"') -and $Value.EndsWith('"')
+      $SingleQuoted = $Value.Length -ge 2 -and $Value.StartsWith("'") -and $Value.EndsWith("'")
+      if ($DoubleQuoted -or $SingleQuoted) { $Value = $Value.Substring(1, $Value.Length - 2) }
+      [Environment]::SetEnvironmentVariable($Name, $Value, 'Process')
+    }
+  }
+}
+
 $DataDir = Join-Path $RepoRoot '.data'
 $LogFile = Join-Path $DataDir 'dev-server.log'
 $PidFile = Join-Path $DataDir 'dev-server.pids'

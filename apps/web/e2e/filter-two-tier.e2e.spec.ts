@@ -35,19 +35,18 @@ async function grantCollaborator(
   if (!res.ok()) throw new Error(`授予协作者失败：${res.status()}`);
 }
 
-/** 筛选弹窗内点击负责人下拉并选择第一个非「不限」选项（返回选中值，便于断言）。 */
+/** 经当前条件构建器添加「负责人=我」（旧版负责人下拉已退役）。 */
 async function pickOwner(page: Page): Promise<string> {
   await page.getByTestId('map-filter-toggle').click();
-  await expect(page.getByTestId('map-filter-pop')).toBeVisible();
-  const select = page.getByTestId('map-filter-pop').locator('.mf-more select').first();
-  const options = await select.locator('option').allTextContents();
-  const target = options.find((o) => o.trim() !== '不限');
-  if (!target) throw new Error('无可用负责人选项');
-  await select.selectOption({ label: target });
+  const pop = page.getByTestId('map-filter-pop');
+  await expect(pop).toBeVisible();
+  await pop.getByRole('button', { name: '＋ 添加筛选条件' }).click();
+  await pop.getByRole('menuitem', { name: '负责人', exact: true }).click();
+  await pop.getByTestId('map-filter-owners').getByLabel('我', { exact: true }).check();
   // 再点 toggle 关闭弹窗（Escape 可能被全局键盘监听拦截）
   await page.getByTestId('map-filter-toggle').click();
-  await expect(page.getByTestId('map-filter-pop')).toHaveCount(0);
-  return target;
+  await expect(pop).toHaveCount(0);
+  return '我';
 }
 
 test.describe('轮 2 筛选双层化', () => {

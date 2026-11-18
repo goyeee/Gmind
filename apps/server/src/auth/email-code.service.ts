@@ -23,8 +23,9 @@ export const EMAIL_CODE_MAX_FAILS = 5;
  * 码值与发信（2026-11-14 需求方：开发环境真发信+万能码并存）：
  * - 全环境恒随机 6 位数字码，issue 均尝试经真实 SMTP 发信；
  * - production：sendMail false → 500 并解除 60s 冷却放行重试（一次 SMTP 抖动不得锁死
- *   用户 60s）；
- * - dev/test：sendMail false（含未配 SMTP）→ 容错成功（本地联调不依赖邮件服务）；
+ *   用户 60s），且不写码；
+ * - dev/test 未配 SMTP：sendMail false → 容错成功（本地联调不依赖邮件服务）；已配 SMTP
+ *   但发送失败 → 500 + 解除冷却，仍写码供本地万能码继续流程，避免页面假倒计时；
  * - 万能码 env.DEV_MAIL_CODE（默认 '123456'）仅在 **非 production 且存在存量码** 时于
  *   verify 侧作为通行证（真实码与万能码并存）；production 不认万能码，无存量码时
  *   万能码无效（防未发码直通）。
@@ -55,8 +56,9 @@ export class EmailCodeService {
     return String(randomInt(0, 1_000_000)).padStart(6, '0');
   }
 
-  /** 发码：60s 冷却 → 生成随机码 → 尝试真实发信（production 失败 500 并解除冷却；
-   *  dev/test 失败容错——本地联调不依赖邮件服务）→ 写码（EX 600）+ 清失败计数。 */
+  /** 发码：60s 冷却 → 生成随机码 → 尝试真实发信 → 写码（EX 600）+ 清失败计数。
+   *  production 或已配 SMTP 的 dev/test 发信失败会返回 500 并解除冷却；后者仍写码，
+   *  让本地万能码可用。未配 SMTP 的 dev/test 保持容错成功。 */
   async issue(scene: EmailCodeScene, email: string): Promise<void> {
     const acquired = await this.redis.set(this.waitKey(scene, email), '1', 'EX', EMAIL_CODE_WAIT_SEC, 'NX');
     if (!acquired) {
@@ -68,9 +70,18 @@ export class EmailCodeService {
       'Gmind 邮箱验证码',
       `你的验证码是 ${code}，10 分钟内有效。若非本人操作，请忽略本邮件。`,
     );
-    if (!sent && env.NODE_ENV === 'production') {
+    if (!sent && (env.NODE_ENV === 'production' || env.SMTP_HOST)) {
       await this.redis.del(this.waitKey(scene, email));
-      throw new HttpException('邮件发送失败，请稍后重试；若持续失败请联系管理员', HttpStatus.INTERNAL_SERVER_ERROR);
+      if (env.NODE_ENV !== 'production') {
+        await this.redis.set(this.codeKey(scene, email), code, 'EX', EMAIL_CODE_TTL_SEC);
+        await this.redis.del(this.failKey(scene, email));
+      }
+      throw new HttpException(
+        env.NODE_ENV === 'production'
+          ? '邮件发送失败，请稍后重试；若持续失败请联系管理员'
+          : '邮件发送失败，请检查 SMTP 配置；本地开发可使用万能验证码 123456',
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
     }
     await this.redis.set(this.codeKey(scene, email), code, 'EX', EMAIL_CODE_TTL_SEC);
     await this.redis.del(this.failKey(scene, email));

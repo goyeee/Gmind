@@ -29,8 +29,8 @@ const envSchema = z.object({
   // 预判）；production 恒随机 6 位数字——EmailCodeService 的 production 分支不读本值，
   // 即使设置了也忽略。
   DEV_MAIL_CODE: z.string().default('123456'),
-  // 邀请邮件（M3b Task 5，FR-SHR-004）注册链接基址：web dev 默认 5173，部署侧覆写。
-  APP_URL: z.string().default('http://localhost:5173'),
+  // 邀请邮件（M3b Task 5，FR-SHR-004）注册链接基址：与 web dev 默认端口 5174 一致，部署侧覆写。
+  APP_URL: z.string().default('http://localhost:5174'),
   // 站内跳转基址（M4 清偿包）：摘要邮件条目的文档深链（${WEB_ORIGIN}/edit/:fileId）与
   // 正文尾部「打开 Gmind」行；缺省跟随本机 web dev 常用端口，部署侧覆写。
   WEB_ORIGIN: z.string().default('http://localhost:5174'),

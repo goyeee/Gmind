@@ -3,9 +3,9 @@ import react from '@vitejs/plugin-react';
 import pkg from './package.json';
 
 // 本机 3000 端口被无关进程占用时，用 API_ORIGIN 指向实际后端（如 http://localhost:3001）。
-// 本机 5173 端口被无关 vite 进程占用时，用 WEB_PORT 换端口（如 5174）。
+// web 默认 5174，避开本机另一项目常用的 5173；仍可用 WEB_PORT 临时覆盖。
 const apiOrigin = process.env.API_ORIGIN ?? 'http://localhost:3000';
-const webPort = Number(process.env.WEB_PORT ?? 5173);
+const webPort = Number(process.env.WEB_PORT ?? 5174);
 
 export default defineConfig({
   plugins: [react()],

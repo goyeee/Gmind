@@ -37,4 +37,4 @@
 
 ## 本机私密配置 dev-local.env（2026-11-14）
 
-`scripts/dev-local.env`（git 忽略，模板见文件内注释）由 `scripts/dev-common.sh` 自动加载，放 SMTP 等不想进 git 的变量；填完 `scripts/dev-restart.sh` 生效。**对 e2e 无影响**：e2e 进程不加载该文件（无 SMTP），发码邮件走"仅记录不发送"分支，注册/换绑用万能码 123456 经 email-code 的 dev 万能码分支通过。dev 真发信语义变更见 `docs/features/login.md` 规则 9。
+`scripts/dev-local.env`（git 忽略，从 `scripts/dev-local.env.example` 复制）由 macOS / Linux 的 `scripts/dev-common.sh` 与 Windows 的 `scripts/dev.ps1` 自动加载，放 SMTP 等不想进 git 的变量；填完分别用 `scripts/dev-restart.sh` 或 `powershell -ExecutionPolicy Bypass -File scripts/dev.ps1 restart` 生效。e2e 测试进程自身不加载该文件；但若复用已通过启动脚本加载 SMTP 的 dev server，发码邮件会真实发送，跑测试前需注意。未配置 SMTP 时走"仅记录不发送"分支，注册/换绑用万能码 123456 经 email-code 的 dev 万能码分支通过。dev 真发信语义见 `docs/features/login.md` 规则 9。
