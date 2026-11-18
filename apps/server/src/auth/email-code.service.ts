@@ -3,7 +3,7 @@ import { randomInt } from 'node:crypto';
 import Redis from 'ioredis';
 import type { EmailCodeScene } from '@gmind/shared';
 import { env } from '../config/env';
-import { MailService } from '../mail/mail.service';
+import { isE2eMailRecipient, MailService } from '../mail/mail.service';
 
 /** 验证码有效期（秒）：`email_code:{scene}:{email}` EX 600。 */
 export const EMAIL_CODE_TTL_SEC = 600;
@@ -25,7 +25,8 @@ export const EMAIL_CODE_MAX_FAILS = 5;
  * - production：sendMail false → 500 并解除 60s 冷却放行重试（一次 SMTP 抖动不得锁死
  *   用户 60s），且不写码；
  * - dev/test 未配 SMTP：sendMail false → 容错成功（本地联调不依赖邮件服务）；已配 SMTP
- *   但发送失败 → 500 + 解除冷却，仍写码供本地万能码继续流程，避免页面假倒计时；
+ *   但真实发送失败 → 500 + 解除冷却，仍写码供本地万能码继续流程，避免页面假倒计时；
+ *   e2e 测试域名的主动拦截不属于失败，仍容错成功；
  * - 万能码 env.DEV_MAIL_CODE（默认 '123456'）仅在 **非 production 且存在存量码** 时于
  *   verify 侧作为通行证（真实码与万能码并存）；production 不认万能码，无存量码时
  *   万能码无效（防未发码直通）。
@@ -57,8 +58,8 @@ export class EmailCodeService {
   }
 
   /** 发码：60s 冷却 → 生成随机码 → 尝试真实发信 → 写码（EX 600）+ 清失败计数。
-   *  production 或已配 SMTP 的 dev/test 发信失败会返回 500 并解除冷却；后者仍写码，
-   *  让本地万能码可用。未配 SMTP 的 dev/test 保持容错成功。 */
+   *  production 或已配 SMTP 的 dev/test 真实发信失败会返回 500 并解除冷却；后者仍写码，
+   *  让本地万能码可用。未配 SMTP 或命中 e2e 测试域名闸的 dev/test 保持容错成功。 */
   async issue(scene: EmailCodeScene, email: string): Promise<void> {
     const acquired = await this.redis.set(this.waitKey(scene, email), '1', 'EX', EMAIL_CODE_WAIT_SEC, 'NX');
     if (!acquired) {
@@ -70,7 +71,7 @@ export class EmailCodeService {
       'Gmind 邮箱验证码',
       `你的验证码是 ${code}，10 分钟内有效。若非本人操作，请忽略本邮件。`,
     );
-    if (!sent && (env.NODE_ENV === 'production' || env.SMTP_HOST)) {
+    if (!sent && (env.NODE_ENV === 'production' || (env.SMTP_HOST && !isE2eMailRecipient(email)))) {
       await this.redis.del(this.waitKey(scene, email));
       if (env.NODE_ENV !== 'production') {
         await this.redis.set(this.codeKey(scene, email), code, 'EX', EMAIL_CODE_TTL_SEC);

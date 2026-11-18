@@ -69,6 +69,9 @@ test('头像区：当前头像与预置库渲染，选预置后当前头像与 m
   const token = await page.evaluate(() => localStorage.getItem('gmind.token'));
   const me = await page.request.get('/api/users/me', { headers: { Authorization: `Bearer ${token ?? ''}` } });
   expect(((await me.json()) as { avatarUrl: string }).avatarUrl).toBe('/avatars/preset-4.svg');
+  // 2026-11-18 根因回归：左下角导航头像必须同步（服务端字段 avatarUrl，旧代码误读 me.avatar
+  // 恒 undefined → 永远回退预置分配，用户看到旧头像）
+  await expect(page.locator('.ws-user-card img')).toHaveAttribute('src', '/avatars/preset-4.svg');
 });
 
 test('改密：当前密码核身成功 toast，新密码可再次登录', async ({ page }) => {

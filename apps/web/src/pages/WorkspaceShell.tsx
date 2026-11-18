@@ -45,7 +45,9 @@ export interface ShellMe {
   id: string;
   nickname: string;
   systemRole?: 'super_admin' | 'member';
-  avatar?: string | null;
+  /** 头像（服务端 fullUserView 字段名即 avatarUrl——2026-11-18 根因修复：
+   *  此前误读 me.avatar 恒 undefined，左下角永远回退预置分配、换头像不生效）。 */
+  avatarUrl?: string | null;
 }
 
 function fmtTime(iso: string): string {
@@ -421,7 +423,7 @@ export function WorkspaceShell({
               onClick={() => setUserMenuAt((v) => (v === 'side' ? null : 'side'))}
             >
               <span className="ws-avatar" aria-hidden>
-                {me ? <Avatar userId={me.id} nickname={me.nickname} avatar={me.avatar} size={28} /> : '…'}
+                {me ? <Avatar userId={me.id} nickname={me.nickname} avatar={me.avatarUrl} size={28} /> : '…'}
               </span>
               <span className="ws-user-meta">
                 <span className="ws-user-name" data-testid="user-nickname">

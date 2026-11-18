@@ -520,3 +520,31 @@ emoji(28)/数字(10) 组往返仍丢（无 XMind 原生源）；颜色/形状信
 - 导出页顺序按原型调整为 XMind、图片、Markdown、Excel、CSV；行卡片间距与固定底部下载位置说明对齐。
 - 仅调整展示与顺序：五种导出仍走原真实通道，CSV/Excel 保持已验收 7 列，JPG 保持当前折叠态与白底 2×，XMind/Markdown 规则不变。
 - `share-export.e2e.spec.ts` 既有五项可见性与五类真实下载用例全部通过；`share-dialog.e2e.spec.ts` 同时覆盖固定高度与普通协作者默认导出。最终门禁数字见 `docs/m3b-acceptance.md` 2026-11-18 补记。
+
+## 二十四、2026-11-18 e2e 真发信打爆发件额度事故防线
+
+### 根因
+
+2026-11-14 开发环境改真发信后，web e2e 每造号一次即调 `/auth/email-code` 真发一封验证码邮件；全量数百测试账号（均为 `@e2e.gmind.dev` 测试域名）把真实 SMTP 发件额度打爆，需求方发件箱被服务商限发。
+
+### 修复（单点收口）
+
+`apps/server/src/mail/mail.service.ts` `sendMail`：**非生产环境**且收件人以 `@e2e.gmind.dev` 结尾 → 只 log 不真发、返回 false（EmailCodeService 的 dev 容错路径照常放行，测试用万能码 123456 不受影响）。验证码/通知/摘要/邀请全走此函数，一处拦截全覆盖；真实邮箱域名与生产环境不受影响。
+
+### 背书
+
+`mail.service.test.ts` 新增 3 用例（非生产 e2e 域名不真发 / 非生产真实域名照常发 / 生产不设闸），先红后绿；server 单测 81/81、typecheck/lint 0。
+
+## 二十五、2026-11-18 左下角导航头像「换头像不生效」根因修复
+
+### 根因（需求方追问「为什么没根本解决」）
+
+前一轮头像修复只覆盖了「换头像后重新拉取数据」一层；左下角真正的断点是**字段名错配**：服务端 `fullUserView`（GET /users/me）返回 `avatarUrl`，`WorkspaceShell` 却读 `me.avatar`——恒 undefined，`Avatar` 回退到按 userId 自动分配的预置头像，用户永远看到「旧头像」。重拉数据无法治愈字段名错配。文件详情页正常是因为其数据走 collaborators 接口（字段恰好对齐）。
+
+### 修复
+
+`WorkspaceShell.tsx`：`ShellMe.avatar` → `avatarUrl`（与服务端视图单点同形），左下角用户卡取值同步改 `me.avatarUrl`。上传键本身每次上传均为新 ULID（`users/{id}/{ulid}.{ext}`），无 URL 缓存残留问题。
+
+### 背书
+
+`settings.e2e.spec.ts:49` 头像用例新增断言：选预置后 `.ws-user-card img` src 必须等于所选预置。修复前失败（偶发通过=默认预置恰好相同，1/5 概率掩盖），修复后 repeat 3/3；typecheck/lint 0。

@@ -46,6 +46,55 @@ describe('MailService（SMTP 传输层）', () => {
   });
 });
 
+describe('MailService（e2e 测试域名发信闸，2026-11-18 发件额度事故防线）', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    process.env = { ...REAL_ENV };
+  });
+
+  /** 按当前 process.env 重放模块构造，再把 transport 换成 spy（断言是否真发）。 */
+  async function makeSpiedService(): Promise<{ svc: MailService; sendMail: ReturnType<typeof vi.fn> }> {
+    vi.resetModules();
+    const { MailService: Reloaded } = await import('./mail.service');
+    const svc = new Reloaded();
+    const sendMail = vi.fn().mockResolvedValue({ messageId: 'm1' });
+    (svc as unknown as { transport: unknown }).transport = { sendMail };
+    return { svc, sendMail };
+  }
+
+  it('非生产 + e2e 测试域名：只 log 不真发（即使 SMTP 已配置），返回 false 走 dev 容错', async () => {
+    process.env.NODE_ENV = 'development';
+    process.env.SMTP_HOST = 'smtp.gmind.dev';
+    process.env.SMTP_PORT = '25';
+    const { svc, sendMail } = await makeSpiedService();
+    const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    await expect(svc.sendMail('e2e-abc@e2e.gmind.dev', '验证码', '正文')).resolves.toBe(false);
+    expect(sendMail).not.toHaveBeenCalled();
+    expect(spy).toHaveBeenCalled();
+  });
+
+  it('非生产 + 真实邮箱域名：不受影响照常发送', async () => {
+    process.env.NODE_ENV = 'development';
+    process.env.SMTP_HOST = 'smtp.gmind.dev';
+    process.env.SMTP_PORT = '25';
+    const { svc, sendMail } = await makeSpiedService();
+    await expect(svc.sendMail('someone@163.com', '验证码', '正文')).resolves.toBe(true);
+    expect(sendMail).toHaveBeenCalledTimes(1);
+  });
+
+  it('生产环境不设此闸：e2e 域名也按正常流程发送（防误伤真实语义）', async () => {
+    process.env.NODE_ENV = 'production';
+    process.env.DEV_SMS_CODE = 'prod-test-only-random-code'; // env 生产启动守卫要求显式配置
+    process.env.SMTP_HOST = 'smtp.gmind.dev';
+    process.env.SMTP_USER = 'mailer@gmind.dev'; // 生产守卫要求 SMTP 认证齐备（仅构造校验，不真连）
+    process.env.SMTP_PASS = 'secret';
+    process.env.SMTP_PORT = '25';
+    const { svc, sendMail } = await makeSpiedService();
+    await expect(svc.sendMail('e2e-abc@e2e.gmind.dev', '验证码', '正文')).resolves.toBe(true);
+    expect(sendMail).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('MailService（SMTP 认证与发件人，2026-11-12 账号体系重做）', () => {
   afterEach(() => {
     vi.restoreAllMocks();

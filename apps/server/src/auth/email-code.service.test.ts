@@ -117,6 +117,26 @@ describe('EmailCodeService.issue（发码）', () => {
     }
   });
 
+  it('dev 已配 SMTP + e2e 测试域名被主动拦截 → 属于预期容错，不误报 500', async () => {
+    vi.resetModules();
+    const real = { ...process.env };
+    try {
+      process.env.NODE_ENV = 'development';
+      process.env.SMTP_HOST = 'smtp.gmind.dev';
+      process.env.SMTP_PORT = '465';
+      const { EmailCodeService: Dev } = await import('./email-code.service');
+      const redis = new RedisMock() as unknown as Redis;
+      await redis.flushall();
+      const svc = new Dev(redis, { sendMail: vi.fn(async () => false) } as unknown as MailService);
+
+      await svc.issue('register', 'e2e-abc@e2e.gmind.dev');
+      expect(await redis.get(codeKey('register', 'e2e-abc@e2e.gmind.dev'))).toMatch(/^\d{6}$/);
+      expect(await redis.get(waitKey('register', 'e2e-abc@e2e.gmind.dev'))).toBe('1');
+    } finally {
+      process.env = real;
+    }
+  });
+
   it('60s 内二次 issue → 429「验证码发送过于频繁，请 60 秒后再试」', async () => {
     const { svc } = await makeService();
     await svc.issue('register', 'a@b.dev');
