@@ -19,21 +19,21 @@
 .editor-toolbar .view-tabs {
   display: flex;
   align-items: center;
-  height: 28px;
+  height: 32px;
   gap: 0;
   margin: 0;
   padding: 2px;
-  border-radius: 6px;
+  border-radius: 8px;
   /* M7c-J（Kimi 专审 #3）：灰轨道+贴齐分段，消除「蓝 chip+裸文字」的拼贴感 */
   background: #f2f3f5;
 }
 .editor-toolbar .view-tabs button {
   border: none;
   background: transparent;
-  height: 24px;
-  padding: 0 12px;
-  border-radius: 4px;
-  font-size: 13px;
+  height: 28px;
+  padding: 0 20px;
+  border-radius: 6px;
+  font-size: 14px;
   line-height: 1;
   color: #4e5969;
   cursor: pointer;
@@ -43,7 +43,7 @@
 }
 .editor-toolbar .view-tabs button.active {
   background: #fff;
-  color: #1d2129;
+  color: #3370ff;
   font-weight: 500;
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
 }
@@ -61,8 +61,10 @@
   flex: none;
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 6px 10px;
+  gap: 12px;
+  height: 52px;
+  box-sizing: border-box;
+  padding: 0 20px;
   background: #fff;
   border-bottom: 1px solid #e5e6eb;
 }
@@ -85,7 +87,7 @@
 .toolbar-sep {
   flex: none;
   width: 1px;
-  height: 28px;
+  height: 20px;
   background: #e5e6eb;
 }
 /* M7b-K5 修订（kimi 复核 P1）：overflow-x:auto 会让 overflow-y 计算为 auto，
@@ -93,29 +95,49 @@
    窄缝——弹层对真实用户不可用。改用 flex-wrap 换行（弹层照常 absolute 展开），
    窄断点配合隐藏低频组与文字标签控制高度。 */
 .editor-toolbar {
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
 }
 /* 分组容器；标题组弹性占满中段（标题输入伸展、右侧组贴右） */
 .toolbar-group {
   flex: none;
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: 4px;
+}
+.toolbar-brand-group { gap: 8px; }
+.editor-toolbar .toolbar-brand {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 36px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: #3370ff;
+  cursor: pointer;
+}
+.toolbar-brand-name {
+  color: #1d2129;
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  white-space: nowrap;
 }
 .toolbar-group.toolbar-group-title {
   flex: none;
-  gap: 6px;
+  gap: 8px;
 }
 /* 图标按钮：28×28、无边框、hover 浅灰底（企微范式） */
 .editor-toolbar .toolbar-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
+  width: 36px;
+  height: 36px;
   padding: 0;
   border: none;
-  border-radius: 6px;
+  border-radius: 8px;
   background: transparent;
   color: #4e5969;
   cursor: pointer;
@@ -130,9 +152,12 @@
 /* 文字标签按钮（M7b-R4 企微式：上级主题/子主题/同级主题/格式）——auto 宽 */
 .editor-toolbar .toolbar-btn.toolbar-btn-text {
   width: auto;
-  min-width: 28px;
+  min-width: 36px;
+  height: 36px;
   padding: 0 10px;
-  gap: 4px;
+  gap: 6px;
+  font-size: 14px;
+  font-weight: 500;
 }
 /* 激活态图标按钮（格式刷模式等，企微范式：浅蓝底 + 蓝字） */
 .editor-toolbar .toolbar-btn.active {
@@ -152,24 +177,29 @@ body.painter-active .editor-canvas svg {
 }
 /* 结构/主题下拉的 .toolbar-field 功能件已随 structure-select 迁入结构面板移除
    （2026-09-30 任务 3），样式一并退役。 */
-.editor-toolbar .title-input {
-  text-overflow: ellipsis;
+.toolbar-group-title .title-display {
   flex: none;
-  width: 200px;
-  max-width: 320px;
-  height: 28px; /* 单行判定：标题组与相邻按钮等高（2026-09-30 任务 1） */
-  padding: 0 8px;
+  width: auto;
+  min-width: 120px;
+  max-width: 160px;
+  font-weight: 600;
+}
+.editor-toolbar .title-edit-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
   border: none;
   border-radius: 6px;
   background: transparent;
-  font-size: 14px;
+  color: #86909c;
+  cursor: pointer;
 }
-.editor-toolbar .title-input:hover {
+.editor-toolbar .title-edit-btn:hover {
   background: #f2f3f5;
-}
-.editor-toolbar .title-input:focus {
-  outline: 1px solid #3370ff;
-  background: #fff;
+  color: #1d2129;
 }
 .save-status {
   color: #86909c;
@@ -205,8 +235,8 @@ body.painter-active .editor-canvas svg {
    flex-wrap 保留作 <1280 视口的换行兜底；≤1080 断点仍隐藏星标/保存状态。 */
 @media (max-width: 1536px) {
   .editor-toolbar {
-    gap: 1px;
-    padding: 6px 8px;
+    gap: 2px;
+    padding: 0 8px;
   }
   .toolbar-group {
     gap: 1px;
@@ -220,21 +250,32 @@ body.painter-active .editor-canvas svg {
      二期对齐轮（2026-10-24「待办」文字钮 +「分享」主按钮入列，≈110px 增量）再收：
      标题 104→84、视图 Tab 10→7、文字钮 5→3、图标钮 28→26、容器 padding 8→4、
      分享钮 14→10——1440/1280 维持单行（toolbar.e2e 锚点用例兜底）。 */
-  .editor-toolbar .title-input {
-    width: 84px;
+  .toolbar-group-title .title-display {
+    width: 160px;
+    min-width: 120px;
+    max-width: 160px;
+  }
+  .editor-toolbar .view-tabs {
+    height: 30px;
   }
   .editor-toolbar .view-tabs button {
+    height: 26px;
     padding: 0 7px;
+    font-size: 13px;
   }
   /* 文字钮收窄水平 padding + 图标-文字间距（文字常显后的宽度预算） */
   .editor-toolbar .toolbar-btn.toolbar-btn-text {
-    padding: 0 3px;
+    height: 32px;
+    padding: 0 4px;
+    gap: 3px;
+    font-size: 13px;
   }
   .editor-toolbar .toolbar-btn {
-    width: 26px;
+    width: 28px;
+    height: 32px;
   }
   .editor-toolbar {
-    padding: 6px 4px;
+    padding: 0 8px;
   }
   .toolbar-share-btn {
     padding: 0 10px;
@@ -296,8 +337,8 @@ body.painter-active .editor-canvas svg {
   flex: none;
   display: flex;
   align-items: center;
-  gap: 6px;
-  height: 28px; /* 单行判定：与按钮行等高 */
+  gap: 12px;
+  height: 40px;
   margin-left: auto;
 }
 /* avatar-me / personal-* 样式已随 2026-11-16 本人头像+个人中心下拉删除而移除 */
@@ -650,14 +691,17 @@ body.painter-active .editor-canvas svg {
 .editor-toolbar .toolbar-share-btn {
   display: inline-flex;
   align-items: center;
-  height: 32px;
-  margin-right: 6px;
-  padding: 0 14px;
+  justify-content: center;
+  gap: 8px;
+  height: 40px;
+  margin-right: 0;
+  padding: 0 20px;
   border: none;
-  border-radius: 6px;
-  background: var(--gm-brand, #3370ff);
+  border-radius: 8px;
+  background: linear-gradient(135deg, #3370ff 0%, #6366f1 100%);
+  box-shadow: 0 4px 12px rgb(51 112 255 / 0.18);
   color: #fff;
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 600;
   cursor: pointer;
 }
@@ -851,52 +895,7 @@ body.painter-active .editor-canvas svg {
   background: #f2f3f5;
 }
 
-/* 导出菜单（M4 Task 5，FR-IO-004）：工具栏「导出」按钮的下拉，项样式对齐 .context-menu */
-.export-wrap {
-  position: relative;
-}
-.export-menu {
-  position: absolute;
-  top: calc(100% + 4px);
-  left: 0;
-  z-index: 1200;
-  background: #fff;
-  border: 1px solid #e5e6eb;
-  border-radius: 10px;
-  box-shadow: 0 8px 24px rgba(31, 35, 41, 0.16);
-  display: flex;
-  flex-direction: column;
-  min-width: 128px;
-  padding: 4px;
-}
-.export-menu button {
-  border: none;
-  background: none;
-  text-align: left;
-  padding: 8px 12px;
-  font-size: 13px;
-  border-radius: 6px;
-  cursor: pointer;
-  white-space: nowrap;
-}
-.export-menu button:hover {
-  background: #f2f3f5;
-}
-/* PNG 透明背景勾选行（M4 Task 9，FR-IO-003）：与菜单项同宽，下缘分隔 XMind 项 */
-.export-menu .export-option {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 12px;
-  font-size: 13px;
-  border-bottom: 1px solid #f0f1f3;
-  cursor: pointer;
-  user-select: none;
-  white-space: nowrap;
-}
-.export-menu .export-option input {
-  cursor: pointer;
-}
+/* 顶部导出菜单已随 2026-11-19 导出去重删除，统一使用分享弹窗导出页。 */
 
 /* 插入菜单（2026-09-28 二次改版；M7b-W3 面板重做）：仅下拉（图标/表情/备注/链接/
    图片）——标记编辑已内嵌任务面板（2026-10-10 裁定，marker-picker.css 承共享
@@ -1164,9 +1163,13 @@ body.painter-active .editor-canvas svg {
    2026-11-16：avatar-me 删除后成员钮成为顶栏最右元素——宽度改按内容自适应
    （头像堆 20 + 角标 16 + 间距），否则固定 28px 装不下内容、溢出顶出工具栏。 */
 .editor-toolbar .toolbar-members-btn {
-  gap: 4px;
+  gap: 8px;
   width: auto;
-  padding: 0 6px;
+  height: 40px;
+  padding: 0 10px;
+  border: 1px solid #e5e6eb;
+  border-radius: 8px;
+  background: #fff;
 }
 .toolbar-members-btn .members-badge {
   flex: none;
@@ -1217,14 +1220,15 @@ body.painter-active .editor-canvas svg {
   align-items: center;
 }
 .members-stack-avatar {
-  width: 20px;
-  height: 20px;
+  box-sizing: border-box;
+  width: 28px;
+  height: 28px;
   border: 2px solid #fff;
   border-radius: 50%;
-  margin-left: -6px;
+  margin-left: -7px;
   color: #fff;
-  font-size: 10px;
-  line-height: 20px;
+  font-size: 11px;
+  line-height: 24px;
   text-align: center;
   object-fit: cover;
   box-shadow: 0 0 0 1px #e5e6eb;
@@ -1233,8 +1237,19 @@ body.painter-active .editor-canvas svg {
   margin-left: 0;
 }
 .members-stack-more {
-  background: #34c724;
+  background: #e5e6eb;
+  color: #4e5969;
   box-shadow: none;
+}
+.members-total {
+  flex: none;
+  color: #4e5969;
+  font-size: 13px;
+  white-space: nowrap;
+}
+.members-total [data-testid='members-count'] {
+  color: #1d2129;
+  font-weight: 500;
 }
 
 /* 轮 3 在线状态（原型 CollabStack）：绿点 + 离线置灰 */
@@ -1242,7 +1257,7 @@ body.painter-active .editor-canvas svg {
   position: relative;
   display: inline-flex;
   /* 轮 3 包 wrap 后重叠偏移移到 wrap 上（内层 avatar 恒 :first-child 偏移为 0） */
-  margin-left: -6px;
+  margin-left: -7px;
 }
 .members-stack-avatar-wrap:first-child {
   margin-left: 0;
@@ -1261,4 +1276,44 @@ body.painter-active .editor-canvas svg {
 .members-stack-avatar-offline {
   background: #e5e6eb !important;
   color: #a9aeb8 !important;
+  filter: grayscale(1);
+  opacity: 0.72;
+}
+
+/* 1512/1440/1280 的桌面密度：保留原型 52px 外框和右侧 40px 大按钮，
+   中间工具紧凑但不换行、不横滚；待办、动态及核心编辑入口全部保留。 */
+@media (min-width: 901px) and (max-width: 1536px) {
+  .toolbar-brand-group { gap: 6px; }
+  .toolbar-brand-name { font-size: 18px; }
+  .editor-toolbar .toolbar-trailing { gap: 8px; }
+  .editor-toolbar .toolbar-share-btn { padding: 0 14px; font-size: 13px; }
+  .editor-toolbar .title-edit-btn { width: 24px; height: 32px; }
+}
+
+@media (min-width: 901px) and (max-width: 1440px) {
+  .editor-toolbar { gap: 1px; padding-inline: 6px; }
+  .toolbar-brand-group { gap: 4px; }
+  .toolbar-brand-name { font-size: 16px; }
+  .editor-toolbar .toolbar-btn.toolbar-btn-text { padding-inline: 3px; }
+  .editor-toolbar .toolbar-members-btn { padding-inline: 6px; }
+  .editor-toolbar .toolbar-trailing { gap: 6px; }
+  .editor-toolbar .toolbar-share-btn { gap: 6px; padding-inline: 10px; }
+}
+
+@media (min-width: 901px) and (max-width: 1366px) {
+  .toolbar-group-title .title-display { width: 120px; min-width: 120px; max-width: 120px; }
+  .toolbar-group-title .save-status { display: none; }
+}
+
+@media (max-width: 900px) {
+  .toolbar-brand-name { display: none; }
+  .editor-toolbar { gap: 8px; padding-inline: 10px; }
+  .editor-toolbar button { white-space: nowrap; }
+  .editor-toolbar .title-display { flex: 1; min-width: 40px; }
+  .editor-toolbar .save-status { flex: none; max-width: 64px; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: 11px; }
+  .editor-toolbar .toolbar-share-btn { width: 32px; height: 32px; padding: 0; box-shadow: none; }
+  .toolbar-share-label { display: none; }
+  .editor-toolbar .toolbar-members-btn { height: 32px; gap: 0; padding-inline: 6px; }
+  .toolbar-members-btn .members-stack { display: none; }
+  .toolbar-members-btn .members-total { font-size: 12px; }
 }

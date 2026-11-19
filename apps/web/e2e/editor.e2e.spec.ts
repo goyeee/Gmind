@@ -590,7 +590,9 @@ test('编辑器：右满 3 左空时右分支 Enter——非末位紧挨下方�
   expect(yOfNew).toBeLessThan(yOf2); // 新节点在右一与右二之间（紧挨其下方）
 
   // 场景 2：另起一文，3 右 0 左，末位（右三）Enter → 开启左列
+  await page.getByTestId('title-edit').click();
   await page.getByRole('textbox', { name: '文档标题' }).fill('场景一收尾'); // 避免与场景二「未命名脑图」重名
+  await page.getByRole('textbox', { name: '文档标题' }).press('Enter');
   await expect(page.getByTestId('save-status')).toHaveText(/已保存/); // 等改名持久化（文件列表定名）
   await page.getByRole('button', { name: '返回工作台' }).click();
   await expect(page).toHaveURL(/\/workspace/);

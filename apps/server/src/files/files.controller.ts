@@ -166,6 +166,7 @@ export class FilesController {
   /** 移除协作者（2026-10-25 原型 ShareModal members tab「移除」）：仅 owner（404
    *  不泄露存在性）；删 file_collaborators 行即收回访问权，幂等。 */
   @Delete(':id/collaborators/:userId')
+  @HttpCode(204) // 空响应必须显式 204：前端 api 对 204 跳过 JSON.parse，删除成功后才会刷新名单。
   removeCollaborator(@Req() req: { user: { id: string } }, @Param('id') id: string, @Param('userId') targetUserId: string) {
     return this.files.removeCollaborator(req.user.id, id, targetUserId);
   }

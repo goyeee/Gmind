@@ -69,6 +69,7 @@ test('导出页签五项齐全：xmind/jpg/md/csv/xlsx 逐项可见+「图片按
   await openShareExportTab(page);
   await expect(page.getByTestId('share-export-xmind')).toBeVisible();
   await expect(page.getByTestId('share-export-jpg')).toBeVisible();
+  await expect(page.getByTestId('share-export-jpg-scale')).toHaveValue('2');
   await expect(page.getByTestId('share-export-md')).toBeVisible();
   await expect(page.getByTestId('share-export-csv')).toBeVisible();
   await expect(page.getByTestId('share-export-xlsx')).toBeVisible();
@@ -179,19 +180,23 @@ test('分享弹框导出带图文档 XMind：zip 含 resources/ 图片、manifes
   expect(todo?.image).toEqual({ src: `xap:${resKeys[0]}`, width: 4, height: 4, align: 'bottom' });
 });
 
-// 用例 3：弹框图片项固定 JPG 白底 2×（onExport('jpg', 2)=runImageExport 同源；
-// 无折叠种子不弹 confirm），下载产物为合法 JPEG（SOI 魔数 FF D8 FF）。
-test('分享弹框导出图片：本周计划.jpg 为 JPEG 魔数（弹框固定 JPG 白底 2×）', async ({ page }) => {
+// 用例 3：弹框图片项保留 JPG 白底 1×/2×/3×，默认 2×；逐档下载均为合法 JPEG。
+test('分享弹框导出图片：同一图片行可选 JPG 1×/2×/3×并分别下载', async ({ page }) => {
   await openSeedDoc(page, '本周计划');
   await openShareExportTab(page);
-  const [download] = await Promise.all([
-    page.waitForEvent('download'),
-    page.getByTestId('share-export-jpg').click(),
-  ]);
-  expect(download.suggestedFilename()).toBe('本周计划.jpg');
-  const jpg = await fs.promises.readFile(await download.path());
-  expect(jpg.length).toBeGreaterThan(0);
-  expect(jpg.subarray(0, 3).toString('hex')).toBe('ffd8ff'); // JPEG 魔数（SOI）
+  const scale = page.getByTestId('share-export-jpg-scale');
+  await expect(scale).toHaveValue('2');
+  for (const value of ['1', '2', '3']) {
+    await scale.selectOption(value);
+    const [download] = await Promise.all([
+      page.waitForEvent('download'),
+      page.getByTestId('share-export-jpg').click(),
+    ]);
+    expect(download.suggestedFilename()).toBe('本周计划.jpg');
+    const jpg = await fs.promises.readFile(await download.path());
+    expect(jpg.length).toBeGreaterThan(0);
+    expect(jpg.subarray(0, 3).toString('hex')).toBe('ffd8ff');
+  }
 });
 
 // 用例 4：Markdown 大纲（docExport.exportMarkdown：首行 `# 标题`，子节点无序列表）。

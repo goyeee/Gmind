@@ -184,7 +184,7 @@ describe('files 域', () => {
       const removed = await request(app.getHttpServer())
         .delete(`/api/files/${fileId}/collaborators/${member.id}`)
         .set('Authorization', `Bearer ${token}`);
-      expect(removed.status).toBe(200);
+      expect(removed.status).toBe(204);
       const after = await request(app.getHttpServer())
         .get(`/api/files/${fileId}/collaborators`)
         .set('Authorization', `Bearer ${token}`);
@@ -197,7 +197,7 @@ describe('files 域', () => {
       const again = await request(app.getHttpServer())
         .delete(`/api/files/${fileId}/collaborators/${member.id}`)
         .set('Authorization', `Bearer ${token}`);
-      expect(again.status).toBe(200);
+      expect(again.status).toBe(204);
     });
 
     it('owner 可查目录（排除 owner/既有协作者、q 模糊搜索、分页）；非 owner 404', async () => {
@@ -347,6 +347,44 @@ describe('files 域', () => {
       expect((await request(app.getHttpServer()).put(`/api/files/${fileId}/doc-state`).set('Authorization', `Bearer ${commenter.token}`).send({ docState: detail.body.docState })).status).toBe(200);
       expect((await request(app.getHttpServer()).patch(`/api/files/${fileId}/collaborators/${owner.id}`).set('Authorization', `Bearer ${owner.token}`).send({ role: 'viewer' })).status).toBe(400);
       expect((await request(app.getHttpServer()).patch(`/api/files/${fileId}/collaborators/${commenter.id}`).set('Authorization', `Bearer ${owner.token}`).send({ role: 'owner' })).status).toBe(400);
+    });
+
+    it('文件名修改权限：owner/editor 可改名，commenter/viewer 直接 PATCH 也返回 404', async () => {
+      const owner = await createAccount(app);
+      const editor = await createAccount(app);
+      const commenter = await createAccount(app);
+      const viewer = await createAccount(app);
+      const created = await request(app.getHttpServer())
+        .post('/api/files')
+        .set('Authorization', `Bearer ${owner.token}`)
+        .send({ title: '改名权限原题' });
+      const fileId = created.body.id as string;
+      const added = await request(app.getHttpServer())
+        .post(`/api/files/${fileId}/collaborators`)
+        .set('Authorization', `Bearer ${owner.token}`)
+        .send({ members: [
+          { userId: editor.id, role: 'editor' },
+          { userId: commenter.id, role: 'commenter' },
+          { userId: viewer.id, role: 'viewer' },
+        ] });
+      expect(added.status).toBe(201);
+
+      for (const [account, title, status] of [
+        [owner, '创建者改名', 200],
+        [editor, '可编辑成员改名', 200],
+        [commenter, '可评论成员不得改名', 404],
+        [viewer, '仅查看成员不得改名', 404],
+      ] as const) {
+        const res = await request(app.getHttpServer())
+          .patch(`/api/files/${fileId}`)
+          .set('Authorization', `Bearer ${account.token}`)
+          .send({ title });
+        expect(res.status).toBe(status);
+      }
+      const detail = await request(app.getHttpServer())
+        .get(`/api/files/${fileId}`)
+        .set('Authorization', `Bearer ${owner.token}`);
+      expect(detail.body.title).toBe('可编辑成员改名');
     });
 
     it('协作通知：真实新增成员收到文件通知，重复添加不重复通知', async () => {

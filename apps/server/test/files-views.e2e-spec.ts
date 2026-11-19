@@ -139,9 +139,10 @@ describe('文件四视图 + 删除 + last_modifier（FR-FIL-001）', () => {
     // （2026-10-25 原型文件卡创建者头像：ownerAvatarUrl 入列——无自定义头像 null）
     expect(Object.keys(res.body[0]).sort()).toEqual([
       'createdAt', 'folderId', 'folderName', 'id', 'kind', 'lastModifierName', 'lastOpenedAt',
-      'nodeCount', 'ownerAvatarUrl', 'ownerName', 'ownerUserId', 'starred', 'structure', 'title', 'updatedAt',
+      'myRole', 'nodeCount', 'ownerAvatarUrl', 'ownerName', 'ownerUserId', 'starred', 'structure', 'title', 'updatedAt',
     ]);
     expect(res.body[0].ownerUserId).toBe(ownerId);
+    expect(res.body[0].myRole).toBe('owner');
     expect(res.body[0].ownerName).toBe('文件甲');
     expect(res.body[0].ownerAvatarUrl).toBeNull(); // 无自定义头像 → null（前端兜底首字符）
     expect(res.body[0].lastModifierName).toBeNull(); // 无人编辑过
@@ -153,6 +154,7 @@ describe('文件四视图 + 删除 + last_modifier（FR-FIL-001）', () => {
     expect(mine1.folderName).toBe('项目资料');
     expect(mine1.starred).toBe(true);
     const sharedItem = res.body.find((f: { id: string }) => f.id === fShared);
+    expect(sharedItem.myRole).toBe('owner'); // 自己拥有、分享给别人的文件仍是 owner
     expect(sharedItem.starred).toBe(false); // starred 是当前用户视角
   });
 
@@ -168,6 +170,7 @@ describe('文件四视图 + 删除 + last_modifier（FR-FIL-001）', () => {
     expect(res.body).toHaveLength(1);
     expect(res.body[0].id).toBe(fShared);
     expect(res.body[0].ownerUserId).toBe(ownerId);
+    expect(res.body[0].myRole).toBe('editor');
     expect(res.body[0].ownerName).toBe('文件甲');
     // 自有文件（fCollab）绝不进 shared 视图
     expect(res.body.map((f: { id: string }) => f.id)).not.toContain(fCollab);
@@ -667,9 +670,10 @@ describe('标题全局搜索（FR-FIL-008）', () => {
     // （2026-10-25 原型创建者头像：ownerAvatarUrl 入列）
     expect(Object.keys(res.body.files[0]).sort()).toEqual([
       'createdAt', 'folderId', 'folderName', 'id', 'kind', 'lastModifierName', 'lastOpenedAt',
-      'nodeCount', 'ownerAvatarUrl', 'ownerName', 'ownerUserId', 'starred', 'structure', 'title', 'updatedAt',
+      'myRole', 'nodeCount', 'ownerAvatarUrl', 'ownerName', 'ownerUserId', 'starred', 'structure', 'title', 'updatedAt',
     ]);
     const sharedItem = res.body.files.find((f: { title: string }) => f.title === '搜索共享件');
+    expect(sharedItem.myRole).toBe('editor');
     expect(sharedItem.ownerName).toBe('搜索甲');
 
     // owner 自己搜：自己的 + 自己拥有的（协作视角反向：乙的私有对甲不可见）

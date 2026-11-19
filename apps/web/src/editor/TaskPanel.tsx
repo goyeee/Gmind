@@ -114,7 +114,7 @@ export function TaskPanel(props: TaskPanelProps): ReactElement {
     for (const n of deriveNodes) for (const o of n.task?.owners ?? []) if (!ids.includes(o)) ids.push(o);
     return ids;
   }, [deriveNodes]);
-  const memberIndex = useTaskMembers(fileId, presence, docOwnerIds);
+  const { memberIndex } = useTaskMembers(fileId, presence, docOwnerIds);
 
   const write = (fn: () => void, fallback: string): void => {
     try {

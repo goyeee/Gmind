@@ -51,17 +51,15 @@ const EDITING_TESTIDS = [
   'undo-btn',
   'redo-btn',
   'fullscreen-btn',
-  'export-menu',
   'title-input',
   'star-toggle',
   'versions-toggle',
   // 2026-10-25 原型顶栏重组：快捷键/评论收进「更多」下拉（help-toggle 移出清单）
   'more-toggle',
-  'members-btn',
   // avatar-me 已随 2026-11-16 需求方裁定整体删除（桌面也不再装配）
 ] as const;
 
-test('移动端：画布照常渲染，编辑控件不装配，保留返回/标题只读/保存状态', async ({ page }) => {
+test('移动端：画布保持简化，创建者仍可改名、分享和查看成员', async ({ page }) => {
   test.setTimeout(60_000);
   await useMobileViewport(page);
   await openSeedDoc(page, '本周计划');
@@ -74,11 +72,37 @@ test('移动端：画布照常渲染，编辑控件不装配，保留返回/标�
   }
   await expect(page.getByTestId('rich-panel')).toHaveCount(0); // 右列富内容面板整列不装配
   await expect(page.locator('.editor-right')).toHaveCount(0);
-  // 保留项：返回工作台 / 标题只读展示（无输入框）/ 保存状态指示 / 评论入口
+  // 保留项：返回 / 标题与改名 / 保存状态 / 评论 / 分享 / 成员；画布编辑工具不装配
   await expect(page.getByTestId('back-btn')).toBeVisible();
   await expect(page.getByTestId('title-display')).toHaveText('本周计划');
+  await expect(page.getByTestId('title-edit')).toBeVisible();
   await expect(page.getByTestId('save-status')).toBeVisible();
   await expect(page.getByTestId('comment-toggle')).toBeVisible();
+  await expect(page.getByTestId('share-btn')).toBeVisible();
+  await expect(page.getByTestId('members-btn')).toBeVisible();
+
+  // 长离线文案也不能把标题挤没或让“评论”竖排。
+  await page.evaluate(() => {
+    (window as unknown as { __gmindCollab?: { setReachable(value: boolean): void } }).__gmindCollab?.setReachable(false);
+  });
+  await expect(page.getByTestId('save-status')).toContainText('离线编辑中');
+  expect((await page.getByTestId('title-display').boundingBox())!.width).toBeGreaterThanOrEqual(40);
+  expect((await page.getByTestId('comment-toggle').boundingBox())!.height).toBeLessThanOrEqual(40);
+  expect(await page.locator('.editor-toolbar').evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+});
+
+test('手机创建者：弹窗改名、分享默认邀请、成员入口均真实可用', async ({ page }) => {
+  await useMobileViewport(page);
+  await openSeedDoc(page, '本周计划');
+  await page.getByTestId('title-edit').click();
+  await page.getByTestId('title-input').fill('手机端改名');
+  await page.getByTestId('title-input').press('Enter');
+  await expect(page.getByTestId('title-display')).toHaveText('手机端改名');
+  await page.getByTestId('share-btn').click();
+  await expect(page.getByTestId('share-tab-invite')).toHaveAttribute('aria-selected', 'true');
+  await page.getByTestId('share-dialog-close').click();
+  await page.getByTestId('members-btn').click();
+  await expect(page.getByTestId('share-tab-members')).toHaveAttribute('aria-selected', 'true');
 });
 
 test('移动端：写交互禁用——单击/双击不进编辑，键盘写路径不装配', async ({ page }) => {
@@ -195,10 +219,13 @@ test('移动端：画布页签可见可切换（裁定 7），＋/重命名/删�
 test('桌面回归：默认视口编辑控件齐全，右列默认不渲染，键盘写路径仍装配（惰性）', async ({ page }) => {
   test.setTimeout(60_000);
   await openSeedDoc(page, '本周计划'); // 默认视口（1280×720，>768px 断点外）
-  for (const tid of EDITING_TESTIDS) {
+  for (const tid of EDITING_TESTIDS.filter((id) => id !== 'title-input' && id !== 'versions-toggle')) {
     await expect(page.getByTestId(tid)).toBeVisible();
   }
-  await expect(page.getByTestId('title-display')).toHaveCount(0); // 移动端标题展示不装配
+  await expect(page.getByTestId('title-display')).toBeVisible();
+  await expect(page.getByTestId('title-edit')).toBeVisible();
+  await expect(page.getByTestId('title-input')).toHaveCount(0); // 输入框仅在改名弹窗打开后装配
+  await expect(page.getByTestId('versions-toggle')).toHaveCount(0); // 版本历史收进“更多”
   // 评论入口桌面已装配（2026-10-25 原型顶栏重组：收进「更多」下拉——移动端只读
   // 仍保留常驻评论钮，桌面对齐为 more-toggle 菜单入口）
   await expect(page.getByTestId('more-toggle')).toBeVisible();

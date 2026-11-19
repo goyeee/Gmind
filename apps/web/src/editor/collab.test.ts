@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildPresence, buildRemoteCursors, type AwarenessState } from './collab';
+import * as collab from './collab';
 
 /**
  * Awareness states → 面板/光标数据面的纯函数单测（M2 Task 5）。
@@ -45,6 +46,32 @@ describe('buildPresence', () => {
       1,
     );
     expect(members.map((m) => m.userId)).toEqual(['a', 'z']);
+  });
+});
+
+describe('顶部协作成员叠加', () => {
+  const people = Array.from({ length: 6 }, (_, i) => ({ userId: `u${i + 1}`, nickname: `成员${i + 1}` }));
+  const stack = (ids: string[], online: string[]): { shown: Array<{ userId: string }>; hidden: Array<{ userId: string }> } =>
+    (collab as unknown as {
+      stackCollaborators: (
+        members: Array<{ userId: string; nickname: string }>,
+        onlineUserIds: ReadonlySet<string>,
+      ) => { shown: Array<{ userId: string }>; hidden: Array<{ userId: string }> };
+    }).stackCollaborators(ids.map((id) => people.find((p) => p.userId === id)!), new Set(online));
+
+  it('在线成员优先且组内按昵称稳定排序，离线成员保留在末尾', () => {
+    const result = stack(['u3', 'u1', 'u2'], ['u2', 'u3']);
+    expect(result.shown.map((p) => p.userId)).toEqual(['u2', 'u3', 'u1']);
+    expect(result.hidden).toEqual([]);
+  });
+
+  it('最多直接展示4个；恰好5个全展示，6个才折叠为4个加2个隐藏', () => {
+    const five = stack(['u1', 'u2', 'u3', 'u4', 'u5'], []);
+    expect(five.shown).toHaveLength(5);
+    expect(five.hidden).toHaveLength(0);
+    const six = stack(['u1', 'u2', 'u3', 'u4', 'u5', 'u6'], ['u6']);
+    expect(six.shown.map((p) => p.userId)).toEqual(['u6', 'u1', 'u2', 'u3']);
+    expect(six.hidden.map((p) => p.userId)).toEqual(['u4', 'u5']);
   });
 });
 

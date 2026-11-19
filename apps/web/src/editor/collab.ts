@@ -166,6 +166,26 @@ export function buildPresence(
   return members;
 }
 
+/**
+ * 顶部头像叠加：本人优先，其后在线优先、昵称稳定排序；离线成员不删除。
+ * 原型口径为最多 4 个，但恰好 5 个时直接全展示，避免用一个“+1”替代真实头像。
+ */
+export function stackCollaborators<T extends { userId: string; nickname: string }>(
+  people: readonly T[],
+  onlineUserIds: ReadonlySet<string>,
+  selfUserId?: string,
+): { shown: T[]; hidden: T[] } {
+  const sorted = [...people].sort((a, b) => {
+    if ((a.userId === selfUserId) !== (b.userId === selfUserId)) return a.userId === selfUserId ? -1 : 1;
+    const aOnline = onlineUserIds.has(a.userId);
+    const bOnline = onlineUserIds.has(b.userId);
+    if (aOnline !== bOnline) return aOnline ? -1 : 1;
+    return a.nickname.localeCompare(b.nickname);
+  });
+  const shown = sorted.length > 5 ? sorted.slice(0, 4) : sorted;
+  return { shown, hidden: sorted.slice(shown.length) };
+}
+
 /** awareness states → 远端光标（过滤自己与未装配身份者；空选区不出光标）。 */
 export function buildRemoteCursors(
   states: Map<number, AwarenessState>,

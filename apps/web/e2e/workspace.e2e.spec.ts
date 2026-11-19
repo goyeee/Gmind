@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { apiRegister, registerAndLogin } from './helpers/auth';
+import { apiRegister, injectToken, registerAndLogin } from './helpers/auth';
 
 /**
  * 工作台 UI E2E —— 2026-10-20 整体重设计（spec 2026-10-20-workspace-redesign-design）
@@ -21,7 +21,9 @@ async function createFileNamed(page: Page, title: string): Promise<void> {
   await expect(page).toHaveURL(/\/edit\//);
   await expect(page.locator('.editor-canvas svg .gm-text').first()).toBeVisible();
   // 编辑器标题改名（即建即开后的命名路径）再返回
+  await page.getByTestId('title-edit').click();
   await page.getByTestId('title-input').fill(title);
+  await page.getByTestId('title-input').press('Enter');
   await page.getByTestId('back-btn').click();
   await expect(page).toHaveURL(/\/workspace/);
   await page.goto('/workspace?view=files');
@@ -244,6 +246,43 @@ test('协作文件的卡片菜单收敛：无删除（owner-only），重命名/
   await expect(menu.getByRole('button', { name: '删除', exact: true })).toHaveCount(0);
 });
 
+test('可评论/仅查看成员的工作台卡片与列表均无重命名，复制保留', async ({ browser, request }) => {
+  const owner = await apiRegister(request);
+  for (const role of ['commenter', 'viewer'] as const) {
+    const member = await apiRegister(request);
+    const meRes = await request.get('/api/users/me', { headers: { Authorization: `Bearer ${member.token}` } });
+    const memberId = ((await meRes.json()) as { id: string }).id;
+    const title = `只读菜单-${role}`;
+    const created = await request.post('/api/files', { data: { title }, headers: { Authorization: `Bearer ${owner.token}` } });
+    const fileId = ((await created.json()) as { id: string }).id;
+    await request.post(`/api/files/${fileId}/collaborators`, { data: { members: [{ userId: memberId, role }] }, headers: { Authorization: `Bearer ${owner.token}` } });
+
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    await injectToken(page, member.token);
+    await page.goto('/workspace?view=collab');
+    const list = await request.get('/api/files?view=shared', { headers: { Authorization: `Bearer ${member.token}` } });
+    expect((await list.json() as Array<{ id: string; myRole: string }>).find((f) => f.id === fileId)?.myRole).toBe(role);
+
+    const card = cardOf(page, title);
+    await expect(card).toBeVisible();
+    await card.getByTestId('card-menu-btn').click();
+    const menu = page.getByTestId('card-menu');
+    await expect(menu.getByRole('button', { name: '重命名' })).toHaveCount(0);
+    await expect(menu.getByRole('button', { name: '复制', exact: true })).toBeVisible();
+
+    await page.goto('/workspace?view=files');
+    await page.getByTestId('file-tab-shared').click();
+    await page.getByTestId('file-layout-list').click();
+    const row = page.getByTestId('file-row').filter({ hasText: title });
+    await row.getByTestId('file-row-menu-btn').click();
+    const rowMenu = page.getByTestId('file-row-menu');
+    await expect(rowMenu.getByRole('button', { name: '重命名' })).toHaveCount(0);
+    await expect(rowMenu.getByRole('button', { name: '复制', exact: true })).toBeVisible();
+    await context.close();
+  }
+});
+
 test('模板库：画廊 → 预览 → 使用模板一键建文档并打开', async ({ page }) => {
   await registerAndLogin(page);
   // 侧栏进模板库：内置精选模板画廊
@@ -275,7 +314,7 @@ test('表格文件（批次 D）：新建表格默认开表格视图；卡片徽
   await page.getByTestId('create-menu-table').click();
   await expect(page).toHaveURL(/\/edit\//);
   // 标题=未命名表格；默认视图=表格（view-tab-table active）
-  await expect(page.getByTestId('title-input')).toHaveValue('未命名表格');
+  await expect(page.getByTestId('title-display')).toHaveText('未命名表格');
   await expect(page.getByTestId('view-tab-table')).toHaveAttribute('aria-selected', 'true');
   await page.getByTestId('back-btn').click();
   await expect(page).toHaveURL(/\/workspace/);

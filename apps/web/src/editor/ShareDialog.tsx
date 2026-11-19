@@ -27,6 +27,7 @@ export interface ShareDialogProps {
   doc: Y.Doc | null;
   nameOf(userId: string): string;
   showToast(message: string): void;
+  onMembershipChanged(): void;
   onExport(kind: 'xmind' | 'jpg', scale?: 1 | 2 | 3): void;
 }
 
@@ -41,11 +42,12 @@ export function ShareDialog(p: ShareDialogProps) {
   const [toggling, setToggling] = useState(false);
   const [linkTick, setLinkTick] = useState(0);
   const [exported, setExported] = useState('');
+  const [jpgScale, setJpgScale] = useState<1 | 2 | 3>(2);
   const boxRef = useRef<HTMLDivElement | null>(null);
   const openedRef = useRef(false);
   const userChosenRef = useRef(false);
   const titleId = useId();
-  const collaborators = useCollaborators(p.open, p.fileId, p.showToast);
+  const collaborators = useCollaborators(p.open, p.fileId, p.showToast, p.onMembershipChanged);
 
   useEffect(() => {
     if (!p.open) {
@@ -175,7 +177,7 @@ export function ShareDialog(p: ShareDialogProps) {
   interface ExportItem { id: string; testid: string; title: string; ext: string; desc: string; tint: string; bg: string; run: () => void }
   const EXPORTS: ExportItem[] = [
     { id: 'xmind', testid: 'share-export-xmind', title: 'XMind', ext: '.xmind', desc: '可在 XMind 中继续编辑，保留完整层级，含全部画布', tint: '#f43f5e', bg: '#fdeceb', run: () => p.onExport('xmind') },
-    { id: 'jpg', testid: 'share-export-jpg', title: '图片', ext: '.jpg', desc: '白底高清整图（2×），适合插入文档与汇报', tint: '#0ea5e9', bg: '#eaf5ff', run: () => p.onExport('jpg', 2) },
+    { id: 'jpg', testid: 'share-export-jpg', title: '图片', ext: '.jpg', desc: `白底高清整图（${jpgScale}×），适合插入文档与汇报`, tint: '#0ea5e9', bg: '#eaf5ff', run: () => p.onExport('jpg', jpgScale) },
     { id: 'md', testid: 'share-export-md', title: 'Markdown', ext: '.md', desc: '层级大纲文本，可粘贴到笔记与文档工具', tint: '#8b5cf6', bg: '#f1edff', run: () => runTextExport('md') },
     { id: 'xlsx', testid: 'share-export-xlsx', title: 'Excel 表格', ext: '.xlsx', desc: '任务表电子表格，可用 Excel/WPS 打开', tint: '#16a34a', bg: '#e9f9ef', run: () => runTextExport('xlsx') },
     { id: 'csv', testid: 'share-export-csv', title: 'CSV 表格', ext: '.csv', desc: '任务表 7 列，可用 Excel 打开', tint: '#14b8a6', bg: '#e9f8f4', run: () => runTextExport('csv') },
@@ -212,7 +214,7 @@ export function ShareDialog(p: ShareDialogProps) {
         )}
         {tab === 'invite' && p.canManage && (
           <div className="share-dialog-body share-dialog-invite">
-            <InviteSection fileId={p.fileId} showToast={p.showToast} onInvited={() => { collaborators.reload(); selectTab('members'); }} />
+            <InviteSection fileId={p.fileId} showToast={p.showToast} onInvited={() => { collaborators.reload(); p.onMembershipChanged(); selectTab('members'); }} />
           </div>
         )}
         {tab === 'link' && (
@@ -259,13 +261,18 @@ export function ShareDialog(p: ShareDialogProps) {
             <div className="share-dialog-body share-dialog-export">
               <p className="share-export-note">导出「{p.title}」：XMind 与表格类格式含已折叠的全部节点；图片按当前折叠状态导出</p>
               <ul className="share-export-list">
-                {EXPORTS.map((e) => (
-                  <li key={e.id}><button type="button" className="share-export-row" data-testid={e.testid} onClick={() => runExport(e)}>
-                    <span className="share-export-icon" style={{ background: e.bg, color: e.tint }} aria-hidden><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" /></svg></span>
-                    <span className="share-export-text"><b>{e.title}<i className="share-export-ext">{e.ext}</i></b><span>{e.desc}</span></span>
-                    <span className={'share-export-btn' + (exported === e.id ? ' done' : '')}>{exported === e.id ? '已导出 ✓' : '导出'}</span>
-                  </button></li>
-                ))}
+                {EXPORTS.map((e) => {
+                  const content = <><span className="share-export-icon" style={{ background: e.bg, color: e.tint }} aria-hidden><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" /></svg></span><span className="share-export-text"><b>{e.title}<i className="share-export-ext">{e.ext}</i></b><span>{e.desc}</span></span></>;
+                  return <li key={e.id}>{e.id === 'jpg' ? (
+                    <div className="share-export-row share-export-row-config">
+                      {content}
+                      <select aria-label="图片导出清晰度" data-testid="share-export-jpg-scale" value={jpgScale} onChange={(event) => setJpgScale(Number(event.target.value) as 1 | 2 | 3)}><option value="1">1×</option><option value="2">2×</option><option value="3">3×</option></select>
+                      <button type="button" className={'share-export-btn' + (exported === e.id ? ' done' : '')} data-testid={e.testid} onClick={() => runExport(e)}>{exported === e.id ? '已导出 ✓' : '导出'}</button>
+                    </div>
+                  ) : (
+                    <button type="button" className="share-export-row" data-testid={e.testid} onClick={() => runExport(e)}>{content}<span className={'share-export-btn' + (exported === e.id ? ' done' : '')}>{exported === e.id ? '已导出 ✓' : '导出'}</span></button>
+                  )}</li>;
+                })}
               </ul>
             </div>
             <footer className="share-dialog-footer">导出的文件会保存到浏览器的默认下载位置</footer>

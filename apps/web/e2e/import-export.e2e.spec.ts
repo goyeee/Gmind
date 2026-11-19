@@ -33,6 +33,16 @@ async function openSeedDoc(page: Page, title: string): Promise<void> {
   await expect(page.locator('.editor-canvas svg .gm-text', { hasText: title })).toBeVisible();
 }
 
+async function openShareExportTab(page: Page): Promise<void> {
+  if (await page.getByTestId('share-dialog').count() === 0) await page.getByTestId('share-btn').click();
+  await page.getByTestId('share-tab-export').click();
+}
+
+async function clickSharedJpg(page: Page, scale: 1 | 2 | 3): Promise<void> {
+  await page.getByTestId('share-export-jpg-scale').selectOption(String(scale));
+  await page.getByTestId('share-export-jpg').click();
+}
+
 test('工作台导入 .xmind：新文件出现且层级/备注正确渲染', async ({ page }) => {
   await registerAndLogin(page);
   await page.goto('/workspace'); // 导入入口=首页「导入文件」卡
@@ -134,10 +144,10 @@ test('导出 XMind 并往返导入：层级/文本/备注一致', async ({ page 
   });
   await openSeedDocWithNote(page);
   // 工具栏「导出」按钮点开下拉（Task 9 前仅 XMind 一项），点击触发下载
-  await page.getByTestId('export-menu').click();
+  await openShareExportTab(page);
   const [download] = await Promise.all([
     page.waitForEvent('download'),
-    page.getByTestId('export-xmind').click(),
+    page.getByTestId('share-export-xmind').click(),
   ]);
   // 下载名 = 编辑器标题（header 与 getMeta(doc).title 同源）+ .xmind
   expect(download.suggestedFilename()).toBe('本周计划.xmind');
@@ -199,10 +209,10 @@ test('导出 JPG 3x：下载产物 JPEG 尺寸可被 3 整除；无折叠不弹�
   page.on('dialog', () => {
     dialogCount += 1;
   });
-  await page.getByTestId('export-menu').click();
+  await openShareExportTab(page);
   const [download] = await Promise.all([
     page.waitForEvent('download'),
-    page.getByTestId('export-jpg-3x').click(),
+    clickSharedJpg(page, 3),
   ]);
   expect(dialogCount).toBe(0); // 无折叠：直接导出，不弹 confirm
   expect(download.suggestedFilename()).toBe('本周计划.jpg');
@@ -228,10 +238,10 @@ test('折叠态导出：不弹确认框直接导出（画布折叠态不变）',
   page.on('dialog', () => {
     dialogCount += 1;
   });
-  await page.getByTestId('export-menu').click();
+  await openShareExportTab(page);
   const [download] = await Promise.all([
     page.waitForEvent('download'),
-    page.getByTestId('export-jpg-1x').click(),
+    clickSharedJpg(page, 1),
   ]);
   expect(dialogCount).toBe(0); // 折叠态也直接导出：确认框已删
   expect(download.suggestedFilename()).toBe('本周计划.jpg');
@@ -248,10 +258,10 @@ test('折叠态导出：不弹确认框直接导出（画布折叠态不变）',
 // 魔数：SOI + 下一段标记高字节）且非空、命名 .jpg。
 test('导出 JPG 1x：下载产物为 JPEG 魔数（FF D8 FF）且 .jpg 命名', async ({ page }) => {
   await openSeedDoc(page, '本周计划');
-  await page.getByTestId('export-menu').click();
+  await openShareExportTab(page);
   const [download] = await Promise.all([
     page.waitForEvent('download'),
-    page.getByTestId('export-jpg-1x').click(),
+    clickSharedJpg(page, 1),
   ]);
   expect(download.suggestedFilename()).toBe('本周计划.jpg');
   const jpg = await fs.promises.readFile(await download.path());
@@ -344,10 +354,10 @@ test('导入纯净水树：toast「已完整导入」、新文件出现且 right
   await page.getByTestId('file-card').filter({ hasText: '示例树' }).first().click();
   await expect(page).toHaveURL(/\/edit\//);
   await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '示例树' })).toBeVisible();
-  await page.getByTestId('export-menu').click();
+  await openShareExportTab(page);
   const [download] = await Promise.all([
     page.waitForEvent('download'),
-    page.getByTestId('export-xmind').click(),
+    page.getByTestId('share-export-xmind').click(),
   ]);
   expect(download.suggestedFilename()).toBe('示例树.xmind'); // 文件名=编辑器标题（=原文件名去后缀）
   const bytes = new Uint8Array(await fs.promises.readFile(await download.path()));
@@ -371,10 +381,10 @@ test('往返：夹具导入→导出→parse，marker 集合 Gmind 值级稳定'
   await page.getByTestId('file-card').filter({ hasText: '示例' }).first().click();
   await expect(page).toHaveURL(/\/edit\//);
   await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '根节点' })).toBeVisible();
-  await page.getByTestId('export-menu').click();
+  await openShareExportTab(page);
   const [download] = await Promise.all([
     page.waitForEvent('download'),
-    page.getByTestId('export-xmind').click(),
+    page.getByTestId('share-export-xmind').click(),
   ]);
   expect(download.suggestedFilename()).toBe('示例.xmind'); // 导出文件名=编辑器标题（2026-11-14 拍板：导入文件名=原文件名）
   const bytes = new Uint8Array(await fs.promises.readFile(await download.path()));

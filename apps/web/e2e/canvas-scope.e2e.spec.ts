@@ -23,6 +23,11 @@ async function openSeedDoc(page: Page, title: string): Promise<void> {
   await expect(page.locator('.editor-canvas svg .gm-text', { hasText: title })).toBeVisible();
 }
 
+async function openShareExportTab(page: Page): Promise<void> {
+  if (await page.getByTestId('share-dialog').count() === 0) await page.getByTestId('share-btn').click();
+  await page.getByTestId('share-tab-export').click();
+}
+
 /** ➕ 新建画布（行内输入提交；自动切换到新画布）。 */
 async function addCanvasViaUi(page: Page, name: string): Promise<void> {
   await page.getByTestId('canvas-add').click();
@@ -137,17 +142,17 @@ test('导出口径：画布B JPG 文件名 = 文件标题＋画布名；XMind �
   await addCanvasViaUi(page, '画布B');
   await addChildNamed(page, '中心主题', '画布B任务');
 
-  await page.getByTestId('export-menu').click();
+  await openShareExportTab(page);
   const [jpg] = await Promise.all([
     page.waitForEvent('download'),
-    page.getByTestId('export-jpg-1x').click(),
+    page.getByTestId('share-export-jpg-scale').selectOption('1').then(() => page.getByTestId('share-export-jpg').click()),
   ]);
   expect(jpg.suggestedFilename()).toBe('本周计划-画布B.jpg');
 
-  await page.getByTestId('export-menu').click();
+  await openShareExportTab(page);
   const [xmind] = await Promise.all([
     page.waitForEvent('download'),
-    page.getByTestId('export-xmind').click(),
+    page.getByTestId('share-export-xmind').click(),
   ]);
   expect(xmind.suggestedFilename()).toBe('本周计划.xmind');
 });

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactElement, type CSSProperties } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement, type CSSProperties } from 'react';
 import type * as Y from 'yjs';
 import {
   assigneeEntriesOf,
@@ -124,26 +124,61 @@ export function Avatar({
 }
 
 /**
+ * 成员目录双口径：任务指派需要保留历史负责人；顶部“协作成员”只认真实协作者与当前在线者。
+ * 两个 Map 共用同一次协作者拉取，避免为不同视图各发一套请求后互相矛盾。
+ */
+export function buildMemberIndexes(
+  collaborators: readonly MemberOption[],
+  presence: readonly Pick<PresenceMember, 'userId' | 'nickname' | 'avatar'>[],
+  docOwnerIds: readonly string[],
+): { memberIndex: Map<string, MemberOption>; collaboratorIndex: Map<string, MemberOption> } {
+  const collaboratorIndex = new Map<string, MemberOption>();
+  for (const c of collaborators) collaboratorIndex.set(c.userId, c);
+  for (const p of presence) {
+    if (!collaboratorIndex.has(p.userId)) collaboratorIndex.set(p.userId, { userId: p.userId, nickname: p.nickname, avatar: p.avatar });
+  }
+  const memberIndex = new Map(collaboratorIndex);
+  for (const userId of docOwnerIds) {
+    if (userId !== '' && !memberIndex.has(userId)) memberIndex.set(userId, { userId, nickname: userId.slice(0, 8) });
+  }
+  return { memberIndex, collaboratorIndex };
+}
+
+/**
  * 成员候选装配（collaborators ∪ presence ∪ 文档内既有负责人 ID）：C3/C4 共用。
- * docOwnerIds 以 join 串进 memo 依赖（调用方每次渲染新建数组，不致重算风暴）。
+ * 同时返回不含历史负责人的 collaboratorIndex，供顶部协作成员按钮使用。
  */
 export function useTaskMembers(
   fileId: string,
   presence: PresenceMember[],
   docOwnerIds: readonly string[],
-): Map<string, MemberOption> {
+): { memberIndex: Map<string, MemberOption>; collaboratorIndex: Map<string, MemberOption>; reloadCollaborators: () => void } {
   const [collaborators, setCollaborators] = useState<MemberOption[]>([]);
+  const [reloadTick, setReloadTick] = useState(0);
+  const collaboratorsLoadedRef = useRef(false);
+  const reloadCollaborators = useCallback(() => setReloadTick((v) => v + 1), []);
   useEffect(() => {
     let alive = true;
+    collaboratorsLoadedRef.current = false;
     api<Array<{ userId: string; nickname: string; avatar?: string | null }>>(`/files/${fileId}/collaborators`)
       .then((list) => {
-        if (alive) setCollaborators(list);
+        if (!alive) return;
+        collaboratorsLoadedRef.current = true;
+        setCollaborators(list);
       })
       .catch(() => undefined);
     return () => {
       alive = false;
     };
-  }, [fileId]);
+  }, [fileId, reloadTick]);
+
+  // 分享链接加入只改变服务端成员行与 presence；首次名单里没有的新在线成员需要补拉，
+  // 否则对方离线后 presence 消失，顶部会把已持久化的协作者错误移除。
+  useEffect(() => {
+    if (!collaboratorsLoadedRef.current) return;
+    const known = new Set(collaborators.map((c) => c.userId));
+    if (presence.some((p) => !known.has(p.userId))) reloadCollaborators();
+  }, [collaborators, presence, reloadCollaborators]);
 
   // 换头像后刷新 collaborators（设置页 dispatch 'gmind:avatar-updated' → 重拉）
   useEffect(() => {
@@ -156,17 +191,10 @@ export function useTaskMembers(
     return () => window.removeEventListener('gmind:avatar-updated', onAvatarUpdated);
   }, [fileId]);
   const ownerKey = docOwnerIds.join('|');
-  return useMemo(() => {
-    const map = new Map<string, MemberOption>();
-    for (const c of collaborators) map.set(c.userId, c);
-    for (const p of presence) {
-      if (!map.has(p.userId)) map.set(p.userId, { userId: p.userId, nickname: p.nickname });
-    }
-    for (const o of ownerKey.split('|')) {
-      if (o !== '' && !map.has(o)) map.set(o, { userId: o, nickname: o.slice(0, 8) });
-    }
-    return map;
-  }, [collaborators, presence, ownerKey]);
+  return useMemo(() => ({
+    ...buildMemberIndexes(collaborators, presence, ownerKey.split('|').filter(Boolean)),
+    reloadCollaborators,
+  }), [collaborators, presence, ownerKey, reloadCollaborators]);
 }
 
 /**

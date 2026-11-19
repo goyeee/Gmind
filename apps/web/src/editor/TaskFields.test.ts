@@ -22,6 +22,7 @@ import {
 } from '@gmind/core';
 import { effectiveProgress } from '@gmind/shared';
 import { CustomFieldInput, deriveNodesOfDoc, SmartDateInput } from './TaskFields';
+import * as TaskFields from './TaskFields';
 
 /**
  * 任务字段公共控件（M7c-C3/C4 抽公共）纯函数单测：deriveNodesOfDoc 的快照映射
@@ -49,6 +50,26 @@ function buildDoc(): Y.Doc {
   );
   return doc;
 }
+
+describe('协作者与任务成员目录', () => {
+  it('任务候选可包含历史负责人，但仅协作者目录不会把历史负责人算成协作成员', () => {
+    const build = (TaskFields as unknown as {
+      buildMemberIndexes: (
+        collaborators: Array<{ userId: string; nickname: string }>,
+        presence: Array<{ userId: string; nickname: string }>,
+        docOwnerIds: readonly string[],
+      ) => { memberIndex: Map<string, { nickname: string }>; collaboratorIndex: Map<string, { nickname: string }> };
+    }).buildMemberIndexes;
+    const result = build(
+      [{ userId: 'owner', nickname: '创建者' }, { userId: 'editor', nickname: '协作者' }],
+      [{ userId: 'guest', nickname: '在线成员' }],
+      ['owner', 'historical-owner'],
+    );
+    expect([...result.memberIndex.keys()]).toEqual(['owner', 'editor', 'guest', 'historical-owner']);
+    expect([...result.collaboratorIndex.keys()]).toEqual(['owner', 'editor', 'guest']);
+    expect(result.collaboratorIndex.has('historical-owner')).toBe(false);
+  });
+});
 
 describe('deriveNodesOfDoc（M7c-C3/C4 抽公共）', () => {
   it('root 不入列；parentId 空串归 null；字段映射 text→title', () => {

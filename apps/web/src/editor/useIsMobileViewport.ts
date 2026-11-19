@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 /**
  * 移动端视口判定 — M5 Task 5（OPEN-T-005）。
  *
- * 口径（BINDING）：≤768px 视口 = 只读（客户端能力降级，非安全边界——服务端不
+ * 口径（BINDING）：≤900px 视口 = 画布只读简化（客户端能力降级，非安全边界——服务端不
  * 拒绝移动端写请求）。matchMedia + change 监听：断点跨越（窗口缩放/旋转）即时
  * 推进，EditorPage 据此切换只读装配分支。
  *
@@ -11,7 +11,7 @@ import { useEffect, useState } from 'react';
  * matches，防御首渲染到监听挂载间的窗口变化；React18 StrictMode 双挂载下监听
  * 幂等移除。matchMedia 缺失（极端测试环境）恒 false——降级为桌面装配。
  */
-const MOBILE_QUERY = '(max-width: 768px)';
+const MOBILE_QUERY = '(max-width: 900px)';
 
 export function useIsMobileViewport(): boolean {
   const [isMobile, setIsMobile] = useState(() =>

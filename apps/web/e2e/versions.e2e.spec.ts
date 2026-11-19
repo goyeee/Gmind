@@ -40,6 +40,11 @@ async function postSnapshot(page: Page, fileId: string, token: string): Promise<
   expect(((await res.json()) as { created: boolean }).created).toBe(true);
 }
 
+async function openVersions(page: Page): Promise<void> {
+  await page.getByTestId('more-toggle').click();
+  await page.getByTestId('versions-toggle').click();
+}
+
 test('版本面板：时间轴/只读预览/一键恢复', async ({ page }) => {
   await registerAndLogin(page);
   await page.getByTestId('file-card').filter({ hasText: '本周计划' }).first().click();
@@ -55,7 +60,7 @@ test('版本面板：时间轴/只读预览/一键恢复', async ({ page }) => {
   await postSnapshot(page, fileId, token);
 
   // —— 打开版本历史面板：两条时间轴 ——
-  await page.getByTestId('versions-toggle').click();
+  await openVersions(page);
   const panel = page.getByTestId('version-panel');
   await expect(panel).toBeVisible();
   const items = panel.locator('[data-testid^="version-item-"]');
@@ -120,7 +125,7 @@ test('版本面板：关闭面板重置预览态——重开不残留旧预览�
   await postSnapshot(page, fileId, token);
 
   // 打开面板 → 预览该条目（内容非空）→ 直接关面板（不是关预览 dialog）
-  await page.getByTestId('versions-toggle').click();
+  await openVersions(page);
   const panel = page.getByTestId('version-panel');
   await expect(panel).toBeVisible();
   const items = panel.locator('[data-testid^="version-item-"]');
@@ -140,7 +145,7 @@ test('版本面板：关闭面板重置预览态——重开不残留旧预览�
   await expect(preview).toHaveCount(0); // 预览随面板关闭重置（曾残留致重开即空白遮罩）
 
   // 重开面板：无残留预览 → 点同一条目 → 预览再次渲染预期内容（非空白）
-  await page.getByTestId('versions-toggle').click();
+  await openVersions(page);
   await expect(panel).toBeVisible();
   await expect(preview).toHaveCount(0);
   await expect(items).toHaveCount(1);
@@ -164,7 +169,7 @@ test('版本面板：预览打开时面板关闭钮指针可点（头部层级�
   // 造一版并打开预览
   await renameNode(page, '周一', '计划B');
   await postSnapshot(page, fileId, token);
-  await page.getByTestId('versions-toggle').click();
+  await openVersions(page);
   const panel = page.getByTestId('version-panel');
   await expect(panel).toBeVisible();
   const items = panel.locator('[data-testid^="version-item-"]');

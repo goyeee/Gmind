@@ -58,9 +58,11 @@ test('快捷键面板：Ctrl+? 打开 → 三分组/Windows 键位 → 搜索折
   await expect(page.locator('.editor-canvas svg .gm-collapse-badge')).toHaveCount(0);
 
   // 输入控件让路：焦点在标题输入内按 Ctrl+? 不开面板（isEditableTarget 判定）
+  await page.getByTestId('title-edit').click();
   await page.getByTestId('title-input').click();
   await page.keyboard.press('Control+Shift+/');
   await expect(page.getByTestId('help-panel')).toHaveCount(0);
+  await page.keyboard.press('Escape');
 });
 
 test('快捷键面板：工具栏按钮开合 + macOS 平台显示 ⌘ 键位 + × 关闭', async ({ page }) => {

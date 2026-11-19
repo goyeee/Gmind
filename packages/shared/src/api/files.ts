@@ -40,6 +40,8 @@ export interface FileListItemDetailed extends FileListItem {
   folderName: string | null;
   /** 当前用户视角是否已加星。 */
   starred: boolean;
+  /** 当前用户在该文件中的真实角色；工作台据此收敛改名等写入口。 */
+  myRole: 'owner' | 'editor' | 'commenter' | 'viewer';
 }
 
 /** PATCH /api/files/:id 响应（M3a Task 5，FR-FIL-002）：FileListItem + 落点 folderId——

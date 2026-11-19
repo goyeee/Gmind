@@ -343,9 +343,10 @@ test('成员面板：编辑/查看分组、创建者标识与离线即时移除'
   const rowB = panel.locator('[data-testid="member-row"]', { hasText: nickB });
   await expect(rowB.getByTestId('owner-badge')).toHaveCount(0);
 
-  // C 关闭页面 → 在线数回落 2；名单行保留（离线不再随 presence 即时移除，转灰显）
+  // C 关闭页面 → 总人数仍为 3、在线数回落 2；名单行保留并转灰显
   await ctxC.close();
-  await expect(pageA.getByTestId('members-count')).toHaveText('2');
+  await expect(pageA.getByTestId('members-count')).toHaveText('3');
+  await expect(pageA.getByTestId('members-online-count')).toHaveText('2');
   await expect(panel.locator('[data-testid="member-row"]', { hasText: nickC })).toHaveCount(1);
   await expect(panel.locator('[data-testid="member-row"]', { hasText: nickC })).not.toHaveClass(
     /member-row-online/,
@@ -697,7 +698,8 @@ test('顶栏头像堆：在线绿点 + 在线优先排序 + 离线置灰', async
 
   // C 关闭 → C 离线置灰 + 绿点消失；A/B 仍在线（2 绿点）
   await ctxC.close();
-  await expect(pageA.getByTestId('members-count')).toHaveText('2');
+  await expect(pageA.getByTestId('members-count')).toHaveText('3');
+  await expect(pageA.getByTestId('members-online-count')).toHaveText('2');
   await expect(stackA.locator('.members-stack-online-dot')).toHaveCount(2, { timeout: 10_000 });
 
   // 离线置灰断言：C 的头像带 offline 类

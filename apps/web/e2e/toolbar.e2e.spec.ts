@@ -38,17 +38,16 @@ async function openSeedDoc(page: Page): Promise<void> {
  *  （more-toggle），默认不渲染故移出本清单——见下方「更多菜单」用例。 */
 const EXISTING_TESTIDS = [
   'back-btn',
-  'title-input',
+  'title-display',
+  'title-edit',
   'star-toggle',
   'save-status',
   'undo-btn',
   'redo-btn',
   'structure-toggle',
   'theme-panel-toggle',
-  'export-menu',
   'members-btn',
   // avatar-me 已随 2026-11-16 需求方裁定整体删除（个人中心入口退役）
-  'versions-toggle',
   'activity-toggle',
   'more-toggle',
   // fullscreen-btn 2026-10-09 迁至底栏右侧（.editor-bottombar），testid 保留
@@ -63,39 +62,61 @@ const EXISTING_TESTIDS = [
   'view-tab-table',
 ] as const;
 
-test('工具栏：单行分组 + 竖线分隔符（9 组 / 7 分隔线）', async ({ page }) => {
+test('工具栏：原型单行分组（8 组 / 7 分隔线），1512/1440/1280 均不换行不横滚', async ({ page }) => {
   await openSeedDoc(page);
   const toolbar = page.locator('.editor-toolbar');
   await expect(toolbar).toBeVisible();
-  // 分组容器：返回 / 标题 / 视图切换 / 撤销重做格式刷 / 上级子级同级 / 格式任务 /
-  // 结构主题 / 导出 / 协作（插入组已随 2026-10-10 删除；导出组与协作组间省略 1 条
-  // 分隔线；全屏组已随 2026-10-09 底栏改版迁至 .editor-bottombar 右侧）
-  await expect(toolbar.locator('> .toolbar-group')).toHaveCount(9);
-  // 组间 1px 竖线分隔符
+  await expect(toolbar.locator('> .toolbar-group')).toHaveCount(8);
   await expect(toolbar.locator('.toolbar-sep')).toHaveCount(7);
-  // 每个分隔符都是 1px 宽的竖线元素（可见）
-  const seps = toolbar.locator('.toolbar-sep');
-  for (let i = 0; i < (await seps.count()); i++) {
-    await expect(seps.nth(i)).toBeVisible();
+  for (const width of [1512, 1440, 1280]) {
+    await page.setViewportSize({ width, height: 800 });
+    await expect(toolbar).toHaveCSS('height', '52px');
+    const lineCenters = await toolbar
+      .locator('> *')
+      .evaluateAll((els) => els.map((e) => {
+        const rect = (e as HTMLElement).getBoundingClientRect();
+        return rect.top + rect.height / 2;
+      }));
+    expect(Math.max(...lineCenters) - Math.min(...lineCenters), `${width}px 工具栏必须单行`).toBeLessThanOrEqual(1);
+    const { scrollWidth, clientWidth } = await toolbar.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }));
+    expect(scrollWidth, `${width}px 工具栏不得横向溢出（${scrollWidth} > ${clientWidth}）`).toBeLessThanOrEqual(clientWidth);
+    const shareBox = await page.getByTestId('share-btn').boundingBox();
+    expect(shareBox!.x + shareBox!.width, `${width}px 分享按钮必须完整可见`).toBeLessThanOrEqual(width);
   }
-  // 2026-09-30 需求方反馈任务 2：文字标签所有宽度常显 + e2e 默认视口（1280）恒
-  // 单行——全部直接子元素 offsetTop 相等（不换行）、无横向溢出；11 个文字标签
-  // （格式刷/三按钮/格式/任务/待办/简洁/结构/主题；「插入」标签随 2026-10-10 菜单
-  // 删除出列；「待办」2026-10-24 入列；「更多」2026-10-25 原型顶栏重组入列——
-  // 评论/快捷键文字钮同时出列；「协作成员」文字随同日头像堆形态出列）
-  // 全部可见（不再随 ≤1536 降级隐藏；增量由 ≤1536 宽度预算回收抵消，
-  // 见 editor.css 断点注释）。
-  const lineTops = await toolbar
-    .locator('> *')
-    .evaluateAll((els) => [...new Set(els.map((e) => (e as HTMLElement).offsetTop))]);
-  expect(lineTops, '工具栏必须单行（全部直接子元素等 offsetTop）').toHaveLength(1);
-  const overflow = await toolbar.evaluate((el) => el.scrollWidth > el.clientWidth);
-  expect(overflow, '工具栏不得横向溢出').toBe(false);
   const labels = toolbar.locator('.toolbar-btn-label');
   await expect(labels).toHaveCount(11);
   for (let i = 0; i < (await labels.count()); i++) {
     await expect(labels.nth(i)).toBeVisible();
   }
+});
+
+test('800px 窄窗口进入简化分支，成员与分享完整可点且不横向溢出', async ({ page }) => {
+  await page.setViewportSize({ width: 800, height: 800 });
+  await openSeedDoc(page);
+  await expect(page.getByTestId('toolbar-add-child')).toHaveCount(0);
+  await expect(page.getByTestId('members-btn')).toBeVisible();
+  await expect(page.getByTestId('share-btn')).toBeVisible();
+  const toolbar = page.locator('.editor-toolbar');
+  expect(await toolbar.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+  const share = await page.getByTestId('share-btn').boundingBox();
+  expect(share!.x + share!.width).toBeLessThanOrEqual(800);
+  await page.getByTestId('members-btn').click();
+  await expect(page.getByTestId('share-tab-members')).toHaveAttribute('aria-selected', 'true');
+});
+
+test('顶部品牌与右侧按钮按原型呈现，顶部导出入口已删除', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await openSeedDoc(page);
+  await expect(page.getByTestId('back-btn').locator('svg')).toHaveCount(1);
+  await expect(page.getByTestId('toolbar-brand-name')).toHaveText('Gmind');
+  await expect(page.getByTestId('title-edit')).toBeVisible();
+  await expect(page.getByTestId('title-display')).toBeVisible();
+  expect((await page.getByTestId('title-display').boundingBox())!.width).toBeGreaterThanOrEqual(120);
+  await expect(page.getByTestId('share-btn').locator('svg')).toHaveCount(1);
+  expect((await page.getByTestId('share-btn').boundingBox())!.height).toBe(40);
+  expect((await page.getByTestId('members-btn').boundingBox())!.height).toBe(40);
+  expect((await page.locator('.members-stack-avatar').first().boundingBox())!.height).toBe(28);
+  await expect(page.getByTestId('export-menu')).toHaveCount(0);
 });
 
 test('工具栏：图标按钮均带内联 svg 与 title 提示；上级/子级/同级为文字钮', async ({ page }) => {
@@ -106,7 +127,7 @@ test('工具栏：图标按钮均带内联 svg 与 title 提示；上级/子级/
   // 底栏右侧，testid 保留；「待办」2026-10-24 入列；快捷键图标钮 2026-10-25 原型
   // 顶栏重组移入「更多」菜单——菜单项不带 toolbar-btn class 出列；members 图标
   // 随同日头像堆形态出列——头像堆为 span 结构非 svg 图标钮）
-  await expect(iconButtons).toHaveCount(14);
+  await expect(iconButtons).toHaveCount(11);
   const count = await iconButtons.count();
   for (let i = 0; i < count; i++) {
     const btn = iconButtons.nth(i);
@@ -129,6 +150,7 @@ test('工具栏：图标按钮均带内联 svg 与 title 提示；上级/子级/
 });
 
 test('工具栏：既有 testid 全保留且可见', async ({ page }) => {
+  await page.setViewportSize({ width: 1600, height: 800 });
   await openSeedDoc(page);
   for (const id of EXISTING_TESTIDS) {
     await expect(page.getByTestId(id), `testid ${id} 必须保留`).toBeVisible();
@@ -151,7 +173,7 @@ test('工具栏：members-btn 与结构面板钮/主题面板钮可访问名语�
   await openSeedDoc(page);
   // 评审 Important（round 1）：members-btn 内容为 aria-hidden SVG + 角标数字，
   // accname 计算内容先于 title → 名字会退化为「1」；须 aria-label 补语义名。
-  await expect(page.getByTestId('members-btn')).toHaveAccessibleName('在线成员');
+  await expect(page.getByTestId('members-btn')).toHaveAccessibleName('协作成员，共 1 人，1 人在线');
   // 结构入口（2026-09-30 任务 3）：select 移除后为面板 toggle 按钮，aria-label
   // 同语义保留（accessible-name 契约自 structure-select 平移）
   await expect(page.getByTestId('structure-toggle')).toHaveAccessibleName('结构');
@@ -159,19 +181,21 @@ test('工具栏：members-btn 与结构面板钮/主题面板钮可访问名语�
   await expect(page.getByTestId('theme-panel-toggle')).toHaveAccessibleName('主题');
 });
 
-test('工具栏：组序符合企微对标布局（返回|标题|视图|撤销重做刷|三钮|格式任务|结构主题|导出|协作）', async ({ page }) => {
+test('工具栏：组序符合原型布局（品牌|标题|视图|历史|主题操作|动态查找|成员分享）', async ({ page }) => {
   await openSeedDoc(page);
   const anchors = [
     'back-btn',
-    'title-input',
+    'title-display',
     'view-tab-mind',
     'undo-btn',
     'toolbar-add-parent',
     'format-toggle',
     'structure-toggle',
     'theme-panel-toggle',
-    'export-menu',
+    'activity-toggle',
+    'find-toggle',
     'members-btn',
+    'share-btn',
   ] as const;
   const placed: { id: string; x: number; y: number }[] = [];
   for (const id of anchors) {
@@ -207,33 +231,96 @@ test('工具栏：组序符合企微对标布局（返回|标题|视图|撤销�
   expect(redoX).toBeGreaterThan(undoX);
   const themeX = (await page.getByTestId('theme-panel-toggle').boundingBox())!.x;
   expect(themeX).toBeGreaterThan(structX);
-  const versionsX = (await page.getByTestId('versions-toggle').boundingBox())!.x;
   const activityX = (await page.getByTestId('activity-toggle').boundingBox())!.x;
   const findX = (await page.getByTestId('find-toggle').boundingBox())!.x;
   const moreX = (await page.getByTestId('more-toggle').boundingBox())!.x;
-  expect(versionsX).toBeGreaterThan(themeX);
-  expect(activityX).toBeGreaterThan(versionsX); // T8 动态入口在版本历史右侧
+  expect(activityX).toBeGreaterThan(themeX); // 版本历史收进“更多”，动态保持原位
   expect(findX).toBeGreaterThan(activityX);
   expect(moreX).toBeGreaterThan(findX);
   // 2026-11-16：本人头像 avatar-me 删除后，members-btn 为顶栏最右入口，在查找右侧
   const membersX = (await page.getByTestId('members-btn').boundingBox())!.x;
   expect(membersX).toBeGreaterThan(findX);
+  const membersBox = (await page.getByTestId('members-btn').boundingBox())!;
+  const shareBox = (await page.getByTestId('share-btn').boundingBox())!;
+  expect(shareBox.x).toBeGreaterThanOrEqual(membersBox.x + membersBox.width);
   await expect(page.getByTestId('avatar-me')).toHaveCount(0);
 });
 
-test('更多菜单：评论/快捷键收纳下拉，菜单项触发目标面板并收起（2026-10-25 原型顶栏重组）', async ({ page }) => {
+test('文件名弹窗：打开全选、空名禁用、取消不写、组合输入 Enter 不误提交', async ({ page }) => {
   await openSeedDoc(page);
-  // 默认收起：菜单与两入口均不渲染
+  const original = await page.getByTestId('title-display').textContent();
+  await page.getByTestId('title-edit').click();
+  const dialog = page.getByTestId('rename-dialog');
+  const input = page.getByTestId('title-input');
+  await expect(dialog).toBeVisible();
+  await expect(input).toBeFocused();
+  expect(await input.evaluate((el: HTMLInputElement) => [el.selectionStart, el.selectionEnd])).toEqual([0, original!.length]);
+
+  await input.fill('   ');
+  await expect(page.getByTestId('rename-confirm')).toBeDisabled();
+  await input.fill('不应保存');
+  await page.getByTestId('rename-cancel').click();
+  await expect(dialog).toHaveCount(0);
+  await expect(page.getByTestId('title-display')).toHaveText(original!);
+
+  await page.getByTestId('title-edit').click();
+  await input.fill('组合输入新名称');
+  await input.dispatchEvent('compositionstart');
+  await input.evaluate((el: HTMLInputElement) => el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', isComposing: true, bubbles: true })));
+  await expect(dialog).toBeVisible();
+  await expect(page.getByTestId('title-display')).toHaveText(original!);
+  await input.dispatchEvent('compositionend');
+  await page.getByTestId('rename-confirm').click();
+  await expect(page.getByTestId('title-display')).toHaveText('组合输入新名称');
+});
+
+test('文件名弹窗：Enter 确认后返回工作台，刷新仍保留新名称', async ({ page }) => {
+  await openSeedDoc(page);
+  const title = `顶部弹窗改名-${Date.now()}`;
+  await page.getByTestId('title-edit').click();
+  await page.getByTestId('title-input').fill(title);
+  await page.getByTestId('title-input').press('Enter');
+  await expect(page.getByTestId('rename-dialog')).toHaveCount(0);
+  await expect(page.getByTestId('title-display')).toHaveText(title);
+  await page.getByTestId('back-btn').click();
+  await page.goto('/workspace?view=files');
+  await expect(page.getByTestId('file-card').filter({ hasText: title })).toBeVisible();
+  await page.reload();
+  await expect(page.getByTestId('file-card').filter({ hasText: title })).toBeVisible();
+});
+
+test('改名弹窗 Escape 只关闭弹窗，不回收正在创建的空白节点', async ({ page }) => {
+  await openSeedDoc(page);
+  const groups = page.locator('.editor-canvas svg g[data-node-id]');
+  const before = await groups.count();
+  await page.keyboard.press('Tab');
+  await expect(groups).toHaveCount(before + 1);
+  await expect(page.locator('.gm-text-editor')).toHaveCount(0); // 惰性创建：落位但尚未敲字
+  await page.getByTestId('title-edit').click();
+  await expect(page.getByTestId('rename-dialog')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.getByTestId('rename-dialog')).toHaveCount(0);
+  await expect(groups).toHaveCount(before + 1);
+  await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '分支主题 1' })).toBeVisible();
+});
+
+test('更多菜单：版本历史/评论/快捷键均可打开真实面板并自动收起', async ({ page }) => {
+  await openSeedDoc(page);
   await expect(page.getByTestId('more-menu')).toHaveCount(0);
   await expect(page.getByTestId('comment-toggle')).toHaveCount(0);
   await expect(page.getByTestId('help-toggle')).toHaveCount(0);
-  // 展开：两项齐备
+  await expect(page.getByTestId('versions-toggle')).toHaveCount(0);
   await page.getByTestId('more-toggle').click();
   const menu = page.getByTestId('more-menu');
   await expect(menu).toBeVisible();
   await expect(menu.getByRole('menuitem', { name: '评论' })).toBeVisible();
   await expect(menu.getByRole('menuitem', { name: '快捷键' })).toBeVisible();
-  // 菜单项触发目标面板并自动收起菜单
+  await expect(menu.getByRole('menuitem', { name: '版本历史' })).toBeVisible();
+  await menu.getByRole('menuitem', { name: '版本历史' }).click();
+  await expect(page.getByTestId('version-panel')).toBeVisible();
+  await expect(menu).toHaveCount(0);
+  await page.getByTestId('version-panel-close').click();
+  await page.getByTestId('more-toggle').click();
   await menu.getByRole('menuitem', { name: '快捷键' }).click();
   await expect(page.getByTestId('help-panel')).toBeVisible();
   await expect(menu).toHaveCount(0);

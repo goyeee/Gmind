@@ -177,6 +177,7 @@ function OwnerAvatar({ userId, name, url }: { userId: string; name: string | nul
 function FileCard(p: FileCardProps): ReactElement {
   const { f, meId } = p;
   const collab = meId !== undefined && f.ownerUserId !== meId;
+  const canRename = f.myRole === 'owner' || f.myRole === 'editor';
   const stop = (e: MouseEvent) => e.stopPropagation();
   // 真实内容缩略图（2026-10-21）：有快照出真图，无快照回退装饰性示意图
   const realThumb = useRealThumb(f.id);
@@ -243,7 +244,7 @@ function FileCard(p: FileCardProps): ReactElement {
         </button>
         {p.menuOpen && (
           <div className="card-menu" data-testid="card-menu">
-            <button onClick={p.onRenameStart}>重命名</button>
+            {canRename && <button onClick={p.onRenameStart}>重命名</button>}
             <button onClick={p.onCopy}>复制</button>
             {f.ownerUserId === meId && (
               <button data-testid="share-action" onClick={p.onShare}>
@@ -267,6 +268,7 @@ function FileCard(p: FileCardProps): ReactElement {
  *  菜单结构，testid 独立——e2e 既有 card-menu-btn 断言均以 file-card 定界）。 */
 function FileRow(p: FileCardProps): ReactElement {
   const { f } = p;
+  const canRename = f.myRole === 'owner' || f.myRole === 'editor';
   const stop = (e: MouseEvent) => e.stopPropagation();
   const realThumb = useRealThumb(f.id);
   return (
@@ -327,7 +329,7 @@ function FileRow(p: FileCardProps): ReactElement {
         </button>
         {p.menuOpen && (
           <div className="card-menu" data-testid="file-row-menu">
-            <button onClick={p.onRenameStart}>重命名</button>
+            {canRename && <button onClick={p.onRenameStart}>重命名</button>}
             <button onClick={p.onCopy}>复制</button>
             {f.ownerUserId === p.meId && (
               <button data-testid="share-action" onClick={p.onShare}>

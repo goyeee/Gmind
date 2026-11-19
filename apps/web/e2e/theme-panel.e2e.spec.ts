@@ -52,7 +52,7 @@ test('主题面板：点新主题画布变色、套用即收起、Ctrl+Z 恢复'
   await openSeedDoc(page, '本周计划');
   const rootFill = rootRectFill(page, '本周计划');
   await expect(rootFill).toHaveAttribute('fill', '#3370ff'); // 默认 gmind-blue
-  const titleBefore = await page.getByTestId('title-input').inputValue();
+  const titleBefore = await page.getByTestId('title-display').textContent();
 
   await page.getByTestId('theme-panel-toggle').click();
   await page.getByTestId('theme-item-forest').click();
@@ -60,7 +60,7 @@ test('主题面板：点新主题画布变色、套用即收起、Ctrl+Z 恢复'
   await expect(page.getByTestId('theme-panel')).toHaveCount(0);
   await expect(rootFill).toHaveAttribute('fill', '#2d6a4f');
   // 文档面不受影响：标题不变、保存链路照常推进
-  await expect(page.getByTestId('title-input')).toHaveValue(titleBefore);
+  await expect(page.getByTestId('title-display')).toHaveText(titleBefore ?? '');
   await expect(page.getByTestId('save-status')).toHaveText(/已保存/);
   // 焦点移出控件后撤销：setDocMeta themeId 走 undo 栈，恢复经典蓝
   await page.locator('.editor-canvas svg').click({ position: { x: 30, y: 30 } });

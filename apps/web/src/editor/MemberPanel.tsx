@@ -19,7 +19,7 @@ function affiliationText(deptName: string | null, groupNames: string[]): string 
 }
 
 /** 弹窗共享的协作者数据源：打开时拉取，邀请/移除/改角色后统一刷新。 */
-export function useCollaborators(open: boolean, fileId: string, showToast: (message: string) => void) {
+export function useCollaborators(open: boolean, fileId: string, showToast: (message: string) => void, onMembershipChanged?: () => void) {
   const [collabs, setCollabs] = useState<CollaboratorRow[] | null>(null);
   const [error, setError] = useState('');
   const [reloadTick, setReloadTick] = useState(0);
@@ -41,6 +41,7 @@ export function useCollaborators(open: boolean, fileId: string, showToast: (mess
     setBusy(true);
     try {
       await api(`/files/${fileId}/collaborators/${target.userId}`, { method: 'DELETE' });
+      onMembershipChanged?.();
       showToast(`已移除 ${target.nickname}`);
       reload();
     } catch (e) {

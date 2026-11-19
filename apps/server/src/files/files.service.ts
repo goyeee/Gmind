@@ -270,7 +270,7 @@ export class FilesService {
     // 稳定次序：主排序键相同时按 id 决出（datetime(3) 同毫秒创建的文件不抖动）
     qb.addOrderBy('f.id', 'DESC').setParameter('userId', userId);
 
-    return this.mapDetailedRows(await qb.getRawMany<Record<string, unknown>>());
+    return this.mapDetailedRows(await qb.getRawMany<Record<string, unknown>>(), userId);
   }
 
   /**
@@ -301,7 +301,7 @@ export class FilesService {
       .addOrderBy('f.updated_at', 'DESC')
       .addOrderBy('f.id', 'DESC')
       .limit(SEARCH_LIMIT);
-    return this.mapDetailedRows(await qb.getRawMany<Record<string, unknown>>());
+    return this.mapDetailedRows(await qb.getRawMany<Record<string, unknown>>(), userId);
   }
 
   /** 全文搜索（2026-10-28 P1）：标题命中（searchByTitle 同口径）+ 节点内容命中
@@ -337,6 +337,7 @@ export class FilesService {
       .leftJoin('users', 'mod_u', 'mod_u.id = f.last_modifier_user_id')
       .leftJoin('folders', 'fold', 'fold.id = f.folder_id AND fold.deleted_at IS NULL')
       .leftJoin('file_stars', 'st', 'st.file_id = f.id AND st.user_id = :viewerId')
+      .leftJoin('file_collaborators', 'member_me', 'member_me.file_id = f.id AND member_me.user_id = :viewerId')
       .setParameter('viewerId', userId)
       .select('f.id', 'id')
       .addSelect('f.title', 'title')
@@ -356,12 +357,13 @@ export class FilesService {
       // 回报的 wire type 随执行计划在 BIGINT(→number) 与 VAR_STRING(→string) 间漂移，
       // `=== 1` 判定是计划依赖的偶发错误源；char(26) 原始列恒为 string|null，
       // 布尔值由 mapDetailedRows 统一派生（st.id IS NOT NULL 的过滤语义不受影响）。
-      .addSelect('st.id', 'starredId');
+      .addSelect('st.id', 'starredId')
+      .addSelect('member_me.role', 'collaboratorRole');
   }
 
   /** 原始行 → FileListItemDetailed（唯一出口：docState 等内部列绝不离开服务端）。
    *  starred 由星标行主键是否存在派生（见 detailedSelect 注：不信任表达式列 wire type）。 */
-  private mapDetailedRows(raw: Array<Record<string, unknown>>): FileListItemDetailed[] {
+  private mapDetailedRows(raw: Array<Record<string, unknown>>, userId: string): FileListItemDetailed[] {
     return raw.map((r) => ({
       id: String(r.id),
       title: String(r.title),
@@ -378,6 +380,7 @@ export class FilesService {
       folderId: r.folderId == null ? null : String(r.folderId),
       folderName: r.folderName == null ? null : String(r.folderName),
       starred: r.starredId != null,
+      myRole: String(r.ownerUserId) === userId ? 'owner' : (r.collaboratorRole as 'editor' | 'commenter' | 'viewer' | null) ?? 'viewer',
     }));
   }
 
@@ -736,6 +739,9 @@ export class FilesService {
     id: string,
     input: { title?: string; folderId?: string | null },
   ): Promise<FilePatchResult> {
+    // 标题属于文档写操作；commenter/viewer 即使绕过界面直接 PATCH 也不能改名。
+    // folderId 历史移动口径不在本轮扩大调整，仅对标题写补 canWrite。
+    if (input.title !== undefined && !(await this.canWrite(userId, id))) throw new NotFoundException('文件不存在');
     const file = await this.findAliveOr404(userId, id);
     if (input.title !== undefined) file.title = input.title;
     if (input.folderId !== undefined && input.folderId !== file.folderId) {

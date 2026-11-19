@@ -153,9 +153,11 @@ test('查找：find-toggle 打开，查「周」6 处；定位展开折叠祖先
   await openSeedDoc(page, '本周计划');
 
   // 标题输入框聚焦时 Ctrl+F 不劫持（isEditableTarget 让路原生查找）
+  await page.getByTestId('title-edit').click();
   await page.getByTestId('title-input').click();
   await page.keyboard.press('Control+F');
   await expect(page.getByTestId('find-bar')).toHaveCount(0);
+  await page.keyboard.press('Escape');
 
   // 工具栏 find-toggle 点击打开
   await page.getByTestId('find-toggle').click();

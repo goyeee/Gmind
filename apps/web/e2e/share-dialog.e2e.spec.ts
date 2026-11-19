@@ -66,11 +66,24 @@ test('真实可邀请成员前5、逐项角色、邀请后回成员并可改角�
   await expect(row.getByTestId('member-role-select')).toHaveValue('viewer');
   await row.getByTestId('member-role-select').selectOption('commenter');
   await expect(row.getByTestId('member-role-select')).toHaveValue('commenter');
+  await expect(page.getByTestId('members-count')).toHaveText('2');
 
   const fileId = /\/edit\/([^/]+)/.exec(page.url())?.[1] ?? '';
   const token = await page.evaluate(() => localStorage.getItem('gmind.token') ?? '');
   const list = await request.get(`/api/files/${fileId}/collaborators`, { headers: authHeader(token) });
   expect((await list.json() as Array<{ userId: string; role: string }>).find((r) => r.userId === invitedId)?.role).toBe('commenter');
+
+  const [deleteResponse] = await Promise.all([
+    page.waitForResponse((res) => res.request().method() === 'DELETE' && res.url().includes(`/api/files/${fileId}/collaborators/`)),
+    row.getByTestId('member-remove-btn').click(),
+  ]);
+  expect(deleteResponse.status()).toBe(204);
+  await expect.poll(async () => {
+    const res = await request.get(`/api/files/${fileId}/collaborators`, { headers: authHeader(token) });
+    return (await res.json() as Array<{ userId: string }>).some((r) => r.userId === invitedId);
+  }).toBe(false);
+  await expect(dialog.getByTestId('member-row').filter({ hasText: invited.nickname })).toHaveCount(0);
+  await expect(page.getByTestId('members-count')).toHaveText('1');
 });
 
 test('链接页支持三档权限、有效期、4位密码和关闭后重开', async ({ page }) => {
@@ -107,6 +120,10 @@ test('普通协作者分享默认导出，无邀请与成员管理操作', async
   await injectToken(page, member.token);
   await page.goto(`/edit/${fileId}`);
   await expect(page.locator('.editor-canvas')).toBeVisible();
+  await expect(page.getByTestId('members-count')).toHaveText('2');
+  await expect(page.getByTestId('members-online-count')).toHaveText('1');
+  await expect(page.getByTestId('title-display')).toHaveText('普通成员四页签');
+  await expect(page.getByTestId('title-edit')).toHaveCount(0);
   await page.getByTestId('share-btn').click();
   await expect(page.getByTestId('share-tab-export')).toHaveAttribute('aria-selected', 'true');
   await expect(page.getByTestId('share-tab-invite')).toHaveCount(0);

@@ -99,8 +99,6 @@ import { ActivityPanel } from '../editor/ActivityPanel';
 import { ThemePanel } from '../editor/ThemePanel';
 import {
   ActivityIcon,
-  BackIcon,
-  ExportIcon,
   FullscreenIcon,
   HistoryIcon,
   KeyboardIcon,
@@ -149,11 +147,11 @@ import type { CustomColumnType } from '@gmind/core';
 import { TodoBench, type BenchRow } from '../editor/TodoBench';
 import { remindTodo } from '../api/todos';
 import { TaskPanel } from '../editor/TaskPanel';
-import { useTaskMembers, deriveNodesOfDoc } from '../editor/TaskFields';
+import { useTaskMembers, deriveNodesOfDoc, type MemberOption } from '../editor/TaskFields';
 import { CommentPanel, type CommentThreadView } from '../editor/CommentPanel';
 import { FindReplace } from '../editor/FindReplace';
 import { VersionPanel } from '../editor/VersionPanel';
-import { startCollab, getCurrentUser, type CollabHandle, type CollabStatus, type PresenceMember } from '../editor/collab';
+import { startCollab, getCurrentUser, stackCollaborators, type CollabHandle, type CollabStatus, type PresenceMember } from '../editor/collab';
 import {
   QUOTA_ADD_BLOCKED,
   QUOTA_STATUS,
@@ -163,6 +161,7 @@ import {
 } from '../editor/saveLoop';
 import { useEditorDoc } from '../editor/useEditorDoc';
 import { ShareDialog } from '../editor/ShareDialog';
+import { RenameFileDialog } from '../editor/RenameFileDialog';
 import { CanvasTabBar } from '../editor/CanvasTabBar';
 import {
   canvasIdPrefix,
@@ -321,17 +320,12 @@ function CompactIcon({ className }: { className?: string }) {
 export function EditorPage() {
   const { fileId = '' } = useParams();
   const navigate = useNavigate();
-  // 移动端只读（M5 Task 5，OPEN-T-005）：≤768px 视口 = 客户端能力降级为只读——
-  // 隐藏全部编辑控件、不装配写交互（键盘/拖拽/右键/双击/画布粘贴）；保留画布
-  // 渲染、平移/缩放手势（Viewport 自有监听不动）、折叠徽标点击、评论（面板
-  // 查看+发表+角标点击过滤）。**非安全边界**：服务端不区分移动端写请求（验收
-  // 文档登记）。matchMedia change 监听驱动：断点跨越即时升降级（装配 effect 以
-  // readOnly 为依赖，跨越即按文件切换同款路径重建场景/协同）。
+  // 移动端简化（≤900px）：不装配画布写交互，但保留评论、改名（owner/editor）、分享与成员。
   const { state, error, setTitle, fileKind, myRole, baseUpdatedAtRef } = useEditorDoc(fileId);
-  // 2026-10-28 P0：viewer（只读链接加入/只读协作者）与移动端共用同一只读装配。
+  // ≤900px 只简化画布编辑；账号角色与视口分开判断，手机上的 owner/editor 仍可改名。
   const mobileReadOnly = useIsMobileViewport();
-  // commenter 可评论但不可编辑；viewer 与移动端同样关闭写操作。
-  const readOnly = mobileReadOnly || myRole === 'viewer' || myRole === 'commenter';
+  const roleReadOnly = myRole === 'viewer' || myRole === 'commenter';
+  const readOnly = mobileReadOnly || roleReadOnly;
   const doc = state?.doc ?? null;
   // 创建者标识依据（M2 Task 6，FR-COL-005）：GET /api/files/:id 扩展字段
   const ownerUserId = state?.ownerUserId ?? null;
@@ -659,11 +653,23 @@ export function EditorPage() {
     }
     return ids;
   }, [doc, tick, activeCanvasId]);
-  const memberIndex = useTaskMembers(fileId, members, docOwnerIds);
+  const { memberIndex, collaboratorIndex, reloadCollaborators } = useTaskMembers(fileId, members, docOwnerIds);
   const memberIndexRef = useRef(memberIndex);
   memberIndexRef.current = memberIndex;
   /** 在线用户 id 集合（presence 含自己）：成员钮头像堆的 online 判定数据源。 */
   const onlineUserIds = useMemo(() => new Set(members.map((m) => m.userId)), [members]);
+  // 顶部只展示真实协作者，不把 useTaskMembers 为任务指派保留的历史负责人算进来。
+  // 名单首次返回前先把本人放入，避免出现“本人头像可见但总人数为 0”的暂态。
+  const topbarCollaborators = useMemo(() => {
+    const map = new Map(collaboratorIndex);
+    if (me && !map.has(me.id)) map.set(me.id, { userId: me.id, nickname: me.nickname, avatar: memberIndex.get(me.id)?.avatar });
+    return [...map.values()];
+  }, [collaboratorIndex, me, memberIndex]);
+  const collaboratorStack = useMemo(
+    () => stackCollaborators(topbarCollaborators, onlineUserIds, me?.id),
+    [topbarCollaborators, onlineUserIds, me?.id],
+  );
+  const onlineCollaboratorCount = onlineUserIds.size;
 
   useEffect(() => {
     if (!doc) return;
@@ -773,9 +779,6 @@ export function EditorPage() {
   const quotaBlockedRef = useRef(false);
   const [toast, setToast] = useState('');
   const [zoomPct, setZoomPct] = useState(100);
-  // 导出菜单（M4 Task 5，FR-IO-004）：工具栏「导出」按钮的下拉开合。
-  const [exportOpen, setExportOpen] = useState(false);
-  const exportWrapRef = useRef<HTMLDivElement | null>(null);
   // 格式面板开合（M7b-R2 需求方裁定）：样式右列默认不显示，收进工具栏「格式」按钮。
   const [formatOpen, setFormatOpen] = useState(false);
   // 右侧任务面板开合（M7c-C4）：与格式面板互斥（开任务收格式、开格式收任务）。
@@ -851,20 +854,6 @@ export function EditorPage() {
     if (toastTimer.current !== null) clearTimeout(toastTimer.current);
     toastTimer.current = setTimeout(() => setToast(''), 2500);
   };
-
-  // 导出菜单外点关闭（M7c-D2：监听改 pointerdown——onSvgPointerDown 的
-  // preventDefault 会抑制兼容性 mousedown，画布空白点击此前收不起菜单；
-  // 打开期间命中按钮/菜单之外即收起）
-  useEffect(() => {
-    if (!exportOpen) return;
-    const onDocPointerDown = (e: PointerEvent): void => {
-      if (exportWrapRef.current && !exportWrapRef.current.contains(e.target as Node)) {
-        setExportOpen(false);
-      }
-    };
-    document.addEventListener('pointerdown', onDocPointerDown);
-    return () => document.removeEventListener('pointerdown', onDocPointerDown);
-  }, [exportOpen]);
 
   // （标记面板弹层的 Esc/外点关闭链已随 2026-10-10「任务面板标记内嵌化」裁定退役：
   //  MarkerPanel 无入口整体删除，标记编辑在 TaskPanel 区块内联完成。）
@@ -962,8 +951,7 @@ export function EditorPage() {
         el.closest('[data-popover-toggle]') ||
         el.closest(
           '.editor-right, .editor-mobile-comments, .theme-panel, .structure-panel, .theme-wrap, .structure-wrap, .activity-panel, .help-panel, .find-bar, .member-panel, .version-panel, .marker-panel, .more-menu, .gm-task-assignee, .gm-task-owner-avatar, .assignee-picker',
-        ) ||
-        exportWrapRef.current?.contains(el)
+        )
       ) {
         return;
       }
@@ -1308,7 +1296,6 @@ export function EditorPage() {
    *  成功后上报埋点）。 */
   const runImageExport = (format: 'jpg', scale: 1 | 2 | 3): void => {
     if (!doc || !meta) return;
-    setExportOpen(false);
     void exportImage(doc, meta.title, {
       format,
       scale,
@@ -1318,8 +1305,7 @@ export function EditorPage() {
       .catch((e: unknown) => showToast(e instanceof Error ? e.message : '导出失败'));
   };
 
-  /** XMind 导出（M4 Task 5，FR-IO-004；2026-11-15 图片写回随导出保真第三波）：
-   *  工具栏导出菜单与分享弹窗 onExport('xmind') 两入口共用同一闭包（行为一致）。
+  /** XMind 导出：分享弹窗 onExport('xmind') 使用此闭包（含图片缺失点名 toast）。
    *  exportXmind 已 async（先抓节点图片入包再下载）：部分图片抓取失败不阻断导出，
    *  toast 点名缺失张数（NFR-USE-005 两段式：原因+下一步=可重试）；其余失败走
    *  既有错误 toast。 */
@@ -3174,11 +3160,8 @@ export function EditorPage() {
   // meta 按当前画布读（structureType/themeId 画布级——页签条切换后工具栏/面板回显
   // 随画布变；title/customColumns/tableView 仍 doc 级，canvasId 对它们无语义）。
   const meta = doc ? getMeta(doc, canvasIdGetter()) : null;
-  // 标题草稿（2026-10-20 IME 修复）：受控值=草稿 ?? meta.title；组合输入期
-  // （拼音上屏前）不写回文档——否则拼音字母被当真值写回、meta 重渲染打断组合
-  // （「删不完/中文回车变英文且不全/多空格」根因）。失焦/回车收敛。
-  const [titleDraft, setTitleDraft] = useState<string | null>(null);
-  const titleComposingRef = useRef(false);
+  // 标题显示为文本；铅笔打开独立弹窗，本地草稿确认后才写文档（原型 Prompt 交互）。
+  const [renameOpen, setRenameOpen] = useState(false);
   const themeId = meta ? resolveThemeId(meta.themeId) : 'gmind-blue';
   // 脚标口径与服务端配额统一（FR-ACC-003）：自当前画布 root 可达的存活节点数
   // （不含 root；墓碑/孤儿不计——与 countAlive 的差异见 @gmind/core countAliveReachable；
@@ -4101,30 +4084,34 @@ export function EditorPage() {
   return (
     <div className="editor-page">
       <header className="editor-toolbar">
-        {/* 工具栏图标化分组改版（M6 Task 1，企微对标）：单行分组 + 1px 竖线分隔。
-            组序：[返回] | [标题·星标·保存状态] | [视图] | [撤销·重做·格式刷] |
-            [上级/子级/同级] | [格式·任务·简洁] | [结构·主题] | [导出] |
-            [成员·版本历史·动态·快捷键·查找]（插入组 2026-10-10 整体删除；全屏组
-            2026-10-09 迁至底栏）；全部按钮内联 SVG 图标 + title 提示，既有
-            data-testid 一概保留（members-btn 实名与既有用例一致）。 */}
-        <div className="toolbar-group">
+        {/* 原型顶部栏：品牌 | 标题·星标·保存状态 | 视图 | 撤销重做 | 主题操作 |
+            格式/任务/待办/简洁 | 结构/主题 | 动态/查找 | 更多 | 成员/分享。
+            导出统一由分享弹窗承接；待办与动态本轮不改位置或功能。 */}
+        <div className="toolbar-group toolbar-brand-group">
           <button
+            type="button"
             data-testid="back-btn"
-            className="toolbar-btn"
+            className="toolbar-brand"
             title="返回工作台"
+            aria-label="返回工作台"
             onClick={() => navigate('/workspace')}
           >
-            <BackIcon />
+            <Lucide name="Share2" size={22} strokeWidth={2.6} />
           </button>
+          <span className="toolbar-brand-name" data-testid="toolbar-brand-name">Gmind</span>
         </div>
         {readOnly ? (
-          /* 移动端工具栏精简版（OPEN-T-005）：仅返回 + 标题只读展示 + 保存状态 +
-             评论开关——其余编辑项（结构/主题/撤销/重做/全屏/导出/标题输入/星标/
-             版本/快捷键/成员）一概不装配。 */
+          /* 简化顶栏：画布编辑控件不装配；owner/editor 在手机仍可改名，
+             所有已登录协作者保留分享与成员入口。 */
           <>
             <span className="title-display" data-testid="title-display">
               {meta?.title ?? ''}
             </span>
+            {!roleReadOnly && (
+              <button type="button" data-testid="title-edit" className="title-edit-btn" title="重命名文件" aria-label="重命名文件" onClick={() => setRenameOpen(true)}>
+                <Lucide name="Pencil" size={14} />
+              </button>
+            )}
             <span className="save-status" data-testid="save-status">
               {status}
             </span>
@@ -4136,62 +4123,31 @@ export function EditorPage() {
             >
               评论
             </button>
-            {!mobileReadOnly && (
-              <>
-                <button type="button" data-testid="share-btn" className="toolbar-share-btn" title="分享" aria-label="分享" onClick={() => setShareView('auto')}>分享</button>
-                <button type="button" data-testid="members-btn" className="toolbar-btn" title="协作成员" aria-label="协作成员" onClick={() => { setMembersFocus(null); setShareView('members'); }}>
-                  成员 <span data-testid="members-count">{members.length}</span>
-                </button>
-              </>
-            )}
+            <button type="button" data-testid="share-btn" className="toolbar-share-btn" title="分享" aria-label="分享" onClick={() => setShareView('auto')}><Lucide name="Share2" size={16} /><span className="toolbar-share-label">分享</span></button>
+            <CollaboratorStackButton
+              stack={collaboratorStack}
+              total={topbarCollaborators.length}
+              onlineCount={onlineCollaboratorCount}
+              onlineUserIds={onlineUserIds}
+              onClick={() => { setMembersFocus(null); setShareView('members'); }}
+            />
           </>
         ) : (
           <>
         <span className="toolbar-sep" />
-        {/* 标题组：标题输入 + 星标 + 保存状态（位置语义不变：返回之后的最左区）。
-            star-toggle 保留 ★/☆ 字形（editor.e2e 断言按钮文本，零回归约束）。 */}
+        {/* 标题组：标题文本 + 铅笔弹窗 + 星标 + 保存状态。 */}
         <div className="toolbar-group toolbar-group-title">
-          <input
-            data-testid="title-input"
-            className="title-input"
-            // 2026-10-20 IME 修复（需求方反馈「删不完/中文回车变英文且不全/多空格」）：
-            // 受控值改本地草稿优先——组合输入期（拼音上屏前）不写回文档、不被 meta
-            // 重渲染打断；失焦/回车收敛（空标题回灌旧值，不落库——旧语义保留）。
-            value={titleDraft ?? meta?.title ?? ''}
-            onChange={(e) => {
-              const value = e.target.value;
-              setTitleDraft(value);
-              if (titleComposingRef.current) return; // 组合期只更新草稿
-              if (value.trim() === '') return; // 空标题不写（失焦时回灌恢复）
-              setTitle(value);
-              afterUserWrite(); // fix round 1 minor a：标题写也走统一 capUndoStack 通道
-            }}
-            onCompositionStart={() => {
-              titleComposingRef.current = true;
-            }}
-            onCompositionEnd={(e) => {
-              titleComposingRef.current = false;
-              const value = (e.target as HTMLInputElement).value;
-              setTitleDraft(value);
-              if (value.trim() === '') return;
-              setTitle(value);
-              afterUserWrite();
-            }}
-            onBlur={() => {
-              // 收敛：空标题回灌 meta（不落库）；非空草稿如与 meta 一致则天然幂等
-              if (titleDraft !== null && titleDraft.trim() !== '') {
-                if (titleDraft !== (meta?.title ?? '')) {
-                  setTitle(titleDraft);
-                  afterUserWrite();
-                }
-              }
-              setTitleDraft(null);
-            }}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); // 回车 = 提交收敛
-            }}
-            placeholder="文档标题"
-          />
+          <span className="title-display" data-testid="title-display" title={meta?.title ?? ''}>{meta?.title ?? ''}</span>
+          <button
+            type="button"
+            data-testid="title-edit"
+            className="title-edit-btn"
+            title="重命名文件"
+            aria-label="重命名文件"
+            onClick={() => setRenameOpen(true)}
+          >
+            <Lucide name="Pencil" size={14} />
+          </button>
           <button
             data-testid="star-toggle"
             className={'star-toggle' + (starred ? ' starred' : '')}
@@ -4454,75 +4410,9 @@ export function EditorPage() {
             />
           </div>
         </div>
-        {/* 导出组（M4 Task 5，FR-IO-004）：XMind + JPG（Task 9 就地追加，不改动
-            既有 XMind 项；PNG 透明档 2026-11-15 退役，图片导出统一 JPG 白底）。
-            文件名与 header 标题同源 getMeta(doc).title。 */}
-        <div className="toolbar-group">
-          <div className="export-wrap" ref={exportWrapRef}>
-            <button
-              data-testid="export-menu"
-              className="toolbar-btn"
-              title="导出"
-              onClick={() => setExportOpen((v) => !v)}
-            >
-              <ExportIcon />
-            </button>
-            {exportOpen && (
-              <div className="export-menu" role="menu">
-                <div className="popover-head">
-                  <span className="popover-head-title">导出</span>
-                  <button
-                    type="button"
-                    data-testid="export-close"
-                    className="popover-close"
-                    title="关闭"
-                    aria-label="关闭导出菜单"
-                    onClick={() => setExportOpen(false)}
-                  >
-                    ×
-                  </button>
-                </div>
-                <button
-                  data-testid="export-xmind"
-                  role="menuitem"
-                  onClick={() => {
-                    setExportOpen(false);
-                    // 全画布多 Sheet（计划四裁定 8）；图片写回与失败点名在 runXmindExport
-                    runXmindExport();
-                  }}
-                >
-                  导出 XMind
-                </button>
-                {/* JPG（M4 Task 9，FR-IO-003）：白底（JPG 无 alpha 通道恒白底，
-                    PNG 透明档 2026-11-15 退役）。1x/2x/3x = 布局包围盒整倍放大。 */}
-                {[1, 2, 3].map((n) => (
-                  <button
-                    key={`jpg-${n}`}
-                    data-testid={`export-jpg-${n}x`}
-                    role="menuitem"
-                    onClick={() => runImageExport('jpg', n as 1 | 2 | 3)}
-                  >
-                    JPG {n}x（白底）
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
         <span className="toolbar-sep" />
-        {/* 协作/视图组（2026-10-25 原型顶栏重组）：版本历史 / 动态 / 查找；快捷键
-            入口移入「更多」下拉（评论同）；成员入口 2026-10-11 迁至顶栏最右 */}
+        {/* 动态与查找保持原位；版本历史按原型收进“更多”。 */}
         <div className="toolbar-group">
-          {/* 版本历史（M4 Task 8，FR-VER-004 UI）：时间轴/只读预览/一键恢复入口 */}
-          <button
-            data-testid="versions-toggle"
-            data-popover-toggle="versions-toggle"
-            className="toolbar-btn"
-            title="版本历史"
-            onClick={() => setVersionsOpen((v) => !v)}
-          >
-            <HistoryIcon />
-          </button>
           {/* 文档动态（M6 Task 8，企微对标）：events 只读流（评论/导出/版本恢复等） */}
           <button
             data-testid="activity-toggle"
@@ -4567,6 +4457,18 @@ export function EditorPage() {
               <button
                 type="button"
                 role="menuitem"
+                data-testid="versions-toggle"
+                onClick={() => {
+                  setMoreOpen(false);
+                  setVersionsOpen((v) => !v);
+                }}
+              >
+                <HistoryIcon />
+                版本历史
+              </button>
+              <button
+                type="button"
+                role="menuitem"
                 data-testid="comment-toggle"
                 onClick={() => {
                   setMoreOpen(false);
@@ -4590,16 +4492,19 @@ export function EditorPage() {
             </div>
           )}
         </div>
-        {/* 顶栏右缘：分享 + 成员钮（2026-11-16 需求方裁定：本人头像 avatar-me 及
-            个人中心下拉整体删除——账号设置/退出登录由工作台侧栏用户卡承接）。
-            成员钮=成员面板唯一入口（2026-10-25 原型头像堆形态：本人头像 + 前 2 位
-            协作者头像 + 溢出 +N，数据源 memberIndex=collaborators∪presence；
-            在线数徽标保留——数字语义在线数，testid members-count 既有用例零改动）；
-            移动端只读分支不装配（随桌面工具栏整体隐藏）。 */}
+        {/* 顶栏右缘：成员头像堆 + 总人数，随后分享主按钮。成员目录只含真实协作者，
+            在线绿点/离线灰与邀请移除刷新共用 useTaskMembers 数据面。 */}
         <div className="toolbar-trailing">
-          {/* 分享（2026-10-25 原型 ShareModal）：打开分享弹窗（邀请协作/链接分享/
-              导出三页签——链接管理与 MD/CSV 导出本弹窗新增；直接复制链接的旧行为
-              由弹窗 link 页签承接）。 */}
+          <CollaboratorStackButton
+            stack={collaboratorStack}
+            total={topbarCollaborators.length}
+            onlineCount={onlineCollaboratorCount}
+            onlineUserIds={onlineUserIds}
+            onClick={() => {
+              setMembersFocus(null);
+              setShareView('members');
+            }}
+          />
           <button
             type="button"
             data-testid="share-btn"
@@ -4608,55 +4513,8 @@ export function EditorPage() {
             aria-label="分享"
             onClick={() => setShareView('auto')}
           >
-            分享
-          </button>
-          <button
-            data-testid="members-btn"
-            data-popover-toggle="members-btn"
-            className="toolbar-btn toolbar-members-btn"
-            title="在线成员"
-            aria-label="在线成员"
-            onClick={() => {
-              setMembersFocus(null); // 常规开关：无定位目标（M6 T9 评审修复轮）
-              setShareView('members');
-            }}
-          >
-            <span className="members-stack" aria-hidden>
-              <MemberChipAvatar
-                userId={me?.id ?? 'me'}
-                nickname={me?.nickname ?? '我'}
-                avatar={me ? memberIndex.get(me.id)?.avatar : undefined}
-                online={me ? onlineUserIds.has(me.id) : false}
-              />
-              {[...memberIndex.values()]
-                .filter((u) => u.userId !== me?.id)
-                // 在线优先（presence 里有 = 在线），离线置灰在后；同组内按昵称字典序稳定排序
-                .sort((a, b) => {
-                  const aOnline = onlineUserIds.has(a.userId);
-                  const bOnline = onlineUserIds.has(b.userId);
-                  if (aOnline !== bOnline) return aOnline ? -1 : 1;
-                  return a.nickname.localeCompare(b.nickname);
-                })
-                .slice(0, 2)
-                .map((u) => (
-                  <MemberChipAvatar key={u.userId} userId={u.userId} nickname={u.nickname} avatar={u.avatar} online={onlineUserIds.has(u.userId)} />
-                ))}
-              {memberIndex.size - 3 > 0 && (
-                <span
-                  className="members-stack-avatar members-stack-more"
-                  title={[...memberIndex.values()]
-                    .filter((u) => u.userId !== me?.id)
-                    .slice(2)
-                    .map((u) => `${u.nickname} · ${onlineUserIds.has(u.userId) ? '在线' : '离线'}`)
-                    .join('\n')}
-                >
-                  +{Math.max(0, memberIndex.size - 3)}
-                </span>
-              )}
-            </span>
-            <span className="members-badge" data-testid="members-count">
-              {members.length}
-            </span>
+            <Lucide name="Share2" size={16} />
+            <span className="toolbar-share-label">分享</span>
           </button>
         </div>
       </>
@@ -5169,9 +5027,18 @@ export function EditorPage() {
         onClose={() => setActivityOpen(false)}
       />
       <HelpPanel open={helpOpen} onClose={() => setHelpOpen(false)} />
-      {/* 分享弹窗（2026-10-25 原型 ShareModal）：邀请/链接/导出三页签；导出转发
-          既有通道（XMind/JPG 与工具栏导出菜单同源；PNG 2026-11-15 退役），
-          MD/CSV/XLSX 为弹窗内真实下载。 */}
+      {renameOpen && (
+        <RenameFileDialog
+          title={meta?.title ?? ''}
+          onCancel={() => setRenameOpen(false)}
+          onConfirm={(title) => {
+            setTitle(title);
+            afterUserWrite();
+            setRenameOpen(false);
+          }}
+        />
+      )}
+      {/* 分享弹窗：协作成员/邀请协作/链接分享/导出四页签；图片导出支持 JPG 三档。 */}
       <ShareDialog
         open={shareView !== 'closed'}
         initialTab={shareView === 'closed' ? 'auto' : shareView}
@@ -5189,6 +5056,7 @@ export function EditorPage() {
         doc={doc}
         nameOf={(uid) => memberIndexRef.current.get(uid)?.nickname ?? `成员 ${uid.slice(-4)}`}
         showToast={showToast}
+        onMembershipChanged={reloadCollaborators}
         onExport={(kind, scale) => {
           if (kind === 'xmind') {
             runXmindExport(); // 与工具栏 export-xmind 同一闭包（含图片缺失点名 toast）
@@ -5241,6 +5109,50 @@ function clipboardErrorMessage(e: unknown): string {
   if (msg === 'TEXT_TOO_LONG') return '节点文本长度已达上限';
   if (msg === 'PARENT_INVALID') return '粘贴目标无效';
   return e instanceof Error ? e.message : '操作失败';
+}
+
+/** 顶栏协作成员入口：编辑者与桌面只读协作者共用同一真实人数、在线状态和打开行为。 */
+function CollaboratorStackButton({
+  stack,
+  total,
+  onlineCount,
+  onlineUserIds,
+  onClick,
+}: {
+  stack: { shown: MemberOption[]; hidden: MemberOption[] };
+  total: number;
+  onlineCount: number;
+  onlineUserIds: ReadonlySet<string>;
+  onClick: () => void;
+}) {
+  const summary = `协作成员，共 ${total} 人，${onlineCount} 人在线`;
+  return (
+    <button
+      type="button"
+      data-testid="members-btn"
+      data-popover-toggle="members-btn"
+      className="toolbar-btn toolbar-members-btn"
+      title={summary}
+      aria-label={summary}
+      onClick={onClick}
+    >
+      <span className="members-stack" aria-hidden>
+        {stack.shown.map((u) => (
+          <MemberChipAvatar key={u.userId} userId={u.userId} nickname={u.nickname} avatar={u.avatar} online={onlineUserIds.has(u.userId)} />
+        ))}
+        {stack.hidden.length > 0 && (
+          <span
+            className="members-stack-avatar members-stack-more"
+            title={stack.hidden.map((u) => `${u.nickname} · ${onlineUserIds.has(u.userId) ? '在线' : '离线'}`).join('\n')}
+          >
+            +{stack.hidden.length}
+          </span>
+        )}
+      </span>
+      <span className="members-total"><span data-testid="members-count">{total}</span> 人</span>
+      <span data-testid="members-online-count" hidden>{onlineCount}</span>
+    </button>
+  );
 }
 
 /** 成员钮头像堆单元（2026-10-25 原型 AvatarStack 形态）：自定义头像直出，
