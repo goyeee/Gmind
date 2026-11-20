@@ -200,6 +200,9 @@ export function useTaskMembers(
 /**
  * 成员多选 chips（C3/C4 同一份交互语义：点击切换选中，选中高亮成员色）。
  * testid 前缀由调用方给（`task-panel-owner` 等，拼 `-{userId}`）。
+ * 可选 onAvatarClick（2026-11-21 需求方裁定「头像/名字分开，点头像调进度选盘」）：
+ * 传入后**已选**成员的头像渲染为独立小按钮触发回调（如面板负责人头像→进度选盘），
+ * chip 其余部分保持原 toggle 语义；未选成员无进度语义，整体仍 toggle。
  */
 export function MemberMultiSelect({
   memberIndex,
@@ -207,12 +210,17 @@ export function MemberMultiSelect({
   onToggle,
   testIdPrefix,
   emptyHint = '暂无文档成员，邀请协作者后可指派',
+  onAvatarClick,
+  avatarTestIdPrefix,
 }: {
   memberIndex: Map<string, MemberOption>;
   selected: string[];
   onToggle: (userId: string) => void;
   testIdPrefix: string;
   emptyHint?: string;
+  onAvatarClick?: (userId: string, at: { x: number; y: number }) => void;
+  /** 头像按钮 testid 前缀（拼 `-{userId}`；onAvatarClick 必传）。 */
+  avatarTestIdPrefix?: string;
 }): ReactElement {
   if (memberIndex.size === 0) {
     return <span className="tt-pop-empty">{emptyHint}</span>;
@@ -222,6 +230,25 @@ export function MemberMultiSelect({
       {[...memberIndex.values()].map((m) => {
         const on = selected.includes(m.userId);
         const color = colorForUser(m.userId);
+        const avatarEl =
+          on && onAvatarClick ? (
+            <button
+              type="button"
+              className="tt-avatar-btn"
+              data-testid={`${avatarTestIdPrefix}-${m.userId}`}
+              title={`${m.nickname} 进度`}
+              aria-label={`${m.nickname} 进度`}
+              onClick={(e) => {
+                e.stopPropagation();
+                const rect = e.currentTarget.getBoundingClientRect();
+                onAvatarClick(m.userId, { x: rect.left + rect.width / 2, y: rect.bottom + 4 });
+              }}
+            >
+              <Avatar userId={m.userId} nickname={m.nickname} avatar={m.avatar} size={14} />
+            </button>
+          ) : (
+            <Avatar userId={m.userId} nickname={m.nickname} avatar={m.avatar} size={14} />
+          );
         return (
           <button
             key={m.userId}
@@ -233,7 +260,7 @@ export function MemberMultiSelect({
             style={on ? chipActive(color) : undefined}
             onClick={() => onToggle(m.userId)}
           >
-            <Avatar userId={m.userId} nickname={m.nickname} avatar={m.avatar} size={14} />
+            {avatarEl}
             {m.nickname}
           </button>
         );
@@ -248,7 +275,7 @@ export function MemberMultiSelect({
  * 多画布（计划三 Task 4 评审修复）：canvasId 限定当前画布子树——异根画布的任务
  * 面板/人员进度不再拉平第一画布数据；缺省走 core 缺省解析（meta.activeCanvasId）。
  */
-export function deriveNodesOfDoc(doc: Y.Doc, canvasId?: string): DeriveNode[] {
+export function deriveNodesOfDoc(doc: Y.Doc, canvasId?: string, includeRoot = false): DeriveNode[] {
   const snaps = new Map<string, NodeSnapshot>();
   const rootId = rootIdOf(doc, canvasId);
   for (const id of subtreeIds(doc, rootId, canvasId)) {
@@ -259,7 +286,7 @@ export function deriveNodesOfDoc(doc: Y.Doc, canvasId?: string): DeriveNode[] {
   const root = snaps.get(rootId);
   const out: DeriveNode[] = [];
   for (const [id, snap] of snaps) {
-    if (id === rootId) continue;
+    if (id === rootId && !includeRoot) continue;
     const parent = snap.parentId === '' ? root : snaps.get(snap.parentId);
     // 人员进度列条目拉平（assigneeEntriesOf 纯读；无条目不出该键——快照零新增键面）
     const assignees = assigneeEntriesOf(doc, id, canvasId);
@@ -270,6 +297,9 @@ export function deriveNodesOfDoc(doc: Y.Doc, canvasId?: string): DeriveNode[] {
       collapsed: snap.collapsed,
       order: parent ? Math.max(0, parent.childIds.indexOf(id)) : 0,
       task: { ...snap.task, owners: [...snap.task.owners] },
+      // taskActive（2026-11-20 任务模型）：core 读侧按显式任务信息/人员条目判定，
+      // 供 taskProgressOf 自动父级汇总排除普通说明节点。
+      taskActive: snap.taskActive,
       ...(assignees.length > 0
         ? {
             customAssignees: assignees.map(({ user, progress, weight }) => ({
@@ -414,12 +444,15 @@ export function SmartDateInput({
 
 /**
  * 人员列编辑器（assignee 类型，2026-10-12 起为唯一人员列——原 person 纯名单类型
- * 已按需求方裁定去除）：每人一行 [头像+昵称] [0-100 进度输入 %] [比重输入（仅自定义
- * 比重模式）] [×移除]，底部成员多选添加（新人默认进度 0——「选了人就必须有进度」）。
- * 比重（2026-10-12 裁定）：列级「按人数平分 / 自定义比重」开关（写列定义 weighted）；
- * 平分模式存量的 weight 不参与合成（core 读侧解析）。整值替换提交（core 整值 LWW
- * 口径）：任何行变化构造 v2 Record 提交；移除到 0 人提交 null（删键）。
- * 值结构 v2 = Record<user, {progress, weight?}>；旧版 number 简形读侧兼容。
+ * 已按需求方裁定去除）：表格单元格弹层形态为每人一行 [头像+昵称] [0-100 进度输入 %]
+ * [比重输入（仅自定义比重模式）] [×移除]，底部成员多选添加（新人默认进度 0——
+ * 「选了人就必须有进度」）。比重（2026-10-12 裁定）：列级「按人数平分 / 自定义比重」
+ * 开关（写列定义 weighted）；平分模式存量的 weight 不参与合成（core 读侧解析）。
+ * 整值替换提交（core 整值 LWW 口径）：任何行变化构造 v2 Record 提交；移除到 0 人
+ * 提交 null（删键）。值结构 v2 = Record<user, {progress, weight?}>；旧版 number
+ * 简形读侧兼容。
+ * 面板形态（2026-11-21 需求方裁定）：onAvatarPick 传入时行内去进度填写框，头像变
+ * 独立按钮调起进度选盘、只读 %回显——写路径走 core 逐人 op（宿主接线）。
  * 表格单元格弹层与任务面板（CustomFieldInput assignee 分支）共用本组件。
  */
 export interface AssigneeRow {
@@ -444,91 +477,77 @@ export function assigneeRowsOf(value: unknown): AssigneeRow[] {
 export function AssigneeField({
   value,
   memberIndex,
-  onCommit,
+  onAssigneeProgress,
+  onAssigneeToggle,
+  onAvatarPick,
   testId,
-  def,
-  onToggleWeighted,
 }: {
   value: unknown;
   memberIndex: Map<string, MemberOption>;
-  onCommit: (v: Record<string, { progress: number; weight?: number }> | null) => void;
+  onAssigneeProgress: (userId: string, progress: number) => void;
+  onAssigneeToggle: (userId: string, assigned: boolean) => void;
+  /** 面板变体（2026-11-21 需求方裁定「进度填写去掉，点头像调进度选盘」）：传入后
+   *  每行头像渲染为独立按钮触发本回调（进度数值一并带给宿主），行内**不再渲染**
+   *  进度输入框，只留只读百分比回显；缺省（表格单元格弹层）保持原输入框编辑。 */
+  onAvatarPick?: (userId: string, progress: number, at: { x: number; y: number }) => void;
   testId: string;
-  /** 列定义（含 weighted 比重开关）；缺省 = 不显示开关（任务面板等只读模式场景）。 */
-  def?: CustomColumnDef;
-  /** 比重模式切换回调（写列 schema weighted）；缺省不渲染开关。 */
-  onToggleWeighted?: (weighted: boolean) => void;
 }): ReactElement {
   const rows = assigneeRowsOf(value);
-  const weighted = def?.weighted === true;
-  const asRecord = (): Record<string, { progress: number; weight?: number }> =>
-    Object.fromEntries(rows.map((r) => [r.user, r.weight === undefined ? { progress: r.progress } : { progress: r.progress, weight: r.weight }]));
-  const commit = (next: Record<string, { progress: number; weight?: number }>): void => {
-    onCommit(Object.keys(next).length > 0 ? next : null);
-  };
   return (
     <span className="task-assignee" data-testid={testId}>
-      {onToggleWeighted && (
-        <label className="task-assignee-weighted-toggle" data-testid={`${testId}-weighted-toggle`}>
-          <input
-            type="checkbox"
-            checked={weighted}
-            onChange={(e) => onToggleWeighted(e.target.checked)}
-          />
-          自定义比重
-        </label>
-      )}
       {rows.length === 0 && <span className="task-custom-placeholder">选择成员并更新进度</span>}
-      {rows.map((row) => (
-        <span key={row.user} className="task-assignee-row" data-testid={`${testId}-row-${row.user}`}>
-          <Avatar userId={row.user} nickname={memberIndex.get(row.user)?.nickname ?? row.user.slice(0, 8)} avatar={memberIndex.get(row.user)?.avatar} />
-          <span className="task-assignee-name">
-            {memberIndex.get(row.user)?.nickname ?? row.user.slice(0, 8)}
+      {rows.map((row) => {
+        const name = memberIndex.get(row.user)?.nickname ?? row.user.slice(0, 8);
+        const avatar = (
+          <Avatar userId={row.user} nickname={name} avatar={memberIndex.get(row.user)?.avatar} />
+        );
+        return (
+          <span key={row.user} className="task-assignee-row" data-testid={`${testId}-row-${row.user}`}>
+            {onAvatarPick ? (
+              <>
+                <button
+                  type="button"
+                  className="tt-avatar-btn"
+                  data-testid={`${testId}-avatar-${row.user}`}
+                  title={`${name} 进度`}
+                  aria-label={`${name} 进度`}
+                  onClick={(e) => {
+                    const rect = e.currentTarget.getBoundingClientRect();
+                    onAvatarPick(row.user, row.progress, { x: rect.left + rect.width / 2, y: rect.bottom + 4 });
+                  }}
+                >
+                  {avatar}
+                </button>
+                <span className="task-assignee-name">{name}</span>
+                <span className="task-assignee-pct">{row.progress}%</span>
+              </>
+            ) : (
+              <>
+                {avatar}
+                <span className="task-assignee-name">{name}</span>
+                <AssigneeProgressInput
+                  testId={`${testId}-progress-${row.user}`}
+                  progress={row.progress}
+                  onCommit={(p) => onAssigneeProgress(row.user, p)}
+                />
+              </>
+            )}
+            <button
+              type="button"
+              className="task-assignee-remove"
+              data-testid={`${testId}-remove-${row.user}`}
+              title="移除该成员"
+              onClick={() => onAssigneeToggle(row.user, false)}
+            >
+              ×
+            </button>
           </span>
-          <AssigneeProgressInput
-            testId={`${testId}-progress-${row.user}`}
-            progress={row.progress}
-            onCommit={(p) => {
-              const next = asRecord();
-              const cur = next[row.user]!;
-              next[row.user] = cur.weight === undefined ? { progress: p } : { progress: p, weight: cur.weight };
-              commit(next);
-            }}
-          />
-          {weighted && (
-            <AssigneeWeightSelect
-              testId={`${testId}-weight-${row.user}`}
-              weight={row.weight ?? 1}
-              onCommit={(w) => {
-                const next = asRecord();
-                next[row.user] = { progress: next[row.user]!.progress, weight: w };
-                commit(next);
-              }}
-            />
-          )}
-          <button
-            type="button"
-            className="task-assignee-remove"
-            data-testid={`${testId}-remove-${row.user}`}
-            title="移除该成员"
-            onClick={() => {
-              const next = asRecord();
-              delete next[row.user];
-              commit(next);
-            }}
-          >
-            ×
-          </button>
-        </span>
-      ))}
+        );
+      })}
       <MemberMultiSelect
         memberIndex={memberIndex}
         selected={rows.map((r) => r.user)}
-        onToggle={(userId) => {
-          const next = asRecord();
-          if (userId in next) delete next[userId];
-          else next[userId] = { progress: 0 }; // 新人默认进度 0
-          commit(next);
-        }}
+        onToggle={(userId) => onAssigneeToggle(userId, !rows.some((row) => row.user === userId))}
         testIdPrefix={`${testId}-member`}
         emptyHint="暂无文档成员，邀请协作者后可指派"
       />
@@ -536,52 +555,10 @@ export function AssigneeField({
   );
 }
 
-/** 自定义比重模式行内的比重下拉（需求方 2026-10-12 裁定：0.3~0.8 弱化档 + 1 平权，
- *  下拉选择替代数字输入——避免填入过大数不好评估；只需将需弱化权重的人员调低）。
- *  weight 缺省（未显式选择）= 1 平权；选中即提交、Esc 还原。 */
-const ASSIGNEE_WEIGHT_OPTIONS: Array<{ value: number; label: string }> = [
-  { value: 1, label: '1（平权）' },
-  { value: 0.8, label: '0.8' },
-  { value: 0.7, label: '0.7' },
-  { value: 0.6, label: '0.6' },
-  { value: 0.5, label: '0.5' },
-  { value: 0.4, label: '0.4' },
-  { value: 0.3, label: '0.3' },
-];
-
-function AssigneeWeightSelect({
-  weight,
-  onCommit,
-  testId,
-}: {
-  weight: number;
-  onCommit: (v: number) => void;
-  testId: string;
-}): ReactElement {
-  // 下拉只有固定档位：当前 weight 无精确匹配档（如旧数据 3）时显示数值占位，选中档位即归一。
-  const known = ASSIGNEE_WEIGHT_OPTIONS.some((o) => o.value === weight);
-  return (
-    <span className="task-assignee-weight" title="比重（合成总进度的权重，1 为平权，可弱化至 0.3）">
-      <select
-        data-testid={testId}
-        value={known ? weight : ''}
-        aria-label="比重"
-        onChange={(e) => onCommit(Number(e.target.value))}
-      >
-        {!known && <option value={weight}>{weight}</option>}
-        {ASSIGNEE_WEIGHT_OPTIONS.map((o) => (
-          <option key={o.value} value={o.value}>
-            {o.label}
-          </option>
-        ))}
-      </select>
-    </span>
-  );
-}
 
 /** 人员进度行内的 0-100 数字输入（失焦/Enter 提交、Esc 还原、钳制取整；
  *  外部值同步守卫同 SmartDateInput——自身聚焦中不被远端值打断）。 */
-function AssigneeProgressInput({
+export function AssigneeProgressInput({
   progress,
   onCommit,
   testId,
@@ -644,6 +621,9 @@ export function CustomFieldInput({
   value,
   memberIndex,
   onCommit,
+  onAssigneeProgress,
+  onAssigneeToggle,
+  onAssigneeAvatarPick,
   testIdPrefix,
 }: {
   def: CustomColumnDef;
@@ -652,6 +632,10 @@ export function CustomFieldInput({
   onCommit: (
     v: string | number | Record<string, { progress: number; weight?: number }> | null,
   ) => void;
+  onAssigneeProgress: (userId: string, progress: number) => void;
+  onAssigneeToggle: (userId: string, assigned: boolean) => void;
+  /** assignee 列面板变体：传入即启用「头像点开进度选盘、行内去填写框」渲染。 */
+  onAssigneeAvatarPick?: (userId: string, progress: number, at: { x: number; y: number }) => void;
   testIdPrefix: string;
 }): ReactElement {
   const testId = `${testIdPrefix}-${def.id}`;
@@ -662,7 +646,14 @@ export function CustomFieldInput({
       );
     case 'assignee':
       return (
-        <AssigneeField value={value} memberIndex={memberIndex} onCommit={onCommit} testId={testId} def={def} />
+        <AssigneeField
+          value={value}
+          memberIndex={memberIndex}
+          onAssigneeProgress={onAssigneeProgress}
+          onAssigneeToggle={onAssigneeToggle}
+          onAvatarPick={onAssigneeAvatarPick}
+          testId={testId}
+        />
       );
     case 'progress':
       return (

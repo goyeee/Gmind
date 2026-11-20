@@ -53,7 +53,7 @@ import './version-panel.css';
 interface VersionItem {
   id: string;
   nodeCount: number;
-  type: 'auto' | 'manual' | 'pre_restore';
+  type: 'auto' | 'manual' | 'pre_restore' | 'pre_task_model';
   createdAt: string;
   createdByName: string | null;
   restoredFrom: string | null;
@@ -68,6 +68,7 @@ const TYPE_BADGE: Record<VersionItem['type'], string> = {
   auto: '自动',
   manual: '手动',
   pre_restore: '恢复前存档',
+  pre_task_model: '任务升级前',
 };
 
 export interface VersionPanelProps {

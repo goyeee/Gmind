@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type * as Y from 'yjs';
 import {
   addChild,
+  addAssignee,
   assigneeEntriesOf,
   canvasesMap,
   countAliveReachable,
@@ -16,11 +17,16 @@ import {
   ORIGIN_SYSTEM,
   ORIGIN_USER,
   rootIdOf,
+  removeAssignee,
+  setAssigneeProgress,
   setCollapsed,
   setCustomColumns,
   setCustomField,
   setDescription,
+  completeNodeTask,
   setNodeTask,
+  setTaskOwner,
+  unfinishedTaskProgressOf,
   setText,
   subtreeIds,
   TABLE_BUILTIN_COLUMN_KEYS,
@@ -37,7 +43,9 @@ import { readTableViewPrefs, writeTableViewPrefs } from './tableViewPrefs';
 import { Lucide } from '../components/lucide-data';
 import {
   childrenOf,
-  effectiveProgress,
+  taskDoneDateOf,
+  taskProgressOf,
+  taskStatusOf,
   isOverdue,
   todayStr,
   type DeriveNode,
@@ -60,6 +68,7 @@ import {
   STATUS_META,
   type MemberOption,
 } from './TaskFields';
+import { TaskCompletionDialog, type UnfinishedEntry } from './TaskCompletionDialog';
 import './task-table.css';
 
 /**
@@ -261,6 +270,13 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
   /** 自定义 text/progress/assignee 单元格编辑与弹层锚点（点击/双击进入；2026-10-12
    *  person 列去除后 assignee 弹层复用本态，原 customPersonOpen 退役）。 */
   const [customEdit, setCustomEdit] = useState<{ nodeId: string; colId: string } | null>(null);
+  // 完成/重开弹窗（Task 3，2026-11-20 任务模型）：状态列点击 done 有未完成子进度 →
+  // 三选；重开与 0%→进行中 → 进度选择。三视图（面板/表格）共用 TaskCompletionDialog。
+  const [statusDialog, setStatusDialog] = useState<
+    | { nodeId: string; kind: 'complete'; unfinished: UnfinishedEntry[] }
+    | { nodeId: string; kind: 'reopen'; targetStatus: TaskStatus }
+    | null
+  >(null);
   /** 列设置浮层（全列显隐勾选清单；非只读入口）。 */
   const [colSettingsOpen, setColSettingsOpen] = useState(false);
 
@@ -325,6 +341,7 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
         collapsed: snap.collapsed,
         order: parent ? Math.max(0, parent.childIds.indexOf(id)) : 0,
         updatedAt: updated.get(id) ?? 0,
+        taskActive: snap.taskActive,
         task: { ...snap.task, owners: [...snap.task.owners] },
         icons: { ...snap.icons },
         description: snap.description,
@@ -353,9 +370,8 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
       if (!map.has(p.userId)) map.set(p.userId, { userId: p.userId, nickname: p.nickname });
     }
     for (const n of nodes) {
-      for (const o of n.task?.owners ?? []) {
-        if (!map.has(o)) map.set(o, { userId: o, nickname: o.slice(0, 8) });
-      }
+      const ownerId = n.task?.ownerId ?? n.task?.owners[0] ?? null;
+      if (ownerId !== null && !map.has(ownerId)) map.set(ownerId, { userId: ownerId, nickname: ownerId.slice(0, 8) });
     }
     return map;
   }, [collaborators, presence, nodes]);
@@ -450,17 +466,20 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
       case 'title':
         return { empty: false, numeric: false, num: 0, text: n.title };
       case 'owner': {
-        const first = t?.owners[0] ?? '';
+        const first = t?.ownerId ?? t?.owners[0] ?? '';
         return { empty: first === '', numeric: false, num: 0, text: first !== '' ? nicknameOf(first) : '' };
       }
       case 'status':
-        return { empty: false, numeric: true, num: STATUS_SORT_ORDER[t?.status ?? 'todo'], text: '' };
+        return { empty: false, numeric: true, num: STATUS_SORT_ORDER[taskStatusOf(nodes, n.id)], text: '' };
       case 'progress':
-        return { empty: false, numeric: true, num: effectiveProgress(nodes, n.id), text: '' };
+        return { empty: false, numeric: true, num: taskProgressOf(nodes, n.id), text: '' };
       case 'startDate':
       case 'dueDate':
-      case 'doneDate':
         return { empty: (t?.[key] ?? null) === null, numeric: false, num: 0, text: t?.[key] ?? '' };
+      case 'doneDate': {
+        const value = taskDoneDateOf(nodes, n.id);
+        return { empty: value === null, numeric: false, num: 0, text: value ?? '' };
+      }
       case 'updatedAt':
         return { empty: (n.updatedAt ?? 0) <= 0, numeric: true, num: n.updatedAt ?? 0, text: '' };
       default:
@@ -555,9 +574,10 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
     const t = n.task;
     const kw = filters.keyword.trim().toLowerCase();
     if (kw !== '' && !n.title.toLowerCase().includes(kw)) return false;
-    const owners = t?.owners ?? [];
+    const owners =
+      t?.ownerId !== null && t?.ownerId !== undefined ? [t.ownerId] : (t?.owners ?? []);
     if (filters.owners.size > 0 && !owners.some((o) => filters.owners.has(o))) return false;
-    if (filters.statuses.size > 0 && !filters.statuses.has(t?.status ?? 'todo')) return false;
+    if (filters.statuses.size > 0 && !filters.statuses.has(taskStatusOf(nodes, n.id))) return false;
     if (filters.overdueOnly && !isOverdue(n, nodes)) return false;
     if (filters.unassignedOnly && owners.length > 0) return false;
     // 分组/部门 + 字段条件（二期对齐轮）：求值单源 taskFilter
@@ -573,10 +593,10 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
       const ctx = {
         owners,
         hasTask: !!t,
-        progress: effectiveProgress(nodes, n.id),
+        progress: taskProgressOf(nodes, n.id),
         startDate: t?.startDate ?? null,
         dueDate: t?.dueDate ?? null,
-        finishDate: t?.doneDate ?? null,
+        finishDate: taskDoneDateOf(nodes, n.id),
         custom: n.custom,
         assigneeUsers: (colId: string) => assigneeUsersOf(n, colId),
       };
@@ -663,6 +683,83 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
     } catch (e) {
       showToast(e instanceof Error ? e.message : '任务字段保存失败，请调整后重试');
     }
+  };
+
+  const commitOwner = (id: string, ownerId: string | null): void => {
+    try {
+      setTaskOwner(doc, id, ownerId, ORIGIN_USER, cid);
+      afterUserWrite();
+      setOwnerCellOpen(null);
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : '负责人保存失败，请重试');
+    }
+  };
+
+  // 状态列点击（2026-11-20 任务模型裁定，与任务面板同口径）：done 有未完成子进度 →
+  // 三选弹窗；重开 / 0%→进行中 → 进度选择弹窗；其余直接落写。
+  const requestCompletion = (nodeId: string): void => {
+    const snap = getNode(doc, nodeId, cid);
+    if (!snap || snap.task.status === 'done' || snap.task.progress === 100) return;
+    const unfinished = unfinishedTaskProgressOf(doc, nodeId, cid);
+    if (unfinished.owner === null && unfinished.assignees.length === 0) {
+      try {
+        completeNodeTask(doc, nodeId, 'preserve-subprogress', ORIGIN_USER, cid);
+        afterUserWrite();
+      } catch (e) {
+        showToast(e instanceof Error ? e.message : '任务完成保存失败，请重试');
+      }
+      return;
+    }
+    const entries: UnfinishedEntry[] = [];
+    if (unfinished.owner !== null) {
+      entries.push({
+        user: unfinished.owner.userId,
+        name: memberIndex.get(unfinished.owner.userId)?.nickname ?? unfinished.owner.userId.slice(0, 8),
+        progress: unfinished.owner.progress,
+        avatar: memberIndex.get(unfinished.owner.userId)?.avatar ?? null,
+      });
+    }
+    for (const a of unfinished.assignees) {
+      entries.push({
+        user: a.user,
+        name: memberIndex.get(a.user)?.nickname ?? a.user.slice(0, 8),
+        progress: a.progress,
+        avatar: memberIndex.get(a.user)?.avatar ?? null,
+        colName: customColumns.find((c) => c.id === a.colId)?.name,
+      });
+    }
+    setStatusDialog({ nodeId, kind: 'complete', unfinished: entries });
+  };
+  const requestProgress = (nodeId: string, progress: number): void => {
+    const snap = getNode(doc, nodeId, cid);
+    if (!snap || progress === snap.task.progress) return;
+    if (progress === 100) {
+      requestCompletion(nodeId);
+      return;
+    }
+    // 完成态直接用所选进度重开（2026-11-21 需求方裁定「不要让用户确定百分比」）：
+    // 裸进度写入在 core 走 applyStatusRules 静默联动（清完成日期、状态派生），
+    // 重开弹窗只留给纯状态切换入口（statusClick）。
+    commitTask(nodeId, { progress });
+  };
+  const statusClick = (nodeId: string, s: TaskStatus): void => {
+    const snap = getNode(doc, nodeId, cid);
+    if (!snap) return;
+    const t = snap.task;
+    if (s === 'done') {
+      requestCompletion(nodeId);
+      return;
+    }
+    if (t.status === 'done' || t.progress === 100) {
+      setStatusDialog({ nodeId, kind: 'reopen', targetStatus: s });
+      return;
+    }
+    if (s === 'doing' && t.progress === 0) {
+      // 0%→进行中（含 blocked 0%）：与 core 门禁条件一致（operations.ts 只看 progress）
+      setStatusDialog({ nodeId, kind: 'reopen', targetStatus: 'doing' });
+      return;
+    }
+    commitTask(nodeId, { status: s });
   };
 
   // —— 自定义列写动作（schema 整表替换 / 单字段写；core 校验两段式文案 toast 透出）——
@@ -952,11 +1049,15 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
     const pinned = pinCls(col.key);
     const pinSt = pinStyle(col.key);
     const task = node.task;
-    const owners = task?.owners ?? [];
-    const status = task?.status ?? 'todo';
+    // 2026-11-20 任务模型：负责人显示/指派以唯一 ownerId 为准（旧 owners 兼容回退）
+    const owners =
+      task?.ownerId !== null && task?.ownerId !== undefined ? [task.ownerId] : (task?.owners ?? []);
+    const autoProgress = task?.autoProgress === true;
+    const status = taskStatusOf(nodes, node.id);
     const statusMeta = STATUS_META[status];
+    const doneDate = taskDoneDateOf(nodes, node.id);
     const overdue = isOverdue(node, nodes);
-    const eff = effectiveProgress(nodes, node.id);
+    const eff = taskProgressOf(nodes, node.id); // 2026-11-20：总进度唯一口径（人员子进度不参与）
     switch (col.key) {
       case 'title':
         return (
@@ -1065,7 +1166,7 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
                 <button
                   type="button"
                   className="tt-owners-btn"
-                  title="点击指派负责人（可多选）"
+                  title="点击选择总负责人（单选）"
                   onClick={() => setOwnerCellOpen(ownerCellOpen === node.id ? null : node.id)}
                 >
                   {owners.length === 0 ? (
@@ -1104,11 +1205,7 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
                             type="button"
                             className="tt-chip"
                             style={on ? chipActive(color) : undefined}
-                            onClick={() =>
-                              commitTask(node.id, {
-                                owners: on ? owners.filter((o) => o !== m.userId) : [...owners, m.userId],
-                              })
-                            }
+                            onClick={() => commitOwner(node.id, on ? null : m.userId)}
                           >
                             <Avatar userId={m.userId} nickname={m.nickname} avatar={m.avatar} size={14} />
                             {m.nickname}
@@ -1139,7 +1236,9 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
                 style={{ color: statusMeta.color }}
                 aria-label="任务状态"
                 value={status}
-                onChange={(e) => commitTask(node.id, { status: e.target.value as TaskStatus })}
+                disabled={autoProgress}
+                title={autoProgress ? '自动父任务状态由子任务进度决定' : undefined}
+                onChange={(e) => statusClick(node.id, e.target.value as TaskStatus)}
               >
                 {STATUS_KEYS.map((s) => (
                   <option key={s} value={s}>
@@ -1159,26 +1258,25 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
             className={pinned || undefined}
             style={pinSt}
             onDoubleClick={(e) => {
-              if (readOnly || hasChildren) return; // 父级只读（Σ 自动值）；叶子进入编辑
+              if (readOnly || autoProgress) return; // 仅自动父级只读；手动父级仍可编辑
               e.stopPropagation();
               setProgressEditId(node.id);
             }}
           >
-            {hasChildren ? (
+            {autoProgress ? (
               <MiniBar value={eff} danger={overdue} auto />
             ) : progressEditId === node.id && !readOnly ? (
               <ProgressEditor
                 value={task?.progress ?? 0}
                 onCommit={(v) => {
                   setProgressEditId(null);
-                  if (v !== (task?.progress ?? 0)) commitTask(node.id, { progress: v });
+                  if (v !== (task?.progress ?? 0)) requestProgress(node.id, v);
                 }}
                 onClose={() => setProgressEditId(null)}
               />
             ) : (
-              // 叶子显示合成有效进度（eff：人员进度列口径，含标准负责人与各人条目
-              // 的拉平平均；双击进入编辑的是标准负责人个人进度 task.progress）。
-              <span title="总进度含人员进度列；双击编辑负责人进度">
+              // 内置进度只显示任务总进度；人员子进度在各人员列单独查看。
+              <span title="任务总进度；双击编辑">
                 <MiniBar value={eff} danger={overdue} />
               </span>
             )}
@@ -1221,14 +1319,14 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
       case 'doneDate':
         return (
           <td key={col.key} data-testid={`table-cell-${node.id}-doneDate`} data-col-key={col.key} className={pinned || undefined} style={pinSt}>
-            {readOnly ? (
-              <span className="tt-date-text">{task?.doneDate ?? '—'}</span>
+            {readOnly || autoProgress ? (
+              <span className="tt-date-text">{doneDate ?? '—'}</span>
             ) : (
               <SmartDateInput
-                value={task?.doneDate ?? null}
-                done={task?.doneDate != null}
+                value={doneDate}
+                done={doneDate != null}
                 onCommit={(v) => {
-                  if (v !== (task?.doneDate ?? null)) commitTask(node.id, { doneDate: v });
+                  if (v !== doneDate) commitTask(node.id, { doneDate: v });
                 }}
               />
             )}
@@ -1407,15 +1505,22 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
                             value={value}
                             memberIndex={memberIndex}
                             testId="table-custom-assignee-editor"
-                            onCommit={(v) => commitCustomField(node.id, c.id, v)}
-                            def={c}
-                            onToggleWeighted={(weighted) => {
-                              // 比重开关写列定义（setCustomColumns 整表替换，同事务收敛）。
-                              commitColumns(
-                                customColumns.map((col) =>
-                                  col.id === c.id ? { ...col, weighted: weighted || undefined } : col,
-                                ),
-                              );
+                            onAssigneeProgress={(userId, progress) => {
+                              try {
+                                setAssigneeProgress(doc, node.id, c.id, userId, progress, ORIGIN_USER, cid);
+                                afterUserWrite();
+                              } catch (e) {
+                                showToast(e instanceof Error ? e.message : '人员子进度保存失败，请重试');
+                              }
+                            }}
+                            onAssigneeToggle={(userId, assigned) => {
+                              try {
+                                if (assigned) addAssignee(doc, node.id, c.id, userId, ORIGIN_USER, cid);
+                                else removeAssignee(doc, node.id, c.id, userId, ORIGIN_USER, cid);
+                                afterUserWrite();
+                              } catch (e) {
+                                showToast(e instanceof Error ? e.message : '人员保存失败，请重试');
+                              }
                             }}
                           />
                         </div>
@@ -1861,6 +1966,31 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
           </tbody>
         </table>
       </div>
+
+      {/* 完成/重开弹窗（三视图共用组件，2026-11-20 任务模型） */}
+      {statusDialog !== null && (
+        <TaskCompletionDialog
+          kind={statusDialog.kind}
+          unfinished={statusDialog.kind === 'complete' ? statusDialog.unfinished : undefined}
+          targetStatus={statusDialog.kind === 'reopen' ? statusDialog.targetStatus : undefined}
+          onConfirm={(_kind, mode) => {
+            const id = statusDialog.nodeId;
+            setStatusDialog(null);
+            try {
+              completeNodeTask(doc, id, mode, ORIGIN_USER, cid);
+              afterUserWrite();
+            } catch (e) {
+              showToast(e instanceof Error ? e.message : '任务完成保存失败，请重试');
+            }
+          }}
+          onConfirmProgress={(_kind, p) => {
+            const d = statusDialog;
+            setStatusDialog(null);
+            commitTask(d.nodeId, { status: d.kind === 'reopen' ? d.targetStatus : 'doing', progress: p });
+          }}
+          onCancel={() => setStatusDialog(null)}
+        />
+      )}
 
       {/* 右键行菜单（查看者只留展开/折叠项） */}
       {menu && (

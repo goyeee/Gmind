@@ -1,21 +1,30 @@
 import { useEffect, useState } from 'react';
 import type * as Y from 'yjs';
 import { getMeta, getNode, childrenIds, listCanvases, listSummaries } from '@gmind/core';
-import { effectiveProgress, type DeriveNode } from '@gmind/shared';
+import { taskProgressOf, type DeriveNode } from '@gmind/shared';
 import {
   layout,
   resolveNodeStyle,
   resolveThemeId,
   THEMES,
   type DocReader,
+  type LayoutResult,
   type MeasureAdapter,
 } from '@gmind/engine';
 
 /**
- * 工作台真实内容缩略图（2026-10-21 需求方裁定：推翻 10-20「装饰性静态图」，改真实快照）：
+ * 工作台真实内容缩略图（2026-10-21 需求方裁定：推翻 10-20「装饰性静态图」，改真实快照；
+ * 2026-11-19 二次裁定「可读优先 + 宽度占缩略图宽度 80%」四问确认，推翻整图包围盒口径）：
  * 引擎 layout 直出 SVG 字符串（内联全部样式属性，零 CSS 依赖——列表卡片 <img> 场景
  * 不携带编辑器样式表）。编辑器在 persisted ack 后节流上传（POST /files/:id/thumbnail），
  * 服务端存 files.thumb_svg；卡片懒加载 GET，无快照回退装饰性 Thumb。
+ *
+ * 取景窗口：viewBox 固定 176×64（纵横比 2.75:1 = 最小卡 220px × 80% 显示宽 ÷ 64px
+ * 显示高），内容经 camera（scale+平移）画进窗口——
+ * - 内容塞得下 → 放大到窗口宽 96% 居中（小文件不再窄条；高度超限按高收）；
+ * - 塞不下 → 钳可读下限 MIN_SCALE，窗口锚定 root 盒中心（root 直接子级全右锚左
+ *   1/4、全左镜像右 1/4、两侧居中——与编辑器「定位中心」单侧偏移同语义），窗口外
+ *   节点跳绘。旧格式快照（整图包围盒）显示侧 contain 加 Letterbox 不回退。
  *
  * 简化口径（缩略图不追求像素级复刻）：只画节点盒（填充/边框/圆角）+ 单行标题文本 +
  * 连线（bezier/elbow）；图片/图标/任务行/概要/折叠徽标一律不画。
@@ -24,9 +33,22 @@ import {
 
 const MAX_NODES = 500;
 const MAX_SVG_BYTES = 200_000;
-const PAD = 16;
-/** 表格缩略图（2026-10-25 原型 TableThumb）：数据行上限。 */
-const TABLE_THUMB_ROWS = 6;
+/** 取景窗口（2.75:1）：显示侧 .file-thumb-img width:80% height:64px contain 正好填满。 */
+const WIN_W = 176;
+const WIN_H = 64;
+/** 完整显示时内容宽度目标 = 窗口宽的 96%（余 4% 呼吸边）。 */
+const CONTENT_W_RATIO = 0.96;
+/** 可读下限：root 文字 20px → 8 窗口单位（显示≈css px）；低于此宁可裁剪不缩成点。 */
+const MIN_SCALE = 0.4;
+/** 表格缩略图（2026-10-25 原型 TableThumb）：数据行上限（2026-11-19 画布归一 2.75
+ *  纵横比后 4 行恰好铺满固定高）。 */
+const TABLE_THUMB_ROWS = 4;
+/** 表格画布（2026-11-19）：390×142 = 2.75:1（与脑图窗口同纵横比）。 */
+const TABLE_W = 390;
+const TABLE_H = 142;
+const TABLE_PAD = 14;
+const TABLE_HEAD_H = 26;
+const TABLE_ROW_H = 22;
 
 function esc(s: string): string {
   return s
@@ -35,6 +57,47 @@ function esc(s: string): string {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
+}
+
+/** 数字保留 2 位小数（camera 缩放后坐标含小数，截短省 SVG 字节）。 */
+const n2 = (v: number): number => Math.round(v * 100) / 100;
+
+interface Camera {
+  s: number;
+  camX: number;
+  camY: number;
+}
+
+/** camera 求解：窗口坐标 = (doc − cam) × s。完整档（target ≥ 可读下限）内容居中；
+ *  裁剪档钳 MIN_SCALE 并把窗口锚定 root 盒中心——root 直接子级全右锚窗口左 1/4、
+ *  全左镜像右 1/4、两侧/无子级居中（NodeBox.side 直读布局结果，与「定位中心」
+ *  单侧偏移同口径；org 的 side='down' 天然走居中）。 */
+function solveCamera(
+  result: LayoutResult,
+  bbox: { minX: number; minY: number; maxX: number; maxY: number },
+  rootBox: LayoutResult['nodes'][number] | undefined,
+): Camera {
+  const contentW = Math.max(bbox.maxX - bbox.minX, 1);
+  const contentH = Math.max(bbox.maxY - bbox.minY, 1);
+  const target = Math.min((CONTENT_W_RATIO * WIN_W) / contentW, WIN_H / contentH);
+  if (target >= MIN_SCALE) {
+    return {
+      s: target,
+      camX: (bbox.minX + bbox.maxX) / 2 - WIN_W / (2 * target),
+      camY: (bbox.minY + bbox.maxY) / 2 - WIN_H / (2 * target),
+    };
+  }
+  const kids = result.nodes.filter((b) => b.depth === 1);
+  const allRight = kids.length > 0 && kids.every((b) => b.side === 'right');
+  const allLeft = kids.length > 0 && kids.every((b) => b.side === 'left');
+  const anchorFx = allRight ? 0.25 : allLeft ? 0.75 : 0.5;
+  const cx = rootBox !== undefined ? rootBox.x + rootBox.w / 2 : (bbox.minX + bbox.maxX) / 2;
+  const cy = rootBox !== undefined ? rootBox.y + rootBox.h / 2 : (bbox.minY + bbox.maxY) / 2;
+  return {
+    s: MIN_SCALE,
+    camX: cx - (anchorFx * WIN_W) / MIN_SCALE,
+    camY: cy - (0.5 * WIN_H) / MIN_SCALE,
+  };
 }
 
 export function buildThumbSvg(doc: Y.Doc, measure: MeasureAdapter): string | null {
@@ -73,34 +136,48 @@ export function buildThumbSvg(doc: Y.Doc, measure: MeasureAdapter): string | nul
     maxX = Math.max(maxX, b.x + b.w);
     maxY = Math.max(maxY, b.y + b.h);
   }
-  const w = maxX - minX + PAD * 2;
-  const h = maxY - minY + PAD * 2;
+  const { s, camX, camY } = solveCamera(
+    result,
+    { minX, minY, maxX, maxY },
+    nodes.find((b) => b.id === first.rootId),
+  );
+  const X = (x: number): number => n2((x - camX) * s);
+  const Y = (y: number): number => n2((y - camY) * s);
+  const edgeW = Math.max(n2(theme.edgeWidth * s), 0.5);
+  const nodeW = Math.max(n2(theme.nodeBorderWidth * s), 0.5);
+  const rx = Math.max(n2(theme.nodeBorderRadius * s), 1);
 
   const parts: string[] = [
-    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${minX - PAD} ${minY - PAD} ${w} ${h}">`,
-    `<rect x="${minX - PAD}" y="${minY - PAD}" width="${w}" height="${h}" fill="${theme.canvasBackground}"/>`,
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${WIN_W} ${WIN_H}">`,
+    `<rect width="${WIN_W}" height="${WIN_H}" fill="${theme.canvasBackground}"/>`,
   ];
 
   for (const e of result.edges) {
     const d =
       e.kind === 'bezier' && e.controls && e.controls.length === 2
-        ? `M ${e.from.x} ${e.from.y} C ${e.controls[0]!.x} ${e.controls[0]!.y}, ${e.controls[1]!.x} ${e.controls[1]!.y}, ${e.to.x} ${e.to.y}`
+        ? `M ${X(e.from.x)} ${Y(e.from.y)} C ${X(e.controls[0]!.x)} ${Y(e.controls[0]!.y)}, ${X(e.controls[1]!.x)} ${Y(e.controls[1]!.y)}, ${X(e.to.x)} ${Y(e.to.y)}`
         : // elbow：中点折线近似（缩略图口径，不追求渲染级 elbow 几何）
-          `M ${e.from.x} ${e.from.y} L ${(e.from.x + e.to.x) / 2} ${e.from.y} L ${(e.from.x + e.to.x) / 2} ${e.to.y} L ${e.to.x} ${e.to.y}`;
-    parts.push(`<path d="${d}" fill="none" stroke="${theme.edgeColor}" stroke-width="${theme.edgeWidth}"/>`);
+          `M ${X(e.from.x)} ${Y(e.from.y)} L ${X((e.from.x + e.to.x) / 2)} ${Y(e.from.y)} L ${X((e.from.x + e.to.x) / 2)} ${Y(e.to.y)} L ${X(e.to.x)} ${Y(e.to.y)}`;
+    parts.push(`<path d="${d}" fill="none" stroke="${theme.edgeColor}" stroke-width="${edgeW}"/>`);
   }
 
   for (const b of nodes) {
+    const x = X(b.x);
+    const y = Y(b.y);
+    const w = n2(b.w * s);
+    const h = n2(b.h * s);
+    // 取景窗口外跳绘（裁剪档省字节；<img> 场景 SVG 溢出本就裁切，双保险）
+    if (x > WIN_W || y > WIN_H || x + w < 0 || y + h < 0) continue;
     const snap = getNode(doc, b.id, canvasId);
     if (!snap || snap.deleted) continue;
     const rs = resolveNodeStyle(theme, b.depth, snap.style ?? {});
     parts.push(
-      `<rect x="${b.x}" y="${b.y}" width="${b.w}" height="${b.h}" rx="${theme.nodeBorderRadius}" fill="${rs.fill}" stroke="${rs.border}" stroke-width="${theme.nodeBorderWidth}"/>`,
+      `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="${rx}" fill="${rs.fill}" stroke="${rs.border}" stroke-width="${nodeW}"/>`,
     );
     const text = snap.text.trim();
     if (text !== '') {
       parts.push(
-        `<text x="${b.x + b.w / 2}" y="${b.y + b.h / 2 + rs.fontSize * 0.35}" text-anchor="middle" font-size="${rs.fontSize}" font-family="${esc(rs.fontFamily)}" fill="${rs.textColor}">${esc(text)}</text>`,
+        `<text x="${X(b.x + b.w / 2)}" y="${Y(b.y + b.h / 2 + rs.fontSize * 0.35)}" text-anchor="middle" font-size="${n2(rs.fontSize * s)}" font-family="${esc(rs.fontFamily)}" fill="${rs.textColor}">${esc(text)}</text>`,
       );
     }
   }
@@ -111,10 +188,11 @@ export function buildThumbSvg(doc: Y.Doc, measure: MeasureAdapter): string | nul
 }
 
 /** 表格文件缩略图（2026-10-25 原型 TableThumb 现实化）：按表格形态直出 SVG——
- *  表头（序号/主题/进度/状态）+ 最多 6 行数据（深度缩进圆点+标题截 10 字 +
+ *  表头（序号/主题/进度/状态）+ 最多 4 行数据（深度缩进圆点+标题截 10 字 +
  *  进度条 + 状态色胶囊），进度取 shared effectiveProgress 同口径（父级 Σ 汇总
  *  一致）。行遍历跳过 collapsed 子树、root 不进表（与 TaskTable 行集同源语义）。
- *  空表（root 无子级）/超限返回 null（回退装饰图）。 */
+ *  空表（root 无子级）/超限返回 null（回退装饰图）。
+ *  画布固定 390×142（2026-11-19 与脑图窗口同 2.75 纵横比，显示框正好填满）。 */
 export function buildTableThumbSvg(doc: Y.Doc): string | null {
   const first = listCanvases(doc)[0];
   if (!first) return null;
@@ -130,6 +208,7 @@ export function buildTableThumbSvg(doc: Y.Doc): string | null {
       parentId,
       title: snap.text,
       collapsed: snap.collapsed,
+      taskActive: snap.taskActive,
       task: snap.task
         ? { ...snap.task, progress: snap.task.progress ?? 0 }
         : undefined,
@@ -145,7 +224,7 @@ export function buildTableThumbSvg(doc: Y.Doc): string | null {
     for (const cid of childrenIds(doc, id, canvasId)) {
       const snap = getNode(doc, cid, canvasId);
       if (!snap || snap.deleted) continue;
-      rows.push({ title: snap.text, depth, progress: effectiveProgress(derive, cid) });
+      rows.push({ title: snap.text, depth, progress: taskProgressOf(derive, cid) });
       if (rows.length >= TABLE_THUMB_ROWS) return;
       if (!snap.collapsed) walk(cid, depth + 1);
       if (rows.length >= TABLE_THUMB_ROWS) return;
@@ -154,26 +233,26 @@ export function buildTableThumbSvg(doc: Y.Doc): string | null {
   walk(first.rootId, 0);
   if (rows.length === 0) return null;
 
-  // 画布：宽 360；高 = 表头 26 + 行 22×N + pad×2
-  const W = 360;
-  const HEAD_H = 26;
-  const ROW_H = 22;
-  const H = PAD * 2 + HEAD_H + rows.length * ROW_H;
+  // 画布固定 390×142（2.75:1）：表头 26 + 行 22×4 + pad×2 = 142 恰好铺满
+  const W = TABLE_W;
+  const H = TABLE_H;
+  const HEAD_H = TABLE_HEAD_H;
+  const ROW_H = TABLE_ROW_H;
   const COL_TITLE = 46; // 序号列右缘
-  const COL_PROG = W - PAD - 108; // 进度条 x
-  const COL_STATUS = W - PAD - 52; // 状态胶囊 x
+  const COL_PROG = W - TABLE_PAD - 108; // 进度条 x
+  const COL_STATUS = W - TABLE_PAD - 52; // 状态胶囊 x
   const parts: string[] = [
     `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}">`,
     `<rect width="${W}" height="${H}" fill="#ffffff"/>`,
     // 表头（灰底 + 三列标签）
-    `<rect x="${PAD}" y="${PAD}" width="${W - PAD * 2}" height="${HEAD_H}" rx="4" fill="#f2f3f5"/>`,
-    `<text x="${PAD + 10}" y="${PAD + 17}" font-size="11" fill="#4e5969">序号</text>`,
-    `<text x="${COL_TITLE + 8}" y="${PAD + 17}" font-size="11" fill="#4e5969">主题</text>`,
-    `<text x="${COL_PROG}" y="${PAD + 17}" font-size="11" fill="#4e5969">进度</text>`,
-    `<text x="${COL_STATUS}" y="${PAD + 17}" font-size="11" fill="#4e5969">状态</text>`,
+    `<rect x="${TABLE_PAD}" y="${TABLE_PAD}" width="${W - TABLE_PAD * 2}" height="${HEAD_H}" rx="4" fill="#f2f3f5"/>`,
+    `<text x="${TABLE_PAD + 10}" y="${TABLE_PAD + 17}" font-size="11" fill="#4e5969">序号</text>`,
+    `<text x="${COL_TITLE + 8}" y="${TABLE_PAD + 17}" font-size="11" fill="#4e5969">主题</text>`,
+    `<text x="${COL_PROG}" y="${TABLE_PAD + 17}" font-size="11" fill="#4e5969">进度</text>`,
+    `<text x="${COL_STATUS}" y="${TABLE_PAD + 17}" font-size="11" fill="#4e5969">状态</text>`,
   ];
   rows.forEach((r, i) => {
-    const y = PAD + HEAD_H + i * ROW_H;
+    const y = TABLE_PAD + HEAD_H + i * ROW_H;
     const title = r.title.length > 10 ? r.title.slice(0, 10) + '…' : r.title;
     // 深度缩进圆点 + 标题（父级行加粗近似：字重属性）
     const indent = COL_TITLE + 8 + r.depth * 12;
@@ -182,7 +261,7 @@ export function buildTableThumbSvg(doc: Y.Doc): string | null {
       `<text x="${indent + 10}" y="${y + 15}" font-size="11" fill="#1f2329" font-weight="${r.depth === 0 ? '600' : '400'}">${esc(title || '（未命名）')}</text>`,
     );
     // 序号
-    parts.push(`<text x="${PAD + 10}" y="${y + 15}" font-size="11" fill="#86909c">${i + 1}</text>`);
+    parts.push(`<text x="${TABLE_PAD + 10}" y="${y + 15}" font-size="11" fill="#86909c">${i + 1}</text>`);
     // 进度条（底槽 + 填充；0 不填充，100 绿、其余蓝）+ 百分比小字
     parts.push(`<rect x="${COL_PROG}" y="${y + 7}" width="44" height="8" rx="4" fill="#f2f3f5"/>`);
     if (r.progress > 0) {

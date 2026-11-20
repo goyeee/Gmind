@@ -42,10 +42,12 @@ import {
   getMeta,
   getNode,
   listCanvases,
+  progressStageOf,
   rootIdOf,
 } from '@gmind/core';
 import type { NodeImagePlacement } from '@gmind/core';
 import { buildXmind, type XmindIcons, type XmindNode, type XmindSheet } from '@gmind/xmind-io';
+import { taskProgressOf, type DeriveNode } from '@gmind/shared';
 
 /** 导出携带的节点样式键（spec §六四键）：fontSize 在内；fontFamily 不在——引擎不支持
  *  节点级 fontFamily 覆盖，spec 裁定不映射。值透传字符串，build 层做 px 形状与非法过滤。 */
@@ -77,6 +79,17 @@ export interface XmindImageTask {
  * 多画布：canvasId 给定时遍历/根解析限定该画布子图；缺省=core 缺省解析（单画布零差异）。 */
 export function docToXmindTree(doc: Y.Doc, canvasId?: string, imageTasks?: XmindImageTask[]): XmindNode {
   const rootId = rootIdOf(doc, canvasId);
+  const derive: DeriveNode[] = [];
+  const deriveSeen = new Set<string>();
+  const collectDerive = (id: string, parentId: string | null): void => {
+    if (deriveSeen.has(id)) return;
+    deriveSeen.add(id);
+    const snap = getNode(doc, id, canvasId);
+    if (!snap || snap.deleted) return;
+    derive.push({ id, parentId, title: snap.text, taskActive: snap.taskActive, task: snap.task });
+    for (const child of snap.childIds) collectDerive(child, id);
+  };
+  collectDerive(rootId, null);
   const visited = new Set<string>([rootId]);
   const walk = (id: string): XmindNode => {
     const snap = getNode(doc, id, canvasId);
@@ -93,6 +106,11 @@ export function docToXmindTree(doc: Y.Doc, canvasId?: string, imageTasks?: Xmind
     for (const group of ICON_GROUPS) {
       const values = snap.icons[group];
       if (values !== undefined && values.length > 0) icons[group] = values;
+    }
+    // 自动父的缓存 progress/图标可能停留在开启开关时；导出按当前完整任务树重算。
+    if (snap.taskActive || icons.progress !== undefined) {
+      const stage = progressStageOf(taskProgressOf(derive, id));
+      if (stage !== null) icons.progress = [stage];
     }
     // href（导出对称 v2，spec §六）：仅 http/https 产键——与 setHref 写入口径
     // （/^https?:\/\//i）、导入解析口径对称；crafted 非 http(s) 值不产（导入侧计超链接降级）。

@@ -1,5 +1,6 @@
 import type * as Y from 'yjs';
 import { childrenIds, getNode, listCanvases } from '@gmind/core';
+import { taskProgressOf, taskStatusOf, type DeriveNode } from '@gmind/shared';
 
 /**
  * 文档级导出（2026-10-25 原型分享弹窗导出页签；2026-11-15 轮 1 五项收敛）：
@@ -29,18 +30,33 @@ interface FlatRow {
 /** 画布树 → 平铺行（root 不进表，depth 0=直属子级；collapsed 展开导出全量）。 */
 function flattenCanvas(doc: Y.Doc, canvasId: string, rootId: string): FlatRow[] {
   const rows: FlatRow[] = [];
+  const derive: DeriveNode[] = [];
+  const collect = (id: string, parentId: string | null): void => {
+    const snap = getNode(doc, id, canvasId);
+    if (!snap || snap.deleted) return;
+    derive.push({
+      id,
+      parentId,
+      title: snap.text,
+      taskActive: snap.taskActive,
+      task: snap.task,
+    });
+    for (const child of childrenIds(doc, id, canvasId)) collect(child, id);
+  };
+  collect(rootId, null);
   const walk = (id: string, depth: number): void => {
     for (const cid of childrenIds(doc, id, canvasId)) {
       const snap = getNode(doc, cid, canvasId);
       if (!snap || snap.deleted) continue;
-      const progress = snap.task?.progress ?? 0;
+      const progress = taskProgressOf(derive, cid);
+      const ownerId = snap.task.ownerId ?? snap.task.owners[0] ?? null;
       rows.push({
         title: snap.text,
         depth,
-        owners: snap.task?.owners ?? [],
+        owners: ownerId === null ? [] : [ownerId],
         dueDate: snap.task?.dueDate ?? null,
         progress,
-        status: snap.task?.status ?? (progress >= 100 ? 'done' : progress > 0 ? 'doing' : 'todo'),
+        status: taskStatusOf(derive, cid),
         priority: snap.icons?.priority?.[0] ?? null,
       });
       walk(cid, depth + 1);

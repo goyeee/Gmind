@@ -25,14 +25,16 @@ import {
   resolveCanvasId,
   ROOT_NODE_ID,
   rootIdOf,
-  setCustomField,
   setDocMeta,
   setDescription,
   setImage,
   setIcon,
   moveImage,
   setNodeSide,
+  setAssigneeProgress,
   setNodeTask,
+  completeNodeTask,
+  setOwnerProgress,
   setStyle,
   setSummary,
   setText,
@@ -89,7 +91,7 @@ import {
   Viewport,
   type ViewportState,
 } from '@gmind/engine';
-import { todayStr } from '@gmind/shared';
+import { isOverdue, taskDoneDateOf, taskProgressOf, taskStatusOf, todayStr } from '@gmind/shared';
 import { attachKeyboardMap, isEditableTarget, resolveDirectEditKey } from '../editor/keyboardMap';
 import { rootKidEffectiveSides, rootSiblingForceSide } from '../editor/rootSiblingSide';
 import { nextChildText } from '../editor/defaultNodeText';
@@ -648,8 +650,9 @@ export function EditorPage() {
   const docOwnerIds = useMemo(() => {
     if (!doc) return [] as string[];
     const ids: string[] = [];
-    for (const n of deriveNodesOfDoc(doc, canvasIdGetter())) {
-      for (const o of n.task?.owners ?? []) if (!ids.includes(o)) ids.push(o);
+    for (const n of deriveNodesOfDoc(doc, canvasIdGetter(), true)) {
+      const ownerId = n.task?.ownerId ?? n.task?.owners[0] ?? null;
+      if (ownerId !== null && !ids.includes(ownerId)) ids.push(ownerId);
     }
     return ids;
   }, [doc, tick, activeCanvasId]);
@@ -679,25 +682,31 @@ export function EditorPage() {
   /** 当前画布任务行快照（待办抽屉/筛选计数数据源；nodeData 已含有效进度派生）。 */
   const benchRows = useMemo<BenchRow[]>(() => {
     const out: BenchRow[] = [];
+    if (!doc) return out;
+    const derive = deriveNodesOfDoc(doc, canvasIdGetter(), true);
+    const byId = new Map(derive.map((n) => [n.id, n]));
     for (const [id, v] of nodeDataRef.current) {
-      if (!v.task) continue;
+      if (!v.task || v.taskActive === false) continue;
+      const self = byId.get(id);
+      const ownerId = v.task.ownerId ?? v.task.owners?.[0] ?? null;
       out.push({
         id,
         text: v.text,
-        owners: v.task.owners ?? [],
-        status: v.task.status ?? 'todo',
+        owners: ownerId === null ? [] : [ownerId],
+        status: self ? taskStatusOf(derive, id) : (v.task.status ?? 'todo'),
         dueDate: v.task.dueDate ?? null,
-        progress: v.task.progress ?? 0,
+        progress: self ? taskProgressOf(derive, id) : (v.task.progress ?? 0),
         assignees: (v.task.assignees ?? []).map((a) => ({ user: a.user, name: a.name, progress: a.progress, colId: a.colId })),
       });
     }
     return out;
-  }, [tick]);
+  }, [doc, tick, activeCanvasId]);
   /** 负责人候选（文档内负责人 ∪ 在线成员；昵称经成员目录，回退 ID 尾段）。 */
   const ownerCandidates = useMemo(() => {
     const ids = new Set<string>();
     for (const [, v] of nodeDataRef.current) {
-      for (const o of v.task?.owners ?? []) ids.add(o);
+      const ownerId = v.task?.ownerId ?? v.task?.owners?.[0] ?? null;
+      if (ownerId !== null) ids.add(ownerId);
       for (const a of v.task?.assignees ?? []) ids.add(a.user);
     }
     for (const m of members) ids.add(m.userId);
@@ -707,13 +716,15 @@ export function EditorPage() {
     const flt = tableFilters;
     const kw = flt.keyword.trim().toLowerCase();
     const fields = condFieldsOf(customColumns);
+    const derive = doc ? deriveNodesOfDoc(doc, canvasIdGetter(), true) : [];
+    const overdueIds = new Set(derive.filter((n) => isOverdue(n, derive)).map((n) => n.id));
     let hit = 0;
     for (const r of benchRows) {
       let ok = true;
       if (kw !== '' && !r.text.toLowerCase().includes(kw)) ok = false;
       if (ok && flt.owners.size > 0 && !r.owners.some((o) => flt.owners.has(o))) ok = false;
       if (ok && flt.statuses.size > 0 && !flt.statuses.has(r.status)) ok = false;
-      if (ok && flt.overdueOnly && !((r.dueDate ?? '') !== '' && (r.dueDate ?? '') < todayStr() && r.status !== 'done')) ok = false;
+      if (ok && flt.overdueOnly && !overdueIds.has(r.id)) ok = false;
       if (ok && flt.unassignedOnly && r.owners.length > 0) ok = false;
       if (ok && (flt.grp !== '' || flt.dept !== '')) {
         const mHit = r.owners.some((o) => {
@@ -797,15 +808,19 @@ export function EditorPage() {
   } | null>(null);
   // 人员进度/负责人头像选盘（2026-10-11/12 裁定）：点击节点任务行成员头像 → 9 档
   // 选盘快速更新进度（对齐 A 的进度徽章交互标杆）。mode=assignee 写人员列
-  // （setCustomField 整值替换）；mode=owner 写标准负责人进度（setNodeTask）。
+  // （setAssigneeProgress 逐人 diff）；mode=owner 写标准负责人进度（setOwnerProgress）。
+  // 2026-11-21 需求方裁定：无其他执行人（人员列空）时点负责人头像也弹选盘——
+  // total=true 直接写任务总进度（含 100=完成），不再 toast 引导去任务面板。
   const [assigneePicker, setAssigneePicker] = useState<{
     mode: 'assignee' | 'owner';
     nodeId: string;
     user: string;
     colId?: string;
     /** 所属列名（2026-10-13 需求方反馈：选盘头部显示列名——前端/测试…，让人知道
-     *  这位成员归哪列）；mode=owner 无列语义，固定「负责人」。 */
+     *  这位成员归哪列）；mode=owner 无列语义：有执行人「负责人」，无执行人「任务总进度」。 */
     colName?: string;
+    /** owner 模式专用：true=写任务总进度（完成/重开语义），false=写负责人子进度。 */
+    total?: boolean;
     name: string;
     avatar: string;
     progress: number;
@@ -1043,28 +1058,37 @@ export function EditorPage() {
     }
   };
 
-  /** 人员进度/负责人选盘写回（2026-10-11/12 裁定）：档位百分比 → mode 分支——
-   *  assignee 写人员列（setCustomField 整值替换，校验先于事务在 core 内）；
-   *  owner 写标准负责人进度（setNodeTask{progress}，进度徽章联动保留——画布
-   *  徽章已退役写而不画）；完成后关盘。 */
+  /** 人员进度/负责人选盘写回（2026-10-11/12 裁定；2026-11-21 任务模型口径更新）：
+   *  档位百分比 → mode 分支——assignee 写人员列逐人进度（setAssigneeProgress 逐人
+   *  diff，并发不覆盖他人）；owner 按 total 分支：无其他执行人（total=true）写任务
+   *  总进度（setNodeTask 裸进度=完成态静默重开；100=完成，保留子进度——与画布进度
+   *  徽章完成语义一致），有执行人写负责人子进度（setOwnerProgress）。完成后关盘。 */
   const applyAssigneePickerValue = (pct: number): void => {
     const p = assigneePicker;
     const d = doc;
     if (!p || !d) return;
     try {
       if (p.mode === 'owner') {
-        if (pct !== (getNode(d, p.nodeId)?.task.progress ?? 0)) {
-          setNodeTask(d, p.nodeId, { progress: pct }, ORIGIN_USER);
+        if (p.total) {
+          const t = getNode(d, p.nodeId)?.task;
+          if (!t) return;
+          if (pct === 100) {
+            if (t.status !== 'done' && t.progress !== 100) {
+              completeNodeTask(d, p.nodeId, 'preserve-subprogress', ORIGIN_USER);
+              afterUserWrite();
+            }
+          } else if (pct !== t.progress) {
+            setNodeTask(d, p.nodeId, { progress: pct }, ORIGIN_USER);
+            afterUserWrite();
+          }
+        } else if (pct !== (getNode(d, p.nodeId)?.task.ownerProgress ?? null)) {
+          setOwnerProgress(d, p.nodeId, pct, ORIGIN_USER);
           afterUserWrite();
         }
       } else {
-        const current = getNode(d, p.nodeId)?.custom?.[p.colId ?? ''];
-        const base: Record<string, { progress: number; weight?: number }> =
-          typeof current === 'object' && current !== null && !Array.isArray(current)
-            ? { ...(current as Record<string, { progress: number; weight?: number }>) }
-            : {};
-        base[p.user] = { progress: pct };
-        setCustomField(d, p.nodeId, p.colId ?? '', base, ORIGIN_USER);
+        // 逐人 diff 写（2026-11-21 起替换整值替换）：只动目标用户 progress 字段，
+        // 两个客户端更新不同人员互不覆盖（与面板/表格逐人入口同口径）。
+        setAssigneeProgress(d, p.nodeId, p.colId ?? '', p.user, pct, ORIGIN_USER);
         afterUserWrite();
       }
     } catch (e) {
@@ -2399,15 +2423,24 @@ export function EditorPage() {
         return;
       }
     }
-    // 负责人头像（2026-10-12 裁定：点负责人头像弹同款选盘快捷改其进度——写
-    // setNodeTask；与人员列点头像同交互同选盘，mode 区分写路径）。
+    // 负责人头像（2026-10-12 裁定：点负责人头像弹同款选盘快捷改其进度；与人员列
+    // 点头像同交互同选盘，mode 区分写路径）。2026-11-21 需求方裁定：无其他执行人
+    // 时不再 toast 引导去面板——直接弹选盘写任务总进度（自动父除外，进度只读）。
     const ownerG = target.closest('.gm-task-owner-avatar[data-owner-user]');
     if (ownerG && !readOnly) {
       const nodeId = target.closest('[data-node-id]')?.getAttribute('data-node-id');
       const user = ownerG.getAttribute('data-owner-user');
       if (nodeId && user) {
+        const snap = getNode(doc, nodeId);
+        if (!snap || snap.deleted) return;
+        const total = assigneeEntriesOf(doc, nodeId).length === 0;
+        if (total && snap.task.autoProgress === true) {
+          setAssigneePicker(null);
+          showToast('自动汇总父任务进度由子级决定，请完成或调整子任务');
+          return;
+        }
         setContextMenu(null);
-        const progress = getNode(doc, nodeId)?.task.progress ?? 0;
+        // 再点同一头像 = toggle 收盘（统一外点已豁免 .gm-task-owner-avatar，同徽章口径）。
         if (
           assigneePicker &&
           assigneePicker.mode === 'owner' &&
@@ -2421,10 +2454,11 @@ export function EditorPage() {
           mode: 'owner',
           nodeId,
           user,
-          colName: '负责人',
+          total,
+          colName: total ? '任务总进度' : '负责人',
           name: memberIndexRef.current.get(user)?.nickname ?? user.slice(0, 8),
           avatar: avatarSrcOf(memberIndexRef.current.get(user)?.avatar ?? null, user),
-          progress,
+          progress: total ? snap.task.progress : (snap.task.ownerProgress ?? 0),
           x: e.clientX,
           y: e.clientY,
         });
@@ -3598,21 +3632,24 @@ export function EditorPage() {
           // 评论角标计数（FR-CMT-002）：仅存活节点携带（服务端 counts 已排除
           // 已删节点线程与 resolved）；无评论的节点不设键 → 引擎按 0 处理不渲染
           commentCount: commentCountsRef.current[id],
+          taskActive: snap.taskActive,
+          taskParentId: snap.parentId === '' ? null : snap.parentId,
           // 任务字段（M7c-C2 接线）：状态条/任务行/徽标数据源。description 行不经
           // nodeData——布局经 DocReader.getNode 直读（engine NodeSnapshotLike 通道）。
           // ownerNames（2026-10-10 mindgrid 对齐）：footer 文字名数据源——成员目录
           // 映射显示名，查不到回退 ID 前 8 位（useTaskMembers 同口径）；渲染期派生。
           task: {
             ...snap.task,
-            ownerNames: snap.task.owners.map(
-              (o) => memberIndexRef.current.get(o)?.nickname ?? o.slice(0, 8),
-            ),
-            // 负责人头像（2026-10-11 头像功能）：成员目录 avatar → 直出 URL
-            // （上传键经 /api/images；null 由引擎回退文字首字符——预置分配在宿主 Avatar
-            // 组件层兜，画布任务行经 ownerAvatarUrls 显式给稳定预置）。
-            ownerAvatarUrls: snap.task.owners.map(
-              (o) => avatarSrcOf(memberIndexRef.current.get(o)?.avatar ?? null, o),
-            ),
+            // 2026-11-20 任务模型：ownerNames/ownerAvatarUrls 改由唯一总负责人
+            // （ownerId）映射；旧 owners 字段仅存量兼容读取，不再产出渲染数据。
+            ownerNames:
+              snap.task.ownerId === null
+                ? []
+                : [memberIndexRef.current.get(snap.task.ownerId)?.nickname ?? snap.task.ownerId.slice(0, 8)],
+            ownerAvatarUrls:
+              snap.task.ownerId === null
+                ? []
+                : [avatarSrcOf(memberIndexRef.current.get(snap.task.ownerId)?.avatar ?? null, snap.task.ownerId)],
             // 人员进度列头像（2026-10-11 第二步）：拉平条目 + 成员目录显示名
             // （同 ownerNames 口径；engine 任务行绘制圆形文字头像+弧形进度环）。
             assignees: assigneeEntriesOf(d, id, canvasId).map((e) => ({
@@ -3645,17 +3682,20 @@ export function EditorPage() {
         const fadeState = new Map<string, 'hit' | 'path' | 'dim'>();
         const parentById = new Map<string, string>();
         for (const b of result.nodes) if (b.parentId) parentById.set(b.id, b.parentId);
+        const filterNodes = deriveNodesOfDoc(d, canvasId, true);
+        const filterNodeById = new Map(filterNodes.map((n) => [n.id, n]));
         for (const b of result.nodes) {
           const snap = getNode(d, b.id, canvasId);
           const t = snap?.task;
-          const owners = t?.owners ?? [];
-          const st = t?.status ?? 'todo';
+          const owners = t?.ownerId !== null && t?.ownerId !== undefined ? [t.ownerId] : (t?.owners ?? []);
+          const deriveSelf = filterNodeById.get(b.id);
+          const st = deriveSelf ? taskStatusOf(filterNodes, b.id) : (t?.status ?? 'todo');
           const kw = flt.keyword.trim().toLowerCase();
           let hit = true;
           if (kw && !(nodeData.get(b.id)?.text ?? '').toLowerCase().includes(kw)) hit = false;
           if (hit && flt.owners.size > 0 && !owners.some((o) => flt.owners.has(o))) hit = false;
           if (hit && flt.statuses.size > 0 && !flt.statuses.has(st)) hit = false;
-          if (hit && flt.overdueOnly && !((t?.dueDate ?? '') !== '' && (t?.dueDate ?? '') < today0 && st !== 'done')) hit = false;
+          if (hit && flt.overdueOnly && !(deriveSelf ? isOverdue(deriveSelf, filterNodes, today0) : false)) hit = false;
           if (hit && flt.unassignedOnly && owners.length > 0) hit = false;
           if (hit && (flt.grp !== '' || flt.dept !== '')) {
             const mHit = owners.some((o) => {
@@ -3669,10 +3709,10 @@ export function EditorPage() {
             const ctx = {
               owners,
               hasTask: !!t,
-              progress: nodeData.get(b.id)?.task?.progress ?? 0,
+              progress: deriveSelf ? taskProgressOf(filterNodes, b.id) : 0,
               startDate: t?.startDate ?? null,
               dueDate: t?.dueDate ?? null,
-              finishDate: t?.doneDate ?? null,
+              finishDate: deriveSelf ? taskDoneDateOf(filterNodes, b.id) : null,
               custom: snap?.custom ?? {},
               assigneeUsers: (colId: string) => {
                 const v = snap?.custom?.[colId];

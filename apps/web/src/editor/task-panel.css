@@ -378,6 +378,13 @@
   align-items: center;
   gap: 6px;
 }
+/* 面板变体（2026-11-21 需求方裁定）：行内进度填写框退役后的只读百分比回显。 */
+.task-assignee-pct {
+  flex: none;
+  font-size: 12px;
+  color: #86909c;
+  font-variant-numeric: tabular-nums;
+}
 .task-assignee-name {
   flex: 1;
   min-width: 0;

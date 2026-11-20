@@ -1,10 +1,14 @@
 /* 任务表格视图（M7a-T4，移植自 mindgrid TreeTable；配色为 Gmind 企微浅色系，
    不搬 mindgrid 深色 IDE 值——todo 灰 / doing 蓝 / done 绿 / blocked 橙）。 */
 
-/* 挂载容器（EditorPage）：脑图视图时隐藏（display:none，组件保持挂载保住筛选态） */
+/* 挂载容器（EditorPage）：脑图视图时隐藏（display:none，组件保持挂载保住筛选态）。
+   min-height: 0（2026-11-19 需求方「表格满一屏无法下滑」）：列向 flex 容器
+   .editor-center 的子项缺省 min-height:auto 会撑到整表内容高——.tt-scroll 拿到的
+   空间恰好等于内容高永远不出滚动条，溢出被 .editor-page overflow:hidden 裁掉。 */
 .task-table-wrap {
   flex: 1;
   min-width: 0;
+  min-height: 0;
   display: flex;
 }
 .task-table-wrap.hidden {
@@ -58,6 +62,21 @@
 }
 .tt-chip:hover {
   background: #f2f3f5;
+}
+/* chip 内可点头像按钮（2026-11-21 需求方裁定「头像/名字分开，点头像调进度选盘」）：
+   裸按钮化，视觉与原头像一致，点击调起选盘不触发 chip 自身 toggle。 */
+.tt-avatar-btn {
+  display: inline-flex;
+  padding: 0;
+  border: none;
+  background: none;
+  border-radius: 50%;
+  cursor: pointer;
+  line-height: 0;
+}
+.tt-avatar-btn:focus-visible {
+  outline: 2px solid #3370ff;
+  outline-offset: 1px;
 }
 .tt-clear {
   border: none;

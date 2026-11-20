@@ -148,8 +148,27 @@ test('任务面板标记：进度档位与百分比全量联动——点档位/�
   await expect(progressInput).toHaveValue('100');
   await expect(markerBadgeByValue(page, '周报复盘', 'done')).toHaveCount(0); // 画布退役
   await expect(panel.getByTestId('marker-progress-done')).toHaveAttribute('aria-pressed', 'true');
-  // 回退待开始：进度清零 + none 档（M7b-W1 裁定链路）
+  // 完成态改进度数字 65：不弹窗直接静默重开（2026-11-21 需求方裁定——进度值类
+  // 入口直接用所选值重开，不再二次确认；纯状态切换仍弹进度选择见下方回退段）
+  await progressInput.fill('65');
+  await page.keyboard.press('Enter');
+  await expect(panel.getByTestId('task-panel-status-doing')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByTestId('task-dialog-overlay')).toHaveCount(0);
+  await expect(progressInput).toHaveValue('65');
+  // 回到完成态，供下方「回退待开始」弹窗段继续
+  await panel.getByTestId('task-panel-status-done').click();
+  await expect(progressInput).toHaveValue('100');
+  // 回退待开始（2026-11-20 新口径）：重开必须显式选 0～99 新进度（弹窗选 0）
   await panel.getByTestId('task-panel-status-todo').click();
+  const reopenDialog = page.getByTestId('task-dialog-overlay');
+  await expect(reopenDialog).toBeVisible();
+  await reopenDialog.getByTestId('task-dialog-progress-input').fill('12.5');
+  await expect(reopenDialog.getByTestId('task-dialog-progress-confirm')).toBeDisabled();
+  await reopenDialog.getByTestId('task-dialog-progress-input').fill('1e2');
+  await expect(reopenDialog.getByTestId('task-dialog-progress-confirm')).toBeDisabled();
+  await reopenDialog.getByTestId('task-dialog-progress-input').fill('0');
+  await reopenDialog.getByTestId('task-dialog-progress-confirm').click();
+  await expect(reopenDialog).toHaveCount(0);
   await expect(progressInput).toHaveValue('0');
   await expect(markerBadgeByValue(page, '周报复盘', 'none')).toHaveCount(0); // 画布退役
   await expect(panel.getByTestId('marker-progress-none')).toHaveAttribute('aria-pressed', 'true');
@@ -157,6 +176,24 @@ test('任务面板标记：进度档位与百分比全量联动——点档位/�
 
 // 用例 3b：父节点默认手动，开启「自动计算」后进度行只读（Σ 自动汇总），
 // 优先级行始终不受限。
+test('任务面板标记：阻塞 0% 节点点进行中弹进度选择（评审修复——UI 与 core 门禁条件一致）', async ({ page }) => {
+  await openSeedDoc(page, '本周计划');
+  await selectNodeByText(page, '周报复盘'); // 叶子节点
+  const panel = await openTaskPanel(page);
+  // todo → blocked：保留进度 0（不弹窗）
+  await panel.getByTestId('task-panel-status-blocked').click();
+  await expect(page.getByTestId('task-dialog-overlay')).toHaveCount(0);
+  // blocked 0% → doing：必须弹进度选择（修复前 UI 限定 todo 来源，直写撞 core 门禁抛错）
+  await panel.getByTestId('task-panel-status-doing').click();
+  const dlg = page.getByTestId('task-dialog-overlay');
+  await expect(dlg).toBeVisible();
+  await dlg.getByTestId('task-dialog-progress-input').fill('25');
+  await dlg.getByTestId('task-dialog-progress-confirm').click();
+  await expect(dlg).toHaveCount(0);
+  await expect(panel.getByTestId('task-panel-status-doing')).toHaveAttribute('aria-pressed', 'true');
+  await expect(panel.getByTestId('task-panel-progress')).toHaveValue('25');
+});
+
 test('任务面板标记：父节点默认手动；开自动后进度行禁用且出现汇总提示', async ({ page }) => {
   await openSeedDoc(page, '本周计划');
   await selectNodeByText(page, '本周计划'); // 根节点（有子级）
@@ -212,4 +249,26 @@ test('格式面板：链接输入框入口（插入菜单删除后路径）', as
   await page.getByTestId('format-toggle').click();
   await expect(page.getByTestId('rich-panel')).toBeVisible();
   await expect(page.locator('input[aria-label="节点链接"]')).toBeVisible();
+});
+
+// 用例 7（2026-11-21 需求方裁定「头像/名字分开，点头像调起进度图标选择进度」）：
+// 面板负责人子进度填写行退役——点负责人头像调起 9 档进度选盘；无其他执行人时
+// 选盘头部标注「任务总进度」，选值直接写总进度（与面板进度输入同口径）。
+test('任务面板：负责人头像点开进度选盘直接改总进度（子进度填写行退役）', async ({ page }) => {
+  await openSeedDoc(page, '本周计划');
+  await selectNodeByText(page, '周报复盘');
+  const panel = await openTaskPanel(page);
+  // 指派自己为负责人（成员 chips 单选；种子文件注册用户即唯一成员）
+  await panel.locator('[data-testid^="task-panel-owner-"]').first().click();
+  // 负责人子进度填写行退役（2026-11-21 裁定）
+  await expect(panel.getByTestId('task-panel-owner-progress-row')).toHaveCount(0);
+  // 点负责人头像 → 面板选盘浮层（无人员列 → 总进度口径）
+  await panel.locator('[data-testid^="task-panel-owner-avatar-"]').first().click();
+  const picker = page.getByTestId('panel-progress-picker');
+  await expect(picker).toBeVisible();
+  await expect(picker.getByTestId('panel-progress-picker-who')).toContainText('任务总进度');
+  // 选 p50 → 写入总进度 50、选盘关闭
+  await picker.getByTestId('panel-progress-picker-value-p50').click();
+  await expect(picker).toHaveCount(0);
+  await expect(panel.getByTestId('task-panel-progress')).toHaveValue('50');
 });

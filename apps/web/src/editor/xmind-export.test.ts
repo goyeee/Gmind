@@ -16,6 +16,7 @@ import {
   setIcon,
   setImage,
   setNodeSide,
+  setNodeTask,
   setStyle,
 } from '@gmind/core';
 import { buildXmind, parseXmind, unzipEntries, type XmindNode } from '@gmind/xmind-io';
@@ -93,6 +94,18 @@ describe('docToXmindTree（当前画布口径，Task 4 item 12 中间态）', ()
     const doc = createTemplateDoc({ title: '本周计划', children: [{ text: '甲' }] });
     expect(docToXmindTree(doc).title).toBe('本周计划');
     doc.destroy();
+  });
+});
+
+describe('docToXmindTree（任务总进度导出）', () => {
+  it('自动父子任务后来完成时，导出覆盖旧缓存徽章为 done', () => {
+    const doc = createTemplateDoc({ title: '根', children: [{ text: '父任务', children: [{ text: '子任务' }] }] });
+    const parentId = childrenIds(doc, ROOT_NODE_ID)[0]!;
+    const childId = childrenIds(doc, parentId)[0]!;
+    setNodeTask(doc, parentId, { autoProgress: true, progress: 0 });
+    setNodeTask(doc, childId, { progress: 100 });
+    const parent = docToXmindTree(doc).children[0]!;
+    expect(parent.icons?.progress).toEqual(['done']);
   });
 });
 

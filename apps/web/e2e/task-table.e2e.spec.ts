@@ -151,3 +151,69 @@ test('双击收窄：行其他区域双击无操作（不进编辑、不折叠�
   await expect(titleInput).toHaveCount(0);
   await expect(page.getByTestId('table-row-count')).toHaveText('6 行');
 });
+
+// 用例 4（2026-11-19 需求方「表格满一屏时无法向下滑动」）：行数超一屏时纵向
+// 滚动可达。根因 = .task-table-wrap 缺 min-height:0（列向 flex 子项 min-height:auto
+// 撑到整表内容高 → .tt-scroll 空间恰等于内容高永不溢出，滚轮无效、溢出被
+// .editor-page overflow:hidden 裁掉）。修复后：滚轮真实下滑推进 scrollTop、
+// scrollHeight > clientHeight、滚到底最后一行可见。
+test('表格纵向滚动：行数超一屏滚轮可下滑，底部行可达', async ({ page }) => {
+  test.setTimeout(120_000);
+  await openSeedDocTable(page, '本周计划');
+
+  const table = page.locator('.task-table-root');
+  const scroll = page.locator('.tt-scroll');
+  const addBtn = table.locator('tbody tr').first().locator('.tt-add-child');
+
+  // 造超一屏行数：对首行连点「+ 添加子任务」+Enter 提交默认名（每次 +1 行）
+  const target = 40;
+  while ((await table.locator('tbody tr').count()) < target) {
+    await addBtn.click();
+    const editInput = page.getByTestId('table-title-input');
+    await expect(editInput).toBeVisible();
+    await editInput.press('Enter');
+    await expect(editInput).toHaveCount(0);
+  }
+  await expect(page.getByTestId('table-row-count')).toHaveText(`${target} 行`);
+
+  // 满一屏判定：内容高于可视区（修复前此断言已可能成立——症状在滚不动）
+  const { sh, ch } = await scroll.evaluate((el) => ({ sh: el.scrollHeight, ch: el.clientHeight }));
+  expect(sh).toBeGreaterThan(ch);
+
+  // 滚轮下滑（真实用户通道）：悬停表格滚动滚轮，scrollTop 必须推进
+  await scroll.hover();
+  await page.mouse.wheel(0, 800);
+  await expect
+    .poll(async () => scroll.evaluate((el) => el.scrollTop), { timeout: 5_000 })
+    .toBeGreaterThan(0);
+
+  // 滚到底：最后一行进入可视区
+  await scroll.evaluate((el) => {
+    el.scrollTop = el.scrollHeight;
+  });
+  await expect(table.locator('tbody tr').last()).toBeVisible();
+});
+
+// 表格进度格（2026-11-21 需求方裁定「百分百切到非百分百不要让用户确定百分比」）：
+// 完成态任务双击进度格输入 65 → 直接静默重开（状态派生进行中、完成日期清除），
+// 不再弹进度确认框——进度值类入口直接用所选值；纯状态切换（状态列下拉）仍弹
+// 进度选择（该动作未携带进度值）。
+test('表格进度格：完成态任务改进度数字直接静默重开，不弹进度确认框', async ({ page }) => {
+  test.setTimeout(90_000);
+  await openSeedDocTable(page, '本周计划');
+  const table = page.locator('.task-table-root');
+  const row = table.locator('tr').filter({ hasText: '周报复盘' });
+  // 先经状态列完成（无未完子进度 → 直接完成，无弹窗）
+  await row.locator('select[aria-label="任务状态"]').selectOption('done');
+  await expect(page.getByTestId('task-dialog-overlay')).toHaveCount(0);
+  await expect(row.locator('td[data-col-key="progress"] .tt-bar-num')).toHaveText('100%');
+  // 双击进度格 → 输入 65 → 不弹确认框，直接重开为进行中 65%
+  await row.locator('td[data-col-key="progress"]').dblclick();
+  const editor = page.locator('.tt-progress-input');
+  await expect(editor).toBeVisible();
+  await editor.fill('65');
+  await editor.press('Enter');
+  await expect(row.locator('td[data-col-key="progress"] .tt-bar-num')).toHaveText('65%');
+  await expect(row.locator('select[aria-label="任务状态"]')).toHaveValue('doing');
+  await expect(page.getByTestId('task-dialog-overlay')).toHaveCount(0);
+});

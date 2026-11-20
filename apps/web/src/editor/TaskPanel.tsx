@@ -3,21 +3,32 @@ import type * as Y from 'yjs';
 import {
   MARKER_GROUP_MODE,
   MAX_DESCRIPTION_LENGTH,
+  ORIGIN_USER,
+  PROGRESS_STAGE_PCT,
+  addAssignee,
+  completeNodeTask,
   getMeta,
   setDescription,
+  removeAssignee,
+  setAssigneeProgress,
   setCustomField,
   setIcon,
   setNodeTask,
+  setOwnerProgress,
+  setTaskOwner,
   setText,
   progressStageOf,
+  unfinishedTaskProgressOf,
   type IconGroup,
   type NodeSnapshot,
 } from '@gmind/core';
 import { MARKER_CATALOG, MARKER_GROUP_LABELS, MARKER_ROW_ORDER, type MarkerGlyphDef } from '@gmind/engine';
 import {
   childrenOf,
-  effectiveProgress,
   isOverdue,
+  taskDoneDateOf,
+  taskProgressOf,
+  taskStatusOf,
   todayStr,
   type TaskPatch,
   type TaskStatus,
@@ -25,6 +36,7 @@ import {
 import type { PresenceMember } from './collab';
 import { MarkerChip } from './MarkerChip';
 import {
+  avatarSrcOf,
   CustomFieldInput,
   deriveNodesOfDoc,
   MemberMultiSelect,
@@ -34,6 +46,7 @@ import {
   STATUS_META,
   useTaskMembers,
 } from './TaskFields';
+import { TaskCompletionDialog, type UnfinishedEntry } from './TaskCompletionDialog';
 import './task-panel.css';
 import './marker-picker.css';
 
@@ -52,6 +65,11 @@ import './marker-picker.css';
  * 三日期（SmartDateInput）/ 进度（叶子可编、父级 Σ 只读）/ 自定义属性（表格
  * 自定义列逐列渲染 CustomFieldInput，即改即存）/ 删除节点（危险红，confirm
  * 二次确认复用现有机制）。
+ * 2026-11-21 需求方裁定（面板进度交互重构）：负责人子进度填写行与人员列行内
+ * 进度填写框退役——点头像调起 9 档进度选盘（负责人头像：有其他执行人写子进度、
+ * 无执行人直接写任务总进度；人员列头像写逐人子进度）；进度值类入口（进度输入/
+ * 档位/选盘）在完成态直接用所选值重开，不再二次弹确认框（纯状态切换仍弹进度
+ * 选择——动作未携带进度值）。
  *
  * 写纪律：全部走 core op（setDescription / setNodeTask / setIcon）+ afterUserWrite，
  * 即改即存；异常两段式 toast；全部控件 data-testid `task-panel-*`。
@@ -97,13 +115,71 @@ export function TaskPanel(props: TaskPanelProps): ReactElement {
   // 折叠标记组的展开态（2026-10-10 内嵌化）：组名→开合，切换节点不重置（跨节点
   // 连续编辑同一组的常见流）。
   const [openMarkerGroups, setOpenMarkerGroups] = useState<Record<string, boolean>>({});
+  // 完成确认 / 重开进度选择弹窗（2026-11-20 任务模型）：done 有未完成子进度 → 三选；
+  // 重开与 0%→进行中（纯状态切换，未携带进度值）→ 进度选择（不自动写 0/1/99）。
+  // Esc/取消零写入。2026-11-21 起进度值类入口（进度输入/档位/头像选盘）直接用所选
+  // 值重开，不再二次确认。
+  const [dialog, setDialog] = useState<
+    | { kind: 'complete'; unfinished: UnfinishedEntry[] }
+    | { kind: 'reopen'; targetStatus: TaskStatus }
+    | null
+  >(null);
+  // 面板进度选盘（2026-11-21 需求方裁定「点头像调起进度图标选择进度」）：负责人
+  // 头像 / 人员列成员头像点开的 9 档选盘浮层——owner.kind 写负责人子进度
+  // （setOwnerProgress），无其他执行人时改写任务总进度（total，含 100=完成）；
+  // assignee.kind 写人员列逐人进度（setAssigneeProgress 逐人 diff）。
+  const [panelPicker, setPanelPicker] = useState<
+    | {
+        kind: 'owner';
+        userId: string;
+        /** 无其他执行人=true：写任务总进度（完成/重开语义），否则写负责人子进度。 */
+        total: boolean;
+        colName: string;
+        name: string;
+        avatar: string;
+        progress: number;
+        x: number;
+        y: number;
+      }
+    | {
+        kind: 'assignee';
+        userId: string;
+        colId: string;
+        colName: string;
+        name: string;
+        avatar: string;
+        progress: number;
+        x: number;
+        y: number;
+      }
+    | null
+  >(null);
+  const [progressReset, setProgressReset] = useState(0);
   useEffect(() => {
     setTitle(snap?.text ?? '');
     setDesc(snap?.description ?? '');
     // 仅 nodeId 变化回灌（RichPanel 同款裁决）：tick 刷新不得覆盖编辑中的输入
   }, [nodeId]);
+  // 面板进度选盘 Esc/外点关闭（画布选盘同机制）。boundary 含 .tt-avatar-btn：
+  // 选盘开着再点头像时 pointerdown 不抢先收盘，开合交给头像 click 的 toggle 分支
+  // （同画布徽章豁免口径，防「闪关重弹」）。
+  useEffect(() => {
+    if (!panelPicker) return;
+    const onDocPointerDown = (e: PointerEvent): void => {
+      if (!(e.target as Element | null)?.closest?.('.panel-progress-picker, .tt-avatar-btn')) setPanelPicker(null);
+    };
+    const onKeyDown = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') setPanelPicker(null);
+    };
+    document.addEventListener('pointerdown', onDocPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', onDocPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [panelPicker]);
 
-  const deriveNodes = useMemo(() => deriveNodesOfDoc(doc, canvasId), [doc, docVersion, canvasId]);
+  const deriveNodes = useMemo(() => deriveNodesOfDoc(doc, canvasId, true), [doc, docVersion, canvasId]);
   /** 自定义列 schema（meta.customColumns；按类型拆分后分别塞进负责人/日期/其余区）。 */
   const customColumns = getMeta(doc).customColumns;
   const ownerCustomColumns = customColumns.filter((c) => c.type === 'assignee');
@@ -111,7 +187,10 @@ export function TaskPanel(props: TaskPanelProps): ReactElement {
   const restCustomColumns = customColumns.filter((c) => c.type !== 'assignee' && c.type !== 'date');
   const docOwnerIds = useMemo(() => {
     const ids: string[] = [];
-    for (const n of deriveNodes) for (const o of n.task?.owners ?? []) if (!ids.includes(o)) ids.push(o);
+    for (const n of deriveNodes) {
+      const ownerId = n.task?.ownerId ?? n.task?.owners[0] ?? null;
+      if (ownerId !== null && !ids.includes(ownerId)) ids.push(ownerId);
+    }
     return ids;
   }, [deriveNodes]);
   const { memberIndex } = useTaskMembers(fileId, presence, docOwnerIds);
@@ -128,7 +207,7 @@ export function TaskPanel(props: TaskPanelProps): ReactElement {
   const commitDescription = (next: string): void => {
     if (!snap) return;
     if ((snap.description ?? '') === next) return; // 未变更零写入
-    write(() => setDescription(doc, snap.id, next), '描述保存失败，请精简后重试');
+    write(() => setDescription(doc, snap.id, next, ORIGIN_USER, canvasId), '描述保存失败，请精简后重试');
   };
 
   /** 标题键入即写（2026-10-10 裁定）：空串不提交（脑图节点无空标题语义，清空等
@@ -137,7 +216,7 @@ export function TaskPanel(props: TaskPanelProps): ReactElement {
     if (!snap) return;
     if (next === snap.text) return; // 未变更零写入
     if (next.trim() === '') return; // 空标题不写入（待用户输入非空值时自然提交）
-    write(() => setText(doc, snap.id, next), '标题保存失败，请重试');
+    write(() => setText(doc, snap.id, next, ORIGIN_USER, canvasId), '标题保存失败，请重试');
   };
 
   if (!snap) {
@@ -162,19 +241,156 @@ export function TaskPanel(props: TaskPanelProps): ReactElement {
   }
 
   const task = snap.task;
-  const owners = [...task.owners];
   const selfNode = deriveNodes.find((n) => n.id === snap.id);
   const hasChildren = childrenOf(deriveNodes, snap.id).length > 0;
   // 父级自动汇总开关：显式设置按显式；未设置 → 默认手动（需求方 2026-10-20 裁定）。
   const autoProgress = task.autoProgress ?? false;
-  const eff = selfNode ? effectiveProgress(deriveNodes, snap.id) : task.progress;
+  // 2026-11-20 任务模型：总进度唯一口径 taskProgressOf（人员子进度不参与）。
+  const eff = selfNode ? taskProgressOf(deriveNodes, snap.id) : task.progress;
+  const displayStatus = selfNode ? taskStatusOf(deriveNodes, snap.id) : task.status;
+  const displayDoneDate = selfNode ? taskDoneDateOf(deriveNodes, snap.id) : task.doneDate;
   const overdue = selfNode ? isOverdue(selfNode, deriveNodes) : false;
   const today = todayStr();
 
   const commitTask = (patch: TaskPatch): void =>
-    write(() => setNodeTask(doc, snap.id, patch), '任务字段保存失败，请调整后重试');
-  const toggleOwner = (userId: string): void =>
-    commitTask({ owners: owners.includes(userId) ? owners.filter((o) => o !== userId) : [...owners, userId] });
+    write(() => setNodeTask(doc, snap.id, patch, ORIGIN_USER, canvasId), '任务字段保存失败，请调整后重试');
+
+  // —— 状态点击（2026-11-20 任务模型裁定）——
+  // done：有未完成子进度 → 三选弹窗（确认时宿主重新执行 core 预检再调原子命令）；
+  // 无子进度未完成 → 直接完成（子进度保留语义）。已完成重开 / 0%→进行中 → 进度选择。
+  const hasOtherExecutors = ownerCustomColumns.some((col) => {
+    const v = snap.custom?.[col.id];
+    return typeof v === 'object' && v !== null && Object.keys(v).length > 0;
+  });
+  const requestCompletion = (): void => {
+    if (task.status === 'done' || task.progress === 100) return;
+    const unfinished = unfinishedTaskProgressOf(doc, snap.id, canvasId);
+    if (unfinished.owner === null && unfinished.assignees.length === 0) {
+      write(() => completeNodeTask(doc, snap.id, 'preserve-subprogress', ORIGIN_USER, canvasId), '任务完成保存失败，请重试');
+      return;
+    }
+    const entries: UnfinishedEntry[] = [];
+    if (unfinished.owner !== null) {
+      entries.push({
+        user: unfinished.owner.userId,
+        name: memberIndex.get(unfinished.owner.userId)?.nickname ?? unfinished.owner.userId.slice(0, 8),
+        progress: unfinished.owner.progress,
+        avatar: memberIndex.get(unfinished.owner.userId)?.avatar ?? null,
+      });
+    }
+    for (const a of unfinished.assignees) {
+      const col = ownerCustomColumns.find((c) => c.id === a.colId);
+      entries.push({
+        user: a.user,
+        name: memberIndex.get(a.user)?.nickname ?? a.user.slice(0, 8),
+        progress: a.progress,
+        avatar: memberIndex.get(a.user)?.avatar ?? null,
+        colName: col?.name,
+      });
+    }
+    setDialog({ kind: 'complete', unfinished: entries });
+  };
+  const requestProgress = (progress: number): void => {
+    if (autoProgress || progress === task.progress) return;
+    if (progress === 100) {
+      requestCompletion();
+      return;
+    }
+    // 完成态直接用所选进度重开（2026-11-21 需求方裁定「不要让用户确定百分比」）：
+    // 进度值类入口不再二次弹确认框——裸进度写入在 core 走 applyStatusRules 静默
+    // 联动（清完成日期、状态派生 todo/doing），重开弹窗只留给纯状态切换入口。
+    commitTask({ progress });
+  };
+  const clickStatus = (s: TaskStatus): void => {
+    if (autoProgress) return;
+    if (s === 'done') {
+      requestCompletion();
+      return;
+    }
+    if ((task.status === 'done' || task.progress === 100)) {
+      setDialog({ kind: 'reopen', targetStatus: s }); // 重开必须显式选 0～99 新进度
+      return;
+    }
+    if (s === 'doing' && task.progress === 0) {
+      // 0%→进行中（含 blocked 0%）选 1～99——与 core 门禁条件一致（operations.ts 只看 progress）
+      setDialog({ kind: 'reopen', targetStatus: 'doing' });
+      return;
+    }
+    commitTask({ status: s });
+  };
+
+  // —— 面板进度选盘（2026-11-21 需求方裁定「头像/名字分开，点头像调起进度图标
+  //    选择进度」）：负责人头像 + 人员列成员头像共用 9 档选盘；写路径见
+  //    applyPanelPickerValue（owner 子进度 / 无执行人时总进度 / 人员列逐人）。 ——
+  const openOwnerPicker = (userId: string, at: { x: number; y: number }): void => {
+    if (!snap || userId !== task.ownerId) return;
+    if (!hasOtherExecutors && autoProgress) {
+      showToast('父节点进度按子级自动汇总，请完成或调整子任务');
+      return;
+    }
+    // 再点同一头像 = toggle 收盘（外点监听已豁免头像按钮，同画布徽章口径）。
+    if (panelPicker && panelPicker.kind === 'owner' && panelPicker.userId === userId) {
+      setPanelPicker(null);
+      return;
+    }
+    const m = memberIndex.get(userId);
+    setPanelPicker({
+      kind: 'owner',
+      userId,
+      total: !hasOtherExecutors,
+      colName: hasOtherExecutors ? '负责人' : '任务总进度',
+      name: m?.nickname ?? userId.slice(0, 8),
+      avatar: avatarSrcOf(m?.avatar ?? null, userId),
+      progress: hasOtherExecutors ? (task.ownerProgress ?? 0) : task.progress,
+      x: at.x,
+      y: at.y,
+    });
+  };
+  const openAssigneePicker = (
+    colId: string,
+    colName: string,
+    userId: string,
+    progress: number,
+    at: { x: number; y: number },
+  ): void => {
+    // 再点同一头像 = toggle 收盘；换列/换成员重锚。
+    if (panelPicker && panelPicker.kind === 'assignee' && panelPicker.colId === colId && panelPicker.userId === userId) {
+      setPanelPicker(null);
+      return;
+    }
+    const m = memberIndex.get(userId);
+    setPanelPicker({
+      kind: 'assignee',
+      userId,
+      colId,
+      colName,
+      name: m?.nickname ?? userId.slice(0, 8),
+      avatar: avatarSrcOf(m?.avatar ?? null, userId),
+      progress,
+      x: at.x,
+      y: at.y,
+    });
+  };
+  const applyPanelPickerValue = (pct: number): void => {
+    const p = panelPicker;
+    setPanelPicker(null);
+    if (!p || !snap) return;
+    if (p.kind === 'owner') {
+      if (p.total) {
+        // 无其他执行人：头像选盘即任务总进度入口——100=完成（未完子进度走既有
+        // 三选流），非 100 直接落值（完成态静默重开，与 requestProgress 同口径）。
+        if (pct === 100) {
+          requestCompletion();
+        } else if (pct !== task.progress) {
+          commitTask({ progress: pct });
+        }
+        return;
+      }
+      write(() => setOwnerProgress(doc, snap.id, pct, ORIGIN_USER, canvasId), '负责人子进度保存失败，请重试');
+      return;
+    }
+    write(() => setAssigneeProgress(doc, snap.id, p.colId, p.userId, pct, ORIGIN_USER, canvasId), '人员子进度保存失败，请重试');
+  };
 
   const markerChips: ReactElement[] = [];
   for (const group of MARKER_ROW_ORDER) {
@@ -195,16 +411,23 @@ export function TaskPanel(props: TaskPanelProps): ReactElement {
   const clickProgressStage = (def: MarkerGlyphDef): void => {
     // 自动汇总父级：进度由子级决定，档位按钮只读。
     if (autoProgress) return;
-    write(() => setIcon(doc, snap.id, 'progress', def.value), '任务进度保存失败，请调整后重试');
+    const progress = PROGRESS_STAGE_PCT[def.value as keyof typeof PROGRESS_STAGE_PCT];
+    if (progress === undefined) return;
+    // 同值但徽章缺失（新节点点“未开始”）仍需落徽章；已有同档由 core 同值守卫零写。
+    if (progress === eff) {
+      write(() => setIcon(doc, snap.id, 'progress', def.value, ORIGIN_USER, canvasId), '任务进度保存失败，请调整后重试');
+      return;
+    }
+    requestProgress(progress);
   };
   // 其余组点击：single 组再点当前值取消（setIcon null）、multi 组 core toggle 直写。
   const clickMarkerValue = (group: IconGroup, value: string): void => {
     if (MARKER_GROUP_MODE[group] === 'multi') {
-      write(() => setIcon(doc, snap.id, group, value), '标记设置失败');
+      write(() => setIcon(doc, snap.id, group, value, ORIGIN_USER, canvasId), '标记设置失败');
       return;
     }
     const has = (snap.icons[group] ?? []).includes(value);
-    write(() => setIcon(doc, snap.id, group, has ? null : value), '标记设置失败');
+    write(() => setIcon(doc, snap.id, group, has ? null : value, ORIGIN_USER, canvasId), '标记设置失败');
   };
   const markerValueButton = (
     group: IconGroup,
@@ -280,14 +503,22 @@ export function TaskPanel(props: TaskPanelProps): ReactElement {
       </section>
 
       <section className="task-panel-section">
-        <span className="task-field-label">负责人</span>
+        <span className="task-field-label">负责人（单选）</span>
+        {/* 总负责人单选（2026-11-20 任务模型）：点成员=设为负责人，再点=取消指派；
+            多人执行走下方人员列。2026-11-21：负责人子进度填写行退役——点负责人
+            头像调起进度选盘（有其他执行人写其子进度；无执行人直接写任务总进度）。 */}
         <MemberMultiSelect
           memberIndex={memberIndex}
-          selected={owners}
-          onToggle={toggleOwner}
+          selected={task.ownerId === null ? [] : [task.ownerId]}
+          onToggle={(userId) =>
+            write(() => setTaskOwner(doc, snap.id, task.ownerId === userId ? null : userId, ORIGIN_USER, canvasId), '负责人保存失败，请重试')
+          }
+          onAvatarClick={openOwnerPicker}
+          avatarTestIdPrefix="task-panel-owner-avatar"
           testIdPrefix="task-panel-owner"
         />
-        {/* 人员相关自定义属性（assignee 类型）直接跟在负责人下面，不再挂「自定义属性」标题 */}
+        {/* 人员相关自定义属性（assignee 类型）直接跟在负责人下面，不再挂「自定义属性」标题；
+            面板变体：行内进度填写框退役，点成员头像调起进度选盘逐人写入。 */}
         {ownerCustomColumns.map((col) => (
           <div className="task-date-row" key={col.id} data-testid="task-panel-custom-row">
             <span className="task-field-label">{col.name}</span>
@@ -296,8 +527,18 @@ export function TaskPanel(props: TaskPanelProps): ReactElement {
               value={snap.custom?.[col.id]}
               memberIndex={memberIndex}
               onCommit={(v) =>
-                write(() => setCustomField(doc, snap.id, col.id, v), '自定义属性保存失败，请调整后重试')
+                write(() => setCustomField(doc, snap.id, col.id, v, ORIGIN_USER, canvasId), '自定义属性保存失败，请调整后重试')
               }
+              onAssigneeProgress={(userId, progress) =>
+                write(() => setAssigneeProgress(doc, snap.id, col.id, userId, progress, ORIGIN_USER, canvasId), '人员子进度保存失败，请重试')
+              }
+              onAssigneeToggle={(userId, assigned) =>
+                write(() => {
+                  if (assigned) addAssignee(doc, snap.id, col.id, userId, ORIGIN_USER, canvasId);
+                  else removeAssignee(doc, snap.id, col.id, userId, ORIGIN_USER, canvasId);
+                }, '人员保存失败，请重试')
+              }
+              onAssigneeAvatarPick={(userId, progress, at) => openAssigneePicker(col.id, col.name, userId, progress, at)}
               testIdPrefix="task-panel-custom"
             />
           </div>
@@ -311,10 +552,12 @@ export function TaskPanel(props: TaskPanelProps): ReactElement {
             <button
               key={s}
               type="button"
-              className={task.status === s ? 'task-status-btn active' : 'task-status-btn'}
+              className={displayStatus === s ? 'task-status-btn active' : 'task-status-btn'}
               data-testid={`task-panel-status-${s}`}
-              aria-pressed={task.status === s}
-              onClick={() => commitTask({ status: s })}
+              aria-pressed={displayStatus === s}
+              disabled={autoProgress}
+              title={autoProgress ? '自动父任务状态由子任务进度决定' : undefined}
+              onClick={() => clickStatus(s)}
             >
               <span className="task-dot" style={{ background: STATUS_META[s].color }} />
               {STATUS_META[s].label}
@@ -416,14 +659,18 @@ export function TaskPanel(props: TaskPanelProps): ReactElement {
         </div>
         <div className="task-date-row">
           <span className="task-field-label">完成</span>
-          <SmartDateInput
-            testId="task-panel-date-doneDate"
-            value={task.doneDate}
-            done={task.doneDate != null}
-            onCommit={(v) => {
-              if (v !== task.doneDate) commitTask({ doneDate: v });
-            }}
-          />
+          {autoProgress ? (
+            <span className="tt-date-text" data-testid="task-panel-date-doneDate">{displayDoneDate ?? '—'}</span>
+          ) : (
+            <SmartDateInput
+              testId="task-panel-date-doneDate"
+              value={displayDoneDate}
+              done={displayDoneDate != null}
+              onCommit={(v) => {
+                if (v !== displayDoneDate) commitTask({ doneDate: v });
+              }}
+            />
+          )}
         </div>
         {/* 日期相关自定义属性（date 类型）并入日期组，同样去掉「自定义属性」标题 */}
         {dateCustomColumns.map((col) => (
@@ -434,7 +681,16 @@ export function TaskPanel(props: TaskPanelProps): ReactElement {
               value={snap.custom?.[col.id]}
               memberIndex={memberIndex}
               onCommit={(v) =>
-                write(() => setCustomField(doc, snap.id, col.id, v), '自定义属性保存失败，请调整后重试')
+                write(() => setCustomField(doc, snap.id, col.id, v, ORIGIN_USER, canvasId), '自定义属性保存失败，请调整后重试')
+              }
+              onAssigneeProgress={(userId, progress) =>
+                write(() => setAssigneeProgress(doc, snap.id, col.id, userId, progress, ORIGIN_USER, canvasId), '人员子进度保存失败，请重试')
+              }
+              onAssigneeToggle={(userId, assigned) =>
+                write(() => {
+                  if (assigned) addAssignee(doc, snap.id, col.id, userId, ORIGIN_USER, canvasId);
+                  else removeAssignee(doc, snap.id, col.id, userId, ORIGIN_USER, canvasId);
+                }, '人员保存失败，请重试')
               }
               testIdPrefix="task-panel-custom"
             />
@@ -461,11 +717,12 @@ export function TaskPanel(props: TaskPanelProps): ReactElement {
           )}
         </div>
         <ProgressField
+          key={`${snap.id}:${task.progress}:${progressReset}`}
           auto={autoProgress}
           effective={eff}
           progress={task.progress}
           testId="task-panel-progress"
-          onCommit={(v) => commitTask({ progress: v })}
+          onCommit={requestProgress}
         />
       </section>
 
@@ -480,13 +737,89 @@ export function TaskPanel(props: TaskPanelProps): ReactElement {
                 value={snap.custom?.[col.id]}
                 memberIndex={memberIndex}
                 onCommit={(v) =>
-                  write(() => setCustomField(doc, snap.id, col.id, v), '自定义属性保存失败，请调整后重试')
+                  write(() => setCustomField(doc, snap.id, col.id, v, ORIGIN_USER, canvasId), '自定义属性保存失败，请调整后重试')
                 }
+                onAssigneeProgress={() => undefined}
+                onAssigneeToggle={() => undefined}
                 testIdPrefix="task-panel-custom"
               />
             </div>
           ))}
         </section>
+      )}
+
+      {dialog !== null && (
+        <TaskCompletionDialog
+          kind={dialog.kind}
+          unfinished={dialog.kind === 'complete' ? dialog.unfinished : undefined}
+          targetStatus={dialog.kind === 'reopen' ? dialog.targetStatus : undefined}
+          onConfirm={(_kind, mode) => {
+            setDialog(null);
+            write(() => completeNodeTask(doc, snap.id, mode, ORIGIN_USER, canvasId), '任务完成保存失败，请重试');
+          }}
+          onConfirmProgress={(_kind, p) => {
+            setDialog(null);
+            commitTask({ status: dialog.kind === 'reopen' ? dialog.targetStatus : 'doing', progress: p });
+          }}
+          onCancel={() => {
+            setDialog(null);
+            setProgressReset((v) => v + 1);
+          }}
+        />
+      )}
+
+      {/* 面板进度选盘（2026-11-21 需求方裁定）：负责人/人员列成员头像点开的 9 档
+          浮层——结构与画布人员选盘同款（marker-picker assignee-picker 复用样式，
+          fixed 定位锚点头像、视口内钳制）。 */}
+      {panelPicker !== null && (
+        <div
+          className="marker-picker assignee-picker panel-progress-picker"
+          data-testid="panel-progress-picker"
+          style={{
+            left: Math.min(panelPicker.x + 6, window.innerWidth - 262),
+            top: Math.min(panelPicker.y + 6, window.innerHeight - 200),
+          }}
+          role="menu"
+          aria-label="进度选择"
+        >
+          <div className="marker-picker-head">
+            <span className="assignee-picker-who" data-testid="panel-progress-picker-who">
+              <em className="marker-picker-label">{panelPicker.colName}</em>
+              <img className="assignee-picker-avatar" src={panelPicker.avatar} alt="" width={22} height={22} />
+              <span className="assignee-picker-name">{panelPicker.name}</span>
+            </span>
+            <button
+              type="button"
+              data-testid="panel-progress-picker-close"
+              className="marker-picker-close"
+              title="关闭"
+              aria-label="关闭"
+              onClick={() => setPanelPicker(null)}
+            >
+              ×
+            </button>
+          </div>
+          <div className="marker-grid">
+            {(MARKER_CATALOG.progress as readonly MarkerGlyphDef[]).map((def) => {
+              // 高亮：当前进度落档（progressStageOf 1/8 步进）——与画布选盘同口径。
+              const active = def.value === progressStageOf(panelPicker.progress);
+              return (
+                <button
+                  key={def.value}
+                  type="button"
+                  data-testid={`panel-progress-picker-value-${def.value}`}
+                  title={def.label}
+                  aria-label={def.label}
+                  aria-pressed={active}
+                  className={active ? 'marker-btn active' : 'marker-btn'}
+                  onClick={() => applyPanelPickerValue(PROGRESS_STAGE_PCT[def.value as keyof typeof PROGRESS_STAGE_PCT])}
+                >
+                  <MarkerChip def={def} />
+                </button>
+              );
+            })}
+          </div>
+        </div>
       )}
 
       <section className="task-panel-section">

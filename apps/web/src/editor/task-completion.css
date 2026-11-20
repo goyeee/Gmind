@@ -1,0 +1,132 @@
+/* 任务完成确认 / 重开进度选择弹窗（Task 3，2026-11-20 任务模型裁定）。
+   视觉与 task-panel 同族：企微浅色 + 语义色；遮罩 + 居中卡片（share-dialog 同族形态）。 */
+
+.task-dialog-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgb(0 0 0 / 0.32);
+}
+
+.task-dialog {
+  width: 360px;
+  max-width: calc(100vw - 48px);
+  background: #fff;
+  border-radius: var(--gm-radius-pop, 8px);
+  box-shadow: var(--gm-shadow-pop, 0 8px 24px rgb(0 0 0 / 0.16));
+  padding: 18px 20px 16px;
+}
+
+.task-dialog-title {
+  margin: 0 0 6px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--gm-ink-1, #1f2329);
+}
+
+.task-dialog-hint {
+  margin: 0 0 10px;
+  font-size: 12px;
+  color: var(--gm-ink-2, #4e5969);
+}
+
+.task-dialog-list {
+  list-style: none;
+  margin: 0 0 12px;
+  padding: 0;
+  max-height: 180px;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.task-dialog-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--gm-ink-1, #1f2329);
+}
+
+.task-dialog-item-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-dialog-item-col {
+  font-size: 11px;
+  color: var(--gm-ink-3, #86909c);
+}
+
+.task-dialog-item-progress {
+  font-size: 12px;
+  color: var(--gm-ink-2, #4e5969);
+  font-variant-numeric: tabular-nums;
+}
+
+.task-dialog-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.task-dialog-btn {
+  border: 1px solid var(--gm-line, #e5e6eb);
+  background: #fff;
+  color: var(--gm-ink-1, #1f2329);
+  border-radius: 6px;
+  padding: 6px 12px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.task-dialog-btn.primary {
+  background: var(--gm-brand, #3370ff);
+  border-color: var(--gm-brand, #3370ff);
+  color: #fff;
+}
+
+.task-dialog-btn.ghost {
+  border-color: transparent;
+  color: var(--gm-ink-2, #4e5969);
+}
+
+.task-dialog-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.task-dialog-progress-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.task-dialog-progress-input {
+  width: 96px;
+  padding: 6px 8px;
+  border: 1px solid var(--gm-line, #e5e6eb);
+  border-radius: 6px;
+  font-size: 14px;
+}
+
+.task-dialog-progress-unit {
+  font-size: 13px;
+  color: var(--gm-ink-2, #4e5969);
+}
+
+.task-dialog-error {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: #f53f3f;
+}

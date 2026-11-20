@@ -93,10 +93,21 @@ function customOf(doc: Y.Doc, nodeId: string): Y.Map<unknown> | undefined {
 
 /** custom 值普通化：Yjs 存 person 数组时转码为 Y.Array（core 读取侧快照才归一为
  *  plain 数组），断言前统一拍平。 */
+// 2026-11-20 任务模型：人员列值为嵌套 Y.Map<user, {progress, weight?}>——递归转
+// plain（与 core read 侧 plainCustomValue 同口径），否则断言读不到新形状。
 function plainCustomValues(doc: Y.Doc, nodeId: string): unknown[] {
+  const toPlain = (v: unknown): unknown => {
+    if (v instanceof Y.Map) {
+      const out: Record<string, unknown> = {};
+      for (const [k, nested] of v.entries()) out[k] = toPlain(nested);
+      return out;
+    }
+    if (v instanceof Y.Array) return v.toArray().map(toPlain);
+    return v;
+  };
   const custom = customOf(doc, nodeId);
   if (custom === undefined) return [];
-  return [...custom.values()].map((v) => (v instanceof Y.Array ? v.toArray() : v));
+  return [...custom.values()].map(toPlain);
 }
 
 test('加文本列 → 表头出现新列，单元格填写后 docState 落库 schema 与节点值', async ({ page }) => {
@@ -282,39 +293,92 @@ test('人员进度列：分配成员/更新进度/合成显示/done 门禁拦截
   await progressInput.fill('30');
   await progressInput.press('Enter');
   await expect(mondayRow.getByTestId('table-custom-assignee')).toContainText('30%');
-  // 表格进度列叶子显示合成有效进度（owners 空 → 仅条目均值 30%）
-  await expect(mondayRow.locator('td[data-col-key="progress"] .tt-bar-num')).toHaveText('30%');
+  // 表格进度列显示任务总进度（2026-11-20 口径：人员子进度不参与——owner 未设 → 0%）
+  await expect(mondayRow.locator('td[data-col-key="progress"] .tt-bar-num')).toHaveText('0%');
 
-  // docState 落库：方案评审 custom 含 {userId: {progress: 30}}
+  // docState 落库：方案评审 custom 含 {userId: {progress: 30}}（嵌套 Y.Map 经 helper 转 plain）
   await waitForDoc(page, (d) => {
     const id = findNodeByText(d, '方案评审');
-    const custom = customOf(d, id);
-    if (!custom) return false;
-    for (const v of custom.values()) {
-      if (typeof v !== 'object' || v === null) continue;
-      for (const entry of Object.values(v as Record<string, unknown>)) {
-        if (typeof entry === 'object' && entry !== null && (entry as { progress?: unknown }).progress === 30) {
-          return true;
-        }
-      }
-    }
-    return false;
+    return plainCustomValues(d, id).some((v) => {
+      if (typeof v !== 'object' || v === null) return false;
+      return Object.values(v as Record<string, unknown>).some(
+        (entry) => typeof entry === 'object' && entry !== null && (entry as { progress?: unknown }).progress === 30,
+      );
+    });
   });
   await page.locator('.tt-overlay').click(); // 关成员弹层（Esc 未接该弹层，overlay 点击关闭）
 
-  // done 门禁：状态列选「已完成」→ 拦截 toast（两段式），状态保持待开始
+  // done 确认流（2026-11-20 任务模型）：有未完成子进度 → 三选弹窗；「仅完成保留
+  // 子进度」→ 状态 done、人员子进度保留 30
   await mondayRow.locator('select[aria-label="任务状态"]').selectOption('done');
-  await expect(page.getByTestId('toast')).toContainText('测试');
-  await expect(page.getByTestId('toast')).toContainText('100%');
-  await expect(mondayRow.locator('select[aria-label="任务状态"]')).toHaveValue('todo');
-
-  // 进度补到 100% → 门禁放行 → 状态完成
-  await mondayRow.getByTestId('table-custom-assignee').click();
-  const progressFull = page.locator('[data-testid^="table-custom-assignee-editor-progress-"]');
-  await progressFull.fill('100');
-  await progressFull.press('Enter');
-  await mondayRow.locator('select[aria-label="任务状态"]').selectOption('done');
+  const dialog = page.getByTestId('task-dialog-overlay');
+  await expect(dialog).toBeVisible();
+  await expect(dialog).toContainText('30%');
+  await dialog.getByTestId('task-dialog-complete-keep').click();
+  await expect(dialog).toHaveCount(0);
   await expect(mondayRow.locator('select[aria-label="任务状态"]')).toHaveValue('done');
+  await expect(mondayRow.getByTestId('table-custom-assignee')).toContainText('30%'); // 子进度保留
+
+  // 重开（必须显式选新进度）→ 再次完成仍保留 30% 子进度，因此再次三选确认
+  await mondayRow.locator('select[aria-label="任务状态"]').selectOption('doing');
+  const reopenDialog = page.getByTestId('task-dialog-overlay');
+  await expect(reopenDialog).toBeVisible();
+  await reopenDialog.getByTestId('task-dialog-progress-input').fill('30');
+  await reopenDialog.getByTestId('task-dialog-progress-confirm').click();
+  await expect(reopenDialog).toHaveCount(0);
+  await mondayRow.locator('select[aria-label="任务状态"]').selectOption('done');
+  await expect(dialog).toBeVisible();
+  await dialog.getByTestId('task-dialog-complete-keep').click();
+  await expect(mondayRow.locator('select[aria-label="任务状态"]')).toHaveValue('done');
+
+  // 总进度输入（2026-11-21 口径）：完成态改进度直接用所选值静默重开、不弹确认框
+  // （百分百→非百分百不再让用户确定百分比）；改 100 完成仍走三选确认——进度输入
+  // 与状态按钮是同一完成动作，共享未完子进度预检
+  const progressCell = mondayRow.locator('td[data-col-key="progress"]');
+  await progressCell.dblclick();
+  await progressCell.getByLabel('任务进度').fill('30');
+  await progressCell.getByLabel('任务进度').press('Enter');
+  await expect(page.getByTestId('task-dialog-overlay')).toHaveCount(0); // 静默重开：无弹窗
+  await expect(mondayRow.locator('td[data-col-key="progress"] .tt-bar-num')).toHaveText('30%');
+  await expect(mondayRow.locator('select[aria-label="任务状态"]')).toHaveValue('doing');
+  await progressCell.dblclick();
+  await progressCell.getByLabel('任务进度').fill('100');
+  await progressCell.getByLabel('任务进度').press('Enter');
+  await expect(dialog).toBeVisible();
+  await dialog.getByTestId('task-dialog-complete-keep').click();
+  await expect(mondayRow.locator('select[aria-label="任务状态"]')).toHaveValue('done');
+});
+
+test('任务面板总进度输入 100%：未完成人员子进度仍弹三选确认', async ({ page }) => {
+  await openSeedDocTable(page, '本周计划');
+  await addColumn(page, '测试', 'assignee');
+  const row = page.locator('tr', { hasText: '方案评审' }).first();
+  await row.getByTestId('table-custom-assignee').click();
+  await page.locator('[data-testid^="table-custom-assignee-editor-member-"]').first().click();
+  const input = page.locator('[data-testid^="table-custom-assignee-editor-progress-"]');
+  await input.fill('30');
+  await input.press('Enter');
+  await page.locator('.tt-overlay').click();
+
+  await page.getByTestId('view-tab-mind').click();
+  await page.locator('.editor-canvas svg .gm-text', { hasText: '方案评审' }).click();
+  await page.getByTestId('task-toggle').click();
+  const panel = page.getByTestId('task-panel');
+  await expect(panel).toBeVisible();
+  await panel.getByTestId('task-panel-progress').fill('100');
+  await panel.getByTestId('task-panel-progress').press('Enter');
+  const dialog = page.getByTestId('task-dialog-overlay');
+  await expect(dialog).toBeVisible();
+  await expect(dialog).toContainText('30%');
+  // 取消：输入框立刻回到真实进度，不会带着未保存的 100% 二次触发完成
+  await dialog.getByTestId('task-dialog-cancel').click();
+  await expect(panel.getByTestId('task-panel-progress')).toHaveValue('0');
+  await panel.getByTestId('task-panel-progress').fill('100');
+  await panel.getByTestId('task-panel-progress').press('Enter');
+  await expect(dialog).toBeVisible();
+  await dialog.getByTestId('task-dialog-complete-keep').click();
+  await expect(panel.getByTestId('task-panel-progress')).toHaveValue('100');
+  await expect(panel.getByTestId('task-panel-status-done')).toHaveAttribute('aria-pressed', 'true');
 });
 
 // 用例 6：节点上人员进度头像 + 点选盘快速更新（2026-10-11 第二步）——表格给叶子
@@ -335,7 +399,7 @@ test('人员进度头像：节点展示圆形头像+进度环，点击弹选盘�
   // 同时给该行设标准负责人（owner 列弹层选人）——画布 owner 头像有点击锚点
   await row.locator('td[data-col-key="owner"] .tt-owners-btn').click();
   await page.locator('.tt-popover .tt-chip').first().click();
-  await page.locator('.tt-overlay').click(); // 关 owner 弹层
+  await expect(page.locator('.tt-overlay')).toHaveCount(0); // 单选负责人后弹层自动关闭
 
   // 切回脑图：节点任务行出现人员进度头像（圆形头像 + data 锚点 + 弧环）——
   // 未自定义头像的用户由宿主稳定分配预置 SVG（圆形 <image> 渲染）。
@@ -345,18 +409,17 @@ test('人员进度头像：节点展示圆形头像+进度环，点击弹选盘�
   await expect(avatar.getAttribute('data-assignee-user')).resolves.toMatch(/.+/);
   await expect(avatar.locator('path.gm-task-assignee-ring')).toBeVisible(); // 30% 弧
   await expect(avatar.locator('image.gm-task-avatar-img')).toHaveAttribute('href', /\/avatars\/preset-\d\.svg/);
-  // 任务行右侧合成总进度：owner 0（w=1）+ 人员列 30（w=1）→ (0+30)/2 = 15%
+  // 任务行右侧总进度（2026-11-20 口径：人员子进度不参与——owner 未设子进度，总进度=自身 0%）
   const nodeTaskProgress = page
     .locator('.editor-canvas svg g[data-node-id]')
     .filter({ has: page.locator('.gm-text', { hasText: '方案评审' }) })
     .locator('text.gm-task-progress');
-  await expect(nodeTaskProgress).toHaveText('15%');
-  // 有人员列时 owner 头像带弧形进度环（2026-10-12「整齐」裁定：环=owner 个人进度，默认 0 仅底环）
+  await expect(nodeTaskProgress).toHaveText('0%');
+  // owner 头像（环=ownerProgress 子进度，未设置 → 无环——与人员头像的底环形态区分）
   const ownerAvatar = page.locator('.editor-canvas svg g.gm-task-owner-avatar');
   await expect(ownerAvatar).toBeVisible();
   await expect(ownerAvatar.getAttribute('data-owner-user')).resolves.toMatch(/.+/);
-  await expect(ownerAvatar.locator('circle.gm-task-assignee-ring-bg')).toBeVisible(); // 0% 底环
-  await expect(ownerAvatar.locator('.gm-task-assignee-ring')).toHaveCount(0); // 无进度弧（仅底环）
+  await expect(ownerAvatar.locator('.gm-task-assignee-ring')).toHaveCount(0); // 子进度未设置无弧环
 
   // 点击人员头像 → 9 档选盘（头部展示人信息）→ 失焦消失 → 重开选 done（100%）
   await avatar.click();
@@ -382,20 +445,15 @@ test('人员进度头像：节点展示圆形头像+进度环，点击弹选盘�
   await expect(avatar.locator('circle.gm-task-assignee-ring')).toBeVisible();
   await waitForDoc(page, (d) => {
     const id = findNodeByText(d, '方案评审');
-    const custom = customOf(d, id);
-    if (!custom) return false;
-    for (const v of custom.values()) {
-      if (typeof v !== 'object' || v === null) continue;
-      for (const entry of Object.values(v as Record<string, unknown>)) {
-        if (typeof entry === 'object' && entry !== null && (entry as { progress?: unknown }).progress === 100) {
-          return true;
-        }
-      }
-    }
-    return false;
+    return plainCustomValues(d, id).some((v) => {
+      if (typeof v !== 'object' || v === null) return false;
+      return Object.values(v as Record<string, unknown>).some(
+        (entry) => typeof entry === 'object' && entry !== null && (entry as { progress?: unknown }).progress === 100,
+      );
+    });
   });
 
-  // 点负责人头像弹同款选盘（2026-10-12 裁定）：头部为负责人信息，选 75% 写回 task.progress
+  // 点负责人头像弹同款选盘（2026-10-12 裁定；2026-11-20 写回 ownerProgress 子进度）
   await ownerAvatar.click();
   await expect(picker).toBeVisible();
   const whoOwner = page.getByTestId('assignee-picker-who');
@@ -403,43 +461,19 @@ test('人员进度头像：节点展示圆形头像+进度环，点击弹选盘�
   await expect(whoOwner).toContainText(nickname);
   await page.getByTestId('assignee-picker-value-p75').click();
   await expect(picker).toHaveCount(0);
-  // owner 环变 75% 弧；docState task.progress=75（写回经 setNodeTask）
+  // owner 环变 75% 弧；docState task.ownerProgress=75（写回经 setOwnerProgress）
   await expect(ownerAvatar.locator('path.gm-task-assignee-ring')).toBeVisible();
   await waitForDoc(page, (d) => {
     const id = findNodeByText(d, '方案评审');
     const task = nodesMapOf(d).get(id)?.get('task') as Y.Map<unknown> | undefined;
-    return task?.get('progress') === 75;
+    return task?.get('ownerProgress') === 75;
   });
 
-  // 比重下拉（2026-10-12 裁定）：切回表格视图 → 勾「自定义比重」→ 每人行出现
-  // 0.3~0.8 弱化档下拉 → 选 0.5 → docState 落 weight 0.5；合成总进度 =
-  // (75×1 + 100×0.5)/(1+0.5) ≈ 83%
+  // 比重控件退役（2026-11-20 裁定规则 5）：切回表格视图验证「自定义比重」开关
+  // 不再渲染（weight 仅兼容读取，不影响任何业务规则）
   await page.getByTestId('view-tab-table').click();
   await expect(page.locator('.task-table-root')).toBeVisible();
   await row.getByTestId('table-custom-assignee').click();
-  const weightedToggle = page.getByTestId('table-custom-assignee-editor-weighted-toggle');
-  await expect(weightedToggle).toBeVisible();
-  await weightedToggle.locator('input').click();
-  // 受控 checkbox 异步 setState：以「比重输入出现」为开关生效信号（不用 check 同步断言）
-  await expect(page.locator('[data-testid^="table-custom-assignee-editor-weight-"]').first()).toBeVisible();
-  await page.locator('.tt-overlay').click(); // 开关勾选即写列定义，关弹层
-  await row.getByTestId('table-custom-assignee').click();
-  const weightSelect = page.locator('[data-testid^="table-custom-assignee-editor-weight-"]');
-  await expect(weightSelect).toBeVisible();
-  await weightSelect.selectOption('0.5');
-  await page.locator('.tt-overlay').click();
-  await waitForDoc(page, (d) => {
-    const id = findNodeByText(d, '方案评审');
-    const custom = customOf(d, id);
-    if (!custom) return false;
-    for (const v of custom.values()) {
-      if (typeof v !== 'object' || v === null) continue;
-      for (const entry of Object.values(v as Record<string, unknown>)) {
-        if (typeof entry === 'object' && entry !== null && (entry as { weight?: unknown }).weight === 0.5) {
-          return true;
-        }
-      }
-    }
-    return false;
-  });
+  await expect(page.getByTestId('table-custom-assignee-editor-weighted-toggle')).toHaveCount(0);
+  await page.locator('.tt-overlay').click(); // 关弹层
 });

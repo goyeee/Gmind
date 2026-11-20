@@ -20,8 +20,8 @@ import {
   setText,
   withTransaction,
 } from '@gmind/core';
-import { effectiveProgress } from '@gmind/shared';
-import { CustomFieldInput, deriveNodesOfDoc, SmartDateInput } from './TaskFields';
+import { taskProgressOf } from '@gmind/shared';
+import { AssigneeField, CustomFieldInput, deriveNodesOfDoc, SmartDateInput } from './TaskFields';
 import * as TaskFields from './TaskFields';
 
 /**
@@ -44,8 +44,8 @@ function buildDoc(): Y.Doc {
       const a2 = addChild(doc, a);
       setText(doc, a2, '子任务A2');
       setNodeTask(doc, a1, { progress: 40 });
-      setNodeTask(doc, a2, { progress: 80, owners: ['u1', 'u2'] });
-      setNodeTask(doc, a, { status: 'doing', dueDate: '2026-09-30' });
+      setNodeTask(doc, a2, { progress: 80, owners: ['u1'] }); // 单负责人（2026-11-20 裁定：多人走人员列）
+      setNodeTask(doc, a, { status: 'doing', progress: 20, dueDate: '2026-09-30' }); // 0%→doing 必须显式选进度（新门禁）
     },
   );
   return doc;
@@ -84,6 +84,15 @@ describe('deriveNodesOfDoc（M7c-C3/C4 抽公共）', () => {
     expect(a1?.order).toBe(0);
   });
 
+  it('任务面板可选包含 root：根任务自动汇总读取子任务总进度', () => {
+    const doc = buildDoc();
+    setNodeTask(doc, ROOT_NODE_ID, { autoProgress: true });
+    const nodes = deriveNodesOfDoc(doc, undefined, true);
+    const root = nodes.find((n) => n.id === ROOT_NODE_ID);
+    expect(root).toBeDefined();
+    expect(taskProgressOf(nodes, ROOT_NODE_ID)).toBe(20);
+  });
+
   it('task 字段透传（status/owners/dates）， owners 数组为拷贝（改副本不动 doc）', () => {
     const doc = buildDoc();
     const nodes = deriveNodesOfDoc(doc);
@@ -91,26 +100,30 @@ describe('deriveNodesOfDoc（M7c-C3/C4 抽公共）', () => {
     expect(a?.task?.status).toBe('doing');
     expect(a?.task?.dueDate).toBe('2026-09-30');
     const a2 = nodes.find((n) => n.title === '子任务A2');
-    expect(a2?.task?.owners).toEqual(['u1', 'u2']);
+    // 2026-11-20 新写入只存 ownerId（owners 键删除，读侧兼容仅对旧文档生效）
+    expect(a2?.task?.ownerId).toBe('u1');
+    expect(a2?.task?.owners).toEqual([]);
     a2?.task?.owners.push('mutated');
-    expect(getNode(doc, a2?.id ?? '')?.task.owners).toEqual(['u1', 'u2']);
+    expect(getNode(doc, a2?.id ?? '')?.task.ownerId).toBe('u1'); // 拷贝防御不改 doc
   });
 
   it('未设置字段的节点按读取侧缺省值（todo/0/null）；手动父级不汇总，开自动后 Σ 与 shared 同口径', () => {
     const doc = buildDoc();
     const aId = getNode(doc, ROOT_NODE_ID)!.childIds.find((id) => getNode(doc, id)?.text === '任务A');
     expect(aId).toBeTruthy();
-    // 默认手动：父级 progress=0，effectiveProgress 不汇总子级
+    // 缺省口径看「未设置任何任务字段」的节点（夹具任务A 现为 doing/20——新门禁要求显式进度）
+    const bId = addChild(doc, ROOT_NODE_ID);
+    setText(doc, bId, '任务B');
     let nodes = deriveNodesOfDoc(doc);
-    const a = nodes.find((n) => n.title === '任务A');
-    expect(a?.task?.progress).toBe(0);
-    expect(a?.task?.startDate).toBeNull();
-    expect(a?.task?.owners).toEqual([]);
-    expect(effectiveProgress(nodes, a?.id ?? '')).toBe(0);
-    // 开启自动汇总后：Σ = 直属子级 (40+80)/2 = 60
+    const b = nodes.find((n) => n.title === '任务B');
+    expect(b?.task?.progress).toBe(0);
+    expect(b?.task?.startDate).toBeNull();
+    expect(b?.task?.owners).toEqual([]);
+    expect(taskProgressOf(nodes, b?.id ?? '')).toBe(0);
+    // 开启自动汇总后：Σ = 直属真正任务子级 (40+80)/2 = 60（taskProgressOf 新口径）
     setNodeTask(doc, aId!, { autoProgress: true });
     nodes = deriveNodesOfDoc(doc);
-    expect(effectiveProgress(nodes, aId!)).toBe(60);
+    expect(taskProgressOf(nodes, aId!)).toBe(60);
   });
 
   it('人员进度列（assignee）条目拉平进 customAssignees；effectiveProgress 按 2026-10-11 口径合成', () => {
@@ -125,8 +138,8 @@ describe('deriveNodesOfDoc（M7c-C3/C4 抽公共）', () => {
       { user: 'uB', progress: 80, weight: 1 },
       { user: 'uC', progress: 30, weight: 1 },
     ]);
-    // (60 + 80 + 30) / 3 = 56.67 → 57（标准负责人一项 + 每人一项）
-    expect(effectiveProgress(nodes, n.id)).toBe(57);
+    // 2026-11-20 新口径：人员子进度不参与任务总进度——总进度=owner 独立值 60
+    expect(taskProgressOf(nodes, n.id)).toBe(60);
   });
 
   it('人员列自定义比重（2026-10-12 裁定）：列 weighted=true 时映射每人 weight，合成按加权平均', () => {
@@ -138,7 +151,8 @@ describe('deriveNodesOfDoc（M7c-C3/C4 抽公共）', () => {
       ORIGIN_USER,
     );
     setNodeTask(doc, id, { owners: ['uA'], progress: 60 }, ORIGIN_USER);
-    // uB 进度 100 比重 3、uC 进度 0 比重 1 → (60×1 + 100×3 + 0×1) / 5 = 72
+    // uB 进度 100 比重 3、uC 进度 0 比重 1——weight 仅兼容读取映射（customAssignees），
+    // 2026-11-20 裁定：人员比重不再参与任务总进度（总进度=owner 独立值 60）
     setCustomField(doc, id, 'w1', { uB: { progress: 100, weight: 3 }, uC: { progress: 0 } }, ORIGIN_USER);
     const nodes = deriveNodesOfDoc(doc);
     const n = nodes.find((x) => x.title === '任务W')!;
@@ -146,7 +160,7 @@ describe('deriveNodesOfDoc（M7c-C3/C4 抽公共）', () => {
       { user: 'uB', progress: 100, weight: 3 },
       { user: 'uC', progress: 0, weight: 1 },
     ]);
-    expect(effectiveProgress(nodes, n.id)).toBe(72);
+    expect(taskProgressOf(nodes, n.id)).toBe(60);
   });
 
   it('无 assignee 条目的节点不出现 customAssignees 键（快照零新增键面）', () => {
@@ -166,7 +180,7 @@ describe('deriveNodesOfDoc（M7c-C3/C4 抽公共）', () => {
     const inC2 = deriveNodesOfDoc(doc, c2);
     expect(inC2.map((n) => n.title)).toEqual(['画布2任务']);
     expect(inC2[0]?.parentId).toBe(r2);
-    expect(inC2[0]?.task?.owners).toEqual(['uZ']);
+    expect(inC2[0]?.task?.ownerId).toBe('uZ');
     // 缺省解析（activeCanvasId=画布 1）：仍拉平画布 1，不含画布 2 节点
     const inDefault = deriveNodesOfDoc(doc);
     expect(inDefault.map((n) => n.title)).not.toContain('画布2任务');
@@ -235,6 +249,8 @@ describe('CustomFieldInput（自定义属性单字段，任务 2 公共控件）
       ['u2', { userId: 'u2', nickname: '乙' }],
     ]);
     const onCommit = (): void => undefined;
+    const onAssigneeProgress = (): void => undefined;
+    const onAssigneeToggle = (): void => undefined;
     try {
       act(() => {
         root.render(
@@ -246,6 +262,8 @@ describe('CustomFieldInput（自定义属性单字段，任务 2 公共控件）
               value: '初值',
               memberIndex,
               onCommit,
+              onAssigneeProgress,
+              onAssigneeToggle,
               testIdPrefix: 'cf',
             }),
             createElement(CustomFieldInput, {
@@ -253,6 +271,8 @@ describe('CustomFieldInput（自定义属性单字段，任务 2 公共控件）
               value: null,
               memberIndex,
               onCommit,
+              onAssigneeProgress,
+              onAssigneeToggle,
               testIdPrefix: 'cf',
             }),
             createElement(CustomFieldInput, {
@@ -260,6 +280,8 @@ describe('CustomFieldInput（自定义属性单字段，任务 2 公共控件）
               value: 60,
               memberIndex,
               onCommit,
+              onAssigneeProgress,
+              onAssigneeToggle,
               testIdPrefix: 'cf',
             }),
             createElement(CustomFieldInput, {
@@ -267,6 +289,8 @@ describe('CustomFieldInput（自定义属性单字段，任务 2 公共控件）
               value: '2026-10-01',
               memberIndex,
               onCommit,
+              onAssigneeProgress,
+              onAssigneeToggle,
               testIdPrefix: 'cf',
             }),
           ),
@@ -296,6 +320,74 @@ describe('CustomFieldInput（自定义属性单字段，任务 2 公共控件）
         root.unmount();
       });
       container.remove();
+    }
+  });
+});
+
+describe('AssigneeField 面板变体（2026-11-21 需求方裁定：进度填写退役，点头像调进度选盘）', () => {
+  const memberIndex = new Map([
+    ['u1', { userId: 'u1', nickname: '甲' }],
+    ['u2', { userId: 'u2', nickname: '乙' }],
+  ]);
+  const render = (props: Record<string, unknown>): { container: HTMLDivElement; cleanup: () => void } => {
+    (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    act(() => {
+      root.render(createElement(AssigneeField, props as never));
+    });
+    return {
+      container,
+      cleanup: () => {
+        act(() => {
+          root.unmount();
+        });
+        container.remove();
+      },
+    };
+  };
+
+  it('传入 onAvatarPick：行内头像变独立按钮、无进度输入框、只读 % 回显，点击回调带用户与当前进度', () => {
+    const picks: Array<{ userId: string; progress: number }> = [];
+    const { container, cleanup } = render({
+      value: { u1: { progress: 40 } },
+      memberIndex,
+      onAssigneeProgress: () => undefined,
+      onAssigneeToggle: () => undefined,
+      onAvatarPick: (userId: string, progress: number) => picks.push({ userId, progress }),
+      testId: 'af',
+    });
+    try {
+      const btn = container.querySelector<HTMLButtonElement>('button[data-testid="af-avatar-u1"]');
+      expect(btn).toBeTruthy();
+      expect(container.querySelector('input[data-testid="af-progress-u1"]')).toBeNull(); // 填写框退役
+      expect(container.textContent).toContain('40%'); // 只读回显
+      expect(container.querySelector('[data-testid="af-remove-u1"]')).toBeTruthy(); // 移除按钮保留
+      act(() => {
+        btn!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      });
+      expect(picks).toEqual([{ userId: 'u1', progress: 40 }]);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('未传 onAvatarPick（表格单元格弹层形态）：保持进度输入框原行为', () => {
+    const { container, cleanup } = render({
+      value: { u1: { progress: 40 } },
+      memberIndex,
+      onAssigneeProgress: () => undefined,
+      onAssigneeToggle: () => undefined,
+      testId: 'af',
+    });
+    try {
+      expect(container.querySelector('button[data-testid="af-avatar-u1"]')).toBeNull();
+      const input = container.querySelector<HTMLInputElement>('input[data-testid="af-progress-u1"]');
+      expect(input).toBeTruthy();
+      expect(input!.value).toBe('40');
+    } finally {
+      cleanup();
     }
   });
 });

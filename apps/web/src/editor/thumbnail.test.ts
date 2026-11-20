@@ -11,10 +11,13 @@ import {
   rootIdOf,
   SEED_TEMPLATES,
   setActiveCanvas,
+  setCustomColumns,
+  setCustomField,
+  setNodeTask,
   subtreeIds,
 } from '@gmind/core';
 import type { MeasureAdapter } from '@gmind/engine';
-import { buildThumbSvg } from './thumbnail';
+import { buildTableThumbSvg, buildThumbSvg } from './thumbnail';
 
 /**
  * 真实内容缩略图（2026-10-21）：引擎 layout 直出内联样式 SVG。
@@ -103,5 +106,62 @@ describe('buildThumbSvg（工作台真实缩略图）', () => {
       expect(svg3).toContain(n.text);
     }
     doc3.destroy();
+  });
+
+  // —— 2026-11-19 取景窗口口径（可读优先 + 宽度占缩略图 80%，四问确认）——
+
+  it('取景窗口：viewBox 固定 176×64（2.75:1），与显示框 width:80%×64px 匹配', () => {
+    const doc = createTemplateDoc(SEED_TEMPLATES[0]!);
+    const svg = buildThumbSvg(doc, measureStub)!;
+    expect(svg).toMatch(/^<svg[^>]*viewBox="0 0 176 64"/);
+    doc.destroy();
+  });
+
+  it('小内容放大撑满：仅 root 的文档按窗口宽 96% 档放大（不再窄条）', () => {
+    const doc = createTemplateDoc({ title: '中心主题', children: [] });
+    const svg = buildThumbSvg(doc, measureStub)!;
+    // root 文本 font-size = 20 × s，s = min(0.96×176/72, 64/28) ≈ 2.29 → ≈45.7
+    const fs = [...svg.matchAll(/font-size="([\d.]+)"/g)].map((m) => Number(m[1]));
+    expect(fs.length).toBeGreaterThan(0);
+    expect(Math.max(...fs)).toBeGreaterThan(30);
+    doc.destroy();
+  });
+
+  it('大内容裁剪锚定（可读优先）：root 字号钳 8 窗口单位，全右布局 root 锚窗口左 1/4', () => {
+    // 造宽文档：root 3 个右列分支（index<3 恒右）各带 30 字长文孙级 → 水平宽度
+    // 超过窗口可读下限覆盖（440 doc 单位）触发裁剪档
+    const long = '一二三四五六七八九十甲乙丙丁戊己庚辛壬癸子丑寅卯辰巳午未申酉';
+    const doc = createTemplateDoc({
+      title: '根主题锚定',
+      children: [1, 2, 3].map((i) => ({ text: `分支${i}`, children: [{ text: long }] })),
+    });
+    const svg = buildThumbSvg(doc, measureStub)!;
+    expect(svg).toMatch(/viewBox="0 0 176 64"/);
+    // root 文本：font-size = 20×0.4 = 8；x = 0.25×176 = 44（锚左 1/4，与定位中心同语义）
+    const rootText = svg.match(/<text x="([\d.-]+)"[^>]*font-size="([\d.]+)"[^>]*>根主题锚定</);
+    expect(rootText).not.toBeNull();
+    expect(Number(rootText![1])).toBeCloseTo(44, 0);
+    expect(Number(rootText![2])).toBeCloseTo(8, 0);
+    doc.destroy();
+  });
+
+  it('表格缩略图只展示任务总进度，人员子进度 100 不把总进度 0 改成 100', () => {
+    const doc = createTemplateDoc({ title: '任务表', children: [{ text: '任务A' }] });
+    const id = subtreeIds(doc, ROOT_NODE_ID).find((nid) => getNode(doc, nid)?.text === '任务A')!;
+    setCustomColumns(doc, [{ id: 'col-a', name: '执行人', type: 'assignee' }]);
+    setCustomField(doc, id, 'col-a', { u1: { progress: 100 } }, ORIGIN_USER);
+    setNodeTask(doc, id, { progress: 0 }, ORIGIN_USER);
+    const svg = buildTableThumbSvg(doc)!;
+    expect(svg).toContain('>0%</text>');
+    expect(svg).not.toContain('>100%</text>');
+    doc.destroy();
+  });
+
+  it('表格缩略图归一同纵横比：viewBox 固定 390×142（2.75:1）', () => {
+    const doc = createTemplateDoc({ title: '任务表', children: [{ text: '任务A' }] });
+    const svg = buildTableThumbSvg(doc)!;
+    expect(svg).toMatch(/^<svg[^>]*viewBox="0 0 390 142"/);
+    expect(svg).toContain('任务A');
+    doc.destroy();
   });
 });

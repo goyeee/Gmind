@@ -44,9 +44,13 @@ async function fillTaskFields(page: Page): Promise<void> {
   await expect(page.getByTestId('task-panel-title')).toHaveValue('写周报');
   await page.getByTestId('task-panel-desc').fill('本周五前完成周报初稿');
   await page.getByTestId('task-panel-desc').blur(); // 描述失焦提交
+  // 0%→进行中（2026-11-20 新门禁）：弹 1～99 进度选择，填 50 确认
   await page.getByTestId('task-panel-status-doing').click();
-  await page.getByTestId('task-panel-progress').fill('50');
-  await page.getByTestId('task-panel-progress').press('Enter'); // 进度 Enter 提交
+  const dlg = page.getByTestId('task-dialog-overlay');
+  await expect(dlg).toBeVisible();
+  await dlg.getByTestId('task-dialog-progress-input').fill('50');
+  await dlg.getByTestId('task-dialog-progress-confirm').click();
+  await expect(dlg).toHaveCount(0);
 }
 
 test('简洁模式：切换隐藏描述/状态条/任务行并内联进度、盒高变小，再点恢复，刷新保持偏好', async ({
