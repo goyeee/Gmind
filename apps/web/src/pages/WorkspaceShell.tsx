@@ -423,7 +423,9 @@ export function WorkspaceShell({
               onClick={() => setUserMenuAt((v) => (v === 'side' ? null : 'side'))}
             >
               <span className="ws-avatar" aria-hidden>
-                {me ? <Avatar userId={me.id} nickname={me.nickname} avatar={me.avatarUrl} size={28} /> : '…'}
+                {/* 2026-11-19 需求方「头像不要有圆环」：38px 图片撑满 .ws-avatar 圆，
+                    紫圈不露出；白描边由 workspace.css 作用域规则去掉 */}
+                {me ? <Avatar userId={me.id} nickname={me.nickname} avatar={me.avatarUrl} size={38} /> : '…'}
               </span>
               <span className="ws-user-meta">
                 <span className="ws-user-name" data-testid="user-nickname">

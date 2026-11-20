@@ -1352,7 +1352,11 @@ export function EditorPage() {
 
   /** 定位到中心（需求方 2026-10-09）：保持当前缩放，把中心主题平移到画布中心。
    *  居中同式 fitCanvas(maxScale) 分支——按 root 盒单点化：tx' = vw/2 − cx×s
-   *  （panBy 补差值）；root 盒缺失（空布局竞态）静默 no-op。 */
+   *  （panBy 补差值）；root 盒缺失（空布局竞态）静默 no-op。
+   *  单侧偏移（需求方 2026-11-19 四问确认）：root 直接子级全在一侧时常规居中后
+   *  再水平偏移视口宽 1/4——全右再左移（中心主题落左 1/4，右侧内容尽量露出）、
+   *  全左镜像右移；混合两侧/无子级/org（side='down'）不偏移。侧别直读布局盒
+   *  NodeBox.side（logic 全右天然命中；概要盒独立数组不参与），纯视口平移。 */
   const centerRoot = (): void => {
     const vp = viewportRef.current;
     const svgEl = svgRef.current;
@@ -1365,7 +1369,25 @@ export function EditorPage() {
       svgEl.clientWidth / 2 - (box.x + box.w / 2) * s - vp.tx,
       svgEl.clientHeight / 2 - (box.y + box.h / 2) * s - vp.ty,
     );
+    // 单侧布局偏移（见头注）：panBy 无钳制（viewport.ts），直接叠加平移
+    const kids = boxesRef.current.filter((b) => b.depth === 1);
+    const shiftFrac = kids.every((b) => b.side === 'right')
+      ? -0.25
+      : kids.every((b) => b.side === 'left')
+        ? 0.25
+        : 0;
+    if (kids.length > 0 && shiftFrac !== 0) vp.panBy(svgEl.clientWidth * shiftFrac, 0);
     syncZoom();
+  };
+
+  /** 画布页签切换包装（2026-11-19 需求方「新建画布中心主题太大」）：新建画布首访
+   *  fit 不封顶，空画布只有一个小 root 盒，computeFit scale 打满 400% 钳制上限
+   *  ——与新建文件首帧同款 fitCanvas(1)（只缩不放 100% 居中）下一帧覆盖。rAF
+   *  注册序保证 rerender 的 vpFit 先跑、fitCanvas(1) 同帧收尾，无闪烁；常规
+   *  页签切换（无 opts）走原编排不动。 */
+  const switchCanvasFromTabBar = (canvasId: string, opts?: { isNew?: boolean }): void => {
+    switchCanvas(canvasId);
+    if (opts?.isNew) requestAnimationFrame(() => fitCanvas(1));
   };
 
   const zoomBy = (factor: number): void => {
@@ -4951,7 +4973,7 @@ export function EditorPage() {
               canvases={canvases}
               activeCanvasId={activeCanvasId}
               showToast={showToast}
-              onSwitch={switchCanvas}
+              onSwitch={switchCanvasFromTabBar}
               onChanged={refresh}
               readOnly={readOnly}
             />

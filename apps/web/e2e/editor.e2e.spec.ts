@@ -803,10 +803,13 @@ test('编辑器：右键拖拽平移画布——超阈值平移且不弹菜单�
   await expect(page.getByTestId('context-menu')).toBeVisible();
 });
 
-// 定位到中心（需求方 2026-10-09 裁定）：底栏「定位中心」——视口平移使中心主题回到
-// 画布中心、缩放倍率保持不变。先缩放 150% + 右键拖拽偏离，再点按钮断言 root 渲染
-// 盒中心 ≈ 画布中心（±3px）且 zoom-pct 不变。
-test('编辑器：定位中心——平移缩放偏离后点击，中心主题居中且缩放不变', async ({ page }) => {
+// 定位到中心（需求方 2026-10-09 裁定 + 2026-11-19 单侧偏移修订，四问确认）：底栏
+// 「定位中心」——视口平移使中心主题回位、缩放倍率保持不变；root 直接子级全在一侧
+// 时常规居中后再水平偏移画布宽 1/4（全右→中心主题落左 1/4，右侧内容尽量露出；
+// 全左镜像右 3/4），两侧混合/无子级恒居中。种子文档 本周计划 3 分支全在右列：
+// 先缩放 150% + 右键拖拽偏离，点按钮断言 root ≈ 画布左 1/4（±3px）、垂直居中、
+// zoom-pct 不变；再拖一支到左列（混合）→ 断言恢复画布正中。
+test('编辑器：定位中心——平移缩放偏离后点击，全右布局中心主题落左 1/4 且缩放不变', async ({ page }) => {
   await openSeedDoc(page, '本周计划');
   const root = page.locator('.editor-canvas svg .gm-text', { hasText: '本周计划' });
   // 偏离：缩放 150% → 右键拖走（超 4px 阈值进入平移）
@@ -826,16 +829,32 @@ test('编辑器：定位中心——平移缩放偏离后点击，中心主题�
   expect(
     Math.abs(off!.x + off!.width / 2 - (canvas!.x + canvas!.width / 2)),
   ).toBeGreaterThan(50);
-  // 点「定位中心」：root 居中 + 缩放保持 150%
+  // 点「定位中心」：全右布局（种子 3 分支全在右列）→ root 落画布左 1/4 + 垂直居中 + 缩放保持 150%
   await page.getByTestId('center-btn').click();
   await expect(page.getByTestId('zoom-pct')).toHaveText('150%');
   const after = await root.boundingBox();
   expect(after).not.toBeNull();
   expect(
-    Math.abs(after!.x + after!.width / 2 - (canvas!.x + canvas!.width / 2)),
+    Math.abs(after!.x + after!.width / 2 - (canvas!.x + canvas!.width * 0.25)),
   ).toBeLessThan(3);
   expect(
     Math.abs(after!.y + after!.height / 2 - (canvas!.y + canvas!.height / 2)),
+  ).toBeLessThan(3);
+
+  // 混合两侧（拖一支到左列空白）：定位中心恢复画布正中
+  const branch = page.locator('.editor-canvas svg .gm-text', { hasText: '周一' });
+  const bb = await branch.boundingBox();
+  expect(bb).not.toBeNull();
+  await page.mouse.move(bb!.x + bb!.width / 2, bb!.y + bb!.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(canvas!.x + canvas!.width * 0.12, canvas!.y + canvas!.height * 0.72, { steps: 6 });
+  await page.mouse.up();
+  await page.waitForTimeout(300); // 布局回流
+  await page.getByTestId('center-btn').click();
+  const after2 = await root.boundingBox();
+  expect(after2).not.toBeNull();
+  expect(
+    Math.abs(after2!.x + after2!.width / 2 - (canvas!.x + canvas!.width / 2)),
   ).toBeLessThan(3);
 });
 

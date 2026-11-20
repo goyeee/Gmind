@@ -55,8 +55,10 @@ export interface CanvasTabBarProps {
   /** 当前活动画布（本地视图态 React 镜像）。 */
   activeCanvasId: string;
   showToast(message: string): void;
-  /** 切换编排（= controller.switchCanvas：临时态清理/视口存档/场景重建）。 */
-  onSwitch(canvasId: string): void;
+  /** 切换编排（= controller.switchCanvas：临时态清理/视口存档/场景重建）。
+   *  opts.isNew = 新建画布后的显式切换：宿主按此下一帧 fitCanvas(1) 封顶
+   *  （2026-11-19 需求方「新建画布中心主题太大」——与新建文件首帧同策略）。 */
+  onSwitch(canvasId: string, opts?: { isNew?: boolean }): void;
   /** 画布管理写后的显式刷新（观察器已自动覆盖，本入口为写路径显式兜底）。 */
   onChanged?(): void;
   /**
@@ -140,7 +142,7 @@ export function CanvasTabBar({
       if (current.canvasId === null) {
         // 新建：空名走 core 默认命名（画布 N）；非空显式命名（校验先于事务在 core）
         const newId = addCanvas(doc, name === '' ? {} : { name });
-        onSwitch(newId); // meta.activeCanvasId（LWW）不强拽本地视图 → 显式切换编排
+        onSwitch(newId, { isNew: true }); // meta.activeCanvasId（LWW）不强拽本地视图 → 显式切换编排；isNew 供宿主首帧 100% 封顶 fit
       } else {
         renameCanvas(doc, current.canvasId, name); // 空名/超长 core 拦截 → 两段式 toast
       }
