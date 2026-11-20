@@ -54,6 +54,18 @@ test('我的待办：跨文件任务汇总 → 行内进度直改 → 勾选完�
   const doneRow = page.getByTestId('todo-row').filter({ hasText: '写周报' });
   await expect(doneRow).toBeVisible();
 
+  // 取消完成也必须明确选择新进度；确认 40% 后回到待办
+  await doneRow.getByTestId('todo-check').click();
+  const reopen = page.getByTestId('task-dialog-overlay');
+  await expect(reopen).toBeVisible();
+  await reopen.getByTestId('task-dialog-progress-input').fill('40');
+  await reopen.getByTestId('task-dialog-progress-confirm').click();
+  await expect(page.getByTestId('todo-row')).toHaveCount(0);
+  await page.getByTestId('todo-tab-all').click();
+  const reopenedRow = page.getByTestId('todo-row').filter({ hasText: '写周报' });
+  await expect(reopenedRow).toBeVisible();
+  await expect(reopenedRow.getByTestId('todo-progress-range')).toHaveValue('40');
+
   // 生成日报：剪贴板 Markdown 含任务与文件名
   await page.getByTestId('todo-daily-report').click();
   const clip = await page.evaluate(() => navigator.clipboard.readText());

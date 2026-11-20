@@ -3,6 +3,7 @@ import { isDueTodayOrOverdue, type TodoItem, type TodoStats } from '@gmind/share
 import { fetchTodos, patchTodo } from '../api/todos';
 import { api } from '../api/client';
 import { WorkspaceShell } from './WorkspaceShell';
+import { TaskCompletionDialog } from '../editor/TaskCompletionDialog';
 
 /**
  * 我的待办（/todos，第二期批次 B；2026-10-24 按 Figma 原型 Todo.tsx 重做布局）：
@@ -40,6 +41,7 @@ export function TodosPage() {
   const [group, setGroup] = useState<string>(''); // 分组筛选（负责人所属分组）
   const [error, setError] = useState('');
   const [toast, setToast] = useState('');
+  const [reopen, setReopen] = useState<TodoItem | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   function showToast(message: string): void {
@@ -106,7 +108,7 @@ export function TodosPage() {
       if (!isDueTodayOrOverdue(t.dueDate)) return false; // 统一口径（shared 单源）
     }
     if (!group) return true;
-    const owners = (t as unknown as { ownerIds?: string[] }).ownerIds ?? [];
+    const owners = t.owners;
     return owners.some((o) => memberInGroup(o, group));
   });
 
@@ -257,7 +259,13 @@ export function TodosPage() {
                       data-testid="todo-check"
                       checked={isDone}
                       title={isDone ? '取消完成' : '标记完成'}
-                      onChange={(e) => void act(() => patchTodo(t.fileId, t.nodeId, { done: e.target.checked }))}
+                      onChange={(e) => {
+                        if (!e.target.checked) {
+                          setReopen(t);
+                          return;
+                        }
+                        void act(() => patchTodo(t.fileId, t.nodeId, { done: true }));
+                      }}
                     />
                     <span className="todo-main">
                       <span className={'todo-title' + (isDone ? ' done' : '')}>{t.text}</span>
@@ -288,6 +296,19 @@ export function TodosPage() {
           ))}
         </div>
 
+        {reopen !== null && (
+          <TaskCompletionDialog
+            kind="reopen"
+            targetStatus="todo"
+            onConfirm={() => undefined}
+            onConfirmProgress={(_kind, progress) => {
+              const target = reopen;
+              setReopen(null);
+              void act(() => patchTodo(target.fileId, target.nodeId, { done: false, progress }));
+            }}
+            onCancel={() => setReopen(null)}
+          />
+        )}
         {toast && (
           <div className="workspace-toast" data-testid="toast" role="alert">
             {toast}
