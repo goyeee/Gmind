@@ -855,8 +855,8 @@ describe('renderScene：任务视觉（M7c-C2）', () => {
 
   it('状态条四色：todo 灰/doing 蓝/done 绿/blocked 橙（左缘 3px 全盒高竖条；todo 有任务信息也出灰条）', () => {
     const data = baseData();
-    data.set('b', { text: 'x', task: { status: 'doing' } });
-    data.set('c', { text: 'y', task: { status: 'done' } });
+    data.set('b', { text: 'x', task: { status: 'doing', progress: 40 } });
+    data.set('c', { text: 'y', task: { status: 'done', progress: 100 } });
     data.set('d', { text: 'z', task: { owners: ['u1'] } }); // status 缺省 todo + 负责人 → 灰条
     const layout = baseLayout();
     layout.nodes.push(box('d', 60, 60, 100, 40));
@@ -935,43 +935,50 @@ describe('renderScene：任务视觉（M7c-C2）', () => {
     expect(g2?.querySelector('path.gm-task-assignee-ring')).not.toBeNull();
   });
 
-  it('负责人头像进度环（2026-10-12 需求方裁定「整齐」口径）：节点有人员进度列时 owner 头像弧环=task.progress（右侧 % 仍=合成总进度）；无人员进度列时 owner 无环', () => {
-    // 有 assignee：owner 环 = task.progress 60（弧 path）
+  it('负责人头像进度环（2026-11-20 任务模型）：owner 环=ownerProgress 子进度（未设置无环）；右侧 % 恒=任务总进度', () => {
+    // ownerProgress 40：owner 头像弧环=40；右侧总进度=任务总进度 60（人员子进度不参与）
     const data = baseData();
     data.set('b', {
       text: 'x',
       task: {
-        owners: ['u1'],
+        ownerId: 'u1',
         ownerNames: ['张三'],
+        ownerProgress: 40,
         progress: 60,
         assignees: [{ user: 'uB', name: '李四', progress: 100, colId: 'w1' }],
       },
     });
     renderScene(createScene(svg), taskInput(data));
     const owner = nodeG('b')?.querySelector('g.gm-task-owner-avatar');
-    expect(owner?.querySelector('path.gm-task-assignee-ring')).not.toBeNull(); // 60% 弧（owner 环）
+    expect(owner?.querySelector('path.gm-task-assignee-ring')).not.toBeNull(); // 40% 弧（owner 子进度环）
     expect(owner?.querySelector('circle.gm-task-avatar')).not.toBeNull();
-    // 右侧合成总进度保留：(60+100)/2=80
-    expect(nodeG('b')?.querySelector('text.gm-task-progress')?.textContent).toBe('80%');
-    // 无 assignee：owner 无环（原状）
-    data.set('b', { text: 'x', task: { owners: ['u1'], ownerNames: ['张三'], progress: 60 } });
+    expect(nodeG('b')?.querySelector('text.gm-task-progress')?.textContent).toBe('60%');
+    // ownerProgress 未设置：owner 无环（总进度仍显示）
+    data.set('b', {
+      text: 'x',
+      task: { ownerId: 'u1', ownerNames: ['张三'], progress: 60, assignees: [{ user: 'uB', name: '李四', progress: 100, colId: 'w1' }] },
+    });
     renderScene(createScene(svg), taskInput(data));
     const owner2 = nodeG('b')?.querySelector('g.gm-task-owner-avatar');
     expect(owner2?.querySelector('.gm-task-assignee-ring')).toBeNull();
     expect(nodeG('b')?.querySelector('text.gm-task-progress')?.textContent).toBe('60%');
+    // 没有其他执行人时，历史 ownerProgress 不画隐藏子进度环。
+    data.set('b', { text: 'x', task: { ownerId: 'u1', ownerNames: ['张三'], ownerProgress: 40, progress: 60 } });
+    renderScene(createScene(svg), taskInput(data));
+    expect(nodeG('b')?.querySelector('g.gm-task-owner-avatar .gm-task-assignee-ring')).toBeNull();
   });
 
-  it('负责人进度为 0 时右侧进度不消失（2026-10-12 修复）：任务行存在即显示右侧 %（0% 也是信息）', () => {
+  it('负责人进度为 0 时右侧进度不消失（2026-10-12 修复，2026-11-20 口径更新）：任务行存在即显示右侧 %（0% 也是信息；人员子进度不参与总进度）', () => {
     // 纯负责人、进度显式 0（右侧面板改 0 的场景）
     const data = baseData();
-    data.set('b', { text: 'x', task: { owners: ['u1'], ownerNames: ['张三'], progress: 0 } });
+    data.set('b', { text: 'x', task: { ownerId: 'u1', ownerNames: ['张三'], progress: 0 } });
     renderScene(createScene(svg), taskInput(data));
     expect(nodeG('b')?.querySelector('text.gm-task-progress')?.textContent).toBe('0%');
-    // 有人员列、owner 0：右侧 = 合成进度（不为 owner 个人值）
+    // 有人员列、owner 子进度 0：右侧 = 任务总进度（新口径人员子进度不参与合成，0% 也是信息）
     data.set('b', {
       text: 'x',
       task: {
-        owners: ['u1'],
+        ownerId: 'u1',
         ownerNames: ['张三'],
         progress: 0,
         assignees: [
@@ -981,8 +988,7 @@ describe('renderScene：任务视觉（M7c-C2）', () => {
       },
     });
     renderScene(createScene(svg), taskInput(data));
-    // 合成 = (0 + 100 + 50)/3 = 50
-    expect(nodeG('b')?.querySelector('text.gm-task-progress')?.textContent).toBe('50%');
+    expect(nodeG('b')?.querySelector('text.gm-task-progress')?.textContent).toBe('0%');
   });
 
   it('头像图片（2026-10-11 头像功能）：owner/assignee 有 avatar 画圆形裁剪 <image>（共享 clipPath），无 avatar 回退首字符 text', () => {
@@ -1051,6 +1057,49 @@ describe('renderScene：任务视觉（M7c-C2）', () => {
     expect(progOf('d')?.textContent).toBe('40%'); // 父 Σ 汇总（直属子级均值）
   });
 
+  it('自动父总进度排除普通说明子节点：脑图与任务面板使用同一 taskActive', () => {
+    const data = baseData();
+    data.set('d', { text: 'D', taskActive: true, task: { owners: ['u9'], autoProgress: true } });
+    data.set('e', { text: '真正任务', taskActive: true, task: { progress: 80 } });
+    data.set('f', { text: '普通说明', taskActive: false });
+    const nodes = [
+      box('a', -60, -10, 120, 20, 'right', 0),
+      box('d', 60, 60, 120, 40),
+      { ...box('e', 220, 40, 80, 40), parentId: 'd' },
+      { ...box('f', 220, 80, 80, 40), parentId: 'd' },
+    ];
+    renderScene(createScene(svg), taskInput(data, nodes));
+    expect(nodeG('d')?.querySelector('text.gm-task-progress')?.textContent).toBe('80%');
+  });
+
+  it('自动父折叠后仍汇总隐藏任务：可见性不改变总进度', () => {
+    const data = baseData();
+    data.set('d', { text: 'D', taskActive: true, task: { owners: ['u9'], autoProgress: true } });
+    data.set('e', { text: '可见任务', taskActive: true, taskParentId: 'd', task: { progress: 50 } });
+    data.set('f', { text: '折叠隐藏任务', taskActive: true, taskParentId: 'd', task: { progress: 100 } });
+    const nodes = [box('a', -60, -10, 120, 20, 'right', 0), box('d', 60, 60, 120, 40)];
+    renderScene(createScene(svg), taskInput(data, nodes));
+    expect(nodeG('d')?.querySelector('text.gm-task-progress')?.textContent).toBe('75%');
+  });
+
+  it('仅开启自动计算且总进度 0 的根任务仍显示任务行与 0%', () => {
+    const data = baseData();
+    data.set('d', { text: 'D', taskActive: true, task: { autoProgress: true } });
+    data.set('e', { text: '零进度子任务', taskActive: true, taskParentId: 'd', task: { progress: 0 } });
+    const nodes = [box('a', -60, -10, 120, 20, 'right', 0), box('d', 60, 60, 120, 40)];
+    renderScene(createScene(svg), taskInput(data, nodes));
+    expect(nodeG('d')?.querySelector('text.gm-task-progress')?.textContent).toBe('0%');
+  });
+
+  it('自动父状态色随派生总状态：子任务全部完成后脑图左侧也变完成色', () => {
+    const data = baseData();
+    data.set('d', { text: 'D', taskActive: true, task: { owners: ['u9'], autoProgress: true, status: 'doing', progress: 0 } });
+    data.set('e', { text: '子任务', taskActive: true, taskParentId: 'd', task: { progress: 100, status: 'done' } });
+    const nodes = [box('a', -60, -10, 120, 20, 'right', 0), box('d', 60, 60, 120, 40)];
+    renderScene(createScene(svg), taskInput(data, nodes));
+    expect(nodeG('d')?.querySelector('rect.gm-task-bar')?.getAttribute('fill')).toBe('#34c724');
+  });
+
   it('日期悬浮 chip（2026-10-10 mindgrid 对齐）：盒右上角外侧 MM-DD；逾期红字红框，常态灰字浅框（逾期=dueDate<今天且进度<100 且非 done）', () => {
     const data = baseData();
     data.set('b', { text: 'x', task: { dueDate: '2026-09-01' } }); // 逾期（进度 0 < 100）
@@ -1072,7 +1121,7 @@ describe('renderScene：任务视觉（M7c-C2）', () => {
 
     const scene = createScene(svg);
     // done 状态：过期日期也不判逾期（isOverdue 口径）
-    data.set('b', { text: 'x', task: { status: 'done', dueDate: '2026-09-01' } });
+    data.set('b', { text: 'x', task: { status: 'done', progress: 100, dueDate: '2026-09-01' } });
     renderScene(scene, taskInput(data));
     expect(chipRectOf('b')?.getAttribute('stroke')).toBe('#e5e6eb');
     // 叶有效进度 100：过期日期不判逾期

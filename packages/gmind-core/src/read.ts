@@ -75,13 +75,17 @@ export interface NodeImage {
 export interface NodeTask {
   status: (typeof TASK_STATUSES)[number];
   progress: number;
+  /** 唯一总负责人；缺省 null。旧 owners 仅在 ownerId 未出现时兼容取第一项。 */
+  ownerId: string | null;
+  /** 总负责人的可选执行子进度；独立于任务总进度。 */
+  ownerProgress: number | null;
   owners: string[];
   startDate: string | null;
   dueDate: string | null;
   doneDate: string | null;
   /**
    * 父级进度是否按子级自动汇总（2026-10-20 需求方裁定）。
-   * 缺省 undefined：读侧交由 derive.effectiveProgress 按兼容口径处理。
+   * 缺省 undefined：读侧交由 derive.taskProgressOf 按手动兼容口径处理。
    */
   autoProgress?: boolean;
 }
@@ -90,6 +94,8 @@ export interface NodeTask {
 export const DEFAULT_NODE_TASK: NodeTask = {
   status: 'todo',
   progress: 0,
+  ownerId: null,
+  ownerProgress: null,
   owners: [],
   startDate: null,
   dueDate: null,
@@ -113,6 +119,8 @@ export interface NodeSnapshot {
   icons: Partial<Record<IconGroup, string[]>>;
   /** 任务字段（M7a-T1）：恒为归一化对象（缺省 todo/0/[]/null×3），防御读取远端坏数据。 */
   task: NodeTask;
+  /** 是否参与自动父级任务汇总：有显式任务信息或人员条目为 true，普通说明节点 false。 */
+  taskActive: boolean;
   style: Record<string, string>;
   collapsed: boolean;
   deleted: boolean;
@@ -128,8 +136,8 @@ export interface NodeSnapshot {
    * 自定义列值（表格自定义列，M 表格轨）：Record<colId, 值>——text=string /
    * person=string[] / progress=number / date='YYYY-MM-DD'。防御归一：custom 非
    * Y.Map → 无该键；**schema 外的列键保留原样**（清理是 repair 的职责，读取侧
-   * 不据 schema 过滤——保证读取是节点状态的纯函数）；Y.Array 值转纯数组、其余
-   * 非 plain 值（Y.Map 等 crafted 形状）不入快照。缺省（无 custom 键/空 Map）=
+   * 不据 schema 过滤——保证读取是节点状态的纯函数）；Y.Array 与人员列嵌套 Y.Map
+   * 递归转普通数组/对象，不把 Yjs 类型泄漏到快照。缺省（无 custom 键/空 Map）=
    * 无该字段，旧文档快照零新增键面。写入走 operations.setCustomField。
    */
   custom?: Record<string, unknown>;
@@ -203,14 +211,23 @@ function readTask(raw: unknown): NodeTask {
   const autoProgressRaw = raw.get('autoProgress');
   const asDate = (v: unknown): string | null =>
     typeof v === 'string' && isValidDateStr(v) ? v : null;
-  const p = typeof progress === 'number' && Number.isFinite(progress) ? progress : 0;
+  const asProgress = (v: unknown): number | null =>
+    typeof v === 'number' && Number.isFinite(v) ? Math.min(100, Math.max(0, Math.round(v))) : null;
+  const p = asProgress(progress) ?? 0;
   const autoProgress = typeof autoProgressRaw === 'boolean' ? autoProgressRaw : undefined;
+  const legacyOwners = Array.isArray(owners) ? owners.filter((v): v is string => typeof v === 'string') : [];
+  const ownerIdRaw = raw.get('ownerId');
+  const ownerId = ownerIdRaw === undefined
+    ? (legacyOwners[0] ?? null)
+    : (typeof ownerIdRaw === 'string' && ownerIdRaw !== '' ? ownerIdRaw : null);
   return {
     status: (TASK_STATUSES as readonly string[]).includes(status as string)
       ? (status as NodeTask['status'])
       : 'todo',
-    progress: Math.min(100, Math.max(0, Math.round(p))),
-    owners: Array.isArray(owners) ? owners.filter((v): v is string => typeof v === 'string') : [],
+    progress: p,
+    ownerId,
+    ownerProgress: asProgress(raw.get('ownerProgress')),
+    owners: legacyOwners,
     startDate: asDate(raw.get('startDate')),
     dueDate: asDate(raw.get('dueDate')),
     doneDate: asDate(raw.get('doneDate')),
@@ -240,29 +257,30 @@ function readIcons(raw: unknown): Partial<Record<IconGroup, string[]>> {
 }
 
 /**
- * 读取侧自定义列值归一化：custom Y.Map 的各键值读取为 plain 值——Y.Array →
- * 纯数组（person 形状），string/number 原样，其余（Y.Map/undefined 等 crafted
- * 形状）不入快照（repair 删键兜底）。schema 外列键**保留原样**（读取不据 meta
- * 过滤，repair 负责清理）；空 Map/非 Y.Map → undefined（快照零新增键面）。
+ * 读取侧自定义列值归一化：custom Y.Map 的各键值读取为 plain 值——Y.Array 递归转
+ * 纯数组，人员列嵌套 Y.Map 递归转普通对象，string/number 原样。schema 外列键
+ * **保留原样**（读取不据 meta 过滤，repair 负责清理）；空 Map/非 Y.Map → undefined
+ * （快照零新增键面）。
  */
+function plainCustomValue(value: unknown): unknown {
+  if (value instanceof Y.Map) {
+    const out: Record<string, unknown> = {};
+    for (const [key, nested] of value.entries()) out[key] = plainCustomValue(nested);
+    return out;
+  }
+  if (value instanceof Y.Array) return value.toArray().map(plainCustomValue);
+  return value;
+}
+
 function readCustom(raw: unknown): Record<string, unknown> | undefined {
   if (!(raw instanceof Y.Map)) return undefined;
   const out: Record<string, unknown> = {};
-  for (const [colId, value] of raw.entries()) {
-    if (value instanceof Y.Array) {
-      out[colId] = value.toArray();
-    } else if (value instanceof Y.Map) {
-      continue; // crafted 形状：不入快照（repair 删键兜底）
-    } else {
-      out[colId] = value;
-    }
-  }
+  for (const [colId, value] of raw.entries()) out[colId] = plainCustomValue(value);
   return Object.keys(out).length > 0 ? out : undefined;
 }
 
-/** 人员进度列拉平条目（done 门禁与 derive 聚合共用）：weight=合成比重——列
- * weighted（自定义比重开关）为真时取存值（缺省 1），为假（按人数平分）时恒 1
- * （存量的 weight 不参与）；旧版 number 简形按 {progress, weight:1} 归一。纯读。 */
+/** 人员进度列拉平条目（完成预检与旧派生兼容读取共用）：旧 number 简形按
+ *  {progress} 归一；旧 weight 仅原样读出供兼容，不再合成任务总进度。纯读。 */
 export interface AssigneeEntry {
   colId: string;
   colName: string;
@@ -285,11 +303,33 @@ export function assigneeEntriesOf(doc: Y.Doc, id: string, canvasId?: string): As
     for (const [user, v] of Object.entries(raw as Record<string, unknown>)) {
       const norm = typeof v === 'number' ? { progress: v } : (v as { progress?: unknown; weight?: unknown } | null);
       if (typeof norm?.progress !== 'number') continue; // 坏形状项跳过（repair 删键兜底）
-      const weight = col.weighted === true && typeof norm.weight === 'number' && norm.weight > 0 ? norm.weight : 1;
+      const weight = typeof norm.weight === 'number' && norm.weight > 0 ? norm.weight : 1;
       out.push({ colId: col.id, colName: col.name, user, progress: norm.progress, weight });
     }
   }
   return out;
+}
+
+export interface UnfinishedTaskProgress {
+  owner: { userId: string; progress: number } | null;
+  assignees: AssigneeEntry[];
+}
+
+/** 完成动作预检：只返回生效总负责人的未完成的可选子进度，以及所有未达 100%
+ *  的人员条目。无负责人、未填写负责人子进度或已完成项均不返回。 */
+export function unfinishedTaskProgressOf(doc: Y.Doc, id: string, canvasId?: string): UnfinishedTaskProgress {
+  const task = getNode(doc, id, canvasId)?.task;
+  const assignees = assigneeEntriesOf(doc, id, canvasId);
+  // 只有实际存在人员列条目时，负责人子进度才作为一条执行项参与完成检查；
+  // 否则面板不会展示这条子进度，不能出现隐藏项触发确认。
+  const owner = assignees.length > 0 && task?.ownerId !== null && task?.ownerId !== undefined &&
+    task.ownerProgress !== null && task.ownerProgress < 100
+    ? { userId: task.ownerId, progress: task.ownerProgress }
+    : null;
+  return {
+    owner,
+    assignees: assignees.filter((entry) => entry.progress < 100),
+  };
 }
 
 /**
@@ -308,6 +348,23 @@ function readImage(raw: unknown): NodeImage | null {
   return rest as unknown as NodeImage;
 }
 
+function hasAssigneeEntries(doc: Y.Doc, custom: Record<string, unknown> | undefined): boolean {
+  if (!custom) return false;
+  const schema = canonicalCustomColumns(doc.getMap('meta').get('customColumns'));
+  for (const col of schema) {
+    if (col.type !== 'assignee') continue;
+    const raw = custom[col.id];
+    if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) continue;
+    for (const value of Object.values(raw as Record<string, unknown>)) {
+      const progress = typeof value === 'number'
+        ? value
+        : (value as { progress?: unknown } | null)?.progress;
+      if (typeof progress === 'number') return true;
+    }
+  }
+  return false;
+}
+
 export function getNode(doc: Y.Doc, id: string, canvasId?: string): NodeSnapshot | null {
   const node = canvasNodesMap(doc, canvasId).get(id);
   if (!node) return null;
@@ -318,6 +375,9 @@ export function getNode(doc: Y.Doc, id: string, canvasId?: string): NodeSnapshot
   const side = node.get('side');
   // 自定义列值透传（防御归一见 readCustom；无键/空 Map 不出现该字段）
   const custom = readCustom(node.get('custom'));
+  const rawTask = node.get('task');
+  const taskActive = (rawTask instanceof Y.Map && rawTask.size > 0) ||
+    (custom !== undefined && hasAssigneeEntries(doc, custom));
   return {
     id,
     text: asString(node.get('text')),
@@ -328,7 +388,8 @@ export function getNode(doc: Y.Doc, id: string, canvasId?: string): NodeSnapshot
     href: asString(node.get('href')),
     image: image ?? null,
     icons: readIcons(node.get('icons')),
-    task: readTask(node.get('task')),
+    task: readTask(rawTask),
+    taskActive,
     style: style ? Object.fromEntries(style.entries()) : {},
     collapsed: node.get('collapsed') === true,
     deleted: node.get('deleted') === true,

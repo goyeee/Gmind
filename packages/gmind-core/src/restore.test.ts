@@ -77,6 +77,7 @@ function expectConverged(target: Y.Doc, snapshot: Y.Doc): void {
     expect(t.collapsed, `collapsed@${sId}`).toBe(s.collapsed);
     expect(t.icons, `icons@${sId}`).toEqual(s.icons);
     expect(t.task, `task@${sId}`).toEqual(s.task);
+    expect(t.custom ?? {}, `custom@${sId}`).toEqual(s.custom ?? {});
     expect(t.image, `image@${sId}`).toEqual(s.image);
     expect(t.style, `style@${sId}`).toEqual(s.style);
     expect(t.childIds, `childIds.len@${sId}`).toHaveLength(s.childIds.length);
@@ -514,7 +515,7 @@ function enrichRandom(rnd: () => number, doc: Y.Doc): void {
     const group = ICON_GROUPS[i % ICON_GROUPS.length]!;
     const values = iconValuesOf(group);
     setIcon(doc, id, group, values[i % values.length]!);
-    if (i % 5 === 0) setNodeTask(doc, id, { status: 'doing', progress: i % 101, owners: [`u${i}`] });
+    if (i % 5 === 0) setNodeTask(doc, id, { status: 'doing', progress: (i % 99) + 1, owners: [`u${i}`] });
     if (i % 3 === 0) setImage(doc, id, { key: `k${i}`, w: 10 + i, h: 20 + i });
     setStyle(doc, id, { color: `#${i}` });
     if (i % 4 === 0) setCollapsed(doc, id, true);
@@ -562,5 +563,111 @@ describe('restore：sharedFilter 不随版本回滚（meta.title 排除先例扩
       grp: '',
       dept: '',
     });
+  });
+});
+
+// ══ 任务模型字段恢复（Task 2，2026-11-20 画布多人任务裁定）：恢复覆盖 ownerId /
+// ownerProgress / autoProgress / 全部节点 custom（人员列逐人 diff）/ doc 级列 schema；
+// done 与未完成子进度并存是合法状态，恢复与 repair 都不得强补。 ══
+
+import { setOwnerProgress, setTaskOwner, setCustomField } from './operations';
+
+describe('任务模型字段恢复（Task 2）', () => {
+  it('恢复覆盖 ownerId/ownerProgress/autoProgress：target 漂移后恢复回快照原值', () => {
+    const target = makeDoc();
+    const snapshot = docFromState(docToState(target)); // 同源快照（同节点 id）
+    const sA = idOf(snapshot, 'A');
+    // 快照固化期望任务模型（autoProgress 不设——恢复要把 target 的 true 删掉）
+    setNodeTask(snapshot, sA, { progress: 80 }, ORIGIN_USER);
+    setTaskOwner(snapshot, sA, 'user-snap', ORIGIN_USER);
+    setOwnerProgress(snapshot, sA, 25, ORIGIN_USER);
+    // target 漂移：换负责人、写子进度、开自动、改进度
+    const tA = idOf(target, 'A');
+    setNodeTask(target, tA, { progress: 30 }, ORIGIN_USER);
+    setTaskOwner(target, tA, 'user-drift', ORIGIN_USER);
+    setOwnerProgress(target, tA, 70, ORIGIN_USER);
+    setNodeTask(target, tA, { autoProgress: true }, ORIGIN_USER);
+    const snapBefore = getNode(snapshot, sA)!;
+
+    restoreFromSnapshot(target, snapshot);
+    const t = getNode(target, tA)!;
+    expect(t.task.ownerId).toBe('user-snap');
+    expect(t.task.ownerProgress).toBe(25);
+    expect(t.task.progress).toBe(80);
+    expect(t.task.autoProgress).toBeUndefined(); // 快照缺省 → target 的 true 被清
+    expect(t.task).toEqual(snapBefore.task);
+  });
+
+  it('换负责人恢复：新旧负责人的子进度数值相同也按快照保留', () => {
+    const target = makeDoc();
+    const snapshot = docFromState(docToState(target));
+    const sA = idOf(snapshot, 'A');
+    setTaskOwner(snapshot, sA, 'user-snap', ORIGIN_USER);
+    setOwnerProgress(snapshot, sA, 50, ORIGIN_USER);
+    const tA = idOf(target, 'A');
+    setTaskOwner(target, tA, 'user-drift', ORIGIN_USER);
+    setOwnerProgress(target, tA, 50, ORIGIN_USER);
+
+    restoreFromSnapshot(target, snapshot);
+    expect(getNode(target, tA)!.task.ownerId).toBe('user-snap');
+    expect(getNode(target, tA)!.task.ownerProgress).toBe(50);
+  });
+
+  it('恢复覆盖节点 custom 与 doc 级列 schema：人员列逐人 diff、target 多余列删除', () => {
+    const target = makeDoc();
+    const schema = [
+      { id: 'col-a', name: '执行人', type: 'assignee' as const },
+      { id: 'col-b', name: '旧列', type: 'assignee' as const },
+    ];
+    target.getMap('meta').set('customColumns', schema.map((c) => ({ ...c })));
+    const snapshot = docFromState(docToState(target)); // 同源（含两列 schema）
+    // 快照固化：schema 只留 col-a；节点 custom col-a 两名人员
+    const sA = idOf(snapshot, 'A');
+    snapshot.getMap('meta').set('customColumns', [schema[0]]);
+    setCustomField(snapshot, sA, 'col-a', { u1: { progress: 80 }, u2: { progress: 20 } }, ORIGIN_USER);
+    // target 漂移：col-a 某人进度漂移 + 多挂 col-b 值
+    const tA = idOf(target, 'A');
+    setCustomField(target, tA, 'col-a', { u1: { progress: 30 } }, ORIGIN_USER);
+    setCustomField(target, tA, 'col-b', { u1: { progress: 99 } }, ORIGIN_USER);
+
+    restoreFromSnapshot(target, snapshot);
+    expect(getNode(target, tA)!.custom!['col-a']).toEqual({ u1: { progress: 80 }, u2: { progress: 20 } });
+    expect(getNode(target, tA)!.custom!['col-b']).toBeUndefined();
+    expect(getMeta(target).customColumns.map((c) => c.id)).toEqual(['col-a']);
+  });
+
+  it('done 与未完成子进度并存：恢复原样落写，后续 normalize 不强补子进度', () => {
+    const target = makeDoc();
+    const schema = [{ id: 'col-a', name: '执行人', type: 'assignee' as const }];
+    target.getMap('meta').set('customColumns', schema.map((c) => ({ ...c })));
+    const snapshot = docFromState(docToState(target));
+    const sA = idOf(snapshot, 'A');
+    setNodeTask(snapshot, sA, { status: 'done' }, ORIGIN_USER); // done → progress 100
+    setCustomField(snapshot, sA, 'col-a', { u1: { progress: 50 } }, ORIGIN_USER);
+    setCustomField(target, idOf(target, 'A'), 'col-a', { u1: { progress: 30 } }, ORIGIN_USER);
+
+    restoreFromSnapshot(target, snapshot);
+    const t = getNode(target, idOf(target, 'A'))!;
+    expect(t.task).toMatchObject({ status: 'done', progress: 100 });
+    expect(t.custom!['col-a']).toEqual({ u1: { progress: 50 } }); // 子进度未完不补 100
+    normalizeTree(target); // repair 同口径：不把总完成+子进度未完成强改成全 100
+    expect(getNode(target, idOf(target, 'A'))!.custom!['col-a']).toEqual({ u1: { progress: 50 } });
+    expect(getNode(target, idOf(target, 'A'))!.task.progress).toBe(100);
+  });
+
+  it('恢复收敛断言覆盖 custom：恢复后整树与快照逐字段一致', () => {
+    const target = makeDoc();
+    const schema = [{ id: 'col-a', name: '执行人', type: 'assignee' as const }];
+    target.getMap('meta').set('customColumns', schema.map((c) => ({ ...c })));
+    const snapshot = docFromState(docToState(target));
+    const sA = idOf(snapshot, 'A');
+    setNodeTask(snapshot, sA, { progress: 45 }, ORIGIN_USER);
+    setTaskOwner(snapshot, sA, 'user-snap', ORIGIN_USER);
+    setOwnerProgress(snapshot, sA, 45, ORIGIN_USER);
+    setCustomField(snapshot, sA, 'col-a', { u1: { progress: 45 }, u2: { progress: 100 } }, ORIGIN_USER);
+    setCustomField(snapshot, idOf(snapshot, 'A1'), 'col-a', { u3: { progress: 10 } }, ORIGIN_USER);
+
+    restoreFromSnapshot(target, snapshot);
+    expectConverged(target, snapshot); // expectConverged 已扩 custom 对比
   });
 });

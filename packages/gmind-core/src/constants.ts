@@ -1,3 +1,5 @@
+import * as Y from 'yjs';
+
 export const MAX_TEXT_LENGTH = 500;
 export const MAX_NOTE_LENGTH = 5000;
 /** 节点描述上限（M7c-C1，对齐 mindgrid TaskNode.description）：一句话任务描述，
@@ -353,23 +355,21 @@ export function isValidCustomValueOfType(type: CustomColumnType, value: unknown)
       return typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= 100;
     case 'date':
       return typeof value === 'string' && isValidDateStr(value);
-    case 'assignee':
-      if (typeof value === 'number') return Number.isInteger(value) && value >= 0 && value <= 100; // 旧版简形（纯进度）
-      return (
-        typeof value === 'object' &&
-        value !== null &&
-        !Array.isArray(value) &&
-        Object.values(value as Record<string, unknown>).every(
-          (v) =>
-            (typeof v === 'number' && Number.isInteger(v) && v >= 0 && v <= 100) || // 旧版简形
-            (typeof v === 'object' &&
-              v !== null &&
-              typeof (v as { progress?: unknown }).progress === 'number' &&
-              Number.isInteger((v as { progress: number }).progress) &&
-              (v as { progress: number }).progress >= 0 &&
-              (v as { progress: number }).progress <= 100),
-        )
-      );
+    case 'assignee': {
+      if (typeof value === 'number') return Number.isInteger(value) && value >= 0 && value <= 100;
+      if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+      const entries = value instanceof Y.Map
+        ? [...value.entries()]
+        : Object.entries(value as Record<string, unknown>);
+      return entries.every(([, raw]) => {
+        if (typeof raw === 'number') return Number.isInteger(raw) && raw >= 0 && raw <= 100;
+        if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return false;
+        const progress = raw instanceof Y.Map
+          ? raw.get('progress')
+          : (raw as { progress?: unknown }).progress;
+        return typeof progress === 'number' && Number.isInteger(progress) && progress >= 0 && progress <= 100;
+      });
+    }
   }
 }
 

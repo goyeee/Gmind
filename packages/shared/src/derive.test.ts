@@ -7,13 +7,16 @@ import {
   flattenVisible,
   isOverdue,
   sortValue,
+  taskDoneDateOf,
+  taskProgressOf,
+  taskStatusOf,
   todayStr,
   type DeriveNode,
   type DeriveTask,
 } from './derive';
 
 function task(p: Partial<DeriveTask> = {}): DeriveTask {
-  return { status: 'todo', progress: 0, startDate: null, dueDate: null, doneDate: null, owners: [], ...p };
+  return { status: 'todo', progress: 0, ownerId: null, ownerProgress: null, startDate: null, dueDate: null, doneDate: null, owners: [], ...p };
 }
 
 function node(id: string, parentId: string | null, extra: Partial<DeriveNode> = {}): DeriveNode {
@@ -88,6 +91,91 @@ describe('effectiveProgress（父级按 autoProgress 区分自动/手动；叶=�
   });
 });
 
+describe('taskProgressOf / taskStatusOf / taskDoneDateOf（独立任务总进度）', () => {
+  it('手动节点只读 task.progress，人员条目与旧 weight 均不参与', () => {
+    const n = node('n', null, {
+      task: task({ progress: 60, owners: ['a'] }),
+      customAssignees: [
+        { user: 'b', progress: 100, weight: 3 },
+        { user: 'c', progress: 0 },
+      ],
+    });
+    expect(taskProgressOf([n], 'n')).toBe(60);
+  });
+
+  it('自动父只平均直属真正任务，说明节点不参与且折叠不影响结果', () => {
+    const a = node('a', 'p', { task: task({ progress: 80 }), taskActive: true, collapsed: true });
+    const b = node('b', 'p', { task: task({ progress: 40 }), taskActive: true });
+    const note = node('note', 'p', { task: task({ progress: 100 }), taskActive: false });
+    const p = node('p', null, { task: task({ autoProgress: true, progress: 10 }), taskActive: true });
+    expect(taskProgressOf([a, b, note, p], 'p')).toBe(60);
+  });
+
+  it('自动父没有任务子级时回退自身 progress；缺失节点为 0', () => {
+    const note = node('note', 'p', { taskActive: false });
+    const p = node('p', null, { task: task({ autoProgress: true, progress: 35 }), taskActive: true });
+    expect(taskProgressOf([note, p], 'p')).toBe(35);
+    expect(taskProgressOf([p], 'missing')).toBe(0);
+  });
+
+  it('自动父递归平均，均值四舍五入；兼容未标 taskActive 的旧任务子级', () => {
+    const x = node('x', 'p', { task: task({ progress: 0 }), taskActive: true });
+    const y = node('y', 'p', { task: task({ progress: 55 }) });
+    const p = node('p', 'g', { task: task({ autoProgress: true }), taskActive: true });
+    const c = node('c', 'g', { task: task({ progress: 100 }), taskActive: true });
+    const g = node('g', null, { task: task({ autoProgress: true }), taskActive: true });
+    expect(taskProgressOf([x, y, p, c, g], 'p')).toBe(28);
+    expect(taskProgressOf([x, y, p, c, g], 'g')).toBe(64);
+  });
+
+  it('状态由总进度派生：0 待开始、1～99 进行中、100 已完成', () => {
+    for (const [progress, status] of [[0, 'todo'], [1, 'doing'], [99, 'doing'], [100, 'done']] as const) {
+      const n = node(`n${progress}`, null, { task: task({ progress, status: 'doing' }) });
+      expect(taskStatusOf([n], n.id)).toBe(status);
+    }
+  });
+
+  it('阻塞保留阻塞态和当前进度，阻塞中到 100 派生完成', () => {
+    const blocked = node('blocked', null, { task: task({ status: 'blocked', progress: 45 }) });
+    const done = node('done', null, { task: task({ status: 'blocked', progress: 100 }) });
+    expect(taskStatusOf([blocked], 'blocked')).toBe('blocked');
+    expect(taskProgressOf([blocked], 'blocked')).toBe(45);
+    expect(taskStatusOf([done], 'done')).toBe('done');
+  });
+
+  it('自动父总状态随汇总进度；完成日期取最晚直属子任务有效日期，不伪造日期', () => {
+    const a = node('a', 'p', {
+      task: task({ progress: 100, status: 'done', doneDate: '2026-01-02' }),
+      taskActive: true,
+    });
+    const b = node('b', 'p', {
+      task: task({ progress: 100, status: 'done', doneDate: '2026-01-05' }),
+      taskActive: true,
+    });
+    const p = node('p', null, {
+      task: task({ autoProgress: true, progress: 0, status: 'todo', doneDate: '2020-01-01' }),
+      taskActive: true,
+    });
+    expect(taskProgressOf([a, b, p], 'p')).toBe(100);
+    expect(taskStatusOf([a, b, p], 'p')).toBe('done');
+    expect(taskDoneDateOf([a, b, p], 'p')).toBe('2026-01-05');
+    const noDate = node('noDate', 'p', {
+      task: task({ progress: 100, status: 'done', doneDate: null }),
+      taskActive: true,
+    });
+    expect(taskDoneDateOf([a, noDate, p], 'p')).toBe('2026-01-02');
+    expect(taskDoneDateOf([noDate, p], 'p')).toBeNull();
+  });
+
+  it('手动节点完成日期读自身，自动父未完成时完成日期为 null', () => {
+    const manual = node('manual', null, { task: task({ status: 'done', progress: 100, doneDate: '2026-02-03' }) });
+    const child = node('child', 'auto', { task: task({ progress: 40, doneDate: '2026-02-04' }), taskActive: true });
+    const auto = node('auto', null, { task: task({ autoProgress: true, doneDate: '2020-01-01' }), taskActive: true });
+    expect(taskDoneDateOf([manual], 'manual')).toBe('2026-02-03');
+    expect(taskDoneDateOf([child, auto], 'auto')).toBeNull();
+  });
+});
+
 describe('isOverdue（逾期边界，源自 mindgrid）', () => {
   const today = '2026-09-28';
 
@@ -112,12 +200,26 @@ describe('isOverdue（逾期边界，源自 mindgrid）', () => {
   });
 
   it('status=done 不算逾期；无 dueDate 不算逾期', () => {
-    const done = node('done', null, { task: task({ dueDate: '2026-09-27', progress: 10, status: 'done' }) });
+    const done = node('done', null, { task: task({ dueDate: '2026-09-27', progress: 100, status: 'done' }) });
     expect(isOverdue(done, [done], today)).toBe(false);
     const noDue = node('noDue', null, { task: task({ progress: 10 }) });
     expect(isOverdue(noDue, [noDue], today)).toBe(false);
     const noTask = node('noTask', null);
     expect(isOverdue(noTask, [noTask], today)).toBe(false);
+  });
+
+  it('人员子进度 100 但任务总进度 0：仍按总任务口径逾期', () => {
+    const n = node('n', null, {
+      task: task({ dueDate: '2026-09-27', progress: 0, status: 'todo' }),
+      customAssignees: [{ user: 'u1', progress: 100 }],
+    });
+    expect(isOverdue(n, [n], today)).toBe(true);
+  });
+
+  it('自动父原始 status=done 但子任务未完成：仍以派生总状态判定逾期', () => {
+    const child = node('child', 'n', { task: task({ progress: 50, status: 'doing' }) });
+    const n = node('n', null, { task: task({ dueDate: '2026-09-27', progress: 0, status: 'done', autoProgress: true }) });
+    expect(isOverdue(n, [child, n], today)).toBe(true);
   });
 
   it('today 缺省取本地今天：昨天到期且未完成 → 逾期', () => {
@@ -193,7 +295,9 @@ describe('sortValue（列排序键，照搬 mindgrid：todo<doing<blocked<done�
   });
 
   it('status 列按 todo(0) < doing(1) < blocked(2) < done(3)；无 task 按 todo', () => {
-    const mk = (status: DeriveTask['status']) => node(status, null, { task: task({ status }) });
+    const mk = (status: DeriveTask['status']) => node(status, null, {
+      task: task({ status, progress: status === 'done' ? 100 : status === 'doing' ? 50 : 0 }),
+    });
     expect(sortValue([mk('todo')], mk('todo'), 'status')).toBe(0);
     expect(sortValue([mk('doing')], mk('doing'), 'status')).toBe(1);
     expect(sortValue([mk('blocked')], mk('blocked'), 'status')).toBe(2);
@@ -211,6 +315,17 @@ describe('sortValue（列排序键，照搬 mindgrid：todo<doing<blocked<done�
     expect(sortValue([n], n, 'doneDate')).toBe('2026-02-02');
     const noTask = node('noTask', null);
     expect(sortValue([noTask], noTask, 'startDate')).toBe('9999');
+  });
+
+  it('新模型排序统一使用 ownerId、总进度与派生状态/完成日期', () => {
+    const child = node('child', 'auto', { task: task({ progress: 100, doneDate: '2026-02-02' }) });
+    const auto = node('auto', null, {
+      task: task({ ownerId: 'owner-new', owners: [], autoProgress: true, status: 'todo', doneDate: null }),
+    });
+    expect(sortValue([child, auto], auto, 'owner')).toBe('owner-new');
+    expect(sortValue([child, auto], auto, 'progress')).toBe(100);
+    expect(sortValue([child, auto], auto, 'status')).toBe(3);
+    expect(sortValue([child, auto], auto, 'doneDate')).toBe('2026-02-02');
   });
 
   it('updatedAt 列返回时间戳（缺省 0）；其余列（含 title）返回标题原文', () => {
@@ -236,31 +351,27 @@ describe('applyStatusRules（完成联动，源自 mindgrid；规则唯一实现
     expect(patch).toEqual({ status: 'done', doneDate: '2026-01-01' });
   });
 
-  it('移出 done（M7b-W1 uniform）：doneDate 清空且 progress 回退 0（显式 progress 也被覆盖）；显式传 doneDate 则分支不触发', () => {
+  it('移出 done 清除 doneDate 并采用显式新进度，不再自动清零；显式传 doneDate 则保留快照原值', () => {
     const before = node('n', null, { task: task({ status: 'done', progress: 100, doneDate: '2026-01-01' }) });
-    expect(applyStatusRules(before, { status: 'todo' })).toEqual({ status: 'todo', doneDate: null, progress: 0 });
-    // uniform：done→任意目标（doing/blocked）同样回退 0；显式 progress 一并覆盖
+    expect(applyStatusRules(before, { status: 'todo' })).toEqual({ status: 'todo', doneDate: null });
     expect(applyStatusRules(before, { status: 'doing', progress: 40 })).toEqual({
       status: 'doing',
       doneDate: null,
-      progress: 0,
+      progress: 40,
     });
-    // 显式传 doneDate（restore 全字段 patch 口径）：联动分支不触发，progress 保留 patch 值
     expect(applyStatusRules(before, { status: 'todo', doneDate: '2026-03-03' })).toEqual({
       status: 'todo',
       doneDate: '2026-03-03',
     });
-    // before 为 done 但 doneDate 已是 null（crafted/恢复产物）：仍按 uniform 回退 progress=0
     const doneBare = node('nb', null, { task: task({ status: 'done', progress: 80 }) });
-    expect(applyStatusRules(doneBare, { status: 'blocked' })).toEqual({ status: 'blocked', doneDate: null, progress: 0 });
+    expect(applyStatusRules(doneBare, { status: 'blocked' })).toEqual({ status: 'blocked', doneDate: null });
   });
 
-  it('status 未变化不触发联动；无 task 的 before 按缺省 todo 处理', () => {
+  it('完成态显式重开为进行中；无 task 的 before 按缺省 todo 处理', () => {
     const doneNode = node('n', null, { task: task({ status: 'done', doneDate: '2026-01-01' }) });
-    expect(applyStatusRules(doneNode, { status: 'done', progress: 50 })).toEqual({ status: 'done', progress: 50 });
+    expect(applyStatusRules(doneNode, { status: 'doing', progress: 50 })).toEqual({ status: 'doing', progress: 50, doneDate: null });
     const bare = node('bare', null);
     expect(applyStatusRules(bare, { status: 'done' })).toEqual({ status: 'done', progress: 100, doneDate: todayStr() });
-    // 同值 status（todo→todo）也不触发
     expect(applyStatusRules(bare, { status: 'todo' })).toEqual({ status: 'todo' });
   });
 

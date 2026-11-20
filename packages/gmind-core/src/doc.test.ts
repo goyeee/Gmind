@@ -1,7 +1,23 @@
 import { describe, expect, it } from 'vitest';
 import * as Y from 'yjs';
-import { ROOT_NODE_ID, countNodes, createTemplateDoc, docFromState, docToState, migrateLegacyToCanvases, SEED_TEMPLATES } from './doc';
+import {
+  LEGACY_OWNER_COLUMN_ID,
+  ROOT_NODE_ID,
+  countNodes,
+  createTemplateDoc,
+  docFromState,
+  docToState,
+  isLegacyTaskModelState,
+  migrateLegacyToCanvases,
+  migrateTaskModel,
+  SEED_TEMPLATES,
+} from './doc';
 import { LEGACY_CANVAS_ID, canvasNodesMap, canvasSummariesMap, listCanvases } from './canvas';
+import { addCanvas } from './canvas-ops';
+import { getMeta } from './read';
+import { getNode } from './read';
+import { GmindCoreError } from './errors';
+import { ORIGIN_SYSTEM } from './undo';
 
 describe('createTemplateDoc', () => {
   it('生成 root + 嵌套子树，meta 完整', () => {
@@ -194,5 +210,249 @@ describe('docFromState 装载迁移（旧形状 → 多画布）', () => {
     const twice = docFromState(docToState(once));
     expect(listCanvases(twice)).toHaveLength(1);
     expect(countNodes(twice)).toBe(2);
+  });
+});
+
+// ══ 任务模型迁移（Task 2，2026-11-20 画布多人任务裁定）：spec
+// docs/superpowers/specs/2026-11-20-canvas-task-model-design.md §五。旧任务模型
+// （task.owners 多人共享 progress / 人员列旧形状）→ 单 ownerId + 独立总进度 +
+// 逐人子进度；装载通道 docFromState 内 migrateLegacyToCanvases 之后、normalize
+// 之前执行。 ══
+
+/** 按文本定位节点 id（createTemplateDoc 的节点 id 是 ulid，夹具固定文本便于断言）。 */
+function nodeIdByText(doc: Y.Doc, text: string, canvasId?: string): string {
+  const nodes = canvasNodesMap(doc, canvasId);
+  for (const [id, node] of nodes.entries()) {
+    if (node instanceof Y.Map && node.get('text') === text) return id;
+  }
+  throw new Error('夹具节点未找到: ' + text);
+}
+
+/** 装载通道直写例外（docFromState 同口径）：给节点写旧任务模型 task/custom。
+ *  nodeId 可传文本（'A'）或真实 id（'root'）。 */
+function writeLegacyTask(
+  doc: Y.Doc,
+  nodeId: string,
+  task: Record<string, unknown> | null,
+  custom?: Record<string, unknown>,
+  canvasId?: string,
+): void {
+  const id = nodeId === 'root' || /^[A-Z0-9]{26}$/.test(nodeId) ? nodeId : nodeIdByText(doc, nodeId, canvasId);
+  const node = canvasNodesMap(doc, canvasId).get(id) as Y.Map<unknown>;
+  doc.transact(() => {
+    if (task !== null) {
+      const t = new Y.Map<unknown>();
+      for (const [k, v] of Object.entries(task)) t.set(k, v);
+      node.set('task', t);
+    }
+    if (custom !== undefined) {
+      const c = new Y.Map<unknown>();
+      for (const [k, v] of Object.entries(custom)) c.set(k, v);
+      node.set('custom', c);
+    }
+  }, ORIGIN_SYSTEM);
+}
+
+function setCustomColumns(doc: Y.Doc, cols: Array<{ id: string; name: string; type: string; weighted?: boolean }>): void {
+  doc.transact(() => {
+    doc.getMap('meta').set('customColumns', cols);
+  }, ORIGIN_SYSTEM);
+}
+
+describe('migrateTaskModel（旧任务模型 → 单负责人/独立总进度/逐人子进度）', () => {
+  it('旧单负责人：owners 第一项转 ownerId，ownerProgress 取旧原始 progress，总进度不变，不建列', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
+    writeLegacyTask(doc, 'A', { status: 'doing', progress: 40, owners: ['u1'] });
+    migrateTaskModel(doc);
+    const task = getNode(doc, nodeIdByText(doc, 'A'))!.task;
+    expect(task.ownerId).toBe('u1');
+    expect(task.ownerProgress).toBe(40);
+    expect(task.progress).toBe(40);
+    expect(task.status).toBe('doing');
+    // 存储侧 owners 键已删（幂等判定 + 读侧不再回退旧负责人）
+    const taskMap = canvasNodesMap(doc).get(nodeIdByText(doc, 'A')) as Y.Map<unknown>;
+    expect(((taskMap.get('task') as Y.Map<unknown>).has('owners'))).toBe(false);
+    expect(getMeta(doc).customColumns).toHaveLength(0); // 单负责人不建「原负责人」列
+  });
+
+  it('旧多负责人：第一人留任总负责人，其余进确定 ID「原负责人」列（每人子进度=旧共享进度）', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
+    writeLegacyTask(doc, 'A', { status: 'doing', progress: 50, owners: ['u1', 'u2', 'u3'] });
+    migrateTaskModel(doc);
+    const task = getNode(doc, nodeIdByText(doc, 'A'))!.task;
+    expect(task.ownerId).toBe('u1');
+    expect(task.ownerProgress).toBe(50); // 总负责人子进度=旧原始 progress
+    expect(task.progress).toBe(50); // 旧显示值（无人员列 → 旧有效进度=progress）
+    const custom = getNode(doc, nodeIdByText(doc, 'A'))!.custom ?? {};
+    expect(custom[LEGACY_OWNER_COLUMN_ID]).toEqual({ u2: { progress: 50 }, u3: { progress: 50 } });
+    const cols = getMeta(doc).customColumns;
+    expect(cols).toHaveLength(1);
+    expect(cols[0]).toMatchObject({ id: LEGACY_OWNER_COLUMN_ID, name: '原负责人', type: 'assignee' });
+  });
+
+  it('多负责人+人员列：新总进度=迁移前旧有效进度（owners 1 项权重 1 + 各列条目 weight 缺省 1 加权平均）', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
+    setCustomColumns(doc, [{ id: 'col-a', name: '执行人', type: 'assignee', weighted: true }]);
+    writeLegacyTask(
+      doc,
+      'A',
+      { status: 'doing', progress: 50, owners: ['u1', 'u2'] },
+      { 'col-a': { a1: { progress: 30, weight: 2 }, a2: { progress: 80 } } },
+    );
+    migrateTaskModel(doc);
+    const task = getNode(doc, nodeIdByText(doc, 'A'))!.task;
+    expect(task.ownerId).toBe('u1');
+    expect(task.ownerProgress).toBe(50);
+    // 旧有效进度 = round((50×1 + 30×2 + 80×1) / (1+2+1)) = round(190/4) = 48
+    expect(task.progress).toBe(48);
+    // 既有人员列条目保持原值，不并入「原负责人」列
+    expect(getNode(doc, nodeIdByText(doc, 'A'))!.custom!['col-a']).toEqual({ a1: { progress: 30, weight: 2 }, a2: { progress: 80 } });
+    expect(getNode(doc, nodeIdByText(doc, 'A'))!.custom![LEGACY_OWNER_COLUMN_ID]).toEqual({ u2: { progress: 50 } });
+  });
+
+  it('人员列旧 number 简形归一为逐人嵌套；无 owners 但有人员列 → 新总进度=旧有效进度（人员加权）', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
+    setCustomColumns(doc, [{ id: 'col-a', name: '执行人', type: 'assignee' }]);
+    writeLegacyTask(doc, 'A', { status: 'doing', progress: 20, owners: [] }, { 'col-a': { a1: 60 } });
+    migrateTaskModel(doc);
+    expect(getNode(doc, nodeIdByText(doc, 'A'))!.custom!['col-a']).toEqual({ a1: { progress: 60 } });
+    expect(getNode(doc, nodeIdByText(doc, 'A'))!.task.ownerId).toBeNull(); // 空 owners：无总负责人
+    expect(getNode(doc, nodeIdByText(doc, 'A'))!.task.ownerProgress).toBeNull();
+    expect(getNode(doc, nodeIdByText(doc, 'A'))!.task.progress).toBe(60); // 旧显示值 = 人员加权（60×1/1）
+  });
+
+  it('旧节点从未写 owners 键、只有人员列：仍保留旧显示总进度', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
+    setCustomColumns(doc, [{ id: 'col-a', name: '执行人', type: 'assignee' }]);
+    writeLegacyTask(doc, 'A', { status: 'doing', progress: 20 }, { 'col-a': { a1: 60 } });
+    migrateTaskModel(doc);
+    expect(getNode(doc, nodeIdByText(doc, 'A'))!.task.progress).toBe(60);
+    expect(getNode(doc, nodeIdByText(doc, 'A'))!.task.ownerId).toBeNull();
+  });
+
+  it('旧节点从未写 owners 键且 done 异常：保留完成事实并拉满总进度', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
+    setCustomColumns(doc, [{ id: 'col-a', name: '执行人', type: 'assignee' }]);
+    writeLegacyTask(doc, 'A', { status: 'done', progress: 30 }, { 'col-a': { a1: 30 } });
+    migrateTaskModel(doc);
+    expect(getNode(doc, nodeIdByText(doc, 'A'))!.task).toMatchObject({ status: 'done', progress: 100 });
+  });
+
+  it('旧人员列关闭自定义比重：遗留 weight 不参与迁移前显示值', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
+    setCustomColumns(doc, [{ id: 'col-a', name: '执行人', type: 'assignee', weighted: false }]);
+    writeLegacyTask(doc, 'A', { status: 'doing', progress: 50, owners: ['u1'] }, { 'col-a': { a1: { progress: 100, weight: 3 } } });
+    migrateTaskModel(doc);
+    expect(getNode(doc, nodeIdByText(doc, 'A'))!.task.progress).toBe(75);
+  });
+
+  it('迁移后总进度 100 时状态统一为 done，避免编辑器与待办索引相反', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }, { text: 'B' }] });
+    writeLegacyTask(doc, 'A', { status: 'blocked', progress: 100, owners: ['u1'] });
+    setCustomColumns(doc, [{ id: 'col-a', name: '执行人', type: 'assignee' }]);
+    writeLegacyTask(doc, 'B', { status: 'doing', progress: 0, owners: [] }, { 'col-a': { a1: 100 } });
+    migrateTaskModel(doc);
+    expect(getNode(doc, nodeIdByText(doc, 'A'))!.task).toMatchObject({ status: 'done', progress: 100 });
+    expect(getNode(doc, nodeIdByText(doc, 'B'))!.task).toMatchObject({ status: 'done', progress: 100 });
+  });
+
+  it('旧单画布顶层 nodes 探针：含 owners 即识别为待迁移并保留升级前版本机会', () => {
+    const legacy = createLegacyDoc();
+    const legacyNode = legacy.getMap<Y.Map<unknown>>('nodes').get('child-1')!;
+    const task = legacyNode.get('task');
+    expect(task).toBeInstanceOf(Y.Map);
+    legacy.transact(() => (task as Y.Map<unknown>).set('owners', ['u1', 'u2']));
+    expect(isLegacyTaskModelState(docToState(legacy))).toBe(true);
+  });
+
+  it('旧 done 异常保留完成事实：总进度/负责人子进度拉满 100，完成日期原值保留（缺失不伪造）', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }, { text: 'B' }] });
+    writeLegacyTask(doc, 'A', { status: 'done', progress: 30, owners: ['u1', 'u2'], doneDate: '2026-01-02' });
+    writeLegacyTask(doc, 'B', { status: 'done', progress: 0, owners: ['u1'] });
+    migrateTaskModel(doc);
+    expect(getNode(doc, nodeIdByText(doc, 'A'))!.task).toMatchObject({ status: 'done', progress: 100, ownerProgress: 100, doneDate: '2026-01-02' });
+    expect(getNode(doc, nodeIdByText(doc, 'B'))!.task).toMatchObject({ status: 'done', progress: 100, ownerProgress: 100 });
+    expect(getNode(doc, nodeIdByText(doc, 'B'))!.task.doneDate).toBeNull(); // 不伪造历史完成日期
+    // done 的其余负责人同样进列（子进度=完成事实 100）
+    expect(getNode(doc, nodeIdByText(doc, 'A'))!.custom![LEGACY_OWNER_COLUMN_ID]).toEqual({ u2: { progress: 100 } });
+  });
+
+  it('多画布全量迁移：「原负责人」列 doc 级只建一次', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
+    const c1 = listCanvases(doc)[0]!.id;
+    const c2 = addCanvas(doc, { name: '画布 2' });
+    writeLegacyTask(doc, 'A', { status: 'doing', progress: 40, owners: ['u1', 'u2'] }, undefined, c1);
+    writeLegacyTask(doc, '中心主题', { status: 'doing', progress: 10, owners: ['u9', 'u8'] }, undefined, c2);
+    migrateTaskModel(doc);
+    expect(getNode(doc, nodeIdByText(doc, 'A', c1), c1)!.task.ownerId).toBe('u1');
+    const c2RootId = nodeIdByText(doc, '中心主题', c2);
+    expect(getNode(doc, c2RootId, c2)!.task.ownerId).toBe('u9');
+    expect(getNode(doc, c2RootId, c2)!.custom![LEGACY_OWNER_COLUMN_ID]).toEqual({ u8: { progress: 10 } });
+    expect(getMeta(doc).customColumns).toHaveLength(1); // 两画布共用一列 schema
+  });
+
+  it('幂等：重复迁移零新增写入，重装载收敛后字节稳定', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
+    writeLegacyTask(doc, 'A', { status: 'doing', progress: 50, owners: ['u1', 'u2'] });
+    migrateTaskModel(doc);
+    const once = docToState(doc);
+    migrateTaskModel(doc); // 判定不命中（owners 键已删、人员列已归一）→ 零写
+    expect(docToState(doc)).toEqual(once);
+    const again = docFromState(once);
+    // docFromState 的 normalize 会对夹具**直写未收敛**的状态补建进度徽章（repair
+    // 合法收敛，与迁移无关）——迁移幂等断言看两处：重复迁移字节零变（上行）+
+    // 重装载产物再装载字节零变（收敛后稳定），迁移语义字段（ownerId/列条目）恒正确。
+    const stable = docFromState(docToState(again));
+    expect(docToState(stable)).toEqual(docToState(again));
+    expect(getNode(again, nodeIdByText(again, 'A'))!.task.ownerId).toBe('u1');
+    expect(getNode(again, nodeIdByText(again, 'A'))!.custom![LEGACY_OWNER_COLUMN_ID]).toEqual({ u2: { progress: 50 } });
+  });
+
+  it('列上限异常：schema 已满时无法建「原负责人」列 → 抛错且原文档零变更', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
+    setCustomColumns(
+      doc,
+      Array.from({ length: 20 }, (_, i) => ({ id: `col-${i}`, name: `列${i}`, type: 'text' as const })),
+    );
+    writeLegacyTask(doc, 'A', { status: 'doing', progress: 50, owners: ['u1', 'u2'] });
+    const before = docToState(doc);
+    expect(() => migrateTaskModel(doc)).toThrow(GmindCoreError);
+    expect(docToState(doc)).toEqual(before); // 校验先于事务：抛错即零变更、人员不丢
+  });
+
+  it('迁移预留列 ID 被文本列占用：中止且原文档零变更，不把负责人写进文本列', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
+    setCustomColumns(doc, [{ id: LEGACY_OWNER_COLUMN_ID, name: '已有文本列', type: 'text' }]);
+    writeLegacyTask(doc, 'A', { status: 'doing', progress: 50, owners: ['u1', 'u2'] });
+    const before = docToState(doc);
+    expect(() => migrateTaskModel(doc)).toThrow(/迁移列标识/);
+    expect(docToState(doc)).toEqual(before);
+  });
+
+  it('新模型文档零迁移：已含 ownerId/无 owners 键 → 直接返回（docToState 不变）', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
+    writeLegacyTask(doc, 'A', { status: 'doing', progress: 40, ownerId: 'u1' });
+    const before = docToState(doc);
+    migrateTaskModel(doc);
+    expect(docToState(doc)).toEqual(before);
+  });
+
+  it('crafted status 迁移按 progress 派生：存储与读侧显示一致（评审发现修复）', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
+    writeLegacyTask(doc, 'A', { status: 'crafted-状态', progress: 50, owners: [] });
+    migrateTaskModel(doc);
+    expect(getNode(doc, nodeIdByText(doc, 'A'))!.task).toMatchObject({ status: 'doing', progress: 50 });
+    doc.destroy();
+  });
+
+  it('docFromState 全管线：旧任务模型随装载自动迁移（多画布迁移之后、normalize 之前）', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
+    writeLegacyTask(doc, 'A', { status: 'doing', progress: 50, owners: ['u1', 'u2', 'u3'] });
+    const loaded = docFromState(docToState(doc));
+    const task = getNode(loaded, nodeIdByText(loaded, 'A'))!.task;
+    expect(task.ownerId).toBe('u1');
+    expect(task.ownerProgress).toBe(50);
+    expect(task.progress).toBe(50);
+    expect(getNode(loaded, nodeIdByText(loaded, 'A'))!.custom![LEGACY_OWNER_COLUMN_ID]).toEqual({ u2: { progress: 50 }, u3: { progress: 50 } });
   });
 });

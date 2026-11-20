@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import * as Y from 'yjs';
 import { ROOT_NODE_ID, createTemplateDoc, docFromState, docToState } from './doc';
 import { canvasNodesMap, canvasOrderArr, canvasesMap } from './canvas';
-import { addChild, deleteNodes, moveNode } from './operations';
+import { addChild, deleteNodes, moveNode, setNodeTask, setOwnerProgress, setTaskOwner } from './operations';
 import { childrenIds, countAlive, getMeta, getNode, setDocMeta } from './read';
 import type { NodeSnapshot } from './read';
 import { attachRemoteNormalization, normalizeTree } from './repair';
@@ -321,5 +321,23 @@ describe('createUndoManager(doc, canvasId) 画布子图撤销（多画布 Task 4
     expect(undo(um)).toBe(true); // 后进先出：撤销 c2 的 y
     expect(getNode(doc, y, c2)).toBeNull();
     expect(getNode(doc, x, c1)).not.toBeNull();
+  });
+});
+
+// ══ 任务模型撤销（Task 2，2026-11-20）：换负责人清旧 ownerProgress、总进度不动；
+// 撤销一起恢复（同一事务多键）。 ══
+
+describe('任务模型撤销（Task 2）', () => {
+  it('换负责人清旧 ownerProgress 不改总进度；撤销恢复 owner 与子进度', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
+    const aId = [...canvasNodesMap(doc).entries()].find(([, n]) => (n as Y.Map<unknown>).get('text') === 'A')![0];
+    setNodeTask(doc, aId, { progress: 60 }, ORIGIN_USER);
+    setTaskOwner(doc, aId, 'u1', ORIGIN_USER);
+    setOwnerProgress(doc, aId, 60, ORIGIN_USER);
+    const um = createUndoManager(doc);
+    setTaskOwner(doc, aId, 'u2', ORIGIN_USER);
+    expect(getNode(doc, aId)!.task).toMatchObject({ ownerId: 'u2', ownerProgress: null, progress: 60 });
+    undo(um);
+    expect(getNode(doc, aId)!.task).toMatchObject({ ownerId: 'u1', ownerProgress: 60, progress: 60 });
   });
 });

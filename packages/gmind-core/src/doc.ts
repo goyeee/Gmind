@@ -1,6 +1,14 @@
 import * as Y from 'yjs';
 import { ulid } from 'ulid';
 import type { StructureType } from '@gmind/shared';
+import {
+  CUSTOM_COLUMN_LIMIT,
+  TASK_STATUSES,
+  canonicalCustomColumns,
+  isValidDateStr,
+  type CustomColumnDef,
+} from './constants';
+import { GmindCoreError } from './errors';
 import { applySideBackfill, normalizeTree, planSideBackfill } from './repair';
 import { ORIGIN_SYSTEM } from './undo';
 import { LEGACY_CANVAS_ID, canvasNodesMap, canvasOrderArr, canvasesMap } from './canvas';
@@ -101,6 +109,260 @@ export function migrateLegacyToCanvases(doc: Y.Doc): void {
   }, ORIGIN_SYSTEM);
 }
 
+// ══ 任务模型迁移（Task 2，2026-11-20 画布多人任务裁定）════════════════════
+// spec docs/superpowers/specs/2026-11-20-canvas-task-model-design.md §五：
+// 旧任务模型（task.owners 多人共享 progress；人员列旧普通对象/number 简形）→
+// 单 ownerId + 独立任务总进度 + 逐人子进度。装载通道 docFromState 内在旧多画布
+// 迁移之后、normalize 之前执行。确定性：列 ID/名称常量、第一人留任、其余人按
+// owners 文档序入列、新总进度按旧有效口径复刻——两副本装载结果一致。
+// 幂等：迁移删除 owners 键并把人员列归一为嵌套 Y.Map，判定键即消失，二次装载
+// 零新增写入。
+
+/** 「原负责人」迁移列确定 ID（doc 级 schema 唯一；多负责人其余人进此列，每人
+ *  子进度=旧共享 progress）。 */
+export const LEGACY_OWNER_COLUMN_ID = 'legacy-assignees';
+const LEGACY_OWNER_COLUMN_NAME = '原负责人';
+
+/** 旧任务模型形状判定（迁移幂等的基础）：任一存活画布节点 task 含 owners 键，
+ *  或 schema 内人员列值尚未归一为 Y.Map（旧普通对象/number 简形）。 */
+function isLegacyTaskModelShape(doc: Y.Doc, assigneeColIds: ReadonlySet<string>): boolean {
+  for (const canvas of canvasesMap(doc).values()) {
+    const nodes = canvas.get('nodes');
+    if (!(nodes instanceof Y.Map)) continue;
+    for (const node of nodes.values()) {
+      if (!(node instanceof Y.Map)) continue;
+      const task = node.get('task');
+      if (task instanceof Y.Map && task.has('owners')) return true;
+      const custom = node.get('custom');
+      if (!(custom instanceof Y.Map)) continue;
+      for (const colId of assigneeColIds) {
+        const value = custom.get(colId);
+        if (value !== undefined && !(value instanceof Y.Map)) return true;
+      }
+    }
+  }
+  return false;
+}
+
+/** 人员列旧值（number 简形 / 普通对象 / 嵌套 Y.Map）→ 嵌套 Y.Map<user, {progress, weight?}>。
+ *  非法条目剔除（与 repair「剔坏条目不丢人」同向）；已归一值原样重建（确定性）。 */
+function normalizeAssigneeColumn(raw: unknown): Y.Map<unknown> {
+  const column = new Y.Map<unknown>();
+  if (raw instanceof Y.Map) {
+    for (const [user, value] of raw.entries()) {
+      if (value instanceof Y.Map) {
+        const entry = new Y.Map<unknown>();
+        for (const [k, v] of value.entries()) entry.set(k, v);
+        column.set(user, entry);
+        continue;
+      }
+      const progress = typeof value === 'number' ? value : null;
+      if (progress === null) continue;
+      const entry = new Y.Map<unknown>();
+      entry.set('progress', progress);
+      column.set(user, entry);
+    }
+    return column;
+  }
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return column;
+  for (const [user, value] of Object.entries(raw as Record<string, unknown>)) {
+    const progress = typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= 100
+      ? value
+      : typeof value === 'object' && value !== null && !Array.isArray(value) &&
+          typeof (value as { progress?: unknown }).progress === 'number' &&
+          Number.isInteger((value as { progress: number }).progress) &&
+          (value as { progress: number }).progress >= 0 && (value as { progress: number }).progress <= 100
+        ? (value as { progress: number }).progress
+        : null;
+    if (progress === null) continue;
+    const entry = new Y.Map<unknown>();
+    entry.set('progress', progress);
+    const weight = typeof value === 'object' && value !== null ? (value as { weight?: unknown }).weight : undefined;
+    if (typeof weight === 'number' && weight > 0) entry.set('weight', weight);
+    column.set(user, entry);
+  }
+  return column;
+}
+
+/**
+ * 任务模型迁移（装载通道，ORIGIN_SYSTEM）。迁移方案全部在事务外纯读计算（校验
+ * 先于事务纪律：列上限异常抛错时原文档零变更、人员不丢），事务内只执行已验证的写：
+ * - task.owners 删除；第一人写 ownerId；ownerProgress=旧原始 progress（done 异常
+ *   同源拉满 100）；总进度=迁移前旧显示值（旧 effectiveProgress 口径复刻：owners
+ *   1 项权重 1 + 全部人员列条目；仅列 weighted=true 时使用条目 weight，否则恒 1，
+ *   无参与项回退 progress）。无 owners 键但有旧人员列的节点同样迁移。
+ * - done 异常保留完成事实：总进度/负责人子进度拉满 100，完成日期原值保留（缺失
+ *   不伪造今天）——否则读侧 taskStatusOf 会把 done 节点按 progress 改判 doing。
+ * - 其余负责人进「原负责人」列（doc 级 schema 唯一，确定 ID/名称），每人子进度=
+ *   旧共享 progress（done=100）。
+ * - 人员列旧形状（普通对象/number 简形）归一为逐人嵌套 Y.Map；非法条目剔除。
+ * - 列上限异常（需建「原负责人」列而 schema 已满）：抛 TASK_MIGRATION_COLUMN_LIMIT
+ *   两段式错误，调用方保留原文档，禁止静默丢人。
+ */
+export function migrateTaskModel(doc: Y.Doc): void {
+  const schema: CustomColumnDef[] = canonicalCustomColumns(doc.getMap('meta').get('customColumns'));
+  const assigneeColIds = new Set(schema.filter((c) => c.type === 'assignee').map((c) => c.id));
+  const weightedByCol = new Map(schema.filter((c) => c.type === 'assignee').map((c) => [c.id, c.weighted === true]));
+  if (!isLegacyTaskModelShape(doc, assigneeColIds)) return; // 幂等：新模型/无任务文档零写
+
+  // —— 迁移方案（事务外纯读）——
+  interface TaskPlan {
+    canvasId: string;
+    nodeId: string;
+    ownerId: string | null;
+    ownerProgress: number | null;
+    progress: number;
+    status: (typeof TASK_STATUSES)[number];
+    doneDate: string | null;
+    legacyOthers: Array<{ user: string; progress: number }>;
+  }
+  const taskPlans: TaskPlan[] = [];
+  const normalizePlans: Array<{ canvasId: string; nodeId: string; colId: string; raw: unknown }> = [];
+  let needLegacyColumn = false;
+  for (const [canvasId, canvas] of canvasesMap(doc).entries()) {
+    const nodes = canvas.get('nodes');
+    if (!(nodes instanceof Y.Map)) continue;
+    for (const [nodeId, node] of nodes.entries()) {
+      if (!(node instanceof Y.Map)) continue;
+      const custom = node.get('custom');
+      let hasLegacyAssigneeValue = false;
+      if (custom instanceof Y.Map) {
+        for (const colId of assigneeColIds) {
+          const value = custom.get(colId);
+          if (value !== undefined && !(value instanceof Y.Map)) {
+            hasLegacyAssigneeValue = true;
+            normalizePlans.push({ canvasId, nodeId, colId, raw: value });
+          }
+        }
+      }
+      const task = node.get('task');
+      if (!(task instanceof Y.Map) && !hasLegacyAssigneeValue) continue;
+      if (task instanceof Y.Map && !task.has('owners') && !hasLegacyAssigneeValue) continue;
+      const ownersRaw = task instanceof Y.Map ? task.get('owners') : undefined;
+      const owners = Array.isArray(ownersRaw) ? ownersRaw.filter((v): v is string => typeof v === 'string') : [];
+      const progressRaw = task instanceof Y.Map ? task.get('progress') : undefined;
+      const progress = typeof progressRaw === 'number' && Number.isFinite(progressRaw)
+        ? Math.min(100, Math.max(0, Math.round(progressRaw)))
+        : 0;
+      const statusRaw = task instanceof Y.Map ? task.get('status') : undefined;
+      // 非法 status 按 progress 派生（存储与读侧显示一致；合法值原样保留）
+      const legacyStatus = (TASK_STATUSES as readonly string[]).includes(statusRaw as string)
+        ? (statusRaw as (typeof TASK_STATUSES)[number])
+        : progress >= 100
+          ? 'done'
+          : progress > 0
+            ? 'doing'
+            : 'todo';
+      const doneDateRaw = task instanceof Y.Map ? task.get('doneDate') : undefined;
+      const doneDate = typeof doneDateRaw === 'string' && isValidDateStr(doneDateRaw) ? doneDateRaw : null;
+      // 旧有效进度复刻：owners 非空 1 项权重 1 + 全部人员列条目；列 weighted=true
+      // 才使用条目 weight，否则恒 1。人员列按旧原始值参与（与新写语义无关）。
+      let weightSum = owners.length > 0 ? 1 : 0;
+      let weighted = owners.length > 0 ? progress : 0;
+      if (custom instanceof Y.Map) {
+        for (const colId of assigneeColIds) {
+          const raw = custom.get(colId);
+          if (raw === undefined || raw instanceof Y.Map || typeof raw !== 'object' || Array.isArray(raw)) continue;
+          for (const [, value] of Object.entries(raw as Record<string, unknown>)) {
+            const p = typeof value === 'number'
+              ? value
+              : typeof value === 'object' && value !== null && !Array.isArray(value)
+                ? (value as { progress?: unknown }).progress
+                : undefined;
+            if (typeof p !== 'number' || !Number.isInteger(p) || p < 0 || p > 100) continue;
+            const w = typeof value === 'object' && value !== null ? (value as { weight?: unknown }).weight : undefined;
+            const effectiveWeight = weightedByCol.get(colId) === true && typeof w === 'number' && w > 0 ? w : 1;
+            weightSum += effectiveWeight;
+            weighted += p * effectiveWeight;
+          }
+        }
+      }
+      const effective = weightSum === 0 ? progress : Math.round(weighted / weightSum);
+      const isDone = legacyStatus === 'done' || effective === 100;
+      const status = isDone ? 'done' : legacyStatus === 'blocked' ? 'blocked' : effective === 0 ? 'todo' : 'doing';
+      const ownerId = owners[0] ?? null;
+      const plan: TaskPlan = {
+        canvasId,
+        nodeId,
+        ownerId,
+        ownerProgress: ownerId === null ? null : isDone ? 100 : progress,
+        progress: isDone ? 100 : effective,
+        status,
+        doneDate,
+        legacyOthers: owners.slice(1).map((user) => ({ user, progress: isDone ? 100 : progress })),
+      };
+      if (plan.legacyOthers.length > 0) needLegacyColumn = true;
+      taskPlans.push(plan);
+    }
+  }
+
+  // 列上限校验（先于事务）：需建「原负责人」列而 schema 已满 → 中止迁移，原文档
+  // 零变更（错误码 TASK_MIGRATION_COLUMN_LIMIT，文案两段式）。
+  const legacyColumn = schema.find((c) => c.id === LEGACY_OWNER_COLUMN_ID);
+  if (needLegacyColumn && legacyColumn && legacyColumn.type !== 'assignee') {
+    throw new GmindCoreError(
+      'TASK_MIGRATION_COLUMN_CONFLICT',
+      '文档预留的迁移列标识已被非人员列占用，请将该自定义列改为人员类型或删除后重试',
+    );
+  }
+  if (
+    needLegacyColumn &&
+    !schema.some((c) => c.id === LEGACY_OWNER_COLUMN_ID) &&
+    schema.length >= CUSTOM_COLUMN_LIMIT
+  ) {
+    throw new GmindCoreError(
+      'TASK_MIGRATION_COLUMN_LIMIT',
+      '文档自定义列已达上限，无法迁移旧多负责人任务。请删除部分自定义列后重新打开文档',
+    );
+  }
+
+  doc.transact(() => {
+    if (needLegacyColumn && !schema.some((c) => c.id === LEGACY_OWNER_COLUMN_ID)) {
+      doc
+        .getMap('meta')
+        .set('customColumns', [...schema, { id: LEGACY_OWNER_COLUMN_ID, name: LEGACY_OWNER_COLUMN_NAME, type: 'assignee' }]);
+    }
+    // 人员列旧形状归一（先于「原负责人」条目写入：同一 custom 下两步写互不覆盖）
+    for (const plan of normalizePlans) {
+      const node = canvasNodesMap(doc, plan.canvasId).get(plan.nodeId);
+      if (!(node instanceof Y.Map)) continue;
+      const custom = node.get('custom');
+      if (!(custom instanceof Y.Map)) continue;
+      custom.set(plan.colId, normalizeAssigneeColumn(plan.raw));
+    }
+    for (const plan of taskPlans) {
+      const node = canvasNodesMap(doc, plan.canvasId).get(plan.nodeId);
+      if (!(node instanceof Y.Map)) continue;
+      const rawTask = node.get('task');
+      const task: Y.Map<unknown> = rawTask instanceof Y.Map ? (rawTask as Y.Map<unknown>) : new Y.Map<unknown>();
+      if (!(rawTask instanceof Y.Map)) node.set('task', task);
+      task.delete('owners');
+      if (plan.ownerId !== null) task.set('ownerId', plan.ownerId);
+      if (plan.ownerProgress !== null) task.set('ownerProgress', plan.ownerProgress);
+      task.set('progress', plan.progress);
+      task.set('status', plan.status);
+      if (plan.doneDate !== null) task.set('doneDate', plan.doneDate);
+      if (plan.legacyOthers.length > 0) {
+        let custom = node.get('custom');
+        if (!(custom instanceof Y.Map)) {
+          custom = new Y.Map<unknown>();
+          node.set('custom', custom);
+        }
+        let column = (custom as Y.Map<unknown>).get(LEGACY_OWNER_COLUMN_ID);
+        if (!(column instanceof Y.Map)) {
+          column = new Y.Map<unknown>();
+          (custom as Y.Map<unknown>).set(LEGACY_OWNER_COLUMN_ID, column);
+        }
+        for (const other of plan.legacyOthers) {
+          const entry = new Y.Map<unknown>();
+          entry.set('progress', other.progress);
+          (column as Y.Map<unknown>).set(other.user, entry);
+        }
+      }
+    }
+  }, ORIGIN_SYSTEM);
+}
+
 /** 按 spec §4.1 的 Y.Doc 结构构建文档（M0 仅写入用到的字段，字段名与 §4.1 严格一致）。
  *  多画布化（Task 2）：产物为新形状——单画布承载 nodes/summaries，rootId 恒 'root'
  *  （第一画布兼容纪律），画布 id 用 ulid（新建路径非迁移路径，允许 ulid）；顶层
@@ -181,6 +443,11 @@ export function docFromState(state: Uint8Array): Y.Doc {
   // 形状才进收敛（Task 5 起 normalizeTree 逐存活画布跑规则 ⓪-⑨）。确定性：画布
   // id/name 常量、structure/theme 取 meta 现值，两副本装载结果一致。
   migrateLegacyToCanvases(doc);
+  // 旧任务模型 → 单负责人/独立总进度/逐人子进度（Task 2，2026-11-20 裁定）：在
+  // 旧多画布迁移之后（画布形状就绪）、normalize 之前（人员列嵌套 Y.Map 已合法，
+  // 不会被 repair 当坏形状清理）。列上限异常抛错即零变更——装载方保留原 docState
+  // 并向用户提示（服务端装载层捕获转两段式文案）。
+  migrateTaskModel(doc);
   // 导入即收敛（Task 9 修复轮 2）：导入/恢复是唯一「外部状态直入」的入口，状态可能
   // 携带残缺写入的规则违例（换父败者侧、孤儿等）——入口处全量 normalize 一次，
   // 保证 docFromState 返回的文档恒满足 §4.2 全部不变量。
@@ -204,4 +471,22 @@ export function docFromState(state: Uint8Array): Y.Doc {
 export function countNodes(doc: Y.Doc, canvasId?: string): number {
   // 多画布口径：canvasId 缺省走 resolveCanvasId 兼容层（第一画布）。
   return canvasNodesMap(doc, canvasId).size;
+}
+
+/** 旧任务模型状态判定（服务端装载通道前置检测，Task 2）：对 doc_state 字节做
+ *  只读探针（临时 doc applyUpdate，不接入任何装载管线），供「迁移前建版本」在
+ *  docFromState 之前判定——恢复产物与迁移产物同字节态，重复装载天然零写、
+ *  预迁移版本不重复建。 */
+export function isLegacyTaskModelState(state: Uint8Array): boolean {
+  const probe = new Y.Doc();
+  try {
+    Y.applyUpdate(probe, state);
+    // 旧单画布仍把节点放在顶层 nodes；先只在临时探针内转多画布，才能识别其中的
+    // 旧任务。真实文档与原始 state 均不被此探针修改，预迁移版本仍保存原始字节。
+    migrateLegacyToCanvases(probe);
+    const schema = canonicalCustomColumns(probe.getMap('meta').get('customColumns'));
+    return isLegacyTaskModelShape(probe, new Set(schema.filter((c) => c.type === 'assignee').map((c) => c.id)));
+  } finally {
+    probe.destroy();
+  }
 }

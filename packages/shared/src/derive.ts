@@ -17,9 +17,14 @@ export type TaskStatus = 'todo' | 'doing' | 'done' | 'blocked';
 export interface DeriveTask {
   status: TaskStatus;
   progress: number;
+  /** 唯一总负责人（2026-11-20 任务模型）：null=未指派。 */
+  ownerId: string | null;
+  /** 总负责人的可选执行子进度；独立于任务总进度。 */
+  ownerProgress: number | null;
   startDate: string | null;
   dueDate: string | null;
   doneDate: string | null;
+  /** 旧多负责人兼容读取（迁移后恒空数组——新写入只存 ownerId）。 */
   owners: string[];
   /**
    * 父级进度是否按子级自动汇总（2026-10-20 需求方裁定：父级默认手动，可单节点
@@ -51,7 +56,11 @@ export interface DeriveNode {
   order?: number;
   /** 毫秒时间戳，表格「更新」列排序用 */
   updatedAt?: number;
-  /** 人员进度列条目（调用方从 core 快照映射、跨列拉平）；叶子节点聚合用，缺省无 */
+  /** 是否作为真正任务参与自动父级汇总；core 按显式任务信息或人员条目填充。
+   *  缺省按 true 兼容旧调用方，普通说明节点由 core 显式写 false。 */
+  taskActive?: boolean;
+  /** 人员进度列条目（调用方从 core 快照映射、跨列拉平）；仅供旧 effectiveProgress
+   *  迁移兼容逻辑使用，新 taskProgressOf 不读取。缺省无 */
   customAssignees?: CustomAssigneeEntry[];
 }
 
@@ -77,6 +86,8 @@ function withDefaults(node: DeriveNode): DeriveNode & { task: DeriveTask; order:
     task: node.task ?? {
       status: 'todo',
       progress: 0,
+      ownerId: null,
+      ownerProgress: null,
       startDate: null,
       dueDate: null,
       doneDate: null,
@@ -153,12 +164,62 @@ export function effectiveProgress(nodes: DeriveNode[], id: string): number {
   return Math.round(weighted / weightSum);
 }
 
-/** 逾期判定：dueDate < today 且 有效进度 < 100 且 status !== 'done'（today 缺省取本地今天；当天到期不算逾期） */
+/** 自动父级参与汇总的直属任务子级。旧调用方未填 taskActive 时按任务兼容纳入；
+ *  core 读出的普通说明节点显式为 false，不参与。 */
+function taskChildrenOf(nodes: DeriveNode[], id: string): DeriveNode[] {
+  return childrenOf(nodes, id).filter((child) => child.taskActive !== false);
+}
+
+/**
+ * 任务总进度唯一新口径：手动节点直接读 task.progress；自动父只递归平均直属
+ * 真正任务的总进度，没有任务子级时回退自身 progress。人员子进度与旧 weight
+ * 一律不参与。旧 effectiveProgress 保留给迁移期兼容旧显示值，不再承载新消费。
+ */
+export function taskProgressOf(nodes: DeriveNode[], id: string): number {
+  const node = nodes.find((n) => n.id === id);
+  if (!node) return 0;
+  if (node.task?.autoProgress === true) {
+    const kids = taskChildrenOf(nodes, id);
+    if (kids.length > 0) {
+      const sum = kids.reduce((acc, child) => acc + taskProgressOf(nodes, child.id), 0);
+      return Math.round(sum / kids.length);
+    }
+  }
+  return node.task?.progress ?? 0;
+}
+
+/** 总状态与总进度同源：100=done、0=todo、其余=doing；手动任务 blocked 保留
+ *  阻塞态与当前进度，到 100 仍为 done。自动父完全随汇总进度，不继承阻塞。 */
+export function taskStatusOf(nodes: DeriveNode[], id: string): TaskStatus {
+  const node = nodes.find((n) => n.id === id);
+  if (!node) return 'todo';
+  const progress = taskProgressOf(nodes, id);
+  if (progress === 100) return 'done';
+  if (node.task?.autoProgress !== true && node.task?.status === 'blocked') return 'blocked';
+  return progress === 0 ? 'todo' : 'doing';
+}
+
+/** 手动任务读自身完成日期；自动父仅在总进度 100 时取最晚直属子任务的有效
+ *  完成日期（递归读取自动子任务），没有历史日期时返回 null，不伪造今天。 */
+export function taskDoneDateOf(nodes: DeriveNode[], id: string): string | null {
+  const node = nodes.find((n) => n.id === id);
+  if (!node) return null;
+  if (node.task?.autoProgress !== true) return node.task?.doneDate ?? null;
+  if (taskProgressOf(nodes, id) !== 100) return null;
+  let latest: string | null = null;
+  for (const child of taskChildrenOf(nodes, id)) {
+    const doneDate = taskDoneDateOf(nodes, child.id);
+    if (doneDate !== null && (latest === null || doneDate > latest)) latest = doneDate;
+  }
+  return latest;
+}
+
+/** 逾期判定只使用任务总进度与派生总状态；人员子进度不影响逾期。 */
 export function isOverdue(node: DeriveNode, nodes: DeriveNode[], today: string = todayStr()): boolean {
   const task = node.task;
   if (!task?.dueDate) return false;
-  if (task.status === 'done') return false;
-  return task.dueDate < today && effectiveProgress(nodes, node.id) < 100;
+  if (taskStatusOf(nodes, node.id) === 'done') return false;
+  return task.dueDate < today && taskProgressOf(nodes, node.id) < 100;
 }
 
 export interface VisibleRow {
@@ -198,17 +259,17 @@ export function sortValue(nodes: DeriveNode[], n: DeriveNode, key: string): stri
   const t = withDefaults(n).task;
   switch (key) {
     case 'progress':
-      return effectiveProgress(nodes, n.id);
+      return taskProgressOf(nodes, n.id);
     case 'owner':
-      return t.owners[0] || OWNER_SENTINEL;
+      return t.ownerId ?? t.owners[0] ?? OWNER_SENTINEL;
     case 'status':
-      return STATUS_ORDER.indexOf(t.status);
+      return STATUS_ORDER.indexOf(taskStatusOf(nodes, n.id));
     case 'startDate':
       return t.startDate ?? DATE_SENTINEL;
     case 'dueDate':
       return t.dueDate ?? DATE_SENTINEL;
     case 'doneDate':
-      return t.doneDate ?? DATE_SENTINEL;
+      return taskDoneDateOf(nodes, n.id) ?? DATE_SENTINEL;
     case 'updatedAt':
       return n.updatedAt ?? 0;
     default:
@@ -218,31 +279,51 @@ export function sortValue(nodes: DeriveNode[], n: DeriveNode, key: string): stri
 
 /* ---------- 状态联动（源自 mindgrid derive.ts applyStatusRules，规则唯一实现，core op 与 web 共用） ---------- */
 
-/** 任务字段补丁（对应 gmind-core setNodeTask 的 patch 入参） */
-export type TaskPatch = Partial<DeriveTask>;
+/** 任务字段补丁：负责人与其子进度分别只能经 setTaskOwner/setOwnerProgress 写入。 */
+export type TaskPatch = Partial<Omit<DeriveTask, 'ownerId' | 'ownerProgress'>>;
 
 /**
- * 状态联动（M7a-T2 移植 + M7b-W1 进度回退修订，需求方 2026-09-29 裁定）：
- * - 进入 done：自动写完成日期并把进度拉满（联动分支 progress 恒置 100，patch 显式
- *   给的 progress 也被覆盖）；手动传入 doneDate 时不覆盖用户的显式选择。
- * - 离开 done（uniform，适用于 done→任意目标；只以 before 状态为门）：清空完成日期
- *   **且进度回退为 0**（「改回待开始进度改为 0%」，显式给的 progress 同样被回退覆盖；
- *   显式给 doneDate 的恢复全字段 patch 不触发本分支——restore 口径）。手改 doneDate
- *   不反写 status。
- * before 无 task 时按缺省（todo/无完成日期）处理。
+ * 状态/进度联动（2026-11-20 任务模型裁定）：
+ * - 100% 与 done 是同一完成动作：总进度 100、状态 done，首次完成写今天；恢复全字段
+ *   patch 显式携带 doneDate（含 null）时完全按快照原值，不触发联动。
+ * - 0%=todo、1～99%=doing；blocked 保留当前进度，阻塞中到 100 仍完成。
+ * - 已完成重开必须显式携带 0～99 的新进度（core 在事务前校验），清除完成日期；
+ *   本纯函数不抛错，也不自动把重开进度改成 0。
  */
 export function applyStatusRules(before: DeriveNode, patch: TaskPatch): TaskPatch {
+  if (patch.doneDate !== undefined) return { ...patch };
   const finalPatch: TaskPatch = { ...patch };
   const beforeStatus = before.task?.status ?? 'todo';
+  const beforeProgress = before.task?.progress ?? 0;
   const beforeDoneDate = before.task?.doneDate ?? null;
-  if (patch.status !== undefined && patch.status !== beforeStatus) {
-    if (patch.status === 'done' && !beforeDoneDate && patch.doneDate === undefined) {
-      finalPatch.doneDate = todayStr();
-      finalPatch.progress = 100;
-    } else if (patch.status !== 'done' && beforeStatus === 'done' && patch.doneDate === undefined) {
-      finalPatch.doneDate = null;
-      finalPatch.progress = 0;
+
+  if (patch.status === 'done' || patch.progress === 100) {
+    finalPatch.status = 'done';
+    finalPatch.progress = 100;
+    finalPatch.doneDate = beforeDoneDate ?? todayStr();
+    return finalPatch;
+  }
+
+  const reopening = beforeStatus === 'done' || beforeProgress === 100;
+  if (reopening && (patch.status !== undefined || patch.progress !== undefined)) {
+    finalPatch.doneDate = null;
+  }
+
+  if (patch.progress !== undefined) {
+    if (patch.status === 'blocked' || (patch.status === undefined && beforeStatus === 'blocked' && !reopening)) {
+      finalPatch.status = 'blocked';
+    } else {
+      finalPatch.status = patch.progress === 0 ? 'todo' : 'doing';
     }
+    return finalPatch;
+  }
+
+  if (patch.status === beforeStatus && patch.progress === undefined) return finalPatch;
+
+  if (patch.status === 'todo' && !reopening) {
+    finalPatch.progress = 0;
+  } else if (patch.status === 'blocked') {
+    finalPatch.status = 'blocked';
   }
   return finalPatch;
 }

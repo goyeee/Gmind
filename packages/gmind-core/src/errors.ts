@@ -10,6 +10,10 @@ export type GmindCoreErrorCode =
   /** done 门禁（人员进度列，需求方 2026-10-11 裁定）：标完成要求所有人员进度列
    *  条目与标准负责人进度全 100%（文案两段式=原因+下一步）。 */
   | 'TASK_DONE_GATE_BLOCKED'
+  /** 任务模型迁移（Task 2，2026-11-20）：列上限导致无法建「原负责人」列，
+   *  迁移中止原文档零变更（不丢人）。 */
+  | 'TASK_MIGRATION_COLUMN_LIMIT'
+  | 'TASK_MIGRATION_COLUMN_CONFLICT'
   | 'SUMMARY_INVALID'
   | 'INVALID_NODE_SIDE' | 'SIDE_ONLY_ROOT_CHILD'
   /** 表格自定义列（doc 级 schema + 节点 custom 值）：schema 定义非法 / 超列上限 /

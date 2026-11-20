@@ -86,7 +86,7 @@ describe('自定义列读取防御（getMeta.customColumns / NodeSnapshot.custom
     expect(getNode(doc, aId)!.custom).toEqual({ 'unknown-col': '值' });
   });
 
-  it('Y.Array 值读为纯数组、Y.Map 值不入快照（crafted 形状防御）', () => {
+  it('Y.Array 读为纯数组、嵌套 Y.Map 递归读为普通对象（人员逐条目快照）', () => {
     const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
     const aId = childrenIds(doc, ROOT_NODE_ID)[0]!;
     const rawNode = canvasNodesMap(doc).get(aId) as Y.Map<unknown>;
@@ -95,7 +95,7 @@ describe('自定义列读取防御（getMeta.customColumns / NodeSnapshot.custom
     custom.set('weird', new Y.Map());
     custom.set('g1', 50);
     rawNode.set('custom', custom);
-    expect(getNode(doc, aId)!.custom).toEqual({ p1: ['U1', 'U2'], g1: 50 });
+    expect(getNode(doc, aId)!.custom).toEqual({ p1: ['U1', 'U2'], weird: {}, g1: 50 });
   });
 });
 
@@ -247,6 +247,8 @@ describe('getNode', () => {
     expect(getNode(doc, 'good')!.task).toEqual({
       status: 'doing',
       progress: 40,
+      ownerId: 'u1',
+      ownerProgress: null,
       owners: ['u1', 'u2'],
       startDate: '2026-09-01',
       dueDate: '2026-10-01',
@@ -256,6 +258,8 @@ describe('getNode', () => {
     expect(getNode(doc, 'bad')!.task).toEqual({
       status: 'todo',
       progress: 100,
+      ownerId: 'u1',
+      ownerProgress: null,
       owners: ['u1'],
       startDate: null,
       dueDate: null,

@@ -4,9 +4,11 @@ import type { Transaction } from 'yjs';
 import { ROOT_NODE_ID, createTemplateDoc, docToState } from './doc';
 import { GmindCoreError } from './errors';
 import { canvasNodesMap, canvasOrderArr, canvasesMap, rootIdOf } from './canvas';
-import { childrenIds, countAlive, getMeta, getNode, subtreeIds } from './read';
+import { childrenIds, countAlive, getMeta, getNode, subtreeIds, unfinishedTaskProgressOf } from './read';
 import {
+  addAssignee,
   addChild,
+  completeNodeTask,
   applyStyle,
   deleteNodes,
   moveImage,
@@ -21,7 +23,11 @@ import {
   setHref,
   setCollapsed,
   setNodeSide,
+  setOwnerProgress,
+  setAssigneeProgress,
+  removeAssignee,
   setStyle,
+  setTaskOwner,
   setText,
   setTableView,
   setSharedFilter,
@@ -762,6 +768,8 @@ describe('setNodeTask（M7a-T1）', () => {
     expect(getNode(doc, id)!.task).toEqual({
       status: 'todo',
       progress: 0,
+      ownerId: null,
+      ownerProgress: null,
       owners: [],
       startDate: null,
       dueDate: null,
@@ -770,14 +778,16 @@ describe('setNodeTask（M7a-T1）', () => {
     setNodeTask(doc, id, {
       status: 'doing',
       progress: 40,
-      owners: ['u1', 'u2'],
+      owners: ['u1'],
       startDate: '2026-09-01',
       dueDate: '2026-10-01',
     });
     expect(getNode(doc, id)!.task).toEqual({
       status: 'doing',
       progress: 40,
-      owners: ['u1', 'u2'],
+      ownerId: 'u1',
+      ownerProgress: null,
+      owners: [],
       startDate: '2026-09-01',
       dueDate: '2026-10-01',
       doneDate: null,
@@ -830,19 +840,19 @@ describe('setNodeTask（M7a-T1）', () => {
     expect(getNode(doc, id)!.task).toMatchObject({ status: 'done', progress: 100, doneDate: todayLocal() });
   });
 
-  it('status→done 时 patch 显式给 doneDate 则联动分支不触发（progress/doneDate 保留 patch 值）', () => {
+  it('普通 status→done 即使显式 doneDate 也联动 progress=100，并保留所选完成日期', () => {
     const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
     const id = childrenIds(doc, ROOT_NODE_ID)[0]!;
     setNodeTask(doc, id, { status: 'done', progress: 60, doneDate: '2026-01-15' });
-    expect(getNode(doc, id)!.task).toMatchObject({ status: 'done', progress: 60, doneDate: '2026-01-15' });
+    expect(getNode(doc, id)!.task).toMatchObject({ status: 'done', progress: 100, doneDate: '2026-01-15' });
   });
 
   it('status 离开 done 清空 doneDate；手改 doneDate 不反写 status', () => {
     const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
     const id = childrenIds(doc, ROOT_NODE_ID)[0]!;
     setNodeTask(doc, id, { status: 'done' }); // doneDate=今天
-    setNodeTask(doc, id, { status: 'doing' });
-    expect(getNode(doc, id)!.task).toMatchObject({ status: 'doing', doneDate: null });
+    setNodeTask(doc, id, { status: 'doing', progress: 40 });
+    expect(getNode(doc, id)!.task).toMatchObject({ status: 'doing', progress: 40, doneDate: null });
     // 手改 doneDate：status 保持
     setNodeTask(doc, id, { status: 'done' });
     setNodeTask(doc, id, { doneDate: '2026-03-01' });
@@ -880,11 +890,11 @@ describe('setNodeTask（M7a-T1）', () => {
     expect(fullSnapshot(doc)).toBe(before); // 全部拒绝：零变更
   });
 
-  it('owners 去重保序（≤20 项判定以去重后计），闰日合法接受', () => {
+  it('旧 owners 入参去重并写入 ownerId（最多一项），闰日合法接受', () => {
     const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
     const id = childrenIds(doc, ROOT_NODE_ID)[0]!;
-    setNodeTask(doc, id, { owners: ['u1', 'u2', 'u1'] });
-    expect(getNode(doc, id)!.task.owners).toEqual(['u1', 'u2']);
+    setNodeTask(doc, id, { owners: ['u1', 'u1'] });
+    expect(getNode(doc, id)!.task).toMatchObject({ ownerId: 'u1', owners: [], ownerProgress: null });
     setNodeTask(doc, id, { startDate: '2024-02-29' }); // 闰日合法
     expect(getNode(doc, id)!.task.startDate).toBe('2024-02-29');
   });
@@ -904,7 +914,7 @@ describe('setNodeTask（M7a-T1）', () => {
 
   it('root 节点同样可写任务字段（任务常驻所有节点）；墓碑/缺失节点拒绝', () => {
     const doc = createTemplateDoc({ title: 'T', children: [] });
-    setNodeTask(doc, ROOT_NODE_ID, { status: 'doing' });
+    setNodeTask(doc, ROOT_NODE_ID, { status: 'doing', progress: 1 });
     expect(getNode(doc, ROOT_NODE_ID)!.task.status).toBe('doing');
     const ghost = 'not-exist';
     try {
@@ -949,7 +959,7 @@ describe('进度徽章↔百分比全量联动', () => {
     setNodeTask(doc, id, { status: 'done' });
     expect(getNode(doc, id)!.task.progress).toBe(100);
     expect(getNode(doc, id)!.icons.progress).toEqual(['done']);
-    setNodeTask(doc, id, { status: 'todo' }); // M7b-W1：改回待开始进度清零
+    setNodeTask(doc, id, { status: 'todo', progress: 0 }); // 重开显式选择 0%
     expect(getNode(doc, id)!.task.progress).toBe(0);
     expect(getNode(doc, id)!.icons.progress).toEqual(['none']);
   });
@@ -963,6 +973,17 @@ describe('进度徽章↔百分比全量联动', () => {
     setIcon(doc, id, 'progress', null);
     expect(getNode(doc, id)!.icons.progress).toBeUndefined();
     expect(getNode(doc, id)!.task.progress).toBe(0); // 键删回读取缺省
+  });
+
+  it('setIcon 进度档位同样联动状态与完成日期，不能绕过完成/重开规则', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
+    const id = childrenIds(doc, ROOT_NODE_ID)[0]!;
+    setIcon(doc, id, 'progress', 'done');
+    expect(getNode(doc, id)!.task).toMatchObject({ status: 'done', progress: 100, doneDate: todayLocal() });
+    setIcon(doc, id, 'progress', 'p75');
+    expect(getNode(doc, id)!.task).toMatchObject({ status: 'doing', progress: 75, doneDate: null });
+    setIcon(doc, id, 'progress', null);
+    expect(getNode(doc, id)!.task).toMatchObject({ status: 'todo', progress: 0, doneDate: null });
   });
 
   it('同值守卫看两边：徽章+百分比均处目标态 → 零事务；仅百分比不一致（p25 徽章+30%）→ 仍写入对齐到 25', () => {
@@ -1193,9 +1214,9 @@ describe('同值守卫（M7c-E4：内容无变化不开事务）', () => {
   it('setNodeTask 同 patch 幂等 → 零事务；done 态重复点「已完成」（联动注入同值）→ 零事务', () => {
     const { doc, count } = withCounter();
     const id = childrenIds(doc, ROOT_NODE_ID)[0]!;
-    setNodeTask(doc, id, { status: 'doing' });
+    setNodeTask(doc, id, { status: 'doing', progress: 1 });
     expect(count()).toBe(1);
-    setNodeTask(doc, id, { status: 'doing' });
+    setNodeTask(doc, id, { status: 'doing', progress: 1 });
     expect(count()).toBe(1);
     setNodeTask(doc, id, { status: 'done' }); // 联动注入 doneDate=今天+progress=100
     const doneCount = count();
@@ -1741,7 +1762,7 @@ describe('人员进度列（assignee 类型，需求方 2026-10-11 裁定）', (
   });
 });
 
-describe('setNodeTask done 门禁（人员进度列，需求方 2026-10-11 裁定）', () => {
+describe('setNodeTask 完成保留子进度（任务模型第一轮新裁定）', () => {
   /** 造数：任务节点 + assignee 列；返回节点 id。 */
   function docWithTask(): { doc: Y.Doc; nodeId: string } {
     const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
@@ -1765,22 +1786,23 @@ describe('setNodeTask done 门禁（人员进度列，需求方 2026-10-11 裁�
     expect(getNode(doc, nodeId)!.task.status).toBe('done');
   });
 
-  it('条目含 <100%：拦截抛错（两段式文案含列名与下一步），零变更', () => {
+  it('条目含 <100%：普通完成仍放行并保留条目，完成事实与未完成子进度可并存', () => {
     const { doc, nodeId } = docWithTask();
     setCustomField(doc, nodeId, 'w1', { uB: 100 });
     setCustomField(doc, nodeId, 'w2', { uC: 30 });
-    expect(() => setNodeTask(doc, nodeId, { status: 'done' }, ORIGIN_USER)).toThrow(/测试/);
-    expect(() => setNodeTask(doc, nodeId, { status: 'done' }, ORIGIN_USER)).toThrow(/100%/);
-    expect(getNode(doc, nodeId)!.task.status).toBe('todo'); // 零变更
+    setNodeTask(doc, nodeId, { status: 'done' }, ORIGIN_USER);
+    expect(getNode(doc, nodeId)!.task.status).toBe('done');
+    expect(getNode(doc, nodeId)!.custom!.w2).toEqual({ uC: { progress: 30 } });
   });
 
-  it('条目全 100% 但标准负责人 progress<100（owners 非空）：拦截', () => {
+  it('总负责人子进度未完成不阻断总任务完成；总进度独立拉满', () => {
     const { doc, nodeId } = docWithTask();
-    setNodeTask(doc, nodeId, { owners: ['uA'], progress: 60 }, ORIGIN_USER);
+    setTaskOwner(doc, nodeId, 'uA');
+    setOwnerProgress(doc, nodeId, 60);
     setCustomField(doc, nodeId, 'w1', { uB: 100 });
     setCustomField(doc, nodeId, 'w2', { uC: 100 });
-    expect(() => setNodeTask(doc, nodeId, { status: 'done' }, ORIGIN_USER)).toThrow(/负责人/);
-    expect(getNode(doc, nodeId)!.task.status).toBe('todo');
+    setNodeTask(doc, nodeId, { status: 'done' }, ORIGIN_USER);
+    expect(getNode(doc, nodeId)!.task).toMatchObject({ status: 'done', progress: 100, ownerProgress: 60 });
   });
 
   it('条目全 100% 且负责人 100%（或 owners 空）：放行并联动 doneDate/progress=100', () => {
@@ -1798,8 +1820,208 @@ describe('setNodeTask done 门禁（人员进度列，需求方 2026-10-11 裁�
   it('非 done 状态（doing/blocked）不触发门禁', () => {
     const { doc, nodeId } = docWithTask();
     setCustomField(doc, nodeId, 'w1', { uB: 30 });
-    setNodeTask(doc, nodeId, { status: 'doing' }, ORIGIN_USER);
+    setNodeTask(doc, nodeId, { status: 'doing', progress: 30 }, ORIGIN_USER);
     expect(getNode(doc, nodeId)!.task.status).toBe('doing');
+  });
+});
+
+describe('独立总进度、单负责人与逐人子进度（任务模型第一轮 Task 1）', () => {
+  function taskDoc(): { doc: Y.Doc; nodeId: string } {
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
+    setCustomColumns(doc, [
+      { id: 'w1', name: '前端配合', type: 'assignee' },
+      { id: 'w2', name: '测试', type: 'assignee' },
+      { id: 'text', name: '说明', type: 'text' },
+    ]);
+    return { doc, nodeId: childrenIds(doc, ROOT_NODE_ID)[0]! };
+  }
+
+  it('ownerId 优先于旧 owners；旧多负责人仅第一项成为生效负责人', () => {
+    const { doc, nodeId } = taskDoc();
+    const node = canvasNodesMap(doc).get(nodeId)!;
+    const task = new Y.Map<unknown>();
+    task.set('owners', ['legacy-a', 'legacy-b']);
+    node.set('task', task);
+    expect(getNode(doc, nodeId)!.task).toMatchObject({ ownerId: 'legacy-a', ownerProgress: null });
+    task.set('ownerId', 'new-owner');
+    task.set('ownerProgress', 35);
+    expect(getNode(doc, nodeId)!.task).toMatchObject({ ownerId: 'new-owner', ownerProgress: 35 });
+  });
+
+  it('更换负责人清除旧 ownerProgress 但保留总进度；撤销一体恢复', () => {
+    const { doc, nodeId } = taskDoc();
+    const um = createUndoManager(doc);
+    setNodeTask(doc, nodeId, { progress: 65 });
+    setTaskOwner(doc, nodeId, 'u1');
+    setOwnerProgress(doc, nodeId, 30);
+    um.stopCapturing();
+    setTaskOwner(doc, nodeId, 'u2');
+    expect(getNode(doc, nodeId)!.task).toMatchObject({ ownerId: 'u2', ownerProgress: null, progress: 65 });
+    expect(canvasNodesMap(doc).get(nodeId)!.get('task')).toSatisfy((raw) => !(raw instanceof Y.Map && raw.has('owners')));
+    undo(um);
+    expect(getNode(doc, nodeId)!.task).toMatchObject({ ownerId: 'u1', ownerProgress: 30, progress: 65 });
+    setTaskOwner(doc, nodeId, null);
+    expect(getNode(doc, nodeId)!.task).toMatchObject({ ownerId: null, ownerProgress: null, progress: 65 });
+  });
+
+  it('人员新增默认 0，逐人写只影响目标条目，移除不影响同列其他人', () => {
+    const { doc, nodeId } = taskDoc();
+    addAssignee(doc, nodeId, 'w1', 'u1');
+    addAssignee(doc, nodeId, 'w1', 'u2');
+    setAssigneeProgress(doc, nodeId, 'w1', 'u2', 45);
+    addAssignee(doc, nodeId, 'w2', 'u3');
+    expect(getNode(doc, nodeId)!.custom).toEqual({
+      w1: { u1: { progress: 0 }, u2: { progress: 45 } },
+      w2: { u3: { progress: 0 } },
+    });
+    setAssigneeProgress(doc, nodeId, 'w1', 'u1', 20);
+    removeAssignee(doc, nodeId, 'w1', 'u2');
+    expect(getNode(doc, nodeId)!.custom!.w1).toEqual({ u1: { progress: 20 } });
+  });
+
+  it('普通说明节点 taskActive=false，显式任务信息或人员条目使其成为真正任务', () => {
+    const { doc, nodeId } = taskDoc();
+    expect(getNode(doc, nodeId)!.taskActive).toBe(false);
+    setCustomField(doc, nodeId, 'text', '只是说明');
+    expect(getNode(doc, nodeId)!.taskActive).toBe(false);
+    addAssignee(doc, nodeId, 'w1', 'u1');
+    expect(getNode(doc, nodeId)!.taskActive).toBe(true);
+    removeAssignee(doc, nodeId, 'w1', 'u1');
+    expect(getNode(doc, nodeId)!.taskActive).toBe(false);
+    setNodeTask(doc, nodeId, { dueDate: '2026-12-01' });
+    expect(getNode(doc, nodeId)!.taskActive).toBe(true);
+  });
+
+  it('非法负责人、人员列和进度输入在事务前拒绝且零变更', () => {
+    const { doc, nodeId } = taskDoc();
+    const before = fullSnapshot(doc);
+    expect(() => setTaskOwner(doc, nodeId, '')).toThrow(/负责人/);
+    expect(() => setOwnerProgress(doc, nodeId, 1.5)).toThrow(/0-100/);
+    expect(() => setOwnerProgress(doc, nodeId, 101)).toThrow(/0-100/);
+    expect(() => addAssignee(doc, nodeId, 'text', 'u1')).toThrow(/人员列/);
+    expect(() => addAssignee(doc, nodeId, 'w1', '')).toThrow(/成员/);
+    expect(() => setAssigneeProgress(doc, nodeId, 'w1', 'missing', 20)).toThrow(/成员/);
+    expect(() => setAssigneeProgress(doc, nodeId, 'w1', 'u1', -1)).toThrow(/0-100/);
+    expect(fullSnapshot(doc)).toBe(before);
+  });
+
+  it('完成预检返回生效负责人子进度与全部未达 100 的人员条目', () => {
+    const { doc, nodeId } = taskDoc();
+    setTaskOwner(doc, nodeId, 'owner');
+    setOwnerProgress(doc, nodeId, 40);
+    addAssignee(doc, nodeId, 'w1', 'u1');
+    addAssignee(doc, nodeId, 'w1', 'u2');
+    setAssigneeProgress(doc, nodeId, 'w1', 'u2', 100);
+    addAssignee(doc, nodeId, 'w2', 'u3');
+    expect(unfinishedTaskProgressOf(doc, nodeId)).toEqual({
+      owner: { userId: 'owner', progress: 40 },
+      assignees: [
+        { colId: 'w1', colName: '前端配合', user: 'u1', progress: 0, weight: 1 },
+        { colId: 'w2', colName: '测试', user: 'u3', progress: 0, weight: 1 },
+      ],
+    });
+  });
+
+  it('无其他执行人时隐藏负责人子进度不参与完成预检；添加人员后才生效', () => {
+    const { doc, nodeId } = taskDoc();
+    setTaskOwner(doc, nodeId, 'owner');
+    setOwnerProgress(doc, nodeId, 40);
+    expect(unfinishedTaskProgressOf(doc, nodeId)).toEqual({ owner: null, assignees: [] });
+    addAssignee(doc, nodeId, 'w1', 'u1');
+    setAssigneeProgress(doc, nodeId, 'w1', 'u1', 100);
+    expect(unfinishedTaskProgressOf(doc, nodeId).owner).toEqual({ userId: 'owner', progress: 40 });
+  });
+
+  it('普通 setNodeTask 完成默认保留子进度；显式 complete-subprogress 原子补全', () => {
+    const { doc, nodeId } = taskDoc();
+    setTaskOwner(doc, nodeId, 'owner');
+    setOwnerProgress(doc, nodeId, 40);
+    addAssignee(doc, nodeId, 'w1', 'u1');
+    setNodeTask(doc, nodeId, { progress: 100 });
+    expect(getNode(doc, nodeId)!.task).toMatchObject({ status: 'done', progress: 100, ownerProgress: 40 });
+    expect(getNode(doc, nodeId)!.custom!.w1).toEqual({ u1: { progress: 0 } });
+
+    setNodeTask(doc, nodeId, { status: 'doing', progress: 70 });
+    const origins: string[] = [];
+    doc.on('afterTransaction', (tr: Transaction) => origins.push(String(tr.origin)));
+    completeNodeTask(doc, nodeId, 'complete-subprogress');
+    expect(origins).toEqual(['user']);
+    expect(getNode(doc, nodeId)!.task).toMatchObject({
+      status: 'done', progress: 100, ownerProgress: 100, doneDate: todayLocal(),
+    });
+    expect(getNode(doc, nodeId)!.custom!.w1).toEqual({ u1: { progress: 100 } });
+  });
+
+  it('preserve-subprogress 原子完成且保留未达 100 的子进度，这是合法状态', () => {
+    const { doc, nodeId } = taskDoc();
+    setTaskOwner(doc, nodeId, 'owner');
+    setOwnerProgress(doc, nodeId, 10);
+    addAssignee(doc, nodeId, 'w1', 'u1');
+    completeNodeTask(doc, nodeId, 'preserve-subprogress');
+    expect(getNode(doc, nodeId)!.task).toMatchObject({ status: 'done', progress: 100, ownerProgress: 10 });
+    expect(getNode(doc, nodeId)!.custom!.w1).toEqual({ u1: { progress: 0 } });
+  });
+
+  it('进度驱动状态：0 待开始、1～99 进行中、100 完成；阻塞保留进度', () => {
+    const { doc, nodeId } = taskDoc();
+    setNodeTask(doc, nodeId, { progress: 35 });
+    expect(getNode(doc, nodeId)!.task.status).toBe('doing');
+    setNodeTask(doc, nodeId, { status: 'blocked' });
+    expect(getNode(doc, nodeId)!.task).toMatchObject({ status: 'blocked', progress: 35 });
+    setNodeTask(doc, nodeId, { progress: 0 });
+    expect(getNode(doc, nodeId)!.task.status).toBe('blocked');
+    setNodeTask(doc, nodeId, { progress: 100 });
+    expect(getNode(doc, nodeId)!.task).toMatchObject({ status: 'done', progress: 100 });
+    setNodeTask(doc, nodeId, { progress: 0 });
+    expect(getNode(doc, nodeId)!.task).toMatchObject({ status: 'todo', progress: 0, doneDate: null });
+  });
+
+  it('完成态重开必须显式给 0～99 新进度，0 到进行中也必须补选进度', () => {
+    const { doc, nodeId } = taskDoc();
+    setNodeTask(doc, nodeId, { status: 'done' });
+    expect(() => setNodeTask(doc, nodeId, { status: 'doing' })).toThrow(/进度/);
+    expect(() => setNodeTask(doc, nodeId, { status: 'doing', progress: 100 })).toThrow(/0-99/);
+    expect(getNode(doc, nodeId)!.task).toMatchObject({ status: 'done', progress: 100 });
+    setNodeTask(doc, nodeId, { status: 'doing', progress: 45 });
+    expect(getNode(doc, nodeId)!.task).toMatchObject({ status: 'doing', progress: 45, doneDate: null });
+    setNodeTask(doc, nodeId, { progress: 0 });
+    expect(() => setNodeTask(doc, nodeId, { status: 'doing' })).toThrow(/进度/);
+    expect(() => setNodeTask(doc, nodeId, { status: 'doing', progress: 0 })).toThrow(/1-99/);
+    expect(getNode(doc, nodeId)!.task).toMatchObject({ status: 'todo', progress: 0 });
+  });
+
+  it('裸进度写入在完成态直接静默重开（2026-11-21 需求方裁定：进度值类入口不再二次确认）', () => {
+    const { doc, nodeId } = taskDoc();
+    setNodeTask(doc, nodeId, { status: 'done' });
+    // 不带 status 的裸进度补丁不走重开门禁——applyStatusRules 静默联动（清完成日期、
+    // 状态派生 doing），进度徽章同事务同步：UI 进度输入/档位/头像选盘直接用所选值重开
+    setNodeTask(doc, nodeId, { progress: 65 });
+    expect(getNode(doc, nodeId)!.task).toMatchObject({ status: 'doing', progress: 65, doneDate: null });
+    expect(getNode(doc, nodeId)!.icons.progress).toEqual(['p62']);
+    setNodeTask(doc, nodeId, { progress: 0 });
+    expect(getNode(doc, nodeId)!.task).toMatchObject({ status: 'todo', progress: 0, doneDate: null });
+    expect(getNode(doc, nodeId)!.icons.progress).toEqual(['none']);
+  });
+
+  it('自动父任务不能通过完成命令或普通补丁手动完成', () => {
+    const { doc, nodeId } = taskDoc();
+    setNodeTask(doc, nodeId, { autoProgress: true, progress: 40 });
+    expect(() => completeNodeTask(doc, nodeId, 'preserve-subprogress')).toThrow(/子任务进度决定/);
+    expect(() => setNodeTask(doc, nodeId, { status: 'done' })).toThrow(/子任务进度决定/);
+    expect(() => setIcon(doc, nodeId, 'progress', 'done')).toThrow(/不能直接修改/);
+    expect(getNode(doc, nodeId)!.task).toMatchObject({ autoProgress: true, progress: 40, status: 'todo' });
+  });
+
+  it('自动汇总开关只缓存总进度，不把开关动作当成用户完成并伪造完成日期', () => {
+    const { doc, nodeId } = taskDoc();
+    setNodeTask(doc, nodeId, { status: 'doing', progress: 40 });
+    setNodeTask(doc, nodeId, { autoProgress: true, progress: 100 });
+    expect(getNode(doc, nodeId)!.task).toMatchObject({
+      autoProgress: true,
+      status: 'doing',
+      progress: 100,
+      doneDate: null,
+    });
   });
 });
 

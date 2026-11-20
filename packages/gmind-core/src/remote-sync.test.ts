@@ -3,7 +3,7 @@ import * as Y from 'yjs';
 import type { Transaction } from 'yjs';
 import { createTemplateDoc, docFromState, docToState } from './doc';
 import { canvasNodesMap } from './canvas';
-import { ORIGIN_SYSTEM, deleteNodes, moveNode } from './operations';
+import { ORIGIN_SYSTEM, deleteNodes, moveNode, addAssignee, setAssigneeProgress, setCustomColumns } from './operations';
 import { childrenIds, getNode } from './read';
 import type { NodeSnapshot } from './read';
 import { attachRemoteNormalization, normalizeTree } from './repair';
@@ -159,5 +159,48 @@ describe('attachRemoteNormalization：远端事务收敛接线（准入清单 §
     expect(childrenIds(wired, 'root')).not.toContain(xId);
     expect(getNode(wired, xId)!.deleted).toBe(true);
     expect(normalizeTree(wired, ORIGIN_SYSTEM)).toBe(0);
+  });
+});
+
+describe('逐人任务子进度并发合并（任务模型第一轮 Task 1）', () => {
+  function assigneeScene(): { a: Y.Doc; b: Y.Doc; nodeId: string } {
+    const base = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
+    setCustomColumns(base, [{ id: 'people', name: '执行人', type: 'assignee' }]);
+    const nodeId = findIdByText(base, 'A');
+    addAssignee(base, nodeId, 'people', 'u1');
+    addAssignee(base, nodeId, 'people', 'u2');
+    const a = docFromState(docToState(base));
+    const b = docFromState(docToState(base));
+    return { a, b, nodeId };
+  }
+
+  function syncBoth(a: Y.Doc, b: Y.Doc): void {
+    Y.applyUpdate(a, Y.encodeStateAsUpdate(b));
+    Y.applyUpdate(b, Y.encodeStateAsUpdate(a));
+    Y.applyUpdate(a, Y.encodeStateAsUpdate(b));
+  }
+
+  it('两端更新同一人员列的不同用户，双向同步后两项都保留', () => {
+    const { a, b, nodeId } = assigneeScene();
+    setAssigneeProgress(a, nodeId, 'people', 'u1', 35);
+    setAssigneeProgress(b, nodeId, 'people', 'u2', 70);
+    syncBoth(a, b);
+    expect(getNode(a, nodeId)!.custom!.people).toEqual({
+      u1: { progress: 35 },
+      u2: { progress: 70 },
+    });
+    expect(getNode(b, nodeId)!.custom!.people).toEqual(getNode(a, nodeId)!.custom!.people);
+  });
+
+  it('同用户同字段并发写在两端收敛为同一结果', () => {
+    const { a, b, nodeId } = assigneeScene();
+    setAssigneeProgress(a, nodeId, 'people', 'u1', 20);
+    setAssigneeProgress(b, nodeId, 'people', 'u1', 90);
+    syncBoth(a, b);
+    const av = getNode(a, nodeId)!.custom!.people as Record<string, { progress: number }>;
+    const bv = getNode(b, nodeId)!.custom!.people;
+    expect(av).toEqual(bv);
+    expect([20, 90]).toContain(av.u1!.progress);
+    expect(av.u2).toEqual({ progress: 0 });
   });
 });

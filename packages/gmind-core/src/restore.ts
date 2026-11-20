@@ -3,7 +3,9 @@ import {
   ICON_GROUPS,
   MARKER_GROUP_MODE,
   MARKER_MULTI_MAX,
+  canonicalCustomColumns,
   iconValuesOf,
+  type CustomFieldValue,
   type IconGroup,
 } from './constants';
 import { ROOT_NODE_ID, deepCopyValue } from './doc';
@@ -13,6 +15,7 @@ import {
   deleteNodes,
   moveNode,
   setCollapsed,
+  setCustomField,
   setHref,
   setImage,
   setIcon,
@@ -24,6 +27,7 @@ import {
   type WriteOrigin,
 } from './operations';
 import { getNode, type NodeSnapshot } from './read';
+import { canvasNodesMap } from './canvas';
 
 /** 恢复写来源（M4 Task 7，FR-VER-004）：撤销栈仅跟踪 ORIGIN_USER（undo.ts），
  *  restore 事务整体不进任何客户端的撤销栈——恢复是文档级事实修正，Ctrl+Z 不回滚。 */
@@ -190,6 +194,16 @@ export function restoreFromSnapshot(target: Y.Doc, snapshot: Y.Doc): RestoreResu
   // 不可依赖；对齐 repair.ts repairScopes 的排序纪律）。
   const unionIds = [...new Set([...tCanvases.keys(), ...sCanvases.keys()])].sort();
 
+  // doc 级列 schema diff（Task 2：节点 custom 纳入恢复范围的前置——快照 custom 键
+  // ⊆ 快照 schema 由装载 repair 保证，target schema 先恢复为快照值，节点恢复期
+  // setCustomField 的 schema 校验必通过）。canonical 归一后 JSON 比较。
+  const snapColumns = canonicalCustomColumns(snapshot.getMap('meta').get('customColumns'));
+  const targetColumns = canonicalCustomColumns(target.getMap('meta').get('customColumns'));
+  const customColumnsPatch =
+    JSON.stringify(snapColumns) !== JSON.stringify(targetColumns)
+      ? snapColumns.map((c) => ({ ...c }))
+      : null;
+
   const canvasSetPlan: CanvasSetPlan = { tombstones: [], rebuilds: [], metaPatches: [] };
   const nodePlans: CanvasNodePlan[] = [];
 
@@ -214,8 +228,9 @@ export function restoreFromSnapshot(target: Y.Doc, snapshot: Y.Doc): RestoreResu
     // 双无 / 双墓碑：零操作（冻结内容已是还原终态，如实不动）。
   }
 
-  // 零操作短路：画布级 op 与全部画布节点 op 皆空 → 全零，不开事务。
+  // 零操作短路：画布级 op、全部画布节点 op 与 doc 级 schema patch 皆空 → 全零，不开事务。
   if (
+    customColumnsPatch === null &&
     canvasSetPlan.tombstones.length === 0 &&
     canvasSetPlan.rebuilds.length === 0 &&
     canvasSetPlan.metaPatches.length === 0 &&
@@ -232,6 +247,10 @@ export function restoreFromSnapshot(target: Y.Doc, snapshot: Y.Doc): RestoreResu
 
   return withTransaction(target, ORIGIN_RESTORE, () => {
     const result: RestoreResult = { deleted: 0, created: 0, moved: 0, updated: 0 };
+    // ── doc 级列 schema（最先：节点 custom 恢复的前置——列存在才可写值）
+    if (customColumnsPatch !== null) {
+      target.getMap('meta').set('customColumns', customColumnsPatch);
+    }
     // ── 画布集合回滚（先集合后节点：重建/墓碑的画布不在节点 diff 集合内，两不相交）
     const order = canvasOrderArr(target);
     for (const canvasId of canvasSetPlan.tombstones) {
@@ -440,7 +459,7 @@ function hasFieldDiff(t: NodeSnapshot, s: NodeSnapshot): boolean {
     diffImage(t.image, s.image) ||
     Object.keys(stylePatchOf(t.style, s.style)).length > 0 ||
     ICON_GROUPS.some((group) => iconGroupDiffers(group, t.icons[group], s.icons[group])) ||
-    hasTaskDiff(t.task, s.task)
+    hasTaskDiff(t.task, s.task) || hasCustomDiff(t.custom, s.custom)
   );
 }
 
@@ -476,17 +495,30 @@ function iconGroupDiffers(
   return target.some((v, i) => v !== snap[i]);
 }
 
-/** task 差异判定（快照 task 恒为归一化对象，逐字段比即可）。 */
+/** task 差异判定（快照 task 恒为归一化对象，逐字段比即可）。ownerProgress/
+ *  autoProgress 在写入侧不经 setNodeTask patch（见 applyFieldDiff），单独 diff。 */
 function hasTaskDiff(t: NodeSnapshot['task'], s: NodeSnapshot['task']): boolean {
   return (
     t.status !== s.status ||
     t.progress !== s.progress ||
+    t.ownerId !== s.ownerId ||
+    t.ownerProgress !== s.ownerProgress ||
+    (t.autoProgress ?? undefined) !== (s.autoProgress ?? undefined) ||
     t.startDate !== s.startDate ||
     t.dueDate !== s.dueDate ||
     t.doneDate !== s.doneDate ||
     t.owners.length !== s.owners.length ||
     t.owners.some((v, i) => v !== s.owners[i])
   );
+}
+
+/** 节点 custom 差异（Task 2：人员列/自定义列值纳入恢复范围；两侧均为 plain 值，
+ *  JSON 逐列比较——键集合不同或任一列值不同即有差异）。 */
+function hasCustomDiff(t: NodeSnapshot['custom'], s: NodeSnapshot['custom']): boolean {
+  const tc = t ?? {};
+  const sc = s ?? {};
+  if (Object.keys(tc).length !== Object.keys(sc).length) return true;
+  return Object.keys(sc).some((k) => JSON.stringify(tc[k]) !== JSON.stringify(sc[k]));
 }
 
 /** ④ 写入：逐项对比并经 core op 落写（origin 传 ORIGIN_RESTORE；本函数在恢复事务内
@@ -540,7 +572,7 @@ function applyFieldDiff(target: Y.Doc, id: string, s: NodeSnapshot, canvasId: st
       {
         status: s.task.status,
         progress: s.task.progress,
-        owners: [...s.task.owners],
+        owners: s.task.ownerId === null ? [] : [s.task.ownerId],
         startDate: s.task.startDate,
         dueDate: s.task.dueDate,
         doneDate: s.task.doneDate,
@@ -548,6 +580,47 @@ function applyFieldDiff(target: Y.Doc, id: string, s: NodeSnapshot, canvasId: st
       ORIGIN_RESTORE,
       canvasId,
     );
+    // ownerProgress / autoProgress 不走 setNodeTask patch（前者有 owner 存在性校验、
+    // 后者 undefined 语义与「缺省不写」耦合）——恢复事务内直写：快照值均为归一化
+    // 原值（read 侧 asProgress/布尔防御），恢复=回滚到快照态，无需业务校验。
+    // 顺序在 setNodeTask 之后：ownerId 转写会清 ownerProgress，此处再按快照补写。
+    const taskMap = (() => {
+      const node = canvasNodesMap(target, canvasId).get(id);
+      const raw = node instanceof Y.Map ? node.get('task') : undefined;
+      return raw instanceof Y.Map ? raw : null;
+    })();
+    if (taskMap !== null) {
+      // setNodeTask 更换负责人会清掉旧 ownerProgress；此处必须按快照无条件恢复，
+      // 不能用恢复前的 t.task.ownerProgress 比较（新旧数值相同也会被换负责人删除）。
+      if (s.task.ownerProgress === null) taskMap.delete('ownerProgress');
+      else taskMap.set('ownerProgress', s.task.ownerProgress);
+      if ((t.task.autoProgress ?? undefined) !== (s.task.autoProgress ?? undefined)) {
+        if (s.task.autoProgress === undefined) taskMap.delete('autoProgress');
+        else taskMap.set('autoProgress', s.task.autoProgress);
+      }
+    }
+    changed = true;
+  }
+  // 节点 custom（Task 2：人员列/自定义列值纳入恢复范围）：快照有值的列经
+  // setCustomField 恢复——assignee 列在写入口即按用户、按字段 diff（Task 1 通道），
+  // 不整列覆盖；target 有而快照无的列 → 置 null 删键（恢复=回滚到快照态）。
+  // 列 schema 已在事务前恢复为快照值（见 restoreFromSnapshot 的 customColumnsPatch），
+  // 故此处 setCustomField 的 schema 校验必通过（快照 custom 键 ⊆ 快照 schema——
+  // 装载 repair 剔除 schema 外孤儿列的保证）。
+  if (hasCustomDiff(t.custom, s.custom)) {
+    const snapCustom = s.custom ?? {};
+    const tCustom = t.custom ?? {};
+    for (const colId of Object.keys(snapCustom)) {
+      setCustomField(target, id, colId, snapCustom[colId] as CustomFieldValue, ORIGIN_RESTORE, canvasId);
+    }
+    // target 有而快照无的列：schema 已恢复为快照值，被删列不在 schema 中——不走
+    // setCustomField（schema 校验必抛），事务内直写删键（恢复=回滚到快照态）。
+    for (const colId of Object.keys(tCustom)) {
+      if (colId in snapCustom) continue;
+      const node = canvasNodesMap(target, canvasId).get(id);
+      const custom = node instanceof Y.Map ? node.get('custom') : undefined;
+      if (custom instanceof Y.Map) custom.delete(colId);
+    }
     changed = true;
   }
   if (diffImage(t.image, s.image)) {

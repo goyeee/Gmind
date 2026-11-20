@@ -21,11 +21,15 @@
  *   兼容子集，由宿主（apps/web 适配层）自 getNode(id).task 透传；ownerNames
  *   为渲染期派生数据（宿主成员目录映射），不入 Yjs 文档。
  */
-import { effectiveProgress, isOverdue, type DeriveNode, type TaskStatus } from '@gmind/shared';
+import { isOverdue, taskProgressOf, taskStatusOf, type DeriveNode, type TaskStatus } from '@gmind/shared';
 
 /** 任务字段渲染子集（core NodeSnapshot.task 结构兼容；字段缺省 = 未设置）。 */
 export interface NodeTaskVisual {
   status?: TaskStatus;
+  /** 唯一总负责人（2026-11-20 任务模型）：null/缺省=未指派。 */
+  ownerId?: string | null;
+  /** 总负责人的可选执行子进度（头像进度环数据源）；缺省=未设置。 */
+  ownerProgress?: number | null;
   owners?: string[];
   /**
    * 父级进度是否按子级自动汇总（2026-10-20 需求方裁定）。
@@ -93,7 +97,9 @@ export function hasTaskInfo(task: NodeTaskVisual | undefined): boolean {
   return (
     (task.status !== undefined && task.status !== 'todo') ||
     (task.owners?.length ?? 0) > 0 ||
+    (task.ownerId !== undefined && task.ownerId !== null) ||
     (task.progress ?? 0) > 0 ||
+    task.autoProgress === true ||
     (task.dueDate ?? '') !== '' ||
     (task.assignees?.length ?? 0) > 0
   );
@@ -177,6 +183,13 @@ export function ownerLabelOf(
   task: NodeTaskVisual | undefined,
   depth: number,
 ): { label: string; unassigned: boolean } {
+  // 2026-11-20 任务模型：唯一总负责人（ownerId）优先；旧 owners 数组仅迁移前文档
+  // 兼容（多人「+N」随之成为兼容路径，新写入恒单人）。
+  const ownerId = task?.ownerId ?? null;
+  if (ownerId !== null) {
+    const first = task?.ownerNames?.[0] ?? ownerId;
+    return { label: first, unassigned: false };
+  }
   const owners = (task?.owners ?? []).filter((o) => o !== '');
   if (owners.length > 0) {
     const first = task?.ownerNames?.[0] ?? (owners[0] as string);
@@ -201,7 +214,11 @@ export function taskRowSlotsOf(
 ): TaskRowSlots | undefined {
   if (!task || !hasTaskInfo(task)) return undefined;
   const { label, unassigned } = ownerLabelOf(task, depth);
-  const owners = (task.owners ?? []).filter((o) => o !== '');
+  // 头像组以 ownerId 为准（单人）；旧 owners 回退（迁移前文档多人头像仍渲染）。
+  const owners =
+    task.ownerId !== null && task.ownerId !== undefined
+      ? [task.ownerId]
+      : (task.owners ?? []).filter((o) => o !== '');
   const ownerAvatars = owners.map((o, i) => task.ownerNames?.[i] ?? o);
   const assigneeAvatars = task.assignees ?? [];
   // 头像（负责人/人员进度）存在时「未分配」文字让位——头像已表达有人参与，
@@ -238,6 +255,8 @@ export function taskRowContentWidth(s: TaskRowSlots, ownerLabelW: number): numbe
 /** 渲染输入的最小节点形状（NodeVisual 结构子集，避免与 render 相互依赖）。 */
 export interface TaskProgressSource {
   task?: NodeTaskVisual;
+  taskActive?: boolean;
+  taskParentId?: string | null;
 }
 
 /** 平铺 DeriveNode（@gmind/shared derive 输入口径）：树由 layout.nodes 的
@@ -247,6 +266,10 @@ function buildDeriveNodes(
   layoutNodes: Array<{ id: string; parentId?: string }>,
 ): DeriveNode[] {
   const parentById = new Map(layoutNodes.map((b) => [b.id, b.parentId ?? null]));
+  // nodeData 可携带完整任务树关系；折叠隐藏的后代不在 layoutNodes，但仍须参与汇总。
+  for (const [id, v] of nodeData) {
+    if (v.taskParentId !== undefined) parentById.set(id, v.taskParentId);
+  }
   const deriveNodes: DeriveNode[] = [];
   for (const [id, v] of nodeData) {
     const t = v.task;
@@ -262,10 +285,13 @@ function buildDeriveNodes(
       id,
       parentId: parentById.get(id) ?? null,
       title: '', // 进度/逾期聚合不消费标题
+      taskActive: v.taskActive,
       task: t
         ? {
             status: t.status ?? 'todo',
             progress: t.progress ?? 0,
+            ownerId: t.ownerId ?? null,
+            ownerProgress: t.ownerProgress ?? null,
             startDate: null,
             dueDate: t.dueDate ?? null,
             doneDate: null,
@@ -280,9 +306,8 @@ function buildDeriveNodes(
 }
 
 /**
- * 各节点有效进度（口径 = @gmind/shared effectiveProgress：叶=自身 progress，
- * 父=直属子级有效进度均值四舍五入）。折叠节点按叶子口径：被隐藏后代不在
- * 渲染集（layout 把折叠节点按叶子输出），childrenOf 取空 → 自身 progress。
+ * 各节点任务总进度：手动=自身 progress，自动父=直属真正任务均值。nodeData 携带
+ * taskParentId 时使用完整任务树，折叠隐藏的后代仍参与汇总；缺省回退可见布局。
  */
 export function taskProgressMap(
   nodeData: Map<string, TaskProgressSource>,
@@ -290,7 +315,19 @@ export function taskProgressMap(
 ): Map<string, number> {
   const deriveNodes = buildDeriveNodes(nodeData, layoutNodes);
   const out = new Map<string, number>();
-  for (const n of deriveNodes) out.set(n.id, effectiveProgress(deriveNodes, n.id));
+  // 2026-11-20 任务模型：总进度唯一口径 taskProgressOf（手动=自身、自动父=直属
+  // 真正任务均值），人员子进度/旧 weight 一律不参与。
+  for (const n of deriveNodes) out.set(n.id, taskProgressOf(deriveNodes, n.id));
+  return out;
+}
+
+export function taskStatusMap(
+  nodeData: Map<string, TaskProgressSource>,
+  layoutNodes: Array<{ id: string; parentId?: string }>,
+): Map<string, TaskStatus> {
+  const deriveNodes = buildDeriveNodes(nodeData, layoutNodes);
+  const out = new Map<string, TaskStatus>();
+  for (const n of deriveNodes) out.set(n.id, taskStatusOf(deriveNodes, n.id));
   return out;
 }
 

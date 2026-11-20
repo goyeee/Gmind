@@ -85,11 +85,12 @@ import {
   taskOverdueIds,
   taskParentIds,
   taskProgressMap,
+  taskStatusMap,
   taskRowSlotsOf,
   taskStatusColor,
   type NodeTaskVisual,
 } from './taskvisual';
-import { todayStr } from '@gmind/shared';
+import { todayStr, type TaskStatus } from '@gmind/shared';
 import {
   MARKER_BADGE_SIZE,
   MARKER_ROW_ORDER,
@@ -279,6 +280,10 @@ export interface NodeVisual {
   image?: { key: string; w: number; h: number; placement?: ImagePlacement } | null;
   /** 未解决评论数（FR-CMT-002）：>0 渲染右上角计数角标；仅存活节点携带。 */
   commentCount?: number;
+  /** 是否为真正任务：自动父汇总排除普通说明节点；缺省由 shared 兼容旧调用方。 */
+  taskActive?: boolean;
+  /** 完整任务树父级：折叠隐藏的后代仍参与自动汇总；缺省回退可见布局关系。 */
+  taskParentId?: string | null;
   /**
    * 任务字段（M7c-C2，只增不改）：宿主自 NodeSnapshot.task 透传（结构兼容子集）。
    * 无任务信息（hasTaskInfo=false）= 纯脑图节点，零任务视觉、几何不变。
@@ -538,6 +543,7 @@ function commentBadgeX(b: NodeBox, hasLink: boolean, hasNote: boolean): number {
 /** 单节点任务上下文（renderScene 预计算，M7c-C2）：有效进度 / 是否父节点 / 是否逾期。 */
 interface NodeTaskContext {
   progress: number;
+  status: TaskStatus;
   parent: boolean;
   overdue: boolean;
 }
@@ -821,7 +827,7 @@ function applyNode(
     entry.taskBar.setAttribute('y', '0');
     entry.taskBar.setAttribute('width', fmt(TASK_BAR_W));
     entry.taskBar.setAttribute('height', fmt(b.h));
-    entry.taskBar.setAttribute('fill', taskStatusColor(task?.status));
+    entry.taskBar.setAttribute('fill', taskStatusColor(taskCtx.status));
   }
 
   // 任务信息行（2026-10-10 mindgrid 全量对齐；2026-10-11 负责人/人员进度头像化）：
@@ -831,8 +837,9 @@ function applyNode(
   // 签名（任务数据+盒几何）不变则整行元素引用保持（重建为无状态绘制，代价极小
   // ——同标记行策略）。简洁模式恒隐藏（紧凑盒 = 纯标题 + 标记）。
   const ownerLabel = taskSlots?.ownerLabel ?? '';
-  // ownerSig 含头像环值（有人员进度列时环=task.progress，其变化须触发整行重建）。
-  const ownerRingPct = (taskSlots?.assigneeAvatars?.length ?? 0) > 0 ? (task?.progress ?? 0) : '';
+  // ownerSig 含头像环值（2026-11-20 任务模型：负责人头像环=ownerProgress 子进度，
+  // 其变化须触发整行重建）。
+  const ownerRingPct = task?.ownerProgress ?? '';
   const ownerSig = (taskSlots?.ownerAvatars ?? [])
     .map((n, i) => `${n}·${taskSlots?.ownerAvatarUrls?.[i] ?? ''}·${ownerRingPct}`)
     .join('·');
@@ -876,16 +883,21 @@ function applyNode(
       const ownerUrls = taskSlots?.ownerAvatarUrls ?? [];
       const ownerNames = taskSlots?.ownerAvatars ?? [];
       // data-owner-user 锚点（2026-10-12 裁定：点负责人头像弹选盘快捷改其进度——
-      // 与人员列点头像同交互；web 层写回走 setNodeTask 而非 setCustomField）。
-      const ownerIds = (task?.owners ?? []).filter((o) => o !== '');
-      const ownerRing = (taskSlots?.assigneeAvatars?.length ?? 0) > 0;
+      // 与人员列点头像同交互；2026-11-20 起锚点/环值按唯一 ownerId：环=ownerProgress
+      // 子进度（未设置不画环），右侧 % 恒=任务总进度）。
+      const ownerIds =
+        task?.ownerId !== undefined && task?.ownerId !== null
+          ? [task.ownerId]
+          : (task?.owners ?? []).filter((o) => o !== '');
+      const ownerRing = task?.ownerProgress !== undefined && task?.ownerProgress !== null &&
+        (task?.assignees?.length ?? 0) > 0;
       for (let i = 0; i < ownerNames.length; i += 1) {
         parts.push(
           avatarGroup(
             cursorX + AVATAR_R,
             rowY,
             ownerNames[i]!,
-            ownerRing ? (task?.progress ?? 0) : null,
+            ownerRing ? (task?.ownerProgress ?? 0) : null,
             { 'data-owner-user': ownerIds[i] ?? '' },
             ownerUrls[i] ?? null,
             scene.idPrefix,
@@ -1181,6 +1193,7 @@ export function renderScene(scene: SceneRoot, input: SceneInput): void {
   // 父节点集（layout.nodes parentId 反查，与布局侧槽位判定同源同树）。
   const today = input.today ?? todayStr();
   const progressById = taskProgressMap(nodeData, layout.nodes);
+  const statusById = taskStatusMap(nodeData, layout.nodes);
   const overdueIds = taskOverdueIds(nodeData, layout.nodes, today);
   const parentIds = taskParentIds(layout.nodes);
 
@@ -1198,6 +1211,7 @@ export function renderScene(scene: SceneRoot, input: SceneInput): void {
       layout.collapsedCounts.get(b.id) ?? 0,
       {
         progress: progressById.get(b.id) ?? 0,
+        status: statusById.get(b.id) ?? 'todo',
         parent: parentIds.has(b.id),
         overdue: overdueIds.has(b.id),
       },

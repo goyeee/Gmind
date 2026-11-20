@@ -1,6 +1,6 @@
 import * as Y from 'yjs';
 import { ulid } from 'ulid';
-import { applyStatusRules, type DeriveNode, type TaskPatch } from '@gmind/shared';
+import { applyStatusRules, todayStr, type DeriveNode, type TaskPatch } from '@gmind/shared';
 import {
   CUSTOM_COLUMN_LIMIT,
   CUSTOM_COLUMN_NAME_MAX,
@@ -38,11 +38,11 @@ import {
   rootIdOf,
 } from './canvas';
 import {
-  assigneeEntriesOf,
   getNode,
   isImagePlacement,
   requireAliveNode,
   subtreeIds,
+  unfinishedTaskProgressOf,
   type NodeImage,
 } from './read';
 import { normalizeTree, normalizeTreeFor, deriveNormalizeDirty } from './repair';
@@ -555,29 +555,32 @@ export function setIcon(
     }
     // 进度组反向联动（需求方 2026-10-10 全量联动）：进度徽章是任务进度的可视化
     // 档位，与 task.progress 一体两面——写档位同步 task.progress=档位百分比
-    // （PROGRESS_STAGE_PCT）；value=null=清除进度（徽章+进度键一并移除，读取回
-    // 缺省 0）。同值守卫看两边：徽章与百分比均处目标态才零事务；徽章同值但百分比
-    // 不一致（旧文档/外部写）仍写入对齐。
+    // （PROGRESS_STAGE_PCT）；value=null=清除徽章并把进度重开为 0%。状态与完成日期
+    // 走同一 applyStatusRules；同值守卫同时比较徽章和联动后的任务字段。
     if (group === 'progress') {
       const current = readIconArray(node, group);
-      const taskRaw = node.get('task');
-      const taskMap = taskRaw instanceof Y.Map ? taskRaw : null;
-      const pctRaw = taskMap?.get('progress');
-      const curPct = typeof pctRaw === 'number' ? pctRaw : undefined;
-      if (value === null) {
-        if (current.length === 0 && curPct === undefined) return; // 已是清除态
-        withTransaction(doc, origin, () => {
-          if (current.length > 0) iconsMapOf(node).delete(group);
-          if (curPct !== undefined) taskMap!.delete('progress');
-        });
-        return;
+      const currentTask = getNode(doc, id, canvasId)!.task;
+      if (currentTask.autoProgress === true && origin !== 'restore') {
+        throw new GmindCoreError('TASK_INVALID_STATUS', '自动汇总父任务由子任务进度决定，不能直接修改父任务进度徽章');
       }
-      const targetPct = PROGRESS_STAGE_PCT[value as keyof typeof PROGRESS_STAGE_PCT];
-      const sameBadge = current.length === 1 && current[0] === value;
-      if (sameBadge && curPct === targetPct) return;
+      const targetPct = value === null ? 0 : PROGRESS_STAGE_PCT[value as keyof typeof PROGRESS_STAGE_PCT];
+      const linked = applyStatusRules(
+        { id, parentId: null, title: '', task: currentTask },
+        { progress: targetPct },
+      );
+      const taskSame = (['status', 'progress', 'doneDate'] as const).every((key) => {
+        const next = linked[key] === undefined ? currentTask[key] : linked[key];
+        return (next ?? null) === (currentTask[key] ?? null);
+      });
+      const sameBadge = value === null ? current.length === 0 : current.length === 1 && current[0] === value;
+      if (sameBadge && taskSame) return;
       withTransaction(doc, origin, () => {
-        if (!sameBadge) iconsMapOf(node).set(group, Y.Array.from([value]));
-        if (curPct !== targetPct) taskMapOf(node).set('progress', targetPct);
+        if (value === null) {
+          if (current.length > 0) iconsMapOf(node).delete(group);
+        } else if (!sameBadge) {
+          iconsMapOf(node).set(group, Y.Array.from([value]));
+        }
+        writeTaskPatch(node, linked);
       });
       return;
     }
@@ -660,25 +663,15 @@ function iconsValueOf(node: Y.Map<unknown>, group: IconGroup): unknown {
 
 /**
  * 设置节点任务字段（M7a-T1）：status('todo'|'doing'|'done'|'blocked') /
- * progress(整数 0-100) / owners(用户ID 字符串数组) / startDate|dueDate|doneDate
- * ('YYYY-MM-DD'|null)。task 为节点上的可选 Y.Map；未提供的键不动，日期 null 删键
- * （读取侧缺省语义见 read.ts readTask）。默认 ORIGIN_USER（可撤销，经既有
- * capUndoStack 纪律由页面侧 afterUserWrite 裁剪，与相邻 op 同路径）。
+ * progress(整数 0-100) / startDate|dueDate|doneDate('YYYY-MM-DD'|null) /
+ * autoProgress。旧 owners 入参仅为兼容：最多一项并转写 ownerId，不再写 owners。
+ * task 为节点上的可选 Y.Map；未提供的键不动，日期 null 删键。默认 ORIGIN_USER。
  *
- * 校验（先于 transact，拒绝即零变更，错误码 TASK_INVALID_*、文案两段式）：
- * - status ∈ TASK_STATUSES，否则 TASK_INVALID_STATUS；
- * - progress 为整数 0-100（拒绝小数/NaN/越界），否则 TASK_INVALID_PROGRESS；
- * - owners 为字符串数组：每项长度 1-64（存用户ID）；**先去重（保序）再校验
- *   去重后 ≤ MAX_TASK_OWNERS 项**，否则 TASK_INVALID_OWNERS；
- * - 三个日期为 null 或日历合法的 'YYYY-MM-DD'（2026-02-30 这类拒绝），否则 TASK_INVALID_DATE。
+ * 校验先于事务：status 枚举、0-100 整数进度、单负责人、布尔自动开关和合法日期。
+ * 完成态重开及 0%→doing 必须显式给新进度；恢复来源的全字段快照保留原值。
  *
- * 状态联动（规则唯一实现在 @gmind/shared applyStatusRules，core 与 web 共用、禁止双写）：
- * status→done 联动（patch.status='done' 且此前非 done、此前无完成日期、patch 未显式给
- * doneDate）时自动 doneDate=今天（本地日期字符串）+ progress=100——mindgrid 语义：
- * 联动分支 progress 恒置 100，patch 显式给的 progress 也被覆盖；patch 显式给 doneDate
- * 时联动分支不触发（progress 保留 patch 值）。status 离开 done 且 patch 未显式给
- * doneDate 时清空既有 doneDate **且 progress 回退 0**（M7b-W1 需求方裁定「改回待开始
- * 进度改为 0%」，uniform 适用于 done→任意目标）；手改 doneDate 不反写 status。
+ * 状态联动由 @gmind/shared applyStatusRules 唯一实现：0%=todo、1～99%=doing、
+ * 100%=done，blocked 保留当前进度；普通完成默认保留所有子进度。
  */
 export function setNodeTask(
   doc: Y.Doc,
@@ -687,7 +680,6 @@ export function setNodeTask(
   origin: WriteOrigin = ORIGIN_USER,
   canvasId?: string,
 ): void {
-  // —— 校验（先于事务；任一违规即抛，零变更）——
   if (patch.status !== undefined && !(TASK_STATUSES as readonly string[]).includes(patch.status)) {
     throw new GmindCoreError(
       'TASK_INVALID_STATUS',
@@ -722,12 +714,9 @@ export function setNodeTask(
         );
       }
     }
-    owners = [...new Set(patch.owners)]; // 去重保序（存储口径：唯一用户ID 集）
-    if (owners.length > MAX_TASK_OWNERS) {
-      throw new GmindCoreError(
-        'TASK_INVALID_OWNERS',
-        `负责人最多 ${MAX_TASK_OWNERS} 人（去重后），请精简后重试`,
-      );
+    owners = [...new Set(patch.owners)];
+    if (owners.length > 1) {
+      throw new GmindCoreError('TASK_INVALID_OWNERS', '总负责人只能有一人，请改用 setTaskOwner 重新选择');
     }
   }
   for (const key of ['startDate', 'dueDate', 'doneDate'] as const) {
@@ -742,65 +731,68 @@ export function setNodeTask(
   }
 
   const node = requireAliveNode(doc, id, canvasId);
-
-  // —— 状态联动（@gmind/shared 唯一实现）：before 取当前归一化任务快照。 ——
   const current = getNode(doc, id, canvasId)!.task;
-  const before: DeriveNode = { id, parentId: null, title: '', task: current };
-  const linked = applyStatusRules(before, owners === undefined ? { ...patch } : { ...patch, owners });
-  if (linked.owners === undefined && owners !== undefined) linked.owners = owners; // 去重结果随写
-
-  // 空 patch（且联动无注入）＝零变更：不开事务直接返回。
-  const definedKeys = (Object.keys(linked) as (keyof TaskPatch)[]).filter((k) => linked[k] !== undefined);
-  if (definedKeys.length === 0) return;
-
-  // 同值守卫（M7c-E4，需求方 #4）：linked 与当前归一化任务逐字段比较，全同＝零变更
-  // 不开事务——覆盖「重复点同一状态/同日期重复提交」等幂等操作（含 applyStatusRules
-  // 联动注入后的字段：已处 done 态再点「已完成」时注入的 doneDate/progress 与现值
-  // 相同，同样在此收敛）。owners 按去重保序数组比较；日期 undefined/null 归一
-  // （写入侧 null=删键、读取侧缺键=null，二者等价）。
-  const same = definedKeys.every((k) => {
-    const nv = linked[k];
-    if (k === 'owners') {
-      return JSON.stringify(nv ?? []) === JSON.stringify(current.owners);
+  const restoringSnapshot = origin === 'restore' && patch.doneDate !== undefined;
+  if (!restoringSnapshot && current.autoProgress === true && patch.autoProgress === undefined &&
+    (patch.status === 'done' || patch.progress === 100)) {
+    throw new GmindCoreError('TASK_INVALID_STATUS', '自动汇总父任务由子任务进度决定，请完成子任务而不是手动完成父任务');
+  }
+  if (!restoringSnapshot) {
+    const reopening = (current.status === 'done' || current.progress === 100) &&
+      patch.status !== undefined && patch.status !== 'done';
+    if (reopening && patch.progress === undefined) {
+      throw new GmindCoreError('TASK_INVALID_PROGRESS', '重新打开已完成任务必须选择 0-99 的新进度，请先选择进度');
     }
-    return (nv ?? null) === (current[k] ?? null);
-  });
-  if (same) return;
-
-  // —— done 门禁（人员进度列，需求方 2026-10-11 裁定）：标 done 要求所有人员进度列
-  // 条目 100% 且标准负责人进度 100%；空列不参与（不拖后腿）。判定一律用写入前
-  // 当前值——applyStatusRules 会把 done 联动 progress 注入 100，不能拿 linked 当
-  // 「负责人已完成」的依据；undo 走 Yjs 层不经过本入口，撤销不受门禁约束。 ——
-  if (linked.status === 'done') {
-    const entries = assigneeEntriesOf(doc, id, canvasId);
-    const unfinished = entries.filter((e) => e.progress !== 100);
-    if (unfinished.length > 0) {
-      const byCol = new Map<string, { colName: string; count: number }>();
-      for (const e of unfinished) {
-        const rec = byCol.get(e.colId) ?? { colName: e.colName, count: 0 };
-        rec.count += 1;
-        byCol.set(e.colId, rec);
-      }
-      const detail = [...byCol.values()].map((c) => `「${c.colName}」列还有 ${c.count} 人`).join('、');
-      throw new GmindCoreError(
-        'TASK_DONE_GATE_BLOCKED',
-        `${detail}进度未达 100%，请相关人员先更新进度，全部完成后再标记任务完成`,
-      );
+    if (reopening && patch.progress === 100) {
+      throw new GmindCoreError('TASK_INVALID_PROGRESS', '重新打开任务的新进度必须是 0-99，请勿再次使用完成值');
     }
-    const ownersNow = linked.owners ?? current.owners;
-    if (ownersNow.length > 0 && current.progress < 100) {
-      throw new GmindCoreError(
-        'TASK_DONE_GATE_BLOCKED',
-        '负责人进度未达 100%，请负责人先更新进度，全部完成后再标记任务完成',
-      );
+    if (reopening && patch.status === 'doing' && patch.progress === 0) {
+      throw new GmindCoreError('TASK_INVALID_PROGRESS', '重新打开为进行中必须选择 1-99 的进度，请先选择进度');
+    }
+    if (patch.status === 'doing' && patch.progress === undefined && current.progress === 0) {
+      throw new GmindCoreError('TASK_INVALID_PROGRESS', '从 0% 改为进行中必须选择 1-99 的进度，请先选择进度');
+    }
+    if (patch.status === 'doing' && patch.progress === 0) {
+      throw new GmindCoreError('TASK_INVALID_PROGRESS', '进行中任务的进度必须是 1-99，请先选择有效进度');
     }
   }
 
+  const before: DeriveNode = { id, parentId: null, title: '', task: current };
+  const explicitDoneDate = patch.doneDate;
+  const ruleInput = { ...patch };
+  delete ruleInput.owners;
+  delete ruleInput.doneDate;
+  const linked = applyStatusRules(
+    before,
+    restoringSnapshot ? { ...ruleInput, doneDate: explicitDoneDate } : ruleInput,
+  );
+  // 开关自动汇总时携带的 progress 只是当前汇总值缓存，不是用户主动完成任务；
+  // 不写状态或完成日期。自动父的对外状态/日期由 shared 派生函数负责。
+  if (patch.autoProgress !== undefined && patch.status === undefined && patch.doneDate === undefined) {
+    delete linked.status;
+    delete linked.doneDate;
+  }
+  if (!restoringSnapshot && explicitDoneDate !== undefined &&
+    linked.status !== 'todo' && linked.status !== 'doing' && linked.status !== 'blocked') {
+    linked.doneDate = explicitDoneDate;
+  }
+  const nextOwnerId = owners === undefined ? undefined : (owners[0] ?? null);
+  const ownerChanged = nextOwnerId !== undefined && nextOwnerId !== current.ownerId;
+  const ownerWrite = nextOwnerId !== undefined && (ownerChanged || current.owners.length > 0);
+  const definedKeys = (Object.keys(linked) as (keyof TaskPatch)[]).filter((k) => linked[k] !== undefined);
+  if (definedKeys.length === 0 && !ownerWrite) return;
+  const same = definedKeys.every((k) => (linked[k] ?? null) === (current[k] ?? null));
+  if (same && !ownerWrite) return;
+
+  // 普通完成入口默认 preserve-subprogress：不改 ownerProgress 或任何人员子进度。
   withTransaction(doc, origin, () => {
     writeTaskPatch(node, linked);
-    // 进度徽章全量联动（需求方 2026-10-10）：凡写入 progress（含状态联动注入的
-    // 100/0）同事务同步进度档位徽章——有任务进度的节点恒有进度徽章
-    // （progressStageOf 对 0-100 整数恒有落位）。
+    if (ownerWrite) {
+      const task = taskMapOf(node);
+      task.set('ownerId', nextOwnerId);
+      task.delete('owners');
+      if (ownerChanged) task.delete('ownerProgress');
+    }
     if (linked.progress !== undefined) {
       const stage = progressStageOf(linked.progress);
       if (stage !== null) iconsMapOf(node).set('progress', Y.Array.from([stage]));
@@ -824,13 +816,62 @@ function writeTaskPatch(node: Y.Map<unknown>, patch: TaskPatch): void {
   if (patch.status !== undefined) task.set('status', patch.status);
   if (patch.progress !== undefined) task.set('progress', patch.progress);
   if (patch.autoProgress !== undefined) task.set('autoProgress', patch.autoProgress);
-  if (patch.owners !== undefined) task.set('owners', patch.owners);
   for (const key of ['startDate', 'dueDate', 'doneDate'] as const) {
     const v = patch[key];
     if (v === undefined) continue;
     if (v === null) task.delete(key);
     else task.set(key, v);
   }
+}
+
+function assertOwnerId(ownerId: string | null): void {
+  if (ownerId !== null && (typeof ownerId !== 'string' || ownerId.length < TASK_OWNER_MIN_LENGTH || ownerId.length > TASK_OWNER_MAX_LENGTH)) {
+    throw new GmindCoreError('TASK_INVALID_OWNERS', '总负责人标识非法，请重新选择成员');
+  }
+}
+
+/** 设置唯一总负责人。负责人实际变化时清除旧 ownerProgress，总 progress 不动；
+ *  同事务删除旧 owners，避免读侧回退到已失效的旧负责人。 */
+export function setTaskOwner(
+  doc: Y.Doc,
+  id: string,
+  ownerId: string | null,
+  origin: WriteOrigin = ORIGIN_USER,
+  canvasId?: string,
+): void {
+  assertOwnerId(ownerId);
+  const node = requireAliveNode(doc, id, canvasId);
+  const current = getNode(doc, id, canvasId)!.task;
+  if (current.ownerId === ownerId && current.owners.length === 0) return;
+  const changed = current.ownerId !== ownerId;
+  withTransaction(doc, origin, () => {
+    const task = taskMapOf(node);
+    task.set('ownerId', ownerId);
+    task.delete('owners');
+    if (changed) task.delete('ownerProgress');
+  });
+}
+
+/** 设置总负责人的可选执行子进度；只写 ownerProgress，不改任务总进度或状态。 */
+export function setOwnerProgress(
+  doc: Y.Doc,
+  id: string,
+  progress: number,
+  origin: WriteOrigin = ORIGIN_USER,
+  canvasId?: string,
+): void {
+  if (!Number.isInteger(progress) || progress < 0 || progress > 100) {
+    throw new GmindCoreError('TASK_INVALID_PROGRESS', '负责人子进度必须是 0-100 的整数，请调整后重试');
+  }
+  const node = requireAliveNode(doc, id, canvasId);
+  const current = getNode(doc, id, canvasId)!.task;
+  if (current.ownerId === null) {
+    throw new GmindCoreError('TASK_INVALID_OWNERS', '尚未设置总负责人，请先选择负责人再填写子进度');
+  }
+  if (current.ownerProgress === progress) return;
+  withTransaction(doc, origin, () => {
+    taskMapOf(node).set('ownerProgress', progress);
+  });
 }
 
 // ══ 表格自定义列（doc 级 schema + 节点 custom 值）════════════════════════════
@@ -1156,16 +1197,98 @@ function ensureCustomMap(node: Y.Map<unknown>): Y.Map<unknown> {
   return custom as Y.Map<unknown>;
 }
 
+type AssigneeValues = Record<string, { progress: number; weight?: number }>;
+
+function requireAssigneeColumn(doc: Y.Doc, colId: string): void {
+  const col = canonicalCustomColumns(doc.getMap('meta').get('customColumns')).find((c) => c.id === colId);
+  if (!col) {
+    throw new GmindCoreError('CUSTOM_FIELD_UNKNOWN_COL', `列 ${colId} 不存在或已删除，请刷新表格后重试`);
+  }
+  if (col.type !== 'assignee') {
+    throw new GmindCoreError('CUSTOM_FIELD_INVALID_VALUE', '目标列不是人员列，请选择人员列后重试');
+  }
+}
+
+function assertAssigneeUserId(userId: string): void {
+  if (typeof userId !== 'string' || userId.length < TASK_OWNER_MIN_LENGTH || userId.length > TASK_OWNER_MAX_LENGTH) {
+    throw new GmindCoreError('CUSTOM_FIELD_INVALID_VALUE', '人员列的成员标识非法，请重新选择成员');
+  }
+}
+
+function assigneeValuesOf(doc: Y.Doc, id: string, colId: string, canvasId?: string): AssigneeValues {
+  const raw = getNode(doc, id, canvasId)?.custom?.[colId];
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return {};
+  const out: AssigneeValues = {};
+  for (const [user, value] of Object.entries(raw as Record<string, unknown>)) {
+    const norm = typeof value === 'number' ? { progress: value } : (value as { progress?: unknown; weight?: unknown } | null);
+    if (typeof norm?.progress !== 'number') continue;
+    const weight = norm.weight;
+    out[user] = {
+      progress: norm.progress,
+      ...(typeof weight === 'number' && weight > 0 ? { weight } : {}),
+    };
+  }
+  return out;
+}
+
+function sameAssigneeValue(a: { progress: number; weight?: number } | undefined, b: { progress: number; weight?: number } | undefined): boolean {
+  return a?.progress === b?.progress && a?.weight === b?.weight;
+}
+
+function assigneeDiffers(current: AssigneeValues, next: AssigneeValues, removeMissing: boolean): boolean {
+  if (Object.entries(next).some(([user, value]) => !sameAssigneeValue(current[user], value))) return true;
+  return removeMissing && Object.keys(current).some((user) => !(user in next));
+}
+
+/** 在已开启的事务内应用逐用户 diff。旧普通对象先归一为 col→user→字段的嵌套
+ *  Y.Map，再只写目标用户的目标字段；本函数不做校验、不抛错。 */
+function writeAssigneeValues(
+  node: Y.Map<unknown>,
+  colId: string,
+  current: AssigneeValues,
+  next: AssigneeValues,
+  removeMissing: boolean,
+): void {
+  const custom = ensureCustomMap(node);
+  let column = custom.get(colId);
+  if (!(column instanceof Y.Map)) {
+    const normalized = new Y.Map<unknown>();
+    for (const [user, value] of Object.entries(current)) {
+      const entry = new Y.Map<unknown>();
+      entry.set('progress', value.progress);
+      if (value.weight !== undefined) entry.set('weight', value.weight);
+      normalized.set(user, entry);
+    }
+    custom.set(colId, normalized);
+    column = normalized;
+  }
+  const columnMap = column as Y.Map<unknown>;
+  if (removeMissing) {
+    for (const user of Object.keys(current)) {
+      if (!(user in next)) columnMap.delete(user);
+    }
+  }
+  for (const [user, value] of Object.entries(next)) {
+    if (sameAssigneeValue(current[user], value)) continue;
+    let entry = columnMap.get(user);
+    if (!(entry instanceof Y.Map)) {
+      entry = new Y.Map<unknown>();
+      columnMap.set(user, entry);
+    }
+    const entryMap = entry as Y.Map<unknown>;
+    entryMap.set('progress', value.progress);
+    if (value.weight === undefined) entryMap.delete('weight');
+    else entryMap.set('weight', value.weight);
+  }
+}
+
 /**
  * 设置节点自定义列值（右键任务设置/表格单元格的写入口）。
  *
- * 数据口径：node.custom Y.Map<colId, 值>——text=string / person=用户ID string[]
- * （复用任务 owners 校验：每项 1-64 字符、写入前去重保序、≤MAX_TASK_OWNERS）/
- * progress=0-100 整数 / date='YYYY-MM-DD' / assignee=Record<用户ID, 0-100 整数>
- * （人员进度列，需求方 2026-10-11 裁定）。**整值替换**（person/assignee 无元素级
- * toggle，与 task.owners 的 LWW 存储口径一致）；custom 值本是普通字段不参与任务
- * 派生——**例外：assignee 列**——其条目并入 effectiveProgress 聚合（derive 经调用方
- * 拉平的 customAssignees 传入）并受 setNodeTask done 门禁校验（见该函数内注）。
+ * 数据口径：node.custom Y.Map<colId, 值>——text=string / progress=0-100 整数 /
+ * date='YYYY-MM-DD' / assignee=嵌套 Y.Map<用户ID, Y.Map<progress|weight>>。
+ * assignee 入参仍兼容普通对象与旧 number 简形，写入前归一并按用户、按字段 diff；
+ * 不再整列覆盖，人员子进度不影响任务总进度，也不再参与完成门禁。
  *
  * 校验（先于事务，拒绝即零变更）：colId 在当前 schema 中（防御读取坏 meta 按 []
  * 处理），否则 CUSTOM_FIELD_UNKNOWN_COL；值按列类型校验（checkCustomValue 单源），
@@ -1197,6 +1320,17 @@ export function setCustomField(
 
   const node = requireAliveNode(doc, id, canvasId);
 
+  if (col.type === 'assignee' && value !== null && value !== undefined) {
+    const currentValues = assigneeValuesOf(doc, id, colId, canvasId);
+    const nextValues = check.value as AssigneeValues;
+    if (!assigneeDiffers(currentValues, nextValues, true) &&
+      ((customMapOf(node)?.has(colId) ?? false) || Object.keys(nextValues).length > 0)) return;
+    withTransaction(doc, origin, () => {
+      writeAssigneeValues(node, colId, currentValues, nextValues, true);
+    });
+    return;
+  }
+
   // 同值守卫（deep equal，零事务）：现值含 Y 类型（crafted 状态）时守卫不命中，
   // 走写入路径以整形（ensureCustomMap/整值覆写）。
   const current = customMapOf(node)?.get(colId);
@@ -1217,6 +1351,125 @@ export function setCustomField(
       return;
     }
     ensureCustomMap(node).set(colId, check.value);
+  });
+}
+
+/** 新增人员条目，默认子进度 0；已有成员幂等，不覆盖其当前进度。 */
+export function addAssignee(
+  doc: Y.Doc,
+  id: string,
+  colId: string,
+  userId: string,
+  origin: WriteOrigin = ORIGIN_USER,
+  canvasId?: string,
+): void {
+  requireAssigneeColumn(doc, colId);
+  assertAssigneeUserId(userId);
+  const node = requireAliveNode(doc, id, canvasId);
+  const current = assigneeValuesOf(doc, id, colId, canvasId);
+  if (current[userId]) return;
+  if (Object.keys(current).length >= MAX_TASK_OWNERS) {
+    throw new GmindCoreError('CUSTOM_FIELD_INVALID_VALUE', `人员列最多 ${MAX_TASK_OWNERS} 人，请精简后重试`);
+  }
+  const next = { ...current, [userId]: { progress: 0 } };
+  withTransaction(doc, origin, () => {
+    writeAssigneeValues(node, colId, current, next, false);
+  });
+}
+
+/** 只移除目标用户条目，不动同列其他成员。 */
+export function removeAssignee(
+  doc: Y.Doc,
+  id: string,
+  colId: string,
+  userId: string,
+  origin: WriteOrigin = ORIGIN_USER,
+  canvasId?: string,
+): void {
+  requireAssigneeColumn(doc, colId);
+  assertAssigneeUserId(userId);
+  const node = requireAliveNode(doc, id, canvasId);
+  const current = assigneeValuesOf(doc, id, colId, canvasId);
+  if (!current[userId]) return;
+  const next = { ...current };
+  delete next[userId];
+  withTransaction(doc, origin, () => {
+    writeAssigneeValues(node, colId, current, next, true);
+  });
+}
+
+/** 只写目标用户的 progress 字段，不整列覆盖，也不改任务总进度。 */
+export function setAssigneeProgress(
+  doc: Y.Doc,
+  id: string,
+  colId: string,
+  userId: string,
+  progress: number,
+  origin: WriteOrigin = ORIGIN_USER,
+  canvasId?: string,
+): void {
+  requireAssigneeColumn(doc, colId);
+  assertAssigneeUserId(userId);
+  if (!Number.isInteger(progress) || progress < 0 || progress > 100) {
+    throw new GmindCoreError('CUSTOM_FIELD_INVALID_VALUE', '人员子进度必须是 0-100 的整数，请调整后重试');
+  }
+  const node = requireAliveNode(doc, id, canvasId);
+  const current = assigneeValuesOf(doc, id, colId, canvasId);
+  if (!current[userId]) {
+    throw new GmindCoreError('CUSTOM_FIELD_INVALID_VALUE', '该成员尚未加入人员列，请先添加成员再更新进度');
+  }
+  if (current[userId]!.progress === progress) return;
+  const next = { ...current, [userId]: { ...current[userId]!, progress } };
+  withTransaction(doc, origin, () => {
+    writeAssigneeValues(node, colId, current, next, false);
+  });
+}
+
+export type TaskCompletionMode = 'preserve-subprogress' | 'complete-subprogress';
+
+/** 原子完成总任务；普通入口与显式命令共享 preserve 默认。complete 模式只补全预检
+ *  返回的生效子进度，所有校验和逐用户 diff 均在事务前完成。 */
+export function completeNodeTask(
+  doc: Y.Doc,
+  id: string,
+  mode: TaskCompletionMode,
+  origin: WriteOrigin = ORIGIN_USER,
+  canvasId?: string,
+): void {
+  if (mode !== 'preserve-subprogress' && mode !== 'complete-subprogress') {
+    throw new GmindCoreError('TASK_INVALID_STATUS', '任务完成模式非法，请重新选择保留或同步子进度');
+  }
+  const node = requireAliveNode(doc, id, canvasId);
+  const current = getNode(doc, id, canvasId)!.task;
+  if (current.autoProgress === true) {
+    throw new GmindCoreError('TASK_INVALID_STATUS', '自动汇总父任务由子任务进度决定，请完成子任务而不是手动完成父任务');
+  }
+  const unfinished = unfinishedTaskProgressOf(doc, id, canvasId);
+  const byCol = new Map<string, { current: AssigneeValues; next: AssigneeValues }>();
+  if (mode === 'complete-subprogress') {
+    for (const entry of unfinished.assignees) {
+      let diff = byCol.get(entry.colId);
+      if (!diff) {
+        const values = assigneeValuesOf(doc, id, entry.colId, canvasId);
+        diff = { current: values, next: { ...values } };
+        byCol.set(entry.colId, diff);
+      }
+      diff.next[entry.user] = { ...diff.next[entry.user]!, progress: 100 };
+    }
+  }
+  const ownerWillChange = mode === 'complete-subprogress' && unfinished.owner !== null;
+  const taskWillChange = current.status !== 'done' || current.progress !== 100 || current.doneDate === null;
+  const assigneesWillChange = [...byCol.values()].some((diff) => assigneeDiffers(diff.current, diff.next, false));
+  if (!taskWillChange && !ownerWillChange && !assigneesWillChange) return;
+  const doneDate = current.doneDate ?? todayStr();
+  withTransaction(doc, origin, () => {
+    const task = taskMapOf(node);
+    task.set('status', 'done');
+    task.set('progress', 100);
+    task.set('doneDate', doneDate);
+    iconsMapOf(node).set('progress', Y.Array.from(['done']));
+    if (ownerWillChange) task.set('ownerProgress', 100);
+    for (const [colId, diff] of byCol) writeAssigneeValues(node, colId, diff.current, diff.next, false);
   });
 }
 

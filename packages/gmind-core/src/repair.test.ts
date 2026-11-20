@@ -1287,3 +1287,32 @@ describe('sharedFilter 归一（meta.sharedFilter，轮 2 筛选双层化）', (
     expect(normalizeTree(doc)).toBe(0);
   });
 });
+
+// ══ 人员列逐条目收敛（Task 2，2026-11-20「不静默丢人」）：progress 非法的坏条目
+// 单独剔除，其余成员条目保留；不再整列删除。 ══
+
+describe('planCustomRepair 人员列逐条目剔除（Task 2）', () => {
+  it('嵌套人员列：坏条目删除、好条目与 weight 保留', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [{ text: 'A' }] });
+    const aId = [...canvasNodesMap(doc).entries()].find(([, n]) => (n as Y.Map<unknown>).get('text') === 'A')![0];
+    doc.transact(() => {
+      doc.getMap('meta').set('customColumns', [{ id: 'col-a', name: '执行人', type: 'assignee' }]);
+      const node = canvasNodesMap(doc).get(aId) as Y.Map<unknown>;
+      const custom = new Y.Map<unknown>();
+      const column = new Y.Map<unknown>();
+      const bad = new Y.Map<unknown>();
+      bad.set('progress', 150); // 值域外 → 剔除
+      const good = new Y.Map<unknown>();
+      good.set('progress', 40);
+      good.set('weight', 2);
+      column.set('u-bad', bad);
+      column.set('u-good', good);
+      custom.set('col-a', column);
+      node.set('custom', custom);
+    }, ORIGIN_SYSTEM);
+    normalizeTree(doc);
+    const column = getNode(doc, aId)!.custom!['col-a'] as Record<string, unknown>;
+    expect(Object.keys(column)).toEqual(['u-good']); // 坏条目删、好条目不丢
+    expect(column['u-good']).toEqual({ progress: 40, weight: 2 });
+  });
+});

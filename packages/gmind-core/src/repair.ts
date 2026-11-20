@@ -501,6 +501,7 @@ export function normalizeTree(doc: Y.Doc, origin: string = ORIGIN_SYSTEM): numbe
     (customPlan.columns !== null ? 1 : 0) +
     customPlan.dropCustom.length +
     customPlan.dropFields.length +
+    customPlan.dropAssigneeEntries.length +
     (customPlan.sharedFilter !== null ? 1 : 0);
 
   // ── 规则⑩：画布序与墓碑收敛（仅新形状）。
@@ -1173,6 +1174,9 @@ export interface CustomRepairPlan {
   dropCustom: Array<{ canvasId: string; nodeId: string }>;
   /** 节点 custom 内需删除的列键（schema 外孤儿 / 值形状与列类型不符）。 */
   dropFields: Array<{ canvasId: string; nodeId: string; colId: string }>;
+  /** 人员列内需删除的单个成员条目（Task 2，2026-11-20：progress 非法的坏条目
+   *  逐条目剔除，不再整列删除——「不静默丢人」纪律，其余成员条目保留）。 */
+  dropAssigneeEntries: Array<{ canvasId: string; nodeId: string; colId: string; user: string }>;
   /** meta.sharedFilter 修复：'delete' = 非对象删键；SharedFilter = 规范化替换
    *  （含 keyword 键剔除）；null = 无需修复（键缺失或已合法）。轮 2 筛选双层化。 */
   sharedFilter: 'delete' | SharedFilter | null;
@@ -1201,7 +1205,7 @@ export interface CustomRepairPlan {
  * 收敛同一「外部状态直入入口（docFromState / 第 64 写摊销清扫 / 安全阀）」口径。
  */
 export function planCustomRepair(doc: Y.Doc): CustomRepairPlan {
-  const plan: CustomRepairPlan = { columns: null, dropCustom: [], dropFields: [], sharedFilter: null };
+  const plan: CustomRepairPlan = { columns: null, dropCustom: [], dropFields: [], dropAssigneeEntries: [], sharedFilter: null };
   const meta = doc.getMap('meta');
   const rawColumns = meta.get('customColumns');
   let schema: CustomColumnDef[];
@@ -1222,7 +1226,33 @@ export function planCustomRepair(doc: Y.Doc): CustomRepairPlan {
       }
       for (const colId of [...custom.keys()]) {
         const type = typeById.get(colId);
-        if (type === undefined || !isValidCustomValueOfType(type, custom.get(colId))) {
+        if (type === undefined) {
+          plan.dropFields.push({ canvasId: scope.canvasId, nodeId, colId });
+          continue;
+        }
+        // 人员列逐条目校验（Task 2「不静默丢人」）：列值已是嵌套 Y.Map（装载迁移
+        // 后的合法形状）时，progress 非法的坏条目单独剔除，其余成员保留；整列形状
+        // 与类型不符（旧形状未迁移/其他类型值坏）仍走整列删除（装载迁移已覆盖正常
+        // 路径，此处是外部直入 crafted 异常的兜底口径，与既有「只删不改」一致）。
+        if (type === 'assignee' && custom.get(colId) instanceof Y.Map) {
+          const column = custom.get(colId) as Y.Map<unknown>;
+          for (const [user, entry] of [...column.entries()]) {
+            const ok = entry instanceof Y.Map
+              ? typeof entry.get('progress') === 'number' &&
+                Number.isInteger(entry.get('progress') as number) &&
+                (entry.get('progress') as number) >= 0 &&
+                (entry.get('progress') as number) <= 100
+              : typeof entry === 'number' &&
+                Number.isInteger(entry) &&
+                entry >= 0 &&
+                entry <= 100;
+            if (!ok) {
+              plan.dropAssigneeEntries.push({ canvasId: scope.canvasId, nodeId, colId, user });
+            }
+          }
+          continue;
+        }
+        if (!isValidCustomValueOfType(type, custom.get(colId))) {
           plan.dropFields.push({ canvasId: scope.canvasId, nodeId, colId });
         }
       }
@@ -1262,6 +1292,12 @@ export function applyCustomRepair(doc: Y.Doc, plan: CustomRepairPlan): void {
   for (const drop of plan.dropFields) {
     const custom = scopedNodesMap(doc, drop.canvasId)?.get(drop.nodeId)?.get('custom');
     if (custom instanceof Y.Map) custom.delete(drop.colId);
+  }
+  // 人员列坏条目逐条目剔除（Task 2「不静默丢人」）：只删目标成员，其余条目不动。
+  for (const drop of plan.dropAssigneeEntries) {
+    const column = scopedNodesMap(doc, drop.canvasId)?.get(drop.nodeId)?.get('custom') as Y.Map<unknown> | undefined;
+    const entries = column instanceof Y.Map ? (column.get(drop.colId) as Y.Map<unknown> | undefined) : undefined;
+    if (entries instanceof Y.Map) entries.delete(drop.user);
   }
 }
 
