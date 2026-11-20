@@ -1,9 +1,9 @@
-import { ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
 import type * as Y from 'yjs';
 import type { TodoItem, TodoOwnerRow, TodoPage, TodoReport, TodoStats } from '@gmind/shared';
-import { docFromState, docToState, getNode, setNodeTask } from '@gmind/core';
+import { completeNodeTask, countAliveReachable, docFromState, docToState, getNode, isLegacyTaskModelState, setNodeTask } from '@gmind/core';
 import { CollabService } from '../collab/collab.service';
 import { FilesService } from '../files/files.service';
 import { NotifyService } from '../notify/notify.service';
@@ -130,15 +130,18 @@ export class TodosService {
   async patchTask(me: string, fileId: string, nodeId: string, input: { progress?: number; done?: boolean }): Promise<void> {
     // viewer 只读（2026-10-28 P0）：任务进度/完成直改要求 editor 角色
     if (!(await this.files.canWrite(me, fileId))) throw new NotFoundException('文件不存在');
-    // done=true 两步走：core 闸门要求进度 100 才可标完成（TASK_DONE_GATE_BLOCKED），
-    // 勾选完成语义=自动补 100% 再置 done；两种路径（活跃/DB）共用同一应用函数。
+    // 完成统一走 core 原子命令，默认保留人员子进度；重开必须同时给出明确的新进度。
     const applyPatch = (doc: Y.Doc): void => {
+      if (getNode(doc, nodeId)?.task.autoProgress === true) {
+        throw new BadRequestException('自动汇总父任务由子任务进度决定，请进入文件更新子任务');
+      }
       if (input.done === true) {
-        const cur = getNode(doc, nodeId)?.task;
-        if (cur && cur.progress < 100) setNodeTask(doc, nodeId, { progress: 100 });
-        setNodeTask(doc, nodeId, { status: 'done' });
+        completeNodeTask(doc, nodeId, 'preserve-subprogress');
       } else if (input.done === false) {
-        setNodeTask(doc, nodeId, { status: 'todo' });
+        if (input.progress === undefined || !Number.isInteger(input.progress) || input.progress < 0 || input.progress > 99) {
+          throw new BadRequestException('重新打开任务需要同时选择 0～99% 的新进度，请设置进度后重试');
+        }
+        setNodeTask(doc, nodeId, { status: input.progress === 0 ? 'todo' : 'doing', progress: input.progress });
       } else {
         setNodeTask(doc, nodeId, { progress: input.progress ?? 0 });
       }
@@ -156,10 +159,15 @@ export class TodosService {
       return;
     }
     if (!file.docState || file.docState.length === 0) throw new NotFoundException('任务不存在，请刷新后重试');
-    const doc = docFromState(new Uint8Array(file.docState));
+    const raw = new Uint8Array(file.docState);
+    const doc = docFromState(raw);
     const snap = getNode(doc, nodeId);
     if (!snap || snap.deleted) throw new NotFoundException('任务不存在，请刷新后重试');
     applyPatch(doc);
+    // 离线直改同样可能触发旧任务模型迁移；回写前使用同一版本存档入口。
+    if (isLegacyTaskModelState(raw)) {
+      await this.collab.insertPreTaskModel(fileId, raw, countAliveReachable(doc));
+    }
     // 服务端直写：无活跃会话，不存在内存/DB 漂移；updated_at 由 ORM update 语义推进（写序自洽）
     await this.files.persistServerDocState(fileId, docToState(doc));
     await this.taskIndex.rebuildForFile(fileId, doc);

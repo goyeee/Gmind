@@ -13,7 +13,8 @@ export class VersionEntity {
   @Column({ type: 'char', length: 26, name: 'file_id' }) fileId!: string;
   @Column({ type: 'int', name: 'node_count' }) nodeCount!: number;
   @Column({ type: 'char', length: 26, name: 'created_by', nullable: true }) createdBy!: string | null;
-  @Column({ type: 'enum', enum: ['auto', 'manual', 'pre_restore'], name: 'type' }) type!: 'auto' | 'manual' | 'pre_restore';
+  @Column({ type: 'enum', enum: ['auto', 'manual', 'pre_restore', 'pre_task_model'], name: 'type' })
+  type!: 'auto' | 'manual' | 'pre_restore' | 'pre_task_model';
   @Column({ type: 'longblob', name: 'state' }) state!: Buffer;
   @Column({ type: 'datetime', precision: 3, name: 'created_at' }) createdAt!: Date;
   // 恢复溯源（FR-VER-002）：恢复自某版本时指向来源版本行 id；auto/manual 为 null

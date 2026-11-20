@@ -16,7 +16,7 @@ import { VersionEntity } from './version.entity';
 export interface VersionListItem {
   id: string;
   nodeCount: number;
-  type: 'auto' | 'manual' | 'pre_restore';
+  type: 'auto' | 'manual' | 'pre_restore' | 'pre_task_model';
   createdAt: string;
   createdByName: string | null;
   restoredFrom: string | null;

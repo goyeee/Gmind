@@ -136,6 +136,20 @@ describe('跨文件待办（/api/todos）', () => {
     expect(doneCount).toBe(1);
   });
 
+  it('重开必须带明确新进度：缺省 400；done=false+40% 后恢复 doing/40', async () => {
+    const missing = await authed(memberToken, 'patch', `/api/todos/${fileId}/${taskANodeId}`).send({ done: false });
+    expect(missing.status).toBe(400);
+    expect(missing.body.message).toContain('选择 0～99% 的新进度');
+    const patch = await authed(memberToken, 'patch', `/api/todos/${fileId}/${taskANodeId}`).send({ done: false, progress: 40 });
+    expect(patch.status).toBe(200);
+    const content = await authed(adminToken, 'get', `/api/files/${fileId}`);
+    expect(content.status, JSON.stringify(content.body)).toBe(200);
+    expect(content.body).toHaveProperty('docState');
+    const { docFromState } = await import('@gmind/core');
+    const doc = docFromState(new Uint8Array(Buffer.from((content.body as { docState: string }).docState, 'base64')));
+    expect(getNode(doc, taskANodeId)?.task).toMatchObject({ status: 'doing', progress: 40 });
+  });
+
   it('remind：提醒负责人 → 站内通知落库；提醒自己 409', async () => {
     const res = await authed(memberToken, 'post', '/api/todos/remind').send({
       fileId,

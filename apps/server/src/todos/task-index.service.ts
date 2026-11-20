@@ -17,15 +17,25 @@ import { TaskIndexEntity } from './task-index.entity';
  * - 遍历：root 起经 childIds 深搜（NodeSnapshot.childIds，core 读 API）。
  */
 
-/** 判定节点是否「用户显式设过任务」（与缺省值比较的单点口径）。 */
+/** 判定节点是否「用户显式设过任务」（与缺省值比较的单点口径）。
+ *  2026-11-20 任务模型：新写入只有 ownerId（owners 键删除）——负责人判定改
+ *  ownerId 优先、owners 兼容回退（不提前破坏待办索引，参与人收录留第二轮）。 */
 function isExplicitTask(t: {
   status: string;
   progress: number;
+  ownerId: string | null;
   owners: string[];
   startDate: string | null;
   dueDate: string | null;
 }): boolean {
-  return t.owners.length > 0 || t.startDate !== null || t.dueDate !== null || t.status !== 'todo' || t.progress > 0;
+  return (
+    t.ownerId !== null ||
+    t.owners.length > 0 ||
+    t.startDate !== null ||
+    t.dueDate !== null ||
+    t.status !== 'todo' ||
+    t.progress > 0
+  );
 }
 
 @Injectable()
@@ -61,7 +71,7 @@ export class TaskIndexService {
         row.fileId = fileId;
         row.nodeId = snap.id;
         row.text = snap.text.slice(0, 255);
-        row.ownersCsv = t.owners.join(',');
+        row.ownersCsv = t.ownerId !== null ? t.ownerId : t.owners.join(',');
         row.status = t.status;
         row.progress = t.progress;
         row.startDate = t.startDate;
@@ -73,7 +83,6 @@ export class TaskIndexService {
     };
     walk('root');
 
-    console.log(`[probe] rebuild file=${fileId} rows=${rows.length} nodes=${nodeRows.length}`);
     await this.dataSource.transaction(async (em) => {
       await em.delete(TaskIndexEntity, { fileId });
       await em.delete(NodeIndexEntity, { fileId });

@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { AddressInfo } from 'node:net';
 import { WebSocket as WsImpl } from 'ws';
+import * as Y from 'yjs';
 import { HocuspocusProvider } from '@hocuspocus/provider';
 import type { HocuspocusProviderConfiguration } from '@hocuspocus/provider';
 import { DataSource } from 'typeorm';
@@ -219,6 +220,92 @@ describe('版本快照（collab 网关 FR-VER-001）+ 90 天清理', () => {
     const rows = await versionRows(fileD.id);
     expect(rows).toHaveLength(1);
     expect(rows[0].createdAt.getTime()).toBeGreaterThan(Date.now() - 90 * DAY_MS);
+  });
+
+  it('任务模型迁移：旧 docState 首次装载建 pre_task_model 版本并回写新模型；重复装载不重复建（Task 2）', async () => {
+    // 旧任务模型 docState：多负责人 task（装载通道直写口径，2026-11-20 裁定）
+    const legacyDoc = createTemplateDoc({ title: '任务模型迁移', children: [{ text: '迁移节点' }] });
+    legacyDoc.transact(() => {
+      legacyDoc.getMap('meta').set('customColumns', [{ id: 'col-a', name: '执行人', type: 'assignee' }]);
+      const node = [...canvasNodesMap(legacyDoc).values()].find((n) => n.get('text') === '迁移节点')!;
+      const task = new Y.Map<unknown>();
+      task.set('status', 'doing');
+      task.set('progress', 50);
+      task.set('owners', ['u1', 'u2']);
+      node.set('task', task);
+    }, 'system');
+    const legacyState = Buffer.from(docToState(legacyDoc));
+    const filesMod = await import('../src/files/files.service');
+    const files = app.get(filesMod.FilesService);
+    const file = await files.createForUser(userId, { title: '任务模型迁移文件', state: legacyState });
+
+    // 首次装载：pre_task_model 版本（旧模型原字节）+ docState 回写新模型
+    const client = await connectSynced(file.id, token);
+    await until(async () => {
+      const rows = await versionRows(file.id);
+      return rows.some((r) => r.type === 'pre_task_model');
+    }, 'pre_task_model version created');
+    const pre = (await versionRows(file.id)).find((r) => r.type === 'pre_task_model')!;
+    // 版本内容断言用探针直读（docFromState 会自动跑迁移管线，读不到旧形状）
+    const probe = new Y.Doc();
+    Y.applyUpdate(probe, new Uint8Array(pre.state));
+    const legacyNode = [...canvasNodesMap(probe).values()].find((n) => n.get('text') === '迁移节点')!;
+    expect(((legacyNode.get('task') as Y.Map<unknown>).get('owners') as string[])).toEqual(['u1', 'u2']); // 版本存的是旧模型原状（可恢复）
+    probe.destroy();
+
+    const rowAfter = await dataSource.getRepository(FileEntity).findOneByOrFail({ id: file.id });
+    const migrated = docFromState(new Uint8Array(rowAfter.docState as Buffer));
+    const mNode = [...canvasNodesMap(migrated).values()].find((n) => n.get('text') === '迁移节点')!;
+    expect((mNode.get('task') as Y.Map<unknown>).get('ownerId')).toBe('u1');
+    expect((mNode.get('task') as Y.Map<unknown>).has('owners')).toBe(false);
+    await until(async () => {
+      const rows = (await dataSource.query('SELECT owners_csv FROM task_index WHERE file_id = ?', [file.id])) as Array<{ owners_csv: string }>;
+      return rows[0]?.owners_csv === 'u1';
+    }, 'task index rebuilt after migration');
+
+    // 第二客户端装载（重复同步）：docState 已是新模型 → 判定不命中，不重复建版本
+    await connectSynced(file.id, token);
+    await new Promise((r) => setTimeout(r, 400));
+    expect((await versionRows(file.id)).filter((r) => r.type === 'pre_task_model')).toHaveLength(1);
+    await closeClient(client);
+  });
+
+  it('离线待办直改触发旧模型迁移时，同样保留 pre_task_model 原状版本', async () => {
+    const legacyDoc = createTemplateDoc({ title: '离线迁移', children: [{ text: '旧任务' }] });
+    let nodeId = '';
+    legacyDoc.transact(() => {
+      for (const [id, node] of canvasNodesMap(legacyDoc).entries()) {
+        if (node.get('text') !== '旧任务') continue;
+        nodeId = id;
+        const task = new Y.Map<unknown>();
+        task.set('status', 'doing');
+        task.set('progress', 50);
+        task.set('owners', [userId]);
+        node.set('task', task);
+      }
+    }, 'system');
+    const legacyState = Buffer.from(docToState(legacyDoc));
+    const filesMod = await import('../src/files/files.service');
+    const file = await app.get(filesMod.FilesService).createForUser(userId, { title: '离线迁移文件', state: legacyState });
+
+    const res = await request(`http://127.0.0.1:${port}`)
+      .patch(`/api/todos/${file.id}/${nodeId}`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ progress: 70 });
+    expect(res.status).toBe(200);
+    const versions = await versionRows(file.id);
+    expect(versions.filter((v) => v.type === 'pre_task_model')).toHaveLength(1);
+    await Promise.all([
+      collab.insertPreTaskModel(file.id, new Uint8Array(legacyState), 2),
+      collab.insertPreTaskModel(file.id, new Uint8Array(legacyState), 2),
+    ]);
+    expect((await versionRows(file.id)).filter((v) => v.type === 'pre_task_model')).toHaveLength(1);
+    legacyDoc.transact(() => {
+      const node = canvasNodesMap(legacyDoc).get(nodeId) as Y.Map<unknown>;
+      (node.get('task') as Y.Map<unknown>).set('progress', 60);
+    });
+    await collab.insertPreTaskModel(file.id, docToState(legacyDoc), 2);
+    expect((await versionRows(file.id)).filter((v) => v.type === 'pre_task_model')).toHaveLength(2);
   });
 });
 

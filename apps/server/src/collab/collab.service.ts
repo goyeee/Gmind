@@ -18,6 +18,7 @@ import {
   createTemplateDoc,
   docFromState,
   docToState,
+  isLegacyTaskModelState,
   getLastEditor,
 } from '@gmind/core';
 import { env } from '../config/env';
@@ -297,15 +298,74 @@ export class CollabService implements OnApplicationShutdown {
 
   /** 加载：恢复 doc_state（docFromState 入口全量 normalize）或空模板（仅含 root，
    *  中心节点文本固定「中心主题」——2026-10-09 裁定，仅新建空白文档；meta.title
-   *  仍为文件标题，文件标题与中心节点文本自此解耦）。 */
+   *  仍为文件标题，文件标题与中心节点文本自此解耦）。
+   *  任务模型迁移钩子（Task 2，2026-11-20 裁定）：docState 为旧任务模型（task.owners
+   *  多负责人/人员列旧形状）时，先以原字节建 'pre_task_model' 版本存档，装载产物
+   *  （迁移已自动完成）随即回写 doc_state——重复装载/第二个客户端装载时 docState
+   *  已是新模型，判定不命中，预迁移版本不重复建。写回走原生 SQL 不翻 updated_at
+   *  （files.thumb_svg 同款纪律，saveLoop 写序守卫不受扰）。 */
   private async loadDocument(data: onLoadDocumentPayload): Promise<void> {
     const file = await this.files.findOne({ where: { id: data.documentName, deletedAt: IsNull() } });
     if (!file) throw new Error('permission-denied'); // 鉴权后文件被删的竞态：拒绝加载
-    const source =
-      file.docState && file.docState.length > 0
-        ? docFromState(new Uint8Array(file.docState))
-        : createTemplateDoc({ title: file.title, children: [], rootText: '中心主题' });
+    if (file.docState && file.docState.length > 0) {
+      const raw = new Uint8Array(file.docState);
+      if (isLegacyTaskModelState(raw)) {
+        const source = docFromState(raw); // 装载通道内自动完成任务模型迁移
+        await this.insertPreTaskModel(file.id, raw, countAliveReachable(source));
+        // 乐观并发：仅当数据库仍是装载前读到的旧字节时才覆盖。若期间离线待办直改
+        // 已保存新模型状态，跳过回写（其自身已带迁移+备份），以先落库者为准。
+        const result = await this.files.query(
+          'UPDATE files SET doc_state = ? WHERE id = ? AND doc_state = ?',
+          [Buffer.from(docToState(source)), file.id, Buffer.from(raw)],
+        );
+        if (result.affectedRows > 0) {
+          // 原生 SQL 不经过保存钩子；迁移后立即重建，避免旧负责人/状态留在待办索引。
+          this.taskIndex.rebuildInBackground(file.id, source);
+        }
+        Y.applyUpdate(data.document, docToState(source));
+        return;
+      }
+      Y.applyUpdate(data.document, docToState(docFromState(raw)));
+      return;
+    }
+    const source = createTemplateDoc({ title: file.title, children: [], rootText: '中心主题' });
     Y.applyUpdate(data.document, docToState(source));
+  }
+
+  /** 任务模型迁移前原状存档：state=旧 docState 原字节（非装载产物）。
+   * 按原始字节判重；不同旧状态各自保留，同状态并发经数据库命名锁串行化。 */
+  async insertPreTaskModel(fileId: string, raw: Uint8Array, nodeCount: number): Promise<void> {
+    const lockName = `gmind:pre-task-model:${fileId}`;
+    await this.versions.manager.transaction(async (em) => {
+      // GET_LOCK=1 才继续；锁与数据写入同事务连接，提交后才释放——并发连接要么
+      // 读到已提交的重复备份，要么在拿到锁后重新查重，保证不重复插入。
+      const rows = (await em.query('SELECT GET_LOCK(?, 5) AS acquired', [lockName])) as Array<{ acquired: number | string | Buffer }>;
+      const acquired = Number(rows[0]?.acquired ?? 0);
+      if (acquired !== 1) {
+        throw new Error(`pre_task_model 锁获取失败（file=${fileId}），请重试`);
+      }
+      try {
+        // 同一文件可先后导入不同的旧状态：只有原始字节完全相同的备份才判重。
+        const rows = await em.find(VersionEntity, {
+          where: { fileId, type: 'pre_task_model' },
+          select: ['id', 'state'],
+        });
+        const bytes = Buffer.from(raw);
+        if (rows.some((row) => Buffer.from(row.state).equals(bytes))) return;
+        const row = this.versions.create();
+        row.id = ulid();
+        row.fileId = fileId;
+        row.nodeCount = nodeCount;
+        row.createdBy = null; // 迁移是系统行为，无操作者
+        row.type = 'pre_task_model';
+        row.state = bytes;
+        row.createdAt = new Date();
+        row.restoredFrom = null;
+        await em.save(row);
+      } finally {
+        await em.query('SELECT RELEASE_LOCK(?)', [lockName]);
+      }
+    });
   }
 
   /** 配额告警（advisory）：越线边缘触发一次广播；回落限内后再次越线可再告警。
