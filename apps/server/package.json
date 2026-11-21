@@ -8,6 +8,7 @@
     "test": "vitest run --passWithNoTests",
     "test:e2e": "vitest run --config vitest.e2e.config.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "cleanup:e2e": "tsx scripts/cleanup-e2e-data.ts",
     "migration:run": "tsx node_modules/typeorm/cli.js migration:run -d src/database/data-source.ts",
     "migration:revert": "tsx node_modules/typeorm/cli.js migration:revert -d src/database/data-source.ts"
   },

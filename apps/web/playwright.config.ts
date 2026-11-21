@@ -7,6 +7,9 @@ const baseURL = `http://localhost:${webPort}`;
 
 export default defineConfig({
   testDir: './e2e',
+  // 整套结束（含失败）后自动清理本轮测试数据（AGENTS 六.6）：调 server 判据化脚本，
+  // 只删 e2e 判据命中的账号/文件/编号分组部门，不误伤真实账号；见 e2e/global-teardown.ts。
+  globalTeardown: './e2e/global-teardown.ts',
   timeout: 30000,
   use: {
     baseURL,
