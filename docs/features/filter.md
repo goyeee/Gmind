@@ -1,6 +1,6 @@
-# 筛选（双层化 + 负责人多选）
+# 筛选（双层化 + 负责人多选 + 参与人多选）
 
-> 最后核对：2026-11-16（负责人收敛追加 + 轮 2 筛选双层化）
+> 最后核对：2026-11-21（第二轮追加参与人多选 + 负责人收敛 + 轮 2 筛选双层化）
 
 ## ① 这是什么
 
@@ -25,6 +25,9 @@
 10. **负责人多选**：筛选弹窗「更多条件·人员」点按钮弹出 checkbox 列表（我/成员A/成员B…），勾多人=负责人「任一命中」筛选。只有这一个负责人入口——字段条件行里没有「负责人」字段（2026-11-16 需求方拍板收敛，此前两处独立状态会导致两组标签且求值 AND 筛不出东西）。
 11. **负责人 + 分组/部门 = AND 收窄**：选了负责人多人 + 又选了分组/部门时，命中负责人的归属还要在所选分组/部门里。例如：负责人=[我, 张三] + 分组=前端组 → 只显示「我或张三负责 且 归属前端组」的任务。
 12. **弹窗外点关闭**：筛选弹窗打开后，点击弹窗外任意位置（含画布空白）立即收起（`MapFilterBar.tsx` document pointerdown 监听，2026-11-18 由 mousedown 改 pointerdown——画布会抑制 mousedown，旧实现在画布上收不起）。
+13. **参与人多选（第二轮 2026-11-21）**：筛选弹窗「参与人」区块（负责人区块同款 checkbox 列表，`MapFilterBar.tsx:159` participantCandidates 入参），候选 = 文档内人员列成员 ∪ 在线成员。勾选后按「这条任务的**任意人员列条目**包含所选成员」命中——跨全部人员列合并判定，不挑列（脑图淡化 `EditorPage.tsx:3712`、表格行 `TaskTable.tsx:594`、待办抽屉计数同口径）。激活后出标签「参与人：…」，与负责人/分组/部门是 AND 收窄。
+14. **参与人随公共筛选发布**：「对所有人生效」把参与人勾选一起写入文件（`SharedFilter.participants`，`packages/gmind-core/src/constants.ts` canonicalSharedFilter 归一：非数组→[]、非字符串剔除、去重保首）。**旧版本客户端**打开时会把这个键当未知字段归一丢弃——全员同版本部署无影响；混版本期间发布的参与人条件可能被旧端回写覆盖（已知限制，登记于 spec §5.4）。
+15. **「未分配」语义不变**：仅未分配仍指「没有总负责人」的任务，与参与人无关（有参与人但无负责人的任务仍算未分配）。
 
 ## ③ 特殊情况
 
@@ -36,12 +39,21 @@
 | 只输了搜索关键词没动其他条件 | 视为「无个人调整」——队友发布时你的结构化条件会跟随，关键词保留 |
 | 文档数据里公共筛选字段损坏（非对象形状） | 读取时归一为「无公共筛选」，不抛错不崩溃 |
 | 公共筛选里混入 keyword 键（异常数据） | 读取时剔除该键，不影响其他字段 |
+| 公共筛选缺 participants 键（旧客户端写入） | 读取归一为空数组，不报错（`read.test.ts` participants 归一用例钉死） |
+| 文档内人员列成员不是协作者（如导入带来的 id） | 参与人候选仍显示（昵称兜底「成员+id 片段」），勾选照常生效 |
 
 ## ④ 待需求方确认
 
 - 无（三轮 AskUserQuestion 已拍定全部口径）。
 
 ## ⑤ 最后核对
+
+2026-11-21，代码核对（第二轮参与人多选追加）：
+- `packages/gmind-core/src/constants.ts` — SharedFilter.participants 字段 + canonicalSharedFilter 归一（read.test.ts/repair.test.ts 用例钉死）
+- `apps/web/src/editor/MapFilterBar.tsx:44/69/94/108/123/159` — Filters/SharedFilter 双向映射含 participants；参与人多选块（`map-filter-participants`）
+- `apps/web/src/editor/TaskTable.tsx:593` — 表格 matchNode 参与人判定（跨列合并）
+- `apps/web/src/pages/EditorPage.tsx:717`（候选 memo）/`:736`（待办抽屉计数）/`:3723`（脑图淡化判定）
+- `apps/web/e2e/filter-two-tier.e2e.spec.ts:254` — 参与人筛选 e2e（多选块/命中/发布落盘）
 
 2026-11-18，代码核对（外点关闭修复）：
 - `apps/web/src/editor/MapFilterBar.tsx` — 弹窗外点监听 mousedown → pointerdown（画布空白点击可收起）
