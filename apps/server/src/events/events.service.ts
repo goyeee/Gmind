@@ -15,12 +15,14 @@ import { EventEntity } from './event.entity';
 export class EventsService {
   constructor(@InjectRepository(EventEntity) private readonly repo: Repository<EventEntity>) {}
 
-  /** 落一行埋点事件；payload 为任意可 JSON 化对象（缺省 null）。 */
+  /** 落一行埋点事件；payload 为任意可 JSON 化对象（缺省 null）。第二轮起任务动态
+   *  payload 使用 shared 的 TaskEventPayload 具名接口（无索引签名），参数放宽为
+   *  object——序列化行为不变。 */
   async record(
     type: string,
     fileId: string | null,
     userId: string | null,
-    payload?: Record<string, unknown>,
+    payload?: object,
   ): Promise<void> {
     const row = this.repo.create();
     row.type = type;

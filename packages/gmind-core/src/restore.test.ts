@@ -535,6 +535,7 @@ describe('restore：sharedFilter 不随版本回滚（meta.title 排除先例扩
     // target：写入与快照不同的公共筛选
     setSharedFilter(base, {
       owners: ['u-target'],
+      participants: [],
       statuses: [],
       overdueOnly: true,
       unassignedOnly: false,
@@ -545,6 +546,7 @@ describe('restore：sharedFilter 不随版本回滚（meta.title 排除先例扩
     // snapshot：写入不同的公共筛选（先于快照）
     setSharedFilter(snap, {
       owners: ['u-snap'],
+      participants: [],
       statuses: ['done'],
       overdueOnly: false,
       unassignedOnly: true,
@@ -556,6 +558,7 @@ describe('restore：sharedFilter 不随版本回滚（meta.title 排除先例扩
     expect(r).toEqual({ deleted: 0, created: 0, moved: 0, updated: 0 }); // 无节点变化
     expect(getMeta(base).sharedFilter).toEqual({
       owners: ['u-target'],
+      participants: [],
       statuses: [],
       overdueOnly: true,
       unassignedOnly: false,

@@ -8,7 +8,7 @@ describe('init migration', () => {
     await ds.initialize();
     // drop 清单必须随新迁移的表同步（组织管理批次 A：org_* 三表；漏加会导致
     // Org 迁移重放 "already exists" 半途失败且账本不记——2026-10-24 实证）
-    await ds.query('DROP TABLE IF EXISTS users, folders, files, file_collaborators, file_stars, share_links, invites, comments, notifications, events, versions, org_user_groups, org_groups, org_departments, task_index, node_index');
+    await ds.query('DROP TABLE IF EXISTS users, folders, files, file_collaborators, file_stars, share_links, invites, comments, notifications, events, versions, org_user_groups, org_groups, org_departments, task_index, task_participant, todo_scope_config, node_index');
     // 同时清掉 typeorm 的迁移记录表，保证每次 e2e 都真正重放 init migration
     await ds.query('DROP TABLE IF EXISTS migrations');
     await ds.runMigrations();
@@ -25,7 +25,7 @@ describe('init migration', () => {
     expect(tables).toEqual([
       'comments', 'events', 'file_collaborators', 'file_stars', 'files',
       'folders', 'invites', 'node_index', 'notifications', 'org_departments', 'org_groups',
-      'org_user_groups', 'share_links', 'task_index', 'users', 'versions',
+      'org_user_groups', 'share_links', 'task_index', 'task_participant', 'todo_scope_config', 'users', 'versions',
     ]);
     const cs: { TABLE_NAME: string; TABLE_COLLATION: string }[] = await ds.query(
       `SELECT TABLE_NAME, TABLE_COLLATION FROM information_schema.TABLES

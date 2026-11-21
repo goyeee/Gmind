@@ -1265,6 +1265,7 @@ describe('sharedFilter 归一（meta.sharedFilter，轮 2 筛选双层化）', (
     expect(normalizeTree(doc)).toBe(1);
     expect(doc.getMap('meta').get('sharedFilter')).toEqual({
       owners: ['u1'],
+      participants: [],
       statuses: [],
       overdueOnly: false,
       unassignedOnly: false,
@@ -1277,6 +1278,7 @@ describe('sharedFilter 归一（meta.sharedFilter，轮 2 筛选双层化）', (
     // 合法零替换
     rawSetSharedFilter(doc, {
       owners: ['u1'],
+      participants: [],
       statuses: ['doing'],
       overdueOnly: true,
       unassignedOnly: false,

@@ -29,6 +29,8 @@ const makeService = (
     versions as Repository<VersionEntity>,
     // 任务索引桩（批次 B）：storeDocument 尾部的 fire-and-forget 重建在单测不触达
     { rebuildInBackground: () => undefined } as never,
+    // 事件桩（第二轮）：任务动态声明盖章落库在单测不触达
+    { record: async () => undefined } as never,
   );
 
 const makePayload = () => {

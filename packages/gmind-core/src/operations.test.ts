@@ -2140,12 +2140,33 @@ describe('多画布写路径（Task 4：写层画布化）', () => {
 // ---------------------------------------------------------------------------
 
 describe('setSharedFilter（公共筛选持久态整体写入，轮 2 筛选双层化）', () => {
-  const EMPTY_SHARED = { owners: [], statuses: [], overdueOnly: false, unassignedOnly: false, conds: [], grp: '', dept: '' };
+  // 第二轮新增 participants 字段：canonical 恒产出（缺省 []）
+  const EMPTY_SHARED = { owners: [], participants: [], statuses: [], overdueOnly: false, unassignedOnly: false, conds: [], grp: '', dept: '' };
 
   it('写入读回：结构化条件一次落盘，getMeta 防御读回 canonical 形状', () => {
     const doc = createTemplateDoc({ title: 'T', children: [] });
-    setSharedFilter(doc, { owners: ['u1'], statuses: ['doing'], overdueOnly: true, unassignedOnly: false, conds: [], grp: 'g1', dept: '' });
-    expect(getMeta(doc).sharedFilter).toEqual({ owners: ['u1'], statuses: ['doing'], overdueOnly: true, unassignedOnly: false, conds: [], grp: 'g1', dept: '' });
+    setSharedFilter(doc, { owners: ['u1'], participants: ['u2'], statuses: ['doing'], overdueOnly: true, unassignedOnly: false, conds: [], grp: 'g1', dept: '' });
+    expect(getMeta(doc).sharedFilter).toEqual({ owners: ['u1'], participants: ['u2'], statuses: ['doing'], overdueOnly: true, unassignedOnly: false, conds: [], grp: 'g1', dept: '' });
+  });
+
+  it('participants 归一（第二轮）：非数组→[]、非字符串元素剔除、去重保首；缺键读回 []', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [] });
+    setSharedFilter(doc, {
+      ...EMPTY_SHARED,
+      participants: ['u1', 'u1', 42 as never, null as never, 'u2'],
+    });
+    expect(getMeta(doc).sharedFilter?.participants).toEqual(['u1', 'u2']);
+    // 旧文档无 participants 键（旧客户端写入）：防御读回 []
+    doc.getMap('meta').set('sharedFilter', {
+      owners: ['u1'],
+      statuses: [],
+      overdueOnly: false,
+      unassignedOnly: false,
+      conds: [],
+      grp: '',
+      dept: '',
+    });
+    expect(getMeta(doc).sharedFilter?.participants).toEqual([]);
   });
 
   it('setSharedFilter(doc, null) → sharedFilter 键删除，getMeta 读回 undefined', () => {

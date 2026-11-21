@@ -731,6 +731,42 @@ describe('sharedFilter 防御读取（getMeta.sharedFilter，轮 2 筛选双层�
     });
     expect(getMeta(doc).sharedFilter).toEqual({
       owners: [],
+      participants: [],
+      statuses: [],
+      overdueOnly: false,
+      unassignedOnly: false,
+      conds: [],
+      grp: '',
+      dept: '',
+    });
+  });
+
+  it('participants 归一（第二轮）：非数组→[]、非字符串/重复元素剔除；缺键读回 []（旧客户端写入兼容）', () => {
+    const doc = createTemplateDoc({ title: 'T', children: [] });
+    doc.getMap('meta').set('sharedFilter', {
+      owners: ['u1'],
+      participants: ['u1', 'u1', 42, null, 'u2'],
+      statuses: [],
+      overdueOnly: false,
+      unassignedOnly: false,
+      conds: [],
+      grp: '',
+      dept: '',
+    });
+    expect(getMeta(doc).sharedFilter?.participants).toEqual(['u1', 'u2']);
+    // 旧文档无 participants 键（旧客户端写入）：防御读回 []，其余字段不变
+    doc.getMap('meta').set('sharedFilter', {
+      owners: ['u1'],
+      statuses: [],
+      overdueOnly: false,
+      unassignedOnly: false,
+      conds: [],
+      grp: '',
+      dept: '',
+    });
+    expect(getMeta(doc).sharedFilter).toEqual({
+      owners: ['u1'],
+      participants: [],
       statuses: [],
       overdueOnly: false,
       unassignedOnly: false,
@@ -753,6 +789,7 @@ describe('sharedFilter 防御读取（getMeta.sharedFilter，轮 2 筛选双层�
     });
     expect(getMeta(doc).sharedFilter).toEqual({
       owners: ['u1', 'u2'],
+      participants: [],
       statuses: ['doing', 'done'],
       overdueOnly: true,
       unassignedOnly: false,

@@ -12,8 +12,19 @@ import { z } from 'zod';
  */
 export const MAX_EVENT_PAYLOAD_CHARS = 10_000;
 
+/** task_* 事件类型保留给盖章通道（第二轮 spec §5.5）：任务动态的 actor/taskText 必须
+ *  以连接身份盖章/服务端现值覆盖——开放上报端点无连接文档上下文可盖章，放行会让
+ *  ActivityPanel/待办动态流的 payload 渲染重新暴露给任意伪造文案（M6 Task 8 裁定的
+ *  「不渲染 payload」前提即遥测通道开放面）。校验放在 schema 层：type 以 task_ 开头
+ *  一律 400，由 ZodExceptionFilter 统一呈现。 */
+const RESERVED_TASK_TYPE_RE = /^task_/;
+
 export const trackEventSchema = z.object({
-  type: z.string().min(1, 'type 不能为空').max(64),
+  type: z
+    .string()
+    .min(1, 'type 不能为空')
+    .max(64)
+    .refine((t) => !RESERVED_TASK_TYPE_RE.test(t), { message: 'task_ 开头的事件类型由协同网关盖章产生，不接受直接上报' }),
   fileId: z.string().max(64).optional(),
   payload: z
     .record(z.unknown())

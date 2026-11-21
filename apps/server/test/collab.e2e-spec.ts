@@ -15,6 +15,7 @@ import {
   docFromState,
   docToState,
   getNode,
+  setNodeTask,
   setText,
 } from '@gmind/core';
 import { createTestApp } from './support/app-test';
@@ -300,5 +301,189 @@ describe('Hocuspocus 协同网关（鉴权/加载/同步/持久化/配额告警�
     expect(warningCounts().length).toBe(before);
 
     await closeClient(client);
+  });
+});
+
+/**
+ * 任务动态声明（第二轮 2026-11-21，spec §5.5）：
+ * - stateless 声明盖章：actor 一律取连接身份（payload 声明值覆盖）、taskText/canvasId
+ *   服务端文档现值覆盖、related 收敛；不转发给其他连接（无实时弹幕）；
+ * - readOnly 连接声明丢弃；形状非法/超长/伪造 nodeId 丢弃；开放上报端点 task_* 400；
+ * - todos PATCH 直记 task_* 事件（操作者=登录身份）；
+ * - 自动父派生变化由索引重建 diff 补记（操作者=最后修改者近似，derived 标记）。
+ */
+describe('任务动态声明（stateless 盖章）', () => {
+  let app: import('@nestjs/common').INestApplication;
+  let port: number;
+  let ownerToken: string;
+  let ownerId: string;
+  let editorToken: string;
+  let editorId: string;
+  let viewerToken: string;
+  let viewerId: string;
+  let fileId: string;
+  let taskId: string;
+  let autoPId: string;
+  let autoChildId: string;
+  let dataSource: DataSource;
+
+  const authed = (token: string, method: 'get' | 'post' | 'patch' | 'put', url: string) =>
+    request(app.getHttpServer())
+      [method](url)
+      .set('Authorization', `Bearer ${token}`);
+
+  beforeAll(async () => {
+    app = await createTestApp();
+    const httpServer = app.getHttpServer();
+    app.get(CollabService).attach(httpServer);
+    await new Promise<void>((resolve) => {
+      httpServer.listen(0, '127.0.0.1', () => resolve());
+    });
+    port = (httpServer.address() as AddressInfo).port;
+    dataSource = app.get(DataSource);
+    const owner = await createAccount(app);
+    ownerToken = owner.token;
+    ownerId = owner.id;
+    const editor = await createAccount(app);
+    editorToken = editor.token;
+    editorId = editor.id;
+    const viewer = await createAccount(app);
+    viewerToken = viewer.token;
+    viewerId = viewer.id;
+
+    // 文件：任务A（owner=editor）+ 自动父（autoProgress，owner=owner，子任务 40）
+    const doc = createTemplateDoc({ title: '动态文件', children: [{ text: '任务A' }, { text: '自动父' }] });
+    const kids = getNode(doc, 'root')!.childIds;
+    taskId = kids[0]!;
+    autoPId = kids[1]!;
+    setNodeTask(doc, taskId, { owners: [editorId], status: 'doing', progress: 40 });
+    setNodeTask(doc, autoPId, { owners: [ownerId], autoProgress: true, progress: 40 });
+    autoChildId = addChild(doc, autoPId, { text: '子任务' });
+    setNodeTask(doc, autoChildId, { owners: [ownerId], status: 'doing', progress: 40 });
+    const created = await authed(ownerToken, 'post', '/api/files').send({ title: '动态文件' });
+    fileId = (created.body as { id: string }).id;
+    await authed(ownerToken, 'post', `/api/files/${fileId}/collaborators`).send({
+      members: [
+        { userId: editorId, role: 'editor' },
+        { userId: viewerId, role: 'viewer' },
+      ],
+    });
+    const put = await authed(ownerToken, 'put', `/api/files/${fileId}/doc-state`).send({
+      docState: Buffer.from(docToState(doc)).toString('base64'),
+    });
+    expect(put.status).toBe(200);
+  });
+
+  afterAll(async () => {
+    for (const c of [...openClients]) await closeClient(c);
+    await app.close();
+  });
+
+  it('盖章：连接身份覆盖声明 actor，taskText/related 服务端现值，且不广播', async () => {
+    const owner = await connectSynced(port, fileId, ownerToken);
+    const editor = await connectSynced(port, fileId, editorToken);
+    // editor 连接不收到 task-event 转发（拦截不广播）；filter-updated 等其他类型不受影响
+    const received: string[] = [];
+    editor.provider.on('stateless', ({ payload }: { payload: string }) => received.push(payload));
+
+    const decl = {
+      kind: 'task_progress',
+      nodeId: taskId,
+      actor: 'FAKE-OPERATOR-ID-NOT-TRUSTED', // 伪造操作者——必须被连接身份覆盖
+      before: { status: 'doing', progress: 40 },
+      after: { status: 'doing', progress: 80 },
+    };
+    editor.provider.sendStateless(JSON.stringify({ type: 'task-event', decl }));
+    await until(async () => {
+      const rows = (await dataSource.query('SELECT type, user_id, payload FROM events WHERE file_id = ? AND type LIKE ?', [fileId, 'task\\_%'])) as Array<{ type: string; user_id: string; payload: string }>;
+      return rows.length > 0;
+    }, 'task event recorded');
+    const rows = (await dataSource.query('SELECT type, user_id, payload FROM events WHERE file_id = ? AND type LIKE ?', [fileId, 'task\\_%'])) as Array<{ type: string; user_id: string; payload: string }>;
+    const row = rows.find((r) => r.type === 'task_progress')!;
+    expect(row.user_id).toBe(editorId); // 盖章：非伪造值
+    const payload = JSON.parse(row.payload) as { actor: string; taskText: string; related: string[]; after: { progress: number } };
+    expect(payload.actor).toBe(editorId);
+    expect(payload.taskText).toBe('任务A'); // 服务端文档现值覆盖
+    expect(payload.related).toEqual([editorId]); // related=任务A 的 owner（editorId）∪ 声明对象 ∪ actor
+    expect(await new Promise<number>((r) => setTimeout(() => r(received.filter((p) => p.includes('task-event')).length), 300))).toBe(0);
+
+    await closeClient(owner);
+    await closeClient(editor);
+  });
+
+  it('viewer 连接声明丢弃；形状非法/伪造 nodeId 丢弃；开放上报 task_* 400', async () => {
+    const viewer = await connectSynced(port, fileId, viewerToken);
+    const before = ((await dataSource.query('SELECT COUNT(*) AS n FROM events WHERE file_id = ? AND type LIKE ?', [fileId, 'task\\_%'])) as Array<{ n: number }>)[0]!.n;
+    viewer.provider.sendStateless(JSON.stringify({ type: 'task-event', decl: { kind: 'task_progress', nodeId: taskId, after: { status: 'doing', progress: 90 } } }));
+    const bad = JSON.stringify({ type: 'task-event', decl: { kind: 'task_progress', nodeId: 'NO-SUCH-NODE', after: { status: 'doing', progress: 90 } } });
+    const editor = await connectSynced(port, fileId, editorToken);
+    editor.provider.sendStateless(bad);
+    editor.provider.sendStateless('not-json-at-all');
+    editor.provider.sendStateless(JSON.stringify({ type: 'task-event', decl: { kind: 'task_bogus_kind', nodeId: taskId } }));
+    // 伪造完成丢弃（评审 P2-1）：任务A 现值 progress=40（未完成），声明完成应被丢弃
+    editor.provider.sendStateless(JSON.stringify({ type: 'task-event', decl: { kind: 'task_complete', nodeId: taskId, after: { status: 'done', progress: 100 } } }));
+    await new Promise((r) => setTimeout(r, 400));
+    const after = ((await dataSource.query('SELECT COUNT(*) AS n FROM events WHERE file_id = ? AND type LIKE ?', [fileId, 'task\\_%'])) as Array<{ n: number }>)[0]!.n;
+    expect(Number(after)).toBe(Number(before)); // 无效声明 + 伪完成全部丢弃
+    // after 现值覆盖（真实流等价）：编辑器连接的内存文档写入（WS 同步到服务端内存
+    // doc——真实客户端写路径先于声明到达），再声明陈旧 after:40——盖章后应为 80
+    setNodeTask(editor.provider.document, taskId, { progress: 80 });
+    await new Promise((r) => setTimeout(r, 400)); // WS 同步先于声明到达（真实流序）
+    editor.provider.sendStateless(JSON.stringify({ type: 'task-event', decl: { kind: 'task_progress', nodeId: taskId, before: { status: 'doing', progress: 40 }, after: { status: 'doing', progress: 40 } } }));
+    await until(async () => {
+      const rows = (await dataSource.query("SELECT payload FROM events WHERE file_id = ? AND type = 'task_progress' ORDER BY created_at DESC LIMIT 1", [fileId])) as Array<{ payload: string }>;
+      const p = JSON.parse(rows[0]!.payload) as { after: { progress: number } };
+      return p.after.progress === 80;
+    }, 'after overwritten by server snapshot');
+
+    const reject = await authed(editorToken, 'post', '/api/events').send({ type: 'task_progress', fileId, payload: { taskText: '伪造' } });
+    expect(reject.status).toBe(400);
+    await closeClient(viewer);
+    await closeClient(editor);
+  });
+
+  it('todos PATCH 直记：完成 → task_complete（actor=登录身份）', async () => {
+    const patch = await authed(editorToken, 'patch', `/api/todos/${fileId}/${taskId}`).send({ progress: 80 });
+    expect(patch.status).toBe(200);
+    await until(async () => {
+      const rows = (await dataSource.query('SELECT type, user_id FROM events WHERE file_id = ? AND type = ?', [fileId, 'task_progress'])) as Array<{ type: string; user_id: string }>;
+      return rows.length > 0;
+    }, 'patch task_progress event');
+    const done = await authed(editorToken, 'patch', `/api/todos/${fileId}/${taskId}`).send({ done: true });
+    expect(done.status).toBe(200);
+    await until(async () => {
+      const rows = (await dataSource.query('SELECT user_id, payload FROM events WHERE file_id = ? AND type = ?', [fileId, 'task_complete'])) as Array<{ user_id: string; payload: string }>;
+      return rows.length > 0;
+    }, 'patch task_complete event');
+    const rows = (await dataSource.query('SELECT user_id, payload FROM events WHERE file_id = ? AND type = ?', [fileId, 'task_complete'])) as Array<{ user_id: string; payload: string }>;
+    expect(rows[0]!.user_id).toBe(editorId);
+    expect((JSON.parse(rows[0]!.payload) as { before: { progress: number }; after: { progress: number } }).after.progress).toBe(100);
+  });
+
+  it('自动父派生变化补记：子任务 40→80 后重建 diff 记 task_progress（derived）', async () => {
+    // 变更子任务进度 → PUT 落库 → 重建 → 自动父派生 40→60 补记
+    const content = await authed(ownerToken, 'get', `/api/files/${fileId}`);
+    const doc = docFromState(new Uint8Array(Buffer.from((content.body as { docState: string }).docState, 'base64')));
+    setNodeTask(doc, autoChildId, { progress: 80 });
+    const put = await authed(ownerToken, 'put', `/api/files/${fileId}/doc-state`).send({
+      docState: Buffer.from(docToState(doc)).toString('base64'),
+    });
+    expect(put.status).toBe(200);
+    await until(async () => {
+      const rows = (await dataSource.query('SELECT user_id, payload FROM events WHERE file_id = ? AND type = ?', [fileId, 'task_progress'])) as Array<{ user_id: string; payload: string }>;
+      return rows.some((r) => {
+        const p = JSON.parse(r.payload) as { derived?: boolean; before?: { progress: number }; after?: { progress: number }; actor?: string };
+        return p.derived === true && p.before?.progress === 40 && p.after?.progress === 80;
+      });
+    }, 'derived event');
+    const rows = (await dataSource.query('SELECT user_id, payload FROM events WHERE file_id = ? AND type = ?', [fileId, 'task_progress'])) as Array<{ user_id: string; payload: string }>;
+    const derivedRow = rows
+      .map((r) => ({ user_id: r.user_id, payload: JSON.parse(r.payload) as { derived?: boolean; before?: { progress: number }; after?: { progress: number } } }))
+      .find((r) => r.payload.derived === true)!;
+    expect(derivedRow.payload.before?.progress).toBe(40);
+    expect(derivedRow.payload.after?.progress).toBe(80);
+    // 操作者=触发重建的最后修改者（近似口径，登记）：PUT API 无 lastEditorUserId
+    // 标记 → 如实为 null（展示层兜底「系统」）
+    expect(derivedRow.user_id).toBeNull();
   });
 });

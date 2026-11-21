@@ -8,26 +8,33 @@ import type {
   onChangePayload,
   onAuthenticatePayload,
   onLoadDocumentPayload,
+  onStatelessPayload,
   onStoreDocumentPayload,
 } from '@hocuspocus/server';
 import * as Y from 'yjs';
 import { ulid } from 'ulid';
 import {
+  assigneeEntriesOf,
+  canvasIdOfNode,
   countAliveReachable,
   countAliveReachableAll,
   createTemplateDoc,
   docFromState,
   docToState,
+  getNode,
   isLegacyTaskModelState,
   getLastEditor,
 } from '@gmind/core';
+import type { TaskEventPayload } from '@gmind/shared';
 import { env } from '../config/env';
 import { MAX_DOC_NODES } from '@gmind/shared';
+import { EventsService } from '../events/events.service';
 import { FileCollaboratorEntity } from '../files/file-collaborator.entity';
 import { FileEntity } from '../files/file.entity';
 import { SessionService } from '../session/session.service';
 import { VersionEntity } from '../versions/version.entity';
 import { TaskIndexService } from '../todos/task-index.service';
+import { taskEventDeclSchema } from './task-event.schema';
 
 /** 协同 WebSocket 升级路由（挂在与 REST API 相同的 HTTP server 上）。 */
 export const COLLAB_WS_PATH = '/collab';
@@ -83,6 +90,7 @@ export class CollabService implements OnApplicationShutdown {
     @InjectRepository(FileCollaboratorEntity) private readonly collaborators: Repository<FileCollaboratorEntity>,
     @InjectRepository(VersionEntity) private readonly versions: Repository<VersionEntity>,
     @Inject(TaskIndexService) private readonly taskIndex: TaskIndexService,
+    @Inject(EventsService) private readonly events: EventsService,
   ) {
     this.hocuspocus = new Hocuspocus({
       quiet: true,
@@ -96,7 +104,11 @@ export class CollabService implements OnApplicationShutdown {
       // 给文档内所有在线连接（hocuspocus 默认不自动转发）。filter-updated 类型即
       // 公共筛选变更通知——viewer 的 doc 更新被 beforeHandleMessage 拦截，但 stateless
       // 是独立通道不受影响，因此 viewer 也能收到筛选变更通知。
+      // 第二轮（spec §5.5）：type='task-event' 的任务动态声明不转发——拦截后以连接
+      // 身份盖章落 events 表（不信任客户端声明的操作者；任务动态无实时弹幕需求，
+      // 仅在动态列表可见）。
       onStateless: async (data) => {
+        if (this.handleTaskEventDeclaration(data)) return;
         this.hocuspocus.documents
           .get(data.documentName)
           ?.broadcastStateless(data.payload);
@@ -199,6 +211,73 @@ export class CollabService implements OnApplicationShutdown {
    *  本单一入口（quota-exceeded/persisted 为网关内部路径，不经此处）。 */
   broadcastStateless(fileId: string, payload: string): void {
     this.hocuspocus.documents.get(fileId)?.broadcastStateless(payload);
+  }
+
+  /** 任务动态声明处理（第二轮 spec §5.5）：拦截 type='task-event' 的声明，命中即
+   *  盖章落库并返回 true（不再转发）。全部无效路径静默丢弃（旁路遥测，不打断编辑）：
+   *  - readOnly 连接（viewer/commenter 无任务写权限）→ 丢弃；
+   *  - payload 超 8KB / JSON 损坏 / 形状不符 → 丢弃；
+   *  - nodeId 不在本内存文档存活（伪造/过期声明）→ 丢弃。
+   *  盖章纪律：actor=connection.context.userId（payload 声明值一律覆盖）；
+   *  taskText/canvasId 取内存文档现值；related=声明值收敛 ∪ actor（操作者总能看到
+   *  自己操作的事件，user_id=me 条件已覆盖，此处冗余并入以防 payload 缺失）。 */
+  private handleTaskEventDeclaration(data: onStatelessPayload): boolean {
+    // 解析出 task-event 即视为「命中」：此后一切无效路径（超长/坏 JSON/形状不符/
+    // 伪 nodeId/readOnly）一律拦截不转发（评审 P2-5：命中即拦截语义统一）
+    if (data.payload.length > 8192) return data.payload.includes('task-event');
+    let parsed: unknown;
+    let isTaskEvent = false;
+    try {
+      const outer = JSON.parse(data.payload) as unknown;
+      if (outer !== null && typeof outer === 'object' && !Array.isArray(outer)) {
+        isTaskEvent = (outer as { type?: unknown }).type === 'task-event';
+        parsed = (outer as { decl?: unknown }).decl;
+      }
+    } catch {
+      return data.payload.includes('task-event');
+    }
+    if (!isTaskEvent) return false; // 其他类型：沿用既有广播
+    const context = data.connection?.context as { userId?: string; readOnly?: boolean } | undefined;
+    const actor = context?.userId;
+    if (!actor || context?.readOnly === true) return true; // 无效身份/readOnly：拦截不落库
+    const decl = taskEventDeclSchema.safeParse(parsed);
+    if (!decl.success) return true;
+    const d = decl.data;
+    const doc = data.document;
+    const canvasId = canvasIdOfNode(doc, d.nodeId);
+    const snap = canvasId !== null ? getNode(doc, d.nodeId, canvasId) : null;
+    if (!snap || snap.deleted) return true; // 无中生有的 nodeId：丢弃
+    // 伪造完成丢弃（评审 P2-1）：声明完成而文档现值未到 100——任务级事件以文档为准
+    if (d.kind === 'task_complete' && snap.task.progress < 100) return true;
+    const related = [
+      ...new Set([
+        ...(d.related ?? []),
+        ...(snap.task.ownerId !== null ? [snap.task.ownerId] : []),
+        ...assigneeEntriesOf(doc, d.nodeId, canvasId ?? undefined).map((e) => e.user),
+        actor,
+      ]),
+    ];
+    // after 以盖章瞬间的文档现值覆盖（评审 P2-1：数值面不信任客户端声明；快速连改
+    // 场景下「现值≈操作结果」，与重建补记的近似口径一致）。before 声明值无从校验，
+    // 保留（已知限制：before 可被有写权限者伪造为任意旧值，仅影响文案展示）。
+    const after = d.after ?? null;
+    const payload: TaskEventPayload = {
+      fileId: data.documentName,
+      canvasId,
+      nodeId: d.nodeId,
+      taskText: snap.text.slice(0, 255),
+      actor,
+      related,
+      before: d.before ?? null,
+      after: after !== null ? { status: snap.task.status, progress: snap.task.progress } : null,
+      ...(d.sub !== undefined ? { sub: d.sub } : {}),
+      ...(d.owner !== undefined ? { owner: d.owner } : {}),
+      ...(d.member !== undefined ? { member: d.member } : {}),
+    };
+    void this.events.record(d.kind, data.documentName, actor, payload).catch((err: unknown) => {
+      console.error(`[collab] 任务动态落库失败（file=${data.documentName}）`, err);
+    });
+    return true;
   }
 
   /** 角色变更即时更新目标连接的写闸；移除（role=null）立即断开并通知前端刷新身份。 */
@@ -325,7 +404,11 @@ export class CollabService implements OnApplicationShutdown {
         Y.applyUpdate(data.document, docToState(source));
         return;
       }
-      Y.applyUpdate(data.document, docToState(docFromState(raw)));
+      const source = docFromState(raw); // 装载通道内自动完成任务模型迁移（幂等）
+      Y.applyUpdate(data.document, docToState(source));
+      // 第二轮（spec §5.1）：存量旧口径索引行（canvas_id IS NULL）后台重建一次，
+      // 补齐画布/参与人/派生口径——文件打开即修复，未打开过的文件显示「未知画布」。
+      void this.taskIndex.rebuildIfStaleInBackground(data.documentName, source);
       return;
     }
     const source = createTemplateDoc({ title: file.title, children: [], rootText: '中心主题' });

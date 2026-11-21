@@ -494,6 +494,12 @@ export interface SharedFilterCond {
 export interface SharedFilter {
   /** 负责人 id 集（JSON 数组，非 Set——Yjs meta 只存 plain JSON）。 */
   owners: string[];
+  /**
+   * 参与人 id 集（第二轮 2026-11-21）：人员列条目跨全部 assignee 列任一命中即命中；
+   * 「未分配」语义不变（仍指无总负责人）。旧客户端 canonicalSharedFilter 不识别该键
+   * 会在归一时丢弃（已知限制，登记于 spec §5.4）。
+   */
+  participants: string[];
   /** 任务状态集（值域 TASK_STATUSES）。 */
   statuses: TaskStatus[];
   overdueOnly: boolean;
@@ -547,6 +553,7 @@ export function canonicalSharedFilter(raw: unknown): SharedFilter | undefined {
   })();
   return {
     owners: strArray(rec.owners),
+    participants: strArray(rec.participants),
     statuses: strArray(rec.statuses) as TaskStatus[],
     overdueOnly: boolField(rec.overdueOnly),
     unassignedOnly: boolField(rec.unassignedOnly),
