@@ -216,7 +216,8 @@ test('组织管理三页签（批次 A）：建部门/分组 → 账号行挂靠
 
   // 部门管理：新增 + 列表出现
   await page.getByTestId('org-tab-departments').click();
-  const deptName = `研发部-${Date.now() % 100000}`;
+  // e2e- 前缀=判据化命名（AGENTS 六.6）：globalTeardown 清理脚本按 name LIKE 'e2e-%' 删
+  const deptName = `e2e-研发部-${Date.now() % 100000}`;
   await page.getByTestId('dept-name-input').fill(deptName);
   await page.getByTestId('dept-add-btn').click();
   const deptItem = page.getByTestId('dept-item').filter({ hasText: deptName });
@@ -224,7 +225,7 @@ test('组织管理三页签（批次 A）：建部门/分组 → 账号行挂靠
 
   // 账号管理：行内下拉挂部门 + 分组管理建组后挂靠
   await page.getByTestId('org-tab-groups').click();
-  const groupName = `前端组-${Date.now() % 100000}`;
+  const groupName = `e2e-前端组-${Date.now() % 100000}`;
   await page.getByTestId('group-name-input').fill(groupName);
   await page.getByTestId('group-add-btn').click();
   await expect(page.getByTestId('group-item').filter({ hasText: groupName })).toBeVisible();
@@ -246,4 +247,167 @@ test('组织管理三页签（批次 A）：建部门/分组 → 账号行挂靠
   await page.on('dialog', (d) => d.accept());
   await deptItem.getByRole('button', { name: '删除' }).click();
   await expect(page.getByTestId('toast')).toContainText('请先转移账号');
+});
+
+
+/** 分组快速连选回归（2026-11-21 需求方反馈「设置不上也关闭不了」）：
+ *  弹层里快速连选 3 个分组（不等列表回刷）——草稿基准修复后全部保留；随后逐个
+ *  取消也全部生效（此前每次点击拿旧 props 全量 PATCH，慢回刷窗口内互相覆盖）。 */
+test('分组连选/取消不互相覆盖：快速三连选全保留，逐个取消全生效', async ({ page }) => {
+  const admin = await superAdmin(page);
+  await uiLogin(page, admin.email);
+  await page.waitForURL(/workspace/); // 登录跳转完成再进管理页（否则 goto 抢跑回登录页）
+  await page.goto('/admin/users');
+  await expect(page.getByTestId('admin-user-row').first()).toBeVisible();
+
+  // 造 3 个独立分组（避免与既有勾选纠缠）；断言建组成功——dev server 重启窗口里
+  // 代理会 500，静默吞掉会让后续「弹层找不到 label」变成无头悬案（2026-11-21 实录）
+  const stamp = Date.now() % 1000000;
+  const names = [`e2e-连选甲-${stamp}`, `e2e-连选乙-${stamp}`, `e2e-连选丙-${stamp}`];
+  for (const name of names) {
+    const created = await page.request.post('/api/org/groups', { headers: auth(admin.token), data: { name } });
+    expect(created.status()).toBe(201);
+  }
+  await page.reload();
+  await expect(page.getByTestId('admin-user-row').first()).toBeVisible();
+
+  // 定位固定成员号行并打开弹层
+  await page.getByTestId('admin-user-search').fill(MEMBER_EMAIL);
+  const row = rowOf(page, MEMBER_EMAIL);
+  await expect(row).toBeVisible();
+  await row.locator('[data-testid^="account-groups-btn-"]').click();
+  const pop = row.locator('[data-testid^="groups-popover-"]');
+
+  // 快速三连选（中间不等回刷——复现旧缺陷的节奏）
+  for (const name of names) {
+    await pop.locator('label').filter({ hasText: name }).locator('input').click();
+  }
+  // 回刷完成后三个全保留
+  await page.waitForTimeout(1500);
+  for (const name of names) {
+    await expect(pop.locator('label').filter({ hasText: name }).locator('input')).toBeChecked();
+    // 行标签取 groups-cell 直接子级（弹层里的同名 group-tag 不算）
+    await expect(row.locator('.groups-cell > .group-tag').filter({ hasText: name })).toBeVisible();
+  }
+  // 接口复核
+  const saved = await page.evaluate(async (email) => {
+    const r = await fetch(`/api/admin/users?page=1&size=20&q=${encodeURIComponent(email)}`, {
+      headers: { Authorization: `Bearer ${localStorage.getItem('gmind.token') ?? ''}` },
+    });
+    const d = (await r.json()) as { items: Array<{ email: string; groupIds: string[] }> };
+    return d.items.find((x) => x.email === email)?.groupIds;
+  }, MEMBER_EMAIL);
+  for (const name of names) {
+    const id = await page.evaluate(async (n) => {
+      const r = await fetch('/api/org/groups', { headers: { Authorization: `Bearer ${localStorage.getItem('gmind.token') ?? ''}` } });
+      const d = await r.json();
+      return (d as Array<{ id: string; name: string }>).find((g) => g.name === n)!.id;
+    }, name);
+    expect(saved).toContain(id);
+  }
+
+  // 逐个取消（同样快速）→ 全部生效
+  for (const name of names) {
+    await pop.locator('label').filter({ hasText: name }).locator('input').click();
+  }
+  await page.waitForTimeout(1500);
+  for (const name of names) {
+    await expect(pop.locator('label').filter({ hasText: name }).locator('input')).not.toBeChecked();
+    await expect(row.locator('.groups-cell > .group-tag').filter({ hasText: name })).toHaveCount(0);
+  }
+});
+
+/** 小视口布局回归（2026-11-21 需求方反馈「点击编辑没反应 / 列表无法向下滚动」）：
+ *  ws-content 是 flex 纵向容器，admin-user-table 曾带 overflow:hidden + 默认
+ *  flex-shrink——行多时表格被压进视口且不产生滚动条，行内分组弹层也被表格底边
+ *  裁掉（弹层实际开着但不可见，用户后续点击全落在透明 mask 上，表现为
+ *  「设置不上也关闭不了」）。修复=表格 overflow:visible + flex:none（滚动交给
+ *  ws-content），本用例小视口锁死两处计算样式 + 底部行弹层真实可点。 */
+test('组织管理小视口：列表可滚动，底部行分组弹层不被表格裁剪', async ({ page }) => {
+  const admin = await superAdmin(page);
+  await uiLogin(page, admin.email);
+  await page.waitForURL(/workspace/);
+  await page.goto('/admin/users');
+  await expect(page.getByTestId('admin-user-row').first()).toBeVisible();
+
+  // 压到 420 高：无论库内账号多少，列表都必然超过视口（触发旧病的条件）
+  await page.setViewportSize({ width: 1000, height: 420 });
+
+  // 修复点锁死：表格不自裁剪、不被 flex 压缩（滚动交给 ws-content）
+  const layout = await page.evaluate(() => {
+    const table = document.querySelector('[data-testid="admin-user-table"]');
+    const content = document.querySelector('.ws-content.admin-users-page');
+    return {
+      tableOverflow: getComputedStyle(table!).overflow,
+      tableFlex: getComputedStyle(table!).flex,
+      scrollable: content!.scrollHeight > content!.clientHeight,
+    };
+  });
+  expect(layout.tableOverflow).toBe('visible');
+  expect(layout.tableFlex).toBe('0 0 auto');
+  expect(layout.scrollable).toBe(true);
+
+  // 行为回归：滚到底后末行弹层真实可点——若表格回归 overflow:hidden，
+  // 末行不可见/弹层被裁，此处的可见性与命中检查直接失败
+  const lastRow = page.locator('[data-testid="admin-user-row"]').last();
+  await lastRow.scrollIntoViewIfNeeded();
+  await expect(lastRow.locator('.groups-edit-btn')).toBeVisible();
+  await lastRow.locator('[data-testid^="account-groups-btn-"]').click();
+  const pop = lastRow.locator('[data-testid^="groups-popover-"]');
+  const firstItem = pop.locator('.groups-popover-item').first();
+  await firstItem.scrollIntoViewIfNeeded();
+  // 勾两次=净零，不留下测试数据（AGENTS 六.6）
+  await firstItem.locator('input').click();
+  await expect(firstItem.locator('input')).toBeChecked();
+  await firstItem.locator('input').click();
+  await expect(firstItem.locator('input')).not.toBeChecked();
+});
+
+/** 矮行分组弹层真实点击回归（2026-11-21 需求方反馈「按钮点击没反应/分组功能无法使用」）：
+ *  .admin-table-row .cell 的 overflow:hidden（0-2-0）压过 .groups-cell 的 visible
+ *  （0-1-0）——无标签矮行（22px）里 absolute 弹层（top:26px 起整块在格外）被裁剪成
+ *  **不可见也不可命中**，而 fixed 透明 mask（z=90）不受裁剪照常全屏生效，任何点击
+ *  都落在 mask 上关闭弹层，表现为「点了没反应」。定位器点击走不到真实命中路径
+ *  （修复前也能过），本用例全程 page.mouse.click 真实坐标 + elementFromPoint 命中
+ *  断言，锁定「弹层看得见且点得着」。 */
+test('分组弹层真实点击：无标签矮行上弹层可见可点、外点关闭（裁剪回归）', async ({ page }) => {
+  const admin = await superAdmin(page);
+  await uiLogin(page, admin.email);
+  await page.waitForURL(/workspace/);
+  await page.goto('/admin/users');
+  await expect(page.getByTestId('admin-user-row').first()).toBeVisible();
+
+  // 无标签矮行（groups-cell 无直接 group-tag 子级——弹层整块落在格外，裁剪必现条件）
+  const shortRow = page
+    .locator('[data-testid="admin-user-row"]:has(.groups-cell:not(:has(> .group-tag)))')
+    .first();
+  await expect(shortRow).toBeVisible();
+
+  // 真实鼠标点开弹层
+  const btn = shortRow.locator('[data-testid^="account-groups-btn-"]');
+  const bb = await btn.boundingBox();
+  await page.mouse.click(bb!.x + bb!.width / 2, bb!.y + bb!.height / 2);
+  const pop = shortRow.locator('[data-testid^="groups-popover-"]');
+  await expect(pop).toBeVisible();
+
+  // 命中断言：勾选框中心的最顶层元素必须是勾选框本身（裁剪病发作时是 .popover-mask）
+  const hit = await pop.locator('input').first().evaluate((el) => {
+    const b = el.getBoundingClientRect();
+    const top = document.elementFromPoint(b.x + b.width / 2, b.y + b.height / 2);
+    return { tag: top?.tagName.toLowerCase(), cls: String(top?.className), inPop: !!top?.closest('[data-testid^="groups-popover-"]') };
+  });
+  expect(hit.inPop, `弹层被裁剪/被遮罩压住：命中了 ${hit.tag}.${hit.cls}`).toBe(true);
+
+  // 真实鼠标勾选：状态变化且弹层不关（草稿机制）；再勾一次=净零不留数据（AGENTS 六.6）
+  const input = pop.locator('input').first();
+  const cb = await input.boundingBox();
+  await page.mouse.click(cb!.x + cb!.width / 2, cb!.y + cb!.height / 2);
+  await expect(input).toBeChecked();
+  await expect(pop).toBeVisible();
+  await page.mouse.click(cb!.x + cb!.width / 2, cb!.y + cb!.height / 2);
+  await expect(input).not.toBeChecked();
+
+  // 真实鼠标外点（页头空白处）→ 弹层关闭
+  await page.mouse.click(60, 100);
+  await expect(pop).toHaveCount(0);
 });

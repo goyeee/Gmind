@@ -62,6 +62,19 @@ export function AdminUsersPage() {
   const [groupName, setGroupName] = useState('');
   // 分组多选编辑中的账号（行内 popover，单开）
   const [groupsEditorFor, setGroupsEditorFor] = useState<string | null>(null);
+  // 弹层打开期间的分组草稿（2026-11-21 需求方反馈「设置不上也关闭不了」）：
+  // toggleGroup 以草稿为基准累积，PATCH 发草稿全量——列表慢回刷（1294 账号）不再
+  // 用过期 props 覆盖连点的选择；关闭弹层时清草稿。
+  const [groupDrafts, setGroupDrafts] = useState<Map<string, string[]>>(new Map());
+
+  function closeGroupsEditor(): void {
+    setGroupsEditorFor(null);
+    setGroupDrafts((m) => {
+      const n = new Map(m);
+      if (groupsEditorFor !== null) n.delete(groupsEditorFor);
+      return n;
+    });
+  }
 
   // 添加账号对话框；失败保持弹窗开、文案走 toast
   const [addOpen, setAddOpen] = useState(false);
@@ -182,9 +195,12 @@ export function AdminUsersPage() {
     );
   }
 
-  /** 分组挂靠（popover 多选，变更即存全量）。 */
+  /** 分组挂靠（popover 多选，变更即存全量）：以草稿为基准累积——慢回刷窗口内
+   *  连点/取消都基于最新草稿发 PATCH，不再互相覆盖（2026-11-21 修正）。 */
   function toggleGroup(u: AdminUserListItem, groupId: string): void {
-    const next = u.groupIds.includes(groupId) ? u.groupIds.filter((g) => g !== groupId) : [...u.groupIds, groupId];
+    const current = groupDrafts.get(u.id) ?? u.groupIds;
+    const next = current.includes(groupId) ? current.filter((g) => g !== groupId) : [...current, groupId];
+    setGroupDrafts((m) => new Map(m).set(u.id, next));
     void act(() => updateAdminUser(u.id, { groupIds: next }));
   }
 
@@ -324,20 +340,20 @@ export function AdminUsersPage() {
                             className="groups-edit-btn"
                             data-testid={`account-groups-btn-${u.id}`}
                             title="设置分组"
-                            onClick={() => setGroupsEditorFor(groupsEditorFor === u.id ? null : u.id)}
+                            onClick={() => (groupsEditorFor === u.id ? closeGroupsEditor() : setGroupsEditorFor(u.id))}
                           >
                             {u.groupIds.length === 0 ? '+ 分组' : '编辑'}
                           </button>
                           {groupsEditorFor === u.id && (
                             <>
-                              <div className="popover-mask" onClick={() => setGroupsEditorFor(null)} />
+                              <div className="popover-mask" onClick={closeGroupsEditor} />
                               <div className="groups-popover" data-testid={`groups-popover-${u.id}`}>
                                 {groups.length === 0 && <p className="groups-empty">暂无分组，请在「分组管理」页签创建</p>}
                                 {groups.map((g) => (
                                   <label key={g.id} className="groups-popover-item">
                                     <input
                                       type="checkbox"
-                                      checked={u.groupIds.includes(g.id)}
+                                      checked={(groupDrafts.get(u.id) ?? u.groupIds).includes(g.id)}
                                       onChange={() => toggleGroup(u, g.id)}
                                     />
                                     <span className="group-tag" style={{ background: groupColor(g.id) }}>

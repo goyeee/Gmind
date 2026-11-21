@@ -310,12 +310,15 @@ img.tt-avatar-img { border-radius: 50%; object-fit: cover; display: inline-block
 /* —— 账号管理（移植 mindgrid 账号体系，仅 super_admin）—— */
 .admin-users-page { width: 100%; }
 .admin-users-hint { color: #86909c; font-size: 13px; }
-.admin-user-table { background: #fff; border: 1px solid var(--gm-line); border-radius: var(--gm-radius-card); overflow: hidden; box-shadow: var(--gm-shadow-card); }
-.admin-table-head { background: #fafbfc; }
+/* overflow 不能用 hidden：表格是 ws-content（flex 纵向）的子项，行多时会被压缩裁剪
+   且不产生滚动条；分组弹层（.groups-popover，行内 absolute）也会被表格底边裁掉。
+   圆角改由表头/末行自己承担。 */
+.admin-user-table { background: #fff; border: 1px solid var(--gm-line); border-radius: var(--gm-radius-card); overflow: visible; flex: none; box-shadow: var(--gm-shadow-card); }
+.admin-table-head { background: #fafbfc; border-radius: var(--gm-radius-card) var(--gm-radius-card) 0 0; }
 .admin-table-head, .admin-table-row { display: grid; grid-template-columns: 1fr 1.05fr 0.9fr 1.25fr 0.8fr 0.6fr 0.5fr 1.5fr; gap: 8px; align-items: center; padding: 12px 16px; }
 .admin-table-head { color: #86909c; font-size: 12px; border-bottom: 1px solid #e5e6eb; }
 .admin-table-row { border-bottom: 1px solid #f2f3f5; }
-.admin-table-row:last-child { border-bottom: none; }
+.admin-table-row:last-child { border-bottom: none; border-radius: 0 0 var(--gm-radius-card) var(--gm-radius-card); }
 .admin-table-row:hover { background: #f7f8fa; }
 .admin-table-row .cell { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
 .admin-table-row .cell.nickname { font-weight: 500; font-size: 14px; }
@@ -344,7 +347,8 @@ img.tt-avatar-img { border-radius: 50%; object-fit: cover; display: inline-block
 }
 .org-tabs button:hover { color: var(--gm-ink); }
 .org-tabs button.active { color: var(--gm-brand); font-weight: 600; border-bottom-color: var(--gm-brand); }
-.org-manage { display: flex; flex-direction: column; gap: 12px; max-width: 640px; }
+/* flex:none 同 .admin-user-table：条目多时让 ws-content 出滚动条，而不是被压缩裁剪 */
+.org-manage { display: flex; flex-direction: column; gap: 12px; max-width: 640px; flex: none; }
 .org-manage-add { display: flex; gap: 8px; }
 .org-manage-add input { flex: 1; max-width: 320px; padding: 9px 12px; border: 1px solid var(--gm-line); border-radius: var(--gm-radius-ctl); font-size: 14px; }
 .org-manage-add input:focus { border-color: var(--gm-brand); outline: none; box-shadow: 0 0 0 3px rgb(51 112 255 / 0.12); }
@@ -363,7 +367,12 @@ img.tt-avatar-img { border-radius: 50%; object-fit: cover; display: inline-block
 .org-manage-row .danger { border: 1px solid var(--gm-line); background: #fff; border-radius: var(--gm-radius-sm); padding: 4px 12px; font-size: 12px; color: var(--gm-bad); }
 .org-manage-row .danger:hover { border-color: var(--gm-bad); }
 .dept-select { padding: 4px 6px; border: 1px solid var(--gm-line); border-radius: 4px; font-size: 12px; background: #fff; max-width: 110px; }
-.groups-cell { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; position: relative; overflow: visible; }
+/* 分组格必须 visible：.admin-table-row .cell 的 overflow:hidden（特异性 0-2-0，:323）
+   会压过单类 .groups-cell（0-1-0）——行内分组弹层（absolute，top:26px 起整块在
+   22px 矮格外）被格子裁剪成不可见也不可命中，而 fixed 透明 mask 不受裁剪照常
+   全屏吞点击，表现为「+ 分组/编辑、添加分组点击没反应」（2026-11-21 需求方反馈，
+   自 55dd32b 引入弹层起即病）。选择器提到同级（0-2-0）靠后胜出，恢复 visible 本意。 */
+.admin-table-row .groups-cell { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; position: relative; overflow: visible; }
 .group-tag { display: inline-block; padding: 2px 8px; border-radius: 999px; color: #fff; font-size: 11px; line-height: 1.5; }
 .groups-edit-btn { border: 1px dashed var(--gm-line); background: none; border-radius: 999px; padding: 2px 10px; font-size: 11px; color: var(--gm-ink-3); cursor: pointer; }
 .groups-edit-btn:hover { color: var(--gm-brand); border-color: var(--gm-brand); }
