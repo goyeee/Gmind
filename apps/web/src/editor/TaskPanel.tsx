@@ -47,6 +47,7 @@ import {
   useTaskMembers,
 } from './TaskFields';
 import { TaskCompletionDialog, type UnfinishedEntry } from './TaskCompletionDialog';
+import { trackTaskWrite, type TaskWriteDetail, type TaskWriteIntent } from './taskEvents';
 import './task-panel.css';
 import './marker-picker.css';
 
@@ -204,6 +205,27 @@ export function TaskPanel(props: TaskPanelProps): ReactElement {
     }
   };
 
+  /** 人员列条目当前子进度（动态声明的 before 值；旧 number 简形同 read 侧兼容）。 */
+  const assigneeProgressOf = (colId: string, userId: string): number => {
+    const v = snap?.custom?.[colId];
+    if (typeof v !== 'object' || v === null) return 0;
+    const entry = (v as Record<string, { progress?: unknown } | number>)[userId];
+    if (typeof entry === 'number') return entry;
+    return typeof entry?.progress === 'number' ? entry.progress : 0;
+  };
+
+  /** 任务写 + 动态声明（第二轮 spec §5.5）：trackTaskWrite 写前快照/写后发声明，
+   *  write 抛错即无声明；面板全部任务写入口统一走本助手。 */
+  const writeTask = (intent: TaskWriteIntent, fn: () => void, detail: TaskWriteDetail, fallback: string): void => {
+    if (!snap) return; // 面板未锚定节点（暂态）无写无事件
+    try {
+      trackTaskWrite(doc, canvasId, snap.id, intent, fn, detail);
+      afterUserWrite();
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : fallback);
+    }
+  };
+
   const commitDescription = (next: string): void => {
     if (!snap) return;
     if ((snap.description ?? '') === next) return; // 未变更零写入
@@ -253,7 +275,7 @@ export function TaskPanel(props: TaskPanelProps): ReactElement {
   const today = todayStr();
 
   const commitTask = (patch: TaskPatch): void =>
-    write(() => setNodeTask(doc, snap.id, patch, ORIGIN_USER, canvasId), '任务字段保存失败，请调整后重试');
+    writeTask('total', () => setNodeTask(doc, snap.id, patch, ORIGIN_USER, canvasId), {}, '任务字段保存失败，请调整后重试');
 
   // —— 状态点击（2026-11-20 任务模型裁定）——
   // done：有未完成子进度 → 三选弹窗（确认时宿主重新执行 core 预检再调原子命令）；
@@ -266,7 +288,7 @@ export function TaskPanel(props: TaskPanelProps): ReactElement {
     if (task.status === 'done' || task.progress === 100) return;
     const unfinished = unfinishedTaskProgressOf(doc, snap.id, canvasId);
     if (unfinished.owner === null && unfinished.assignees.length === 0) {
-      write(() => completeNodeTask(doc, snap.id, 'preserve-subprogress', ORIGIN_USER, canvasId), '任务完成保存失败，请重试');
+      writeTask('complete', () => completeNodeTask(doc, snap.id, 'preserve-subprogress', ORIGIN_USER, canvasId), {}, '任务完成保存失败，请重试');
       return;
     }
     const entries: UnfinishedEntry[] = [];
@@ -386,10 +408,10 @@ export function TaskPanel(props: TaskPanelProps): ReactElement {
         }
         return;
       }
-      write(() => setOwnerProgress(doc, snap.id, pct, ORIGIN_USER, canvasId), '负责人子进度保存失败，请重试');
+      writeTask('sub', () => setOwnerProgress(doc, snap.id, pct, ORIGIN_USER, canvasId), { sub: { user: p.userId, before: task.ownerProgress ?? 0, after: pct, colName: '负责人子进度' } }, '负责人子进度保存失败，请重试');
       return;
     }
-    write(() => setAssigneeProgress(doc, snap.id, p.colId, p.userId, pct, ORIGIN_USER, canvasId), '人员子进度保存失败，请重试');
+    writeTask('sub', () => setAssigneeProgress(doc, snap.id, p.colId, p.userId, pct, ORIGIN_USER, canvasId), { sub: { user: p.userId, before: p.progress, after: pct, colName: p.colName } }, '人员子进度保存失败，请重试');
   };
 
   const markerChips: ReactElement[] = [];
@@ -511,7 +533,12 @@ export function TaskPanel(props: TaskPanelProps): ReactElement {
           memberIndex={memberIndex}
           selected={task.ownerId === null ? [] : [task.ownerId]}
           onToggle={(userId) =>
-            write(() => setTaskOwner(doc, snap.id, task.ownerId === userId ? null : userId, ORIGIN_USER, canvasId), '负责人保存失败，请重试')
+            writeTask(
+              'owner',
+              () => setTaskOwner(doc, snap.id, task.ownerId === userId ? null : userId, ORIGIN_USER, canvasId),
+              { owner: { before: task.ownerId, after: task.ownerId === userId ? null : userId } },
+              '负责人保存失败，请重试',
+            )
           }
           onAvatarClick={openOwnerPicker}
           avatarTestIdPrefix="task-panel-owner-avatar"
@@ -530,13 +557,23 @@ export function TaskPanel(props: TaskPanelProps): ReactElement {
                 write(() => setCustomField(doc, snap.id, col.id, v, ORIGIN_USER, canvasId), '自定义属性保存失败，请调整后重试')
               }
               onAssigneeProgress={(userId, progress) =>
-                write(() => setAssigneeProgress(doc, snap.id, col.id, userId, progress, ORIGIN_USER, canvasId), '人员子进度保存失败，请重试')
+                writeTask(
+                  'sub',
+                  () => setAssigneeProgress(doc, snap.id, col.id, userId, progress, ORIGIN_USER, canvasId),
+                  { sub: { user: userId, before: assigneeProgressOf(col.id, userId), after: progress, colName: col.name } },
+                  '人员子进度保存失败，请重试',
+                )
               }
               onAssigneeToggle={(userId, assigned) =>
-                write(() => {
-                  if (assigned) addAssignee(doc, snap.id, col.id, userId, ORIGIN_USER, canvasId);
-                  else removeAssignee(doc, snap.id, col.id, userId, ORIGIN_USER, canvasId);
-                }, '人员保存失败，请重试')
+                writeTask(
+                  assigned ? 'member-add' : 'member-remove',
+                  () => {
+                    if (assigned) addAssignee(doc, snap.id, col.id, userId, ORIGIN_USER, canvasId);
+                    else removeAssignee(doc, snap.id, col.id, userId, ORIGIN_USER, canvasId);
+                  },
+                  { member: { user: userId, colName: col.name } },
+                  '人员保存失败，请重试',
+                )
               }
               onAssigneeAvatarPick={(userId, progress, at) => openAssigneePicker(col.id, col.name, userId, progress, at)}
               testIdPrefix="task-panel-custom"
@@ -684,13 +721,23 @@ export function TaskPanel(props: TaskPanelProps): ReactElement {
                 write(() => setCustomField(doc, snap.id, col.id, v, ORIGIN_USER, canvasId), '自定义属性保存失败，请调整后重试')
               }
               onAssigneeProgress={(userId, progress) =>
-                write(() => setAssigneeProgress(doc, snap.id, col.id, userId, progress, ORIGIN_USER, canvasId), '人员子进度保存失败，请重试')
+                writeTask(
+                  'sub',
+                  () => setAssigneeProgress(doc, snap.id, col.id, userId, progress, ORIGIN_USER, canvasId),
+                  { sub: { user: userId, before: assigneeProgressOf(col.id, userId), after: progress, colName: col.name } },
+                  '人员子进度保存失败，请重试',
+                )
               }
               onAssigneeToggle={(userId, assigned) =>
-                write(() => {
-                  if (assigned) addAssignee(doc, snap.id, col.id, userId, ORIGIN_USER, canvasId);
-                  else removeAssignee(doc, snap.id, col.id, userId, ORIGIN_USER, canvasId);
-                }, '人员保存失败，请重试')
+                writeTask(
+                  assigned ? 'member-add' : 'member-remove',
+                  () => {
+                    if (assigned) addAssignee(doc, snap.id, col.id, userId, ORIGIN_USER, canvasId);
+                    else removeAssignee(doc, snap.id, col.id, userId, ORIGIN_USER, canvasId);
+                  },
+                  { member: { user: userId, colName: col.name } },
+                  '人员保存失败，请重试',
+                )
               }
               testIdPrefix="task-panel-custom"
             />
@@ -755,7 +802,7 @@ export function TaskPanel(props: TaskPanelProps): ReactElement {
           targetStatus={dialog.kind === 'reopen' ? dialog.targetStatus : undefined}
           onConfirm={(_kind, mode) => {
             setDialog(null);
-            write(() => completeNodeTask(doc, snap.id, mode, ORIGIN_USER, canvasId), '任务完成保存失败，请重试');
+            writeTask('complete', () => completeNodeTask(doc, snap.id, mode, ORIGIN_USER, canvasId), {}, '任务完成保存失败，请重试');
           }}
           onConfirmProgress={(_kind, p) => {
             setDialog(null);

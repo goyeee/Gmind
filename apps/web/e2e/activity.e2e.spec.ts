@@ -53,6 +53,9 @@ test('动态面板：UI 发评论后开面板，最新条目为「评论」+昵�
   test.setTimeout(90_000);
   const ctx = await browser.newContext();
   const page = await ctx.newPage();
+  page.on('pageerror', (err) => console.log('PAGEERROR:', err.message.slice(0, 300)));
+  page.on('response', (res) => { if (res.status() >= 400) console.log('HTTP', res.status(), res.url().slice(-80)); });
+  page.on('console', (msg) => { if (msg.type() === 'error') console.log('CONSOLE:', msg.text().slice(0, 300)); });
   await openSeedDoc(page, '本周计划');
   const nickname = await nicknameOf(page);
 
@@ -63,9 +66,11 @@ test('动态面板：UI 发评论后开面板，最新条目为「评论」+昵�
   await commentOnNode(page, '周三', '动态面板用例评论');
 
   // 打开动态面板：版本历史旁的「动态」入口
-  await page.getByTestId('activity-toggle').click();
+  console.log('TOGGLE_ACTIVITY');
+  await page.getByTestId('activity-toggle').click({ timeout: 8000 });
   const panel = page.getByTestId('activity-panel');
-  await expect(panel).toBeVisible();
+  await expect(panel).toBeVisible({ timeout: 5000 });
+  console.log('ACTIVITY_OPEN');
 
   // 最新条目（倒序首条）：「评论」类型 + 评论者昵称 + 相对时间
   const firstItem = panel.locator('[data-testid^="activity-item-"]').first();
@@ -82,5 +87,52 @@ test('动态面板：UI 发评论后开面板，最新条目为「评论」+昵�
   await page.getByTestId('activity-panel-close').click();
   await expect(page.getByTestId('activity-panel')).toHaveCount(0);
 
+  await ctx.close();
+});
+
+/**
+ * 任务动态（第二轮 2026-11-21，spec §5.5）：编辑器内用户级任务写（面板指派负责人）
+ * → stateless 声明 → 服务端以连接身份盖章落库 → 文档动态抽屉出现任务事件条目
+ * （动作文案 + 任务文本 + 操作人）。操作人 = 当前登录用户（盖章不信任客户端声明）。
+ */
+test('任务动态：面板指派负责人后，文档动态抽屉出现盖章的任务事件', async ({ browser }) => {
+  test.setTimeout(90_000);
+  const ctx = await browser.newContext();
+  const page = await ctx.newPage();
+  page.on('pageerror', (err) => console.log('PAGEERROR:', err.message.slice(0, 300)));
+  page.on('response', (res) => { if (res.status() >= 400) console.log('HTTP', res.status(), res.url().slice(-80)); });
+  page.on('console', (msg) => { if (msg.type() === 'error') console.log('CONSOLE:', msg.text().slice(0, 300)); });
+  await openSeedDoc(page, '本周计划');
+  const nickname = await nicknameOf(page);
+  const nodeId = await page.evaluate(async () => {
+    const res = await fetch('/api/users/me', {
+      headers: { Authorization: `Bearer ${localStorage.getItem('gmind.token') ?? ''}` },
+    });
+    return ((await res.json()) as { id?: string }).id ?? '';
+  });
+  expect(nodeId).not.toBe('');
+
+  // 选中节点 → 任务面板 → 点自己 = 指派为总负责人（用户级任务写入口）。
+  // 存量怪相（HEAD 已有，本轮登记非回归）：画布节点点击后的第一次工具栏点击会
+  // 双触发 onClick——面板闪开即关；这里点开后若面板不在再补一次点击。
+  await page.locator('.editor-canvas svg .gm-text').first().click();
+  const nodeText = (await page.locator('.editor-canvas svg .gm-text').first().textContent()) ?? '';
+  await page.getByTestId('task-toggle').click();
+  if ((await page.getByTestId('task-panel').count()) === 0) {
+    await page.getByTestId('task-toggle').click();
+  }
+  await page.getByTestId('task-panel').waitFor({ timeout: 5000 });
+  await page.locator(`[data-testid^="task-panel-owner-"]`).first().click({ timeout: 8000 }); // 负责人 chip（task-panel-owner-${userId}，wt-task-model 同款前缀）
+
+  // 文档动态抽屉：任务事件条目出现（面板开合重拉；声明→盖章落库有传输延迟）
+  console.log('TOGGLE_ACTIVITY');
+  await page.getByTestId('activity-toggle').click({ timeout: 8000 });
+  const panel = page.getByTestId('activity-panel');
+  await expect(panel).toBeVisible({ timeout: 5000 });
+  console.log('ACTIVITY_OPEN');
+  const item = panel.locator('[data-testid^="activity-item-"]', { hasText: '指派了负责人' });
+  await expect(item.first()).toBeVisible({ timeout: 15_000 });
+  await expect(item.first()).toContainText(nodeText); // taskText 服务端文档现值
+  await expect(item.first()).toContainText(nickname); // actor=连接身份（盖章）
   await ctx.close();
 });

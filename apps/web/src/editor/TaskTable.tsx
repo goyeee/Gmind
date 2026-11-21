@@ -69,6 +69,7 @@ import {
   type MemberOption,
 } from './TaskFields';
 import { TaskCompletionDialog, type UnfinishedEntry } from './TaskCompletionDialog';
+import { trackTaskWrite, type TaskWriteDetail, type TaskWriteIntent } from './taskEvents';
 import './task-table.css';
 
 /**
@@ -165,6 +166,8 @@ function newColumnId(): string {
 export interface Filters {
   keyword: string;
   owners: Set<string>;
+  /** 参与人（第二轮）：人员列条目跨全部 assignee 列任一命中即命中。 */
+  participants: Set<string>;
   statuses: Set<TaskStatus>;
   overdueOnly: boolean;
   unassignedOnly: boolean;
@@ -178,6 +181,7 @@ export interface Filters {
 export const EMPTY_FILTERS: Filters = {
   keyword: '',
   owners: new Set(),
+  participants: new Set(),
   statuses: new Set(),
   overdueOnly: false,
   unassignedOnly: false,
@@ -550,6 +554,7 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
   const filtering =
     filters.keyword.trim() !== '' ||
     filters.owners.size > 0 ||
+    filters.participants.size > 0 ||
     filters.statuses.size > 0 ||
     filters.overdueOnly ||
     filters.unassignedOnly ||
@@ -569,6 +574,14 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
     const v = n.custom[colId];
     return v && typeof v === 'object' ? Object.keys(v as Record<string, unknown>) : [];
   };
+  /** 人员列条目当前子进度（动态声明的 before 值；旧 number 简形同 read 侧兼容）。 */
+  const assigneeCellProgressOf = (n: RowNode, colId: string, userId: string): number => {
+    const v = n.custom[colId];
+    if (typeof v !== 'object' || v === null) return 0;
+    const entry = (v as Record<string, { progress?: unknown } | number>)[userId];
+    if (typeof entry === 'number') return entry;
+    return typeof entry?.progress === 'number' ? entry.progress : 0;
+  };
 
   const matchNode = (n: RowNode): boolean => {
     const t = n.task;
@@ -577,6 +590,13 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
     const owners =
       t?.ownerId !== null && t?.ownerId !== undefined ? [t.ownerId] : (t?.owners ?? []);
     if (filters.owners.size > 0 && !owners.some((o) => filters.owners.has(o))) return false;
+    // 参与人（第二轮）：人员列条目跨全部 assignee 列任一命中即命中
+    if (filters.participants.size > 0) {
+      const assigneeUsers = customColumns
+        .filter((c) => c.type === 'assignee')
+        .flatMap((c) => assigneeUsersOf(n, c.id));
+      if (!assigneeUsers.some((u) => filters.participants.has(u))) return false;
+    }
     if (filters.statuses.size > 0 && !filters.statuses.has(taskStatusOf(nodes, n.id))) return false;
     if (filters.overdueOnly && !isOverdue(n, nodes)) return false;
     if (filters.unassignedOnly && owners.length > 0) return false;
@@ -676,20 +696,27 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
 
   // —— 写动作（全部 core op + afterUserWrite；异常两段式透出） ——
 
-  const commitTask = (id: string, patch: TaskPatch): void => {
+  /** 任务写 + 动态声明（第二轮 spec §5.5）：写前快照/写后发声明，写抛错即无声明。 */
+  const writeTask = (id: string, intent: TaskWriteIntent, fn: () => void, detail: TaskWriteDetail, fallback: string): void => {
     try {
-      setNodeTask(doc, id, patch, ORIGIN_USER, cid);
+      trackTaskWrite(doc, cid, id, intent, fn, detail);
       afterUserWrite();
     } catch (e) {
-      showToast(e instanceof Error ? e.message : '任务字段保存失败，请调整后重试');
+      showToast(e instanceof Error ? e.message : fallback);
     }
+  };
+
+  const commitTask = (id: string, patch: TaskPatch): void => {
+    writeTask(id, 'total', () => setNodeTask(doc, id, patch, ORIGIN_USER, cid), {}, '任务字段保存失败，请调整后重试');
   };
 
   const commitOwner = (id: string, ownerId: string | null): void => {
     try {
-      setTaskOwner(doc, id, ownerId, ORIGIN_USER, cid);
+      trackTaskWrite(doc, cid, id, 'owner', () => setTaskOwner(doc, id, ownerId, ORIGIN_USER, cid), {
+        owner: { before: getNode(doc, id, cid)?.task.ownerId ?? null, after: ownerId },
+      });
       afterUserWrite();
-      setOwnerCellOpen(null);
+      setOwnerCellOpen(null); // 保存成功才关弹层（评审 P3-5：写失败保留弹层可重试）
     } catch (e) {
       showToast(e instanceof Error ? e.message : '负责人保存失败，请重试');
     }
@@ -702,12 +729,7 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
     if (!snap || snap.task.status === 'done' || snap.task.progress === 100) return;
     const unfinished = unfinishedTaskProgressOf(doc, nodeId, cid);
     if (unfinished.owner === null && unfinished.assignees.length === 0) {
-      try {
-        completeNodeTask(doc, nodeId, 'preserve-subprogress', ORIGIN_USER, cid);
-        afterUserWrite();
-      } catch (e) {
-        showToast(e instanceof Error ? e.message : '任务完成保存失败，请重试');
-      }
+      writeTask(nodeId, 'complete', () => completeNodeTask(doc, nodeId, 'preserve-subprogress', ORIGIN_USER, cid), {}, '任务完成保存失败，请重试');
       return;
     }
     const entries: UnfinishedEntry[] = [];
@@ -1506,21 +1528,20 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
                             memberIndex={memberIndex}
                             testId="table-custom-assignee-editor"
                             onAssigneeProgress={(userId, progress) => {
-                              try {
-                                setAssigneeProgress(doc, node.id, c.id, userId, progress, ORIGIN_USER, cid);
-                                afterUserWrite();
-                              } catch (e) {
-                                showToast(e instanceof Error ? e.message : '人员子进度保存失败，请重试');
-                              }
+                              const before = assigneeCellProgressOf(node, c.id, userId);
+                              writeTask(node.id, 'sub', () => setAssigneeProgress(doc, node.id, c.id, userId, progress, ORIGIN_USER, cid), { sub: { user: userId, before, after: progress, colName: c.name } }, '人员子进度保存失败，请重试');
                             }}
                             onAssigneeToggle={(userId, assigned) => {
-                              try {
-                                if (assigned) addAssignee(doc, node.id, c.id, userId, ORIGIN_USER, cid);
-                                else removeAssignee(doc, node.id, c.id, userId, ORIGIN_USER, cid);
-                                afterUserWrite();
-                              } catch (e) {
-                                showToast(e instanceof Error ? e.message : '人员保存失败，请重试');
-                              }
+                              writeTask(
+                                node.id,
+                                assigned ? 'member-add' : 'member-remove',
+                                () => {
+                                  if (assigned) addAssignee(doc, node.id, c.id, userId, ORIGIN_USER, cid);
+                                  else removeAssignee(doc, node.id, c.id, userId, ORIGIN_USER, cid);
+                                },
+                                { member: { user: userId, colName: c.name } },
+                                '人员保存失败，请重试',
+                              );
                             }}
                           />
                         </div>
@@ -1976,12 +1997,7 @@ export function TaskTable(props: TaskTableProps): React.ReactElement {
           onConfirm={(_kind, mode) => {
             const id = statusDialog.nodeId;
             setStatusDialog(null);
-            try {
-              completeNodeTask(doc, id, mode, ORIGIN_USER, cid);
-              afterUserWrite();
-            } catch (e) {
-              showToast(e instanceof Error ? e.message : '任务完成保存失败，请重试');
-            }
+            writeTask(id, 'complete', () => completeNodeTask(doc, id, mode, ORIGIN_USER, cid), {}, '任务完成保存失败，请重试');
           }}
           onConfirmProgress={(_kind, p) => {
             const d = statusDialog;

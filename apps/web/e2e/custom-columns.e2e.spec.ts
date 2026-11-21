@@ -224,9 +224,12 @@ test('任务面板：自定义属性三列可见，修改文本列值后表格�
   // 负责人；date 并入日期组。三列逐行渲染，通过 data-testid="task-panel-custom-row" 定位。
   const textRow = panel.locator('[data-testid="task-panel-custom-row"]', { hasText: '备注' });
   await expect(textRow).toBeVisible();
-  await expect(panel.locator('[data-testid="task-panel-custom-row"]', { hasText: '复核人' })).toContainText(
-    '选择成员并更新进度',
-  );
+  // 人员列（2026-11-21 二次裁定「不单独列行，跟负责人一样」）：未指派时不再有
+  // 「选择成员并更新进度」占位行——直接渲染成员 chips（未选中态，点即可指派）
+  const reviewerRow = panel.locator('[data-testid="task-panel-custom-row"]', { hasText: '复核人' });
+  await expect(reviewerRow).toBeVisible();
+  await expect(reviewerRow.locator('.task-assignee-row')).toHaveCount(0);
+  await expect(reviewerRow.locator('[data-testid^="task-panel-custom-"][data-testid*="-member-"]').first()).toBeVisible();
   await expect(
     panel.locator('[data-testid="task-panel-custom-row"]', { hasText: '截止' }).locator('input[data-smart-date]'),
   ).toBeVisible();

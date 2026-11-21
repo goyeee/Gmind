@@ -41,6 +41,7 @@ interface SavedView {
   name: string;
   filters: {
     owners: string[];
+    participants: string[];
     statuses: TaskStatus[];
     overdueOnly: boolean;
     unassignedOnly: boolean;
@@ -65,6 +66,7 @@ function loadViews(fileId: string): SavedView[] {
 function serialize(f: Filters): SavedView['filters'] {
   return {
     owners: [...f.owners],
+    participants: [...f.participants],
     statuses: [...f.statuses],
     overdueOnly: f.overdueOnly,
     unassignedOnly: f.unassignedOnly,
@@ -89,6 +91,7 @@ function deserialize(v: SavedView['filters']): Filters {
   return {
     keyword: '',
     owners: new Set(v.owners),
+    participants: new Set(v.participants ?? []),
     statuses: new Set(v.statuses),
     overdueOnly: v.overdueOnly,
     unassignedOnly: v.unassignedOnly,
@@ -102,6 +105,7 @@ function deserialize(v: SavedView['filters']): Filters {
 export function toSharedFilter(f: Filters): SharedFilter {
   return {
     owners: [...f.owners],
+    participants: [...f.participants],
     statuses: [...f.statuses] as SharedFilter['statuses'],
     overdueOnly: f.overdueOnly,
     unassignedOnly: f.unassignedOnly,
@@ -116,6 +120,7 @@ export function fromSharedFilter(sf: SharedFilter): Filters {
   return {
     keyword: '',
     owners: new Set(sf.owners),
+    participants: new Set(sf.participants ?? []),
     statuses: new Set(sf.statuses) as Filters['statuses'],
     overdueOnly: sf.overdueOnly,
     unassignedOnly: sf.unassignedOnly,
@@ -130,6 +135,7 @@ export function isEqualToShared(f: Filters, shared: SharedFilter | null): boolea
   if (shared === null) {
     return (
       f.owners.size === 0 &&
+      f.participants.size === 0 &&
       f.statuses.size === 0 &&
       !f.overdueOnly &&
       !f.unassignedOnly &&
@@ -149,6 +155,8 @@ export interface MapFilterBarProps {
   view: 'mind' | 'table';
   /** 负责人候选（文档内负责人 ∪ 在线成员；label = 昵称回退）。 */
   candidates: Array<{ id: string; label: string }>;
+  /** 参与人候选（第二轮：文档内人员列成员 ∪ 在线成员）。 */
+  participantCandidates: Array<{ id: string; label: string }>;
   meId: string;
   totalTasks: number;
   hitCount: number;
@@ -170,7 +178,17 @@ export interface MapFilterBarProps {
 }
 
 export function MapFilterBar(props: MapFilterBarProps): React.ReactElement {
-  const { filters, onFiltersChange, candidates, meId, totalTasks, hitCount, customColumns, orgOptions, fileId, view, sharedFilter, selfPublished, onPublish, onRestoreShared } = props;
+  const { filters, onFiltersChange, candidates, participantCandidates, meId, totalTasks, hitCount, customColumns, orgOptions, fileId, view, sharedFilter, selfPublished, onPublish, onRestoreShared } = props;
+  // 参与人多选（第二轮）：存原始 val（'me' 字面量保留），求值时调用方解析——与条件行
+  // 人员多选同口径（2026-11-16 字面量 'me' 裁定）。
+  const participantSel = [...filters.participants].map((id) => (id === meId ? 'me' : id));
+  const toggleParticipant = (id: string): void => {
+    const raw = id === 'me' ? meId : id;
+    const next = new Set(filters.participants);
+    if (next.has(raw)) next.delete(raw);
+    else next.add(raw);
+    set({ participants: next });
+  };
   const [pop, setPop] = useState<'' | 'filter' | 'views'>('');
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const fields = useMemo(() => condFieldsOf(customColumns), [customColumns]);
@@ -198,6 +216,7 @@ export function MapFilterBar(props: MapFilterBarProps): React.ReactElement {
   const filtering =
     filters.keyword.trim() !== '' ||
     filters.owners.size > 0 ||
+    filters.participants.size > 0 ||
     filters.statuses.size > 0 ||
     filters.overdueOnly ||
     filters.unassignedOnly ||
@@ -216,6 +235,7 @@ export function MapFilterBar(props: MapFilterBarProps): React.ReactElement {
    *  - 与公共一致：不显示（你没有在做个人调整）。 */
   const hasFilterConditions =
     filters.owners.size > 0 ||
+    filters.participants.size > 0 ||
     filters.statuses.size > 0 ||
     filters.overdueOnly ||
     filters.unassignedOnly ||
@@ -290,6 +310,12 @@ export function MapFilterBar(props: MapFilterBarProps): React.ReactElement {
       '负责人',
       [...filters.owners].map(labelOf).join('、'),
       () => set({ owners: new Set() }),
+    ]);
+  if (filters.participants.size > 0)
+    tagList.push([
+      '参与人',
+      [...filters.participants].map(labelOf).join('、'),
+      () => set({ participants: new Set() }),
     ]);
   if (filters.grp !== '') tagList.push(['分组', orgOptions.groups.find((g) => g.id === filters.grp)?.name ?? '', () => set({ grp: '' })]);
   if (filters.dept !== '') tagList.push(['部门', orgOptions.depts.find((d) => d.id === filters.dept)?.name ?? '', () => set({ dept: '' })]);
@@ -489,6 +515,31 @@ export function MapFilterBar(props: MapFilterBarProps): React.ReactElement {
               {sel('分组', filters.grp, (v) => set({ grp: v }), orgOptions.groups.map((g) => [g.id, g.name] as [string, string]))}
               {sel('部门', filters.dept, (v) => set({ dept: v }), orgOptions.depts.map((d) => [d.id, d.name] as [string, string]))}
             </div>
+            <div className="mf-more-title">参与人</div>
+            <ul className="mf-people mf-participants" data-testid="map-filter-participants">
+              {meId !== '' && (
+                <li>
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={participantSel.includes('me')}
+                      onChange={() => toggleParticipant('me')}
+                    />
+                    我
+                  </label>
+                </li>
+              )}
+              {participantCandidates
+                .filter((x) => x.id !== meId)
+                .map((x) => (
+                  <li key={x.id}>
+                    <label>
+                      <input type="checkbox" checked={participantSel.includes(x.id)} onChange={() => toggleParticipant(x.id)} />
+                      {x.label}
+                    </label>
+                  </li>
+                ))}
+            </ul>
             <div className="mf-more-title">待办状态</div>
             <div className="mf-statuses">
               {STATUS_ITEMS.map(([k, label]) => (

@@ -324,7 +324,7 @@ describe('CustomFieldInput（自定义属性单字段，任务 2 公共控件）
   });
 });
 
-describe('AssigneeField 面板变体（2026-11-21 需求方裁定：进度填写退役，点头像调进度选盘）', () => {
+describe('AssigneeField 面板形态（2026-11-21 需求方二次裁定：不单独列行，跟负责人一样）', () => {
   const memberIndex = new Map([
     ['u1', { userId: 'u1', nickname: '甲' }],
     ['u2', { userId: 'u2', nickname: '乙' }],
@@ -348,32 +348,46 @@ describe('AssigneeField 面板变体（2026-11-21 需求方裁定：进度填写
     };
   };
 
-  it('传入 onAvatarPick：行内头像变独立按钮、无进度输入框、只读 % 回显，点击回调带用户与当前进度', () => {
+  it('传入 onAvatarPick：只渲染成员 chips（无单独行/×/占位），已指派成员点头像回调带当前进度，点 chip 本体取消指派', () => {
     const picks: Array<{ userId: string; progress: number }> = [];
+    const toggles: Array<{ userId: string; assigned: boolean }> = [];
     const { container, cleanup } = render({
       value: { u1: { progress: 40 } },
       memberIndex,
       onAssigneeProgress: () => undefined,
-      onAssigneeToggle: () => undefined,
+      onAssigneeToggle: (userId: string, assigned: boolean) => toggles.push({ userId, assigned }),
       onAvatarPick: (userId: string, progress: number) => picks.push({ userId, progress }),
       testId: 'af',
     });
     try {
+      // 无单独行、无 ×、无输入框、无占位文案（与负责人区块同构，chips 唯一形态）
+      expect(container.querySelector('.task-assignee-row')).toBeNull();
+      expect(container.querySelector('[data-testid="af-remove-u1"]')).toBeNull();
+      expect(container.querySelector('input[data-testid="af-progress-u1"]')).toBeNull();
+      expect(container.textContent).not.toContain('选择成员并更新进度');
+      // 已指派 u1：chip 内头像独立按钮存在；未指派 u2：只有普通 chip
       const btn = container.querySelector<HTMLButtonElement>('button[data-testid="af-avatar-u1"]');
       expect(btn).toBeTruthy();
-      expect(container.querySelector('input[data-testid="af-progress-u1"]')).toBeNull(); // 填写框退役
-      expect(container.textContent).toContain('40%'); // 只读回显
-      expect(container.querySelector('[data-testid="af-remove-u1"]')).toBeTruthy(); // 移除按钮保留
+      expect(container.querySelector('[data-testid="af-avatar-u2"]')).toBeNull();
+      expect(container.querySelector('[data-testid="af-member-u2"]')).toBeTruthy();
+      // 点 u1 头像 → onAvatarPick 带当前进度 40
       act(() => {
         btn!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
       });
       expect(picks).toEqual([{ userId: 'u1', progress: 40 }]);
+      // 点 u1 chip 本体（名字部分）→ 取消指派
+      const chip = container.querySelector<HTMLButtonElement>('button[data-testid="af-member-u1"]');
+      expect(chip).toBeTruthy();
+      act(() => {
+        chip!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      });
+      expect(toggles).toEqual([{ userId: 'u1', assigned: false }]);
     } finally {
       cleanup();
     }
   });
 
-  it('未传 onAvatarPick（表格单元格弹层形态）：保持进度输入框原行为', () => {
+  it('未传 onAvatarPick（表格单元格弹层形态）：保持行+进度输入框原行为', () => {
     const { container, cleanup } = render({
       value: { u1: { progress: 40 } },
       memberIndex,
@@ -383,6 +397,7 @@ describe('AssigneeField 面板变体（2026-11-21 需求方裁定：进度填写
     });
     try {
       expect(container.querySelector('button[data-testid="af-avatar-u1"]')).toBeNull();
+      expect(container.querySelector('[data-testid="af-row-u1"]')).toBeTruthy();
       const input = container.querySelector<HTMLInputElement>('input[data-testid="af-progress-u1"]');
       expect(input).toBeTruthy();
       expect(input!.value).toBe('40');

@@ -1,5 +1,6 @@
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
-import { registerAndLogin } from './helpers/auth';
+import { addAssignee, createTemplateDoc, docToState, getNode, setCustomColumns, setAssigneeProgress, setNodeTask } from '@gmind/core';
+import { apiRegister, registerAndLogin } from './helpers/auth';
 
 /**
  * 轮 2 筛选双层化 e2e（2026-11-15 需求方拍板）：
@@ -243,3 +244,77 @@ test.describe('轮 2 筛选双层化', () => {
     await ctxB.close();
   });
 });
+
+/**
+ * 参与人筛选（第二轮 2026-11-21，spec §5.4）：
+ * - 筛选弹窗「参与人」多选块（候选=文档内人员列成员 ∪ 在线成员）；
+ * - 求值=人员列条目跨全部 assignee 列任一命中（表格仅显示命中项）；
+ * - 「对所有人生效」发布含 participants（SharedFilter schema 扩展）。
+ */
+test('参与人筛选：多选块 + 人员列条目命中 + 公共筛选发布', async ({ page }) => {
+  const { token } = await registerAndLogin(page);
+  const me = (await (await page.request.get('/api/users/me', { headers: auth0(token) })).json()) as { id: string };
+  const other = await apiRegister(page.request, { nickname: '执行乙' });
+  const otherId = (await (await page.request.get('/api/users/me', { headers: auth0(other.token) })).json()) as { id: string };
+
+  // 造数：任务A（我参与 40%）+ 任务B（执行乙参与 60%）
+  const created = await page.request.post('/api/files', { headers: auth0(token), data: { title: '参与人筛选' } });
+  expect(created.status()).toBe(201);
+  const fileId = ((await created.json()) as { id: string }).id;
+  const doc = createTemplateDoc({ title: '参与人筛选', children: [{ text: '任务A' }, { text: '任务B' }] });
+  setCustomColumns(doc, [{ id: 'col-a', name: '执行组', type: 'assignee' }]);
+  const kids = getNode(doc, 'root')!.childIds;
+  setNodeTask(doc, kids[0]!, { owners: [otherId.id], status: 'doing', progress: 40 });
+  addAssignee(doc, kids[0]!, 'col-a', me.id);
+  setAssigneeProgress(doc, kids[0]!, 'col-a', me.id, 40);
+  setNodeTask(doc, kids[1]!, { owners: [me.id], status: 'doing', progress: 60 });
+  addAssignee(doc, kids[1]!, 'col-a', otherId.id);
+  setAssigneeProgress(doc, kids[1]!, 'col-a', otherId.id, 60);
+  const put = await page.request.put(`/api/files/${fileId}/doc-state`, {
+    headers: auth0(token),
+    data: { docState: Buffer.from(docToState(doc)).toString('base64') },
+  });
+  expect(put.status()).toBe(200);
+  await page.goto(`/edit/${fileId}`);
+  await expect(page.locator('.editor-canvas svg .gm-text', { hasText: '任务A' })).toBeVisible({ timeout: 15_000 });
+
+  // 打开筛选弹窗：参与人块渲染（候选=文档内人员列成员 ∪ 在线成员 → 我 + 执行乙）
+  await page.getByTestId('map-filter-toggle').click();
+  const pop = page.getByTestId('map-filter-pop');
+  await expect(pop).toBeVisible();
+  const partBlock = pop.getByTestId('map-filter-participants');
+  await expect(partBlock).toBeVisible();
+  await expect(partBlock.getByLabel('我', { exact: true })).toBeVisible();
+  // 执行乙非协作者但为文档内负责人：memberIndex 兜底昵称 = id 前 8 位
+  const otherLabel = otherId.id.slice(0, 8);
+  await expect(partBlock.getByText(otherLabel)).toBeVisible();
+
+  // 勾选「执行乙」→ 参与人命中：表格仅显示任务B（其人员列含执行乙）
+  await partBlock.getByText(otherLabel).click();
+  await page.getByTestId('view-tab-table').click();
+  await expect(page.locator('.task-table-root')).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByTestId('map-filter-count')).toContainText('命中 1 个任务');
+  const rows = page.locator('.task-table-root tbody tr');
+  await expect(rows.filter({ hasText: '任务B' })).toHaveCount(1);
+  await expect(rows.filter({ hasText: '任务A' })).toHaveCount(0);
+
+  // 发布为公共筛选（含 participants）→ 同步徽章；文档 meta 的 SharedFilter.participants
+  // 落盘且经 canonical 归一（schema 层守护——dev 钩子 getDoc + /@id 动态导入，walkthrough 先例）
+  await page.getByTestId('map-filter-toggle').click();
+  await expect(pop).toBeVisible();
+  await pop.getByTestId('map-filter-publish').click();
+  await expect(page.getByTestId('map-filter-synced-badge')).toBeVisible();
+  const shared = await page.evaluate(async () => {
+    // vite dev 的 /@id 路径 TS 无法静态解析（变量绕过检查）；walkthrough 脚本同款
+    const corePath = '/@id/@gmind/core';
+    const core = (await import(/* @vite-ignore */ corePath)) as typeof import('@gmind/core');
+    const doc = (window as unknown as { __gmind: { getDoc(): import('yjs').Doc } }).__gmind.getDoc();
+    return core.getMeta(doc).sharedFilter ?? null;
+  });
+  expect(shared?.participants).toEqual([otherId.id]);
+  expect(shared?.owners).toEqual([]);
+});
+
+function auth0(token: string): Record<string, string> {
+  return { Authorization: `Bearer ${token}` };
+}

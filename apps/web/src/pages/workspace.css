@@ -1051,12 +1051,14 @@
 }
 .todo-tabs-row {
   display: flex;
+  flex-wrap: wrap; /* 分组 chips 多时换行收纳，页签不再被挤成竖排（2026-11-21 第二轮走查发现） */
   align-items: flex-end;
   justify-content: space-between;
   gap: 12px;
 }
 .todo-tabs-chips {
   display: flex;
+  flex-wrap: wrap;
   gap: 6px;
   padding-bottom: 6px;
 }
@@ -1206,6 +1208,10 @@
 .space-trend-date {
   color: var(--gm-ink-3);
   font-size: 11px;
+}
+.space-avatar-img {
+  object-fit: cover;
+  flex-shrink: 0;
 }
 .space-avatar {
   display: inline-flex;
@@ -1617,3 +1623,219 @@
 .search-node-link:hover { border-color: var(--gm-brand, #3370ff); }
 .search-node-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; color: var(--gm-ink-1); }
 .search-node-file { flex: none; color: var(--gm-ink-3); font-size: 12px; }
+
+/* ── 我的待办第二轮（2026-11-21）：画布分组/角色徽章/我的子进度/动态流 ── */
+.todo-canvas-group {
+  display: flex;
+  flex-direction: column;
+}
+.todo-canvas-name {
+  padding: 6px 16px 2px;
+  font-size: 12px;
+  color: var(--gm-ink-3);
+}
+.todo-role-badge {
+  flex: none;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--gm-brand-soft);
+  color: var(--gm-brand);
+  font-size: 11px;
+  line-height: 18px;
+  white-space: nowrap;
+}
+.todo-role-badge.part {
+  background: rgba(0, 180, 42, 0.12);
+  color: #00b42a;
+}
+.todo-my-progress {
+  flex: none;
+  border: 1px solid var(--gm-line);
+  border-radius: 999px;
+  background: #fff;
+  padding: 2px 10px;
+  font-size: 12px;
+  color: var(--gm-ink-2);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.todo-my-progress:hover {
+  border-color: var(--gm-brand);
+  color: var(--gm-brand);
+}
+.todos-progress-picker {
+  position: fixed;
+  z-index: 60;
+}
+.todo-activity-list {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--gm-line);
+  border-radius: var(--gm-radius-card);
+  background: #fff;
+  box-shadow: var(--gm-shadow-card);
+  overflow: hidden;
+}
+.todo-activity-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  padding: 11px 16px;
+  border: none;
+  border-bottom: 1px solid #f2f3f5;
+  background: none;
+  text-align: left;
+  font-size: 13px;
+  cursor: pointer;
+}
+.todo-activity-row:last-child {
+  border-bottom: none;
+}
+.todo-activity-row:hover {
+  background: #fafbfc;
+}
+.todo-activity-main {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+}
+.todo-activity-user {
+  flex: none;
+  font-weight: 500;
+  color: var(--gm-ink);
+}
+.todo-activity-action {
+  flex: none;
+  color: var(--gm-brand);
+}
+.todo-activity-task {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--gm-ink-2);
+}
+.todo-activity-file {
+  flex: none;
+  color: var(--gm-ink-3);
+  font-size: 12px;
+}
+.todo-activity-time {
+  flex: none;
+  color: var(--gm-ink-3);
+  font-size: 12px;
+}
+
+/* 待办空间聚合表（第二轮 10 列：人员/总数/负责/参与/完成/进行/未开始/逾期/完成率/操作） */
+.space-table-wrap .admin-table-head,
+.space-table-wrap .admin-table-row {
+  grid-template-columns: 1.3fr 0.55fr 0.5fr 0.5fr 0.6fr 0.6fr 0.6fr 0.5fr 0.9fr 0.6fr;
+}
+
+/* ── 待办/统计参与范围配置弹窗（2026-11-21 需求方追加）── */
+.todo-scope-mask {
+  position: fixed;
+  inset: 0;
+  background: rgba(29, 33, 41, 0.4);
+  z-index: 90;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 96px;
+}
+.todo-scope-pop {
+  width: 560px;
+  max-width: calc(100vw - 32px);
+  max-height: 70vh;
+  overflow-y: auto;
+  background: #fff;
+  border-radius: var(--gm-radius-card, 10px);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.16);
+  padding: 16px 20px;
+}
+.todo-scope-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+.todo-scope-sub {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--gm-ink-3, #86909c);
+}
+.todo-scope-close {
+  border: none;
+  background: none;
+  font-size: 18px;
+  color: var(--gm-ink-3, #86909c);
+  cursor: pointer;
+  padding: 2px 6px;
+}
+.todo-scope-files {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.todo-scope-file {
+  border-bottom: 1px solid #f2f3f5;
+}
+.todo-scope-file:last-child {
+  border-bottom: none;
+}
+.todo-scope-file-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 0;
+}
+.todo-scope-expand {
+  border: none;
+  background: none;
+  color: var(--gm-ink-3, #86909c);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 2px 6px;
+  transition: transform 0.15s;
+}
+.todo-scope-expand.open {
+  transform: rotate(90deg);
+}
+.todo-scope-expand:disabled {
+  visibility: hidden;
+}
+.todo-scope-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+}
+.todo-scope-canvases {
+  list-style: none;
+  margin: 0 0 8px;
+  padding: 0 0 0 30px;
+}
+.todo-scope-canvas {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 0;
+}
+.todo-scope-canvas.dim .todo-scope-name {
+  color: var(--gm-ink-3, #86909c);
+}
+.todo-scope-canvas .todo-scope-name {
+  font-size: 13px;
+  color: var(--gm-ink-2, #4e5969);
+}
+.todo-scope-canvas-empty {
+  font-size: 12px;
+  color: var(--gm-ink-3, #86909c);
+  padding: 6px 0;
+}

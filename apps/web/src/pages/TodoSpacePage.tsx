@@ -1,8 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { TodoReport, TodoOwnerRow } from '@gmind/shared';
 import { fetchTodoReport, remindTodo } from '../api/todos';
+import { avatarSrcOf } from '../editor/TaskFields';
 import { api } from '../api/client';
 import { WorkspaceShell } from './WorkspaceShell';
+import { TodoScopeDialog } from './TodoScopeDialog';
 
 /**
  * 待办空间（/todo-space，第二期批次 C；2026-10-24 按 Figma 原型 Space.tsx 重做布局）：
@@ -51,6 +53,7 @@ export function TodoSpacePage() {
   const [deptNames, setDeptNames] = useState<Array<{ id: string; name: string }>>([]);
   const [error, setError] = useState('');
   const [toast, setToast] = useState('');
+  const [scopeOpen, setScopeOpen] = useState(false);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   function showToast(message: string): void {
@@ -103,7 +106,21 @@ export function TodoSpacePage() {
     }
   }
 
-  const nicknameOf = (id: string): string => (id === meId ? meName : (members.find((m) => m.id === id)?.nickname ?? `成员 ${id.slice(-4)}`));
+  // 名字解析（2026-11-21 修正）：目录（org directory）只收录有部门/分组挂靠的账号，
+  // 纯任务协作用户（无挂靠）查不到会掉进「成员+id尾段」兜底——服务端 byOwner.name
+  // 本来就是 users 表昵称（namesFor 回填），用它建全量 id→昵称映射作第二兜底。
+  // 顺序：本人 → 目录 → 服务端昵称 → 成员+id尾段。
+  const nameById = useMemo(() => {
+    const map = new Map<string, string>();
+    // 名单与时间范围解耦（2026-11-21 修正）：「今日」等范围下范围外人员的明细行
+    // 也要能解析真名，不能用按范围过滤的 byOwner 建映射
+    if (report) for (const p of report.people) map.set(p.id, p.name);
+    return map;
+  }, [report]);
+  const nicknameOf = (id: string): string =>
+    id === meId
+      ? meName
+      : (members.find((m) => m.id === id)?.nickname ?? nameById.get(id) ?? `成员 ${id.slice(-4)}`);
   const deptOf = (id: string): string => {
     const deptId = members.find((m) => m.id === id)?.departmentId;
     return deptId ? (deptNames.find((d) => d.id === deptId)?.name ?? '未分配') : '未分配';
@@ -143,14 +160,16 @@ export function TodoSpacePage() {
         ? report.byDepartment
         : report.byGroup;
 
-  // 下钻判定：负责人/部门/分组三维度下，任务是否归属选中行（按 owners 反查挂靠）
+  // 下钻判定：负责人/部门/分组三维度下，任务是否归属选中行（按 owners ∪ participants
+  // 反查挂靠；第二轮统计收录参与人，下钻同口径）
   const deptOfId = (id: string): string | null => members.find((m) => m.id === id)?.departmentId ?? null;
   const groupsOfId = (id: string): string[] => members.find((m) => m.id === id)?.groupIds ?? [];
-  const itemInSelection = (t: { owners: string[] }): boolean => {
+  const itemInSelection = (t: { owners: string[]; participants?: string[] }): boolean => {
     if (!selectedKey) return true;
-    if (dim === 'owner') return t.owners.includes(selectedKey);
-    if (dim === 'department') return t.owners.some((o) => deptOfId(o) === selectedKey);
-    return t.owners.some((o) => groupsOfId(o).includes(selectedKey));
+    const people = [...t.owners, ...(t.participants ?? [])];
+    if (dim === 'owner') return people.includes(selectedKey);
+    if (dim === 'department') return people.some((o) => deptOfId(o) === selectedKey);
+    return people.some((o) => groupsOfId(o).includes(selectedKey));
   };
 
   // 明细过滤：维度选中（若有效）× 状态 chips（逾期=未完成且截止早于今天，前端派生）
@@ -191,6 +210,9 @@ export function TodoSpacePage() {
                 {r.label}
               </button>
             ))}
+            <button className="ws-create ghost" data-testid="todo-scope-toggle" onClick={() => setScopeOpen(true)}>
+              ⚙ 配置
+            </button>
             <button className="ws-create" data-testid="todo-report-btn" onClick={() => void copyReport()}>
               生成完成报告
             </button>
@@ -243,6 +265,8 @@ export function TodoSpacePage() {
               <div className="admin-table-head space-head">
                 <span>{dim === 'owner' ? '人员' : dim === 'group' ? '分组' : '部门'}</span>
                 <span>总任务</span>
+                <span>负责</span>
+                <span>参与</span>
                 <span>已完成</span>
                 <span>进行中</span>
                 <span>未开始</span>
@@ -262,9 +286,17 @@ export function TodoSpacePage() {
                   <span className="cell nickname">
                     {dim === 'owner' && (
                       <>
-                        <span className="space-avatar" aria-hidden>
-                          {r.name.charAt(0)}
-                        </span>
+                        {r.avatarUrl ? (
+                          <img
+                            className="space-avatar space-avatar-img"
+                            src={avatarSrcOf(r.avatarUrl, r.key)}
+                            alt=""
+                          />
+                        ) : (
+                          <span className="space-avatar" aria-hidden>
+                            {r.name.charAt(0)}
+                          </span>
+                        )}
                         <span className="space-name-wrap">
                           <b>{r.name}</b>
                           <i>{deptOf(r.key)}</i>
@@ -274,6 +306,9 @@ export function TodoSpacePage() {
                     {dim !== 'owner' && r.name}
                   </span>
                   <span className="cell">{r.total}</span>
+                  {/* 负责/参与拆计数（第二轮裁定 4/6）：同人同任务只进一处，负责+参与=总任务 */}
+                  <span className="cell" data-testid="space-responsible">{r.responsible}</span>
+                  <span className="cell" data-testid="space-participating">{r.participating}</span>
                   <span className="cell">{r.done}</span>
                   <span className="cell">{r.doing}</span>
                   <span className="cell">{r.todo}</span>
@@ -355,6 +390,7 @@ export function TodoSpacePage() {
             <span>任务</span>
             <span>所属文件</span>
             <span>负责人</span>
+            <span>参与人</span>
             <span>截止</span>
             <span>进度</span>
             <span>状态</span>
@@ -368,7 +404,8 @@ export function TodoSpacePage() {
                   {t.fileTitle}
                 </button>
               </span>
-              <span className="cell">{t.owners.map(nicknameOf).join('、')}</span>
+              <span className="cell">{t.owners.map(nicknameOf).join('、') || '未分配'}</span>
+              <span className="cell">{t.participants.map(nicknameOf).join('、') || '—'}</span>
               <span className="cell">{t.dueDate ?? '—'}</span>
               <span className="cell rate">
                 <span className="rate-bar">
@@ -395,6 +432,11 @@ export function TodoSpacePage() {
           {shownItems.length === 0 && <p className="admin-users-hint">没有符合条件的任务</p>}
         </div>
 
+        <TodoScopeDialog
+          open={scopeOpen}
+          onClose={() => setScopeOpen(false)}
+          onChanged={() => void reload().catch(() => undefined)}
+        />
         {toast && (
           <div className="workspace-toast" data-testid="toast" role="alert">
             {toast}

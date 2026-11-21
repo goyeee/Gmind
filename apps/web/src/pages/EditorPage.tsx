@@ -11,6 +11,8 @@ import {
   deleteNodes,
   getMeta,
   getNode,
+  canvasNodesMap,
+  listCanvases,
   ICON_GROUPS,
   MARKER_GROUP_MODE,
   markLastEditor,
@@ -145,6 +147,7 @@ import { StructurePanel, type StructureTypeValue } from '../editor/StructurePane
 import { TaskTable, EMPTY_FILTERS, type Filters } from '../editor/TaskTable';
 import { MapFilterBar, toSharedFilter, fromSharedFilter, isEqualToShared } from '../editor/MapFilterBar';
 import { evalCond, resolveCondVal, condFieldsOf } from '../editor/taskFilter';
+import { setTaskEventSink, trackTaskWrite } from '../editor/taskEvents';
 import type { CustomColumnType } from '@gmind/core';
 import { TodoBench, type BenchRow } from '../editor/TodoBench';
 import { remindTodo } from '../api/todos';
@@ -712,6 +715,21 @@ export function EditorPage() {
     for (const m of members) ids.add(m.userId);
     return [...ids].map((id) => ({ id, label: memberIndexRef.current.get(id)?.nickname ?? `成员 ${id.slice(-4)}` }));
   }, [tick, members]);
+  /** 参与人候选（第二轮 spec §5.4）：**全文档**人员列成员（跨画布）∪ 在线成员。 */
+  const participantCandidates = useMemo(() => {
+    const ids = new Set<string>();
+    if (doc) {
+      for (const canvas of listCanvases(doc)) {
+        for (const [id] of canvasNodesMap(doc, canvas.id).entries()) {
+          const snap = getNode(doc, id, canvas.id);
+          if (!snap || snap.deleted) continue;
+          for (const e of assigneeEntriesOf(doc, id, canvas.id)) ids.add(e.user);
+        }
+      }
+    }
+    for (const m of members) ids.add(m.userId);
+    return [...ids].map((id) => ({ id, label: memberIndexRef.current.get(id)?.nickname ?? `成员 ${id.slice(-4)}` }));
+  }, [doc, tick, members]);
   const taskCounts = useMemo(() => {
     const flt = tableFilters;
     const kw = flt.keyword.trim().toLowerCase();
@@ -723,6 +741,8 @@ export function EditorPage() {
       let ok = true;
       if (kw !== '' && !r.text.toLowerCase().includes(kw)) ok = false;
       if (ok && flt.owners.size > 0 && !r.owners.some((o) => flt.owners.has(o))) ok = false;
+      // 参与人（第二轮）：benchRows.assignees 已跨列拉平
+      if (ok && flt.participants.size > 0 && !r.assignees.some((a) => flt.participants.has(a.user))) ok = false;
       if (ok && flt.statuses.size > 0 && !flt.statuses.has(r.status)) ok = false;
       if (ok && flt.overdueOnly && !overdueIds.has(r.id)) ok = false;
       if (ok && flt.unassignedOnly && r.owners.length > 0) ok = false;
@@ -1067,28 +1087,41 @@ export function EditorPage() {
     const p = assigneePicker;
     const d = doc;
     if (!p || !d) return;
+    const cid = canvasIdGetter();
     try {
       if (p.mode === 'owner') {
         if (p.total) {
-          const t = getNode(d, p.nodeId)?.task;
+          const t = getNode(d, p.nodeId, cid)?.task;
           if (!t) return;
           if (pct === 100) {
             if (t.status !== 'done' && t.progress !== 100) {
-              completeNodeTask(d, p.nodeId, 'preserve-subprogress', ORIGIN_USER);
+              // 任务动态声明（第二轮）：完成走 complete 事件；写入口成功后由包装器发声明
+              trackTaskWrite(d, cid, p.nodeId, 'complete', () =>
+                completeNodeTask(d, p.nodeId, 'preserve-subprogress', ORIGIN_USER, cid),
+              );
               afterUserWrite();
             }
           } else if (pct !== t.progress) {
-            setNodeTask(d, p.nodeId, { progress: pct }, ORIGIN_USER);
+            trackTaskWrite(d, cid, p.nodeId, 'total', () => setNodeTask(d, p.nodeId, { progress: pct }, ORIGIN_USER, cid));
             afterUserWrite();
           }
-        } else if (pct !== (getNode(d, p.nodeId)?.task.ownerProgress ?? null)) {
-          setOwnerProgress(d, p.nodeId, pct, ORIGIN_USER);
+        } else if (pct !== (getNode(d, p.nodeId, cid)?.task.ownerProgress ?? null)) {
+          trackTaskWrite(
+            d,
+            cid,
+            p.nodeId,
+            'sub',
+            () => setOwnerProgress(d, p.nodeId, pct, ORIGIN_USER, cid),
+            { sub: { user: p.user, before: getNode(d, p.nodeId, cid)?.task.ownerProgress ?? 0, after: pct, colName: '负责人子进度' } },
+          );
           afterUserWrite();
         }
       } else {
         // 逐人 diff 写（2026-11-21 起替换整值替换）：只动目标用户 progress 字段，
         // 两个客户端更新不同人员互不覆盖（与面板/表格逐人入口同口径）。
-        setAssigneeProgress(d, p.nodeId, p.colId ?? '', p.user, pct, ORIGIN_USER);
+        trackTaskWrite(d, cid, p.nodeId, 'sub', () => setAssigneeProgress(d, p.nodeId, p.colId ?? '', p.user, pct, ORIGIN_USER, cid), {
+          sub: { user: p.user, before: p.progress, after: pct, colName: p.colName ?? null },
+        });
         afterUserWrite();
       }
     } catch (e) {
@@ -3694,6 +3727,15 @@ export function EditorPage() {
           let hit = true;
           if (kw && !(nodeData.get(b.id)?.text ?? '').toLowerCase().includes(kw)) hit = false;
           if (hit && flt.owners.size > 0 && !owners.some((o) => flt.owners.has(o))) hit = false;
+          // 参与人（第二轮）：人员列条目跨全部 assignee 列任一命中即命中
+          if (hit && flt.participants.size > 0) {
+            const assigneeUsers = (snap?.custom !== undefined
+              ? Object.entries(snap.custom)
+                  .filter(([colId]) => m.customColumns.some((c) => c.id === colId && c.type === 'assignee'))
+                  .flatMap(([, v]) => (v && typeof v === 'object' ? Object.keys(v as Record<string, unknown>) : []))
+              : []);
+            if (!assigneeUsers.some((u) => flt.participants.has(u))) hit = false;
+          }
           if (hit && flt.statuses.size > 0 && !flt.statuses.has(st)) hit = false;
           if (hit && flt.overdueOnly && !(deriveSelf ? isOverdue(deriveSelf, filterNodes, today0) : false)) hit = false;
           if (hit && flt.unassignedOnly && owners.length > 0) hit = false;
@@ -3998,6 +4040,11 @@ export function EditorPage() {
       showToast(`${nickname} 更改了筛选条件`);
     });
 
+    // 任务动态声明 sink（第二轮 spec §5.5）：用户级任务写包装器经 provider 的
+    // stateless 通道发声明，服务端以连接身份盖章落 events。断线时 provider 存活但
+    // 消息入队失败即丢（已知限制如实登记）；销毁时置 null 防悬挂引用。
+    setTaskEventSink((message) => collab.provider.sendStateless(message));
+
     // 键盘写路径：移动端只读不装配（OPEN-T-005 裁定「以不挂载实现」——Enter/
     // Tab/Delete/粘贴等全部写键位随监听缺席一并失效；readOnly 入 effect 依赖，
     // 断点跨越时按本 effect 重建路径重新装配/卸下）。
@@ -4086,6 +4133,7 @@ export function EditorPage() {
       if (thumbTimer !== null) clearTimeout(thumbTimer); // 缩略图尾沿定时器随装配拆卸
       collabHandleRef.current = null;
       quotaBlockedRef.current = false; // 文件切换不继承上一文件的配额拦截
+      setTaskEventSink(null); // 任务动态声明 sink 随连接收尾（防悬挂引用）
       collab.destroy(); // provider + IndexedDB 本地副本一并收尾（顺序：先冲刷 saveLoop 决策再断链）
       commentsRefreshRef.current = null; // 文件切换不继承上一文件的评论刷新入口
       scheduleRerenderRef.current = null; // 文件切换不继承上一文件的画布重排入口
@@ -4620,6 +4668,7 @@ export function EditorPage() {
             filters={tableFilters}
             onFiltersChange={setTableFilters}
             candidates={ownerCandidates}
+            participantCandidates={participantCandidates}
             meId={meId}
             view={view}
             totalTasks={taskCounts.total}

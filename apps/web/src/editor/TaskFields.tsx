@@ -451,8 +451,9 @@ export function SmartDateInput({
  * 整值替换提交（core 整值 LWW 口径）：任何行变化构造 v2 Record 提交；移除到 0 人
  * 提交 null（删键）。值结构 v2 = Record<user, {progress, weight?}>；旧版 number
  * 简形读侧兼容。
- * 面板形态（2026-11-21 需求方裁定）：onAvatarPick 传入时行内去进度填写框，头像变
- * 独立按钮调起进度选盘、只读 %回显——写路径走 core 逐人 op（宿主接线）。
+ * 面板形态（2026-11-21 需求方二次裁定「不单独列行，跟负责人一样」）：onAvatarPick
+ * 传入时只渲染成员 chips——已指派高亮、点头像调进度选盘、点 chip 本体取消指派，
+ * 单独行/×/占位文案全部退役；写路径走 core 逐人 op（宿主接线）。
  * 表格单元格弹层与任务面板（CustomFieldInput assignee 分支）共用本组件。
  */
 export interface AssigneeRow {
@@ -486,13 +487,31 @@ export function AssigneeField({
   memberIndex: Map<string, MemberOption>;
   onAssigneeProgress: (userId: string, progress: number) => void;
   onAssigneeToggle: (userId: string, assigned: boolean) => void;
-  /** 面板变体（2026-11-21 需求方裁定「进度填写去掉，点头像调进度选盘」）：传入后
-   *  每行头像渲染为独立按钮触发本回调（进度数值一并带给宿主），行内**不再渲染**
-   *  进度输入框，只留只读百分比回显；缺省（表格单元格弹层）保持原输入框编辑。 */
+  /** 面板形态（2026-11-21 需求方二次裁定「不单独列行，跟负责人一样」）：传入后
+   *  **只渲染成员 chips**——已指派成员高亮，点头像调起进度选盘（progress 数值一并
+   *  带给宿主）、点 chip 本体取消指派；未指派成员点 chip 整体指派。不渲染单独行、
+   *  × 移除钮与占位文案。缺省（表格单元格弹层）保持行+输入框编辑。 */
   onAvatarPick?: (userId: string, progress: number, at: { x: number; y: number }) => void;
   testId: string;
 }): ReactElement {
   const rows = assigneeRowsOf(value);
+  if (onAvatarPick) {
+    return (
+      <span className="task-assignee" data-testid={testId}>
+        <MemberMultiSelect
+          memberIndex={memberIndex}
+          selected={rows.map((r) => r.user)}
+          onToggle={(userId) => onAssigneeToggle(userId, !rows.some((row) => row.user === userId))}
+          onAvatarClick={(userId, at) =>
+            onAvatarPick(userId, rows.find((r) => r.user === userId)?.progress ?? 0, at)
+          }
+          avatarTestIdPrefix={`${testId}-avatar`}
+          testIdPrefix={`${testId}-member`}
+          emptyHint="暂无文档成员，邀请协作者后可指派"
+        />
+      </span>
+    );
+  }
   return (
     <span className="task-assignee" data-testid={testId}>
       {rows.length === 0 && <span className="task-custom-placeholder">选择成员并更新进度</span>}
@@ -503,35 +522,13 @@ export function AssigneeField({
         );
         return (
           <span key={row.user} className="task-assignee-row" data-testid={`${testId}-row-${row.user}`}>
-            {onAvatarPick ? (
-              <>
-                <button
-                  type="button"
-                  className="tt-avatar-btn"
-                  data-testid={`${testId}-avatar-${row.user}`}
-                  title={`${name} 进度`}
-                  aria-label={`${name} 进度`}
-                  onClick={(e) => {
-                    const rect = e.currentTarget.getBoundingClientRect();
-                    onAvatarPick(row.user, row.progress, { x: rect.left + rect.width / 2, y: rect.bottom + 4 });
-                  }}
-                >
-                  {avatar}
-                </button>
-                <span className="task-assignee-name">{name}</span>
-                <span className="task-assignee-pct">{row.progress}%</span>
-              </>
-            ) : (
-              <>
-                {avatar}
-                <span className="task-assignee-name">{name}</span>
-                <AssigneeProgressInput
-                  testId={`${testId}-progress-${row.user}`}
-                  progress={row.progress}
-                  onCommit={(p) => onAssigneeProgress(row.user, p)}
-                />
-              </>
-            )}
+            {avatar}
+            <span className="task-assignee-name">{name}</span>
+            <AssigneeProgressInput
+              testId={`${testId}-progress-${row.user}`}
+              progress={row.progress}
+              onCommit={(p) => onAssigneeProgress(row.user, p)}
+            />
             <button
               type="button"
               className="task-assignee-remove"
